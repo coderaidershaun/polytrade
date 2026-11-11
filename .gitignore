@@ -1,2 +1,9 @@
 /target
 .DS_Store
+
+# rex:ignore superrex
+.claude/skills/
+.claude/agents/
+.claude/settings.local.json
+/.rex/*
+/.claude/worktrees/
