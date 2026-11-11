@@ -1,0 +1,18 @@
+[package]
+name = "polytrade-cli"
+description = "Command-line interface for polytrade"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "polytrade"
+path = "src/main.rs"
+
+[dependencies]
+polytrade-core.workspace = true
+
+[lints]
+workspace = true
