@@ -225,6 +225,10 @@ impl EdgeControl {
 
     /// Opens the exit unless one is already under way, answering whether this call is the one that
     /// opened it — so the caller sweeps once rather than on every latch read.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the session chassis stamps queued time and paces reconnects by wall time"
+    )]
     pub(crate) fn open_exit(&mut self, reason: CancelReason) -> bool {
         if self.exit.is_some() {
             return false;
@@ -235,6 +239,10 @@ impl EdgeControl {
     }
 
     /// The next paced cancel attempt, once the retry interval allows and the sweep is unfinished.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the session chassis stamps queued time and paces reconnects by wall time"
+    )]
     pub(crate) fn claim_sweep_retry(&mut self) -> Option<CancelReason> {
         if self.is_swept {
             return None;
@@ -244,6 +252,10 @@ impl EdgeControl {
     }
 
     /// When a failed pass may be tried again, jittered by the same caps that pace reconnects.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the session chassis stamps queued time and paces reconnects by wall time"
+    )]
     pub(crate) fn next_attempt_at(&self, attempt: u32) -> TsUs {
         let delay = self.backoff.delay(attempt);
         self.clock.now() + DurationUs::from_micros(delay.as_micros() as i64)
@@ -268,6 +280,10 @@ impl EventFunnel {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the session chassis stamps queued time and paces reconnects by wall time"
+    )]
     pub(crate) fn send(&mut self, mut message: InboundMessage) {
         message.set_queued_ts_us(self.clock.now());
         self.producer.push(message);
@@ -334,6 +350,10 @@ pub(crate) trait EdgeDriver {
 }
 
 /// Dial, serve, back off, repeat — until a terminal exit has swept every order this run owns.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the session chassis stamps queued time and paces reconnects by wall time"
+)]
 pub(crate) async fn run_edge<D: EdgeDriver>(mut driver: D, lane: EdgeLane) {
     let mut sender = lane.into_sender();
     driver.start().await;
@@ -399,6 +419,10 @@ async fn check_latches<D: EdgeDriver>(driver: &mut D) {
 }
 
 // While offline, answers are read rather than slept through, and each one carries the sweep forward.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the session chassis stamps queued time and paces reconnects by wall time"
+)]
 async fn settle_offline<D: EdgeDriver>(driver: &mut D, wait: Duration) {
     let deadline = tokio::time::Instant::now() + wait;
     while !(driver.control().is_swept && driver.control().exit.is_some()) {

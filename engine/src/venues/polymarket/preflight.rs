@@ -58,6 +58,10 @@ pub enum ScaleError {
 /// accepted tick, and stamps the current grid onto every Polymarket row. A run with no Polymarket
 /// source returns at once. The stamp is taken once and a tick change mid-run is not re-stamped, so
 /// a price off that grid shows as invalid rather than being silently rounded.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a start preflight reads the wall clock once, before any message exists"
+)]
 pub(crate) async fn preflight_poly(registry: &mut Registry) -> Result<(), ScaleError> {
     let Some(series) = poly_series(registry) else {
         return Ok(());

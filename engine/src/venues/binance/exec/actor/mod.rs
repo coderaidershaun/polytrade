@@ -252,6 +252,10 @@ impl EdgeDriver for Actor {
     }
 
     // The clock, the balances and the open-order reads are what seed the mirror.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn start(&mut self) {
         let mut expected = self.pass_reads();
         if self.submit(RestJob::SyncClock) {
@@ -277,6 +281,10 @@ impl EdgeDriver for Actor {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn serve(
         &mut self,
         mut writer: Writer,

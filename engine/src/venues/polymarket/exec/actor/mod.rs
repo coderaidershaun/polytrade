@@ -249,6 +249,10 @@ impl Actor {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     fn on_disconnected(&mut self) {
         self.is_subscribed = false;
         // Held frames would be explained against a stale index; resync rebuilds it.

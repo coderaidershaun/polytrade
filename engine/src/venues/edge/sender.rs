@@ -119,6 +119,10 @@ impl<K: TickSource> Sender<K> {
     /// Takes every item off the lane and hands each command to `transport`, then ends the wake with
     /// one flush. A watermark belongs to the simulated venue, so a live venue never sees one. Answers
     /// how the connection ended, when it did, and leaves what is still on the lane for the next one.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a sender stamps the counter at the pop and at the wire for its wire samples"
+    )]
     pub async fn drain<T: CommandTransport>(
         &mut self,
         transport: &mut T,

@@ -153,6 +153,10 @@ impl Actor {
     }
 
     /// Resolve current window for initial subscribe set. WS ops deferred to connect; Rotation/BookReset land now.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn bootstrap(&mut self) {
         let now = self.clock.now();
         let current = self.schedule.current_window(now);
@@ -177,6 +181,10 @@ impl Actor {
     }
 
     /// Re-baseline live legs, resend plain subscribe. False on socket write failure → backoff+reconnect.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn prime_connection(&mut self, writer: &mut Writer) -> bool {
         let now = self.clock.now();
         let effects = collect_effects(|emit| self.core.on_reconnect(now, emit));
@@ -198,6 +206,10 @@ impl Actor {
         true
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn on_socket_message(
         &mut self,
         frame: Option<Result<Message, ProtocolError>>,
@@ -252,6 +264,10 @@ impl Actor {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn on_core_event(&mut self, event: Option<CoreEvent>, writer: &mut Writer) -> Flow {
         let Some(event) = event else {
             return Flow::Continue;
@@ -312,6 +328,10 @@ struct MarketLane {
 }
 
 impl Lane for MarketLane {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn session(&mut self, socket: Socket) -> SessionEnd {
         let actor = &mut self.actor;
         let (mut writer, mut reader) = socket.split();

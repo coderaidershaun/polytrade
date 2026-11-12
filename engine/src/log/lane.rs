@@ -271,6 +271,10 @@ fn open_lane(tag: &'static str) -> Option<LaneWriter<TextRecord>> {
 }
 
 /// Engine time from the one process clock, or the boot clock before `init` has run.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a log line and its file date take wall time, which is never engine state"
+)]
 fn engine_time() -> TsUs {
     GLOBALS
         .get()

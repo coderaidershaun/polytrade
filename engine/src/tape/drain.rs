@@ -28,6 +28,10 @@ const MAX_POP_BATCH: usize = 8_192;
 pub struct PersistWriter;
 
 impl PersistWriter {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a writer stamps and paces its own files, which are never engine state"
+    )]
     pub fn spawn(
         cfg: PersistConfig,
         meta: RunMeta,
@@ -148,6 +152,10 @@ impl WriterState {
         outcome
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a writer stamps and paces its own files, which are never engine state"
+    )]
     fn pump(&mut self, drain: &AtomicBool) -> Result<(), PersistError> {
         self.retention.prune();
         let mut last_seal = Instant::now();

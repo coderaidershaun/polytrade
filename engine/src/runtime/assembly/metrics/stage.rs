@@ -69,6 +69,10 @@ fn micros_span(start: TsUs, end: TsUs) -> Option<u64> {
 }
 
 /// `None` when the sample does not carry the stamps of `stage`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the metrics thread anchors ticks to engine time and turns them into time, off the fold"
+)]
 pub(super) fn stage_nanos(
     sample: &StageSample,
     stage: Stage,
@@ -99,6 +103,10 @@ pub(super) fn stage_nanos(
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the metrics thread anchors ticks to engine time and turns them into time, off the fold"
+)]
 pub(super) fn wire_nanos(
     sample: &WireSample,
     stage: Stage,

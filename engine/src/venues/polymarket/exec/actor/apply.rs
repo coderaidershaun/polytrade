@@ -27,6 +27,10 @@ use super::rest::{Lane, RestJob, RestPurpose, Submitted};
 use super::{Actor, Writer};
 
 impl Actor {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) async fn dispatch(
         &mut self,
         outgoing: Vec<Outgoing>,
@@ -56,6 +60,10 @@ impl Actor {
         ended
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn send(
         &mut self,
         request_id: RequestId,
@@ -148,6 +156,10 @@ impl Actor {
     /// stream is ready the moment the frame is on the wire. A re-arm after a scoped sweep reaches
     /// here with the socket already subscribed — sending a second auth frame would be a guess about
     /// behaviour the venue does not document, so it is skipped rather than repeated.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn subscribe(&mut self, writer: Option<&mut Writer>) -> Option<SessionOutcome> {
         if !self.is_subscribed {
             let Some(writer) = writer else {
@@ -183,6 +195,10 @@ impl Actor {
     /// Whether this request may leave now, and the work that makes it sendable next time. It is a
     /// verb because it is not a query: an availability refusal is counted here, and a cold token's
     /// allowance refresh is issued here.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     fn decide_send(&mut self, request: &ExecRequest) -> Option<PlaceNotSentReason> {
         let now = self.control.clock.now();
         if let Some(parked) = self.parked
@@ -222,6 +238,10 @@ impl Actor {
     }
 
     /// The venue's taker hold, during which a cancel is refused rather than queued.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     fn cancel_hold(&self, request: &ExecRequest) -> Option<crate::msg::time::TsUs> {
         let ExecRequest::Cancel { client_id, .. } = request else {
             return None;
@@ -230,6 +250,10 @@ impl Actor {
             .held_until(*client_id, self.control.clock.now())
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) async fn release_withheld_cancels(
         &mut self,
         writer: Option<&mut Writer>,
@@ -270,6 +294,10 @@ impl Actor {
     /// The venue said "come back later". Placement parks; the hot side is told its pending slot
     /// closed so the declaration loop can decide again rather than hanging on an answer that will
     /// never arrive.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) fn on_unavailable(&mut self, availability: VenueAvailability) {
         let wait = match availability {
             VenueAvailability::Restarting => DurationUs::from_secs(2),
@@ -318,6 +346,10 @@ impl Actor {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     fn re_arm_after_sweep(&mut self) {
         // Connecting the core again asks only for the stream subscription, or for nothing once the
         // core has stopped for good. The socket is already subscribed, so this re-reads state and

@@ -8,6 +8,10 @@
 
 // The counting allocator implements an unsafe trait, and the workspace denies unsafe code.
 #![allow(unsafe_code)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read clocks for their own deadlines, which are never engine state"
+)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;

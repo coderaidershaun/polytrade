@@ -161,6 +161,10 @@ impl Actor {
         self.fail_resync(resync_seq);
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) async fn finish_resync(&mut self, writer: Option<&mut Writer>) {
         self.session.finish_pass();
         let mut outgoing = Vec::new();

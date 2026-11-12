@@ -123,6 +123,10 @@ pub struct EngineClock {
 }
 
 impl EngineClock {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the clock module wraps the std clocks and the counter, so every other read goes through it"
+    )]
     pub fn start() -> Self {
         let wall_anchor_ts_us = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -136,6 +140,10 @@ impl EngineClock {
 
     /// Called twice for every hot-path message, and small enough to inline into the caller.
     #[inline]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the clock module wraps the std clocks and the counter, so every other read goes through it"
+    )]
     pub fn now(&self) -> TsUs {
         let elapsed_us = self.mono_anchor.elapsed().as_micros() as i64;
         TsUs::from_micros(self.wall_anchor_ts_us + elapsed_us)
@@ -162,6 +170,13 @@ pub enum Stamper {
 impl Stamper {
     /// `Off` reads nothing and gives the same tick every time.
     #[inline]
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        expect(
+            clippy::disallowed_methods,
+            reason = "the clock module wraps the counter, so every other read goes through it"
+        )
+    )]
     pub fn stamp(&self) -> Tick {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -330,6 +345,10 @@ impl ClockError {
 /// The wall clock now, for stamps that never become engine state, so a plain clock read is fine:
 /// the link's restart marker, the base of the controller epoch, and log and file timestamps. A
 /// clock set before the epoch gives 0 rather than a panic.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the clock module wraps the std clocks and the counter, so every other read goes through it"
+)]
 pub(crate) fn boot_stamp_us() -> TsUs {
     let micros = SystemTime::now()
         .duration_since(UNIX_EPOCH)

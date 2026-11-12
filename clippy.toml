@@ -1,0 +1,26 @@
+# Each call that reads a clock or turns a counter tick into time. A permitted site says why with
+# #[expect(clippy::disallowed_methods, reason = "...")]; the fitness test of the clock sites holds
+# the list of those sites.
+disallowed-methods = [
+    { path = "std::time::Instant::now", reason = "a clock read; only a permitted site may read one" },
+    { path = "std::time::Instant::elapsed", reason = "a clock read; only a permitted site may read one" },
+    { path = "std::time::SystemTime::now", reason = "a clock read; only a permitted site may read one" },
+    { path = "std::time::SystemTime::elapsed", reason = "a clock read; only a permitted site may read one" },
+    { path = "web_time::Instant::now", reason = "a clock read; only a permitted site may read one" },
+    { path = "web_time::Instant::elapsed", reason = "a clock read; only a permitted site may read one" },
+    { path = "web_time::SystemTime::now", reason = "a clock read; only a permitted site may read one" },
+    { path = "web_time::SystemTime::elapsed", reason = "a clock read; only a permitted site may read one" },
+    # The browser build has no tokio clock, so the path resolves only in a native build.
+    { path = "tokio::time::Instant::now", reason = "a clock read; only a permitted site may read one", allow-invalid = true },
+    # The browser build has no tokio clock, so the path resolves only in a native build.
+    { path = "tokio::time::Instant::elapsed", reason = "a clock read; only a permitted site may read one", allow-invalid = true },
+    { path = "quanta::Clock::raw", reason = "a counter read; only a permitted site may read one" },
+    { path = "quanta::Clock::now", reason = "a counter read; only a permitted site may read one" },
+    { path = "quanta::Instant::now", reason = "a counter read; only a permitted site may read one" },
+    { path = "engine::msg::time::EngineClock::start", reason = "starts a clock; the process has one" },
+    { path = "engine::msg::time::EngineClock::now", reason = "a clock read; only a permitted site may read one" },
+    { path = "engine::msg::time::boot_stamp_us", reason = "a clock read; only a permitted site may read one" },
+    { path = "engine::msg::time::Stamper::stamp", reason = "a counter read; only a permitted site may read one" },
+    { path = "engine::msg::time::TickScale::nanos", reason = "turns ticks into time; only the metrics thread may" },
+    { path = "engine::msg::time::TickScale::nanos_since", reason = "turns ticks into time; only the metrics thread may" },
+]

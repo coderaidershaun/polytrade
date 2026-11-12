@@ -228,6 +228,10 @@ impl Actor {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the link actor stamps each peer frame and marker with message time before the tape records it"
+    )]
     async fn run(mut self) {
         let socket = Arc::clone(&self.socket);
         let mut flush = SendWait::new(self.placement, tokio::time::interval(self.flush_period));
@@ -273,6 +277,10 @@ impl Actor {
     }
 
     /// Peer frame -> hot path: stamped engine's clock, not sender's (cross-region skew -> reordering).
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the link actor stamps each peer frame and marker with message time before the tape records it"
+    )]
     fn on_payload(&mut self, origin: LinkOrigin, payload: LinkPayload, received_ts_us: TsUs) {
         self.inbound.push(InboundMessage::Link(InboundLink {
             frame: LinkFrame { origin, payload },

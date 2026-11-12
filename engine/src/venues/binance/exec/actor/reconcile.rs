@@ -61,6 +61,10 @@ impl Actor {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn on_account(
         &mut self,
         job: RestJob,
@@ -90,6 +94,10 @@ impl Actor {
     }
 
     // The codec de-dupes, so the mirror and the hot state both see the same reading of this order.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn on_order_record(
         &mut self,
         job: RestJob,
@@ -144,6 +152,10 @@ impl Actor {
 
     // `None` means the order is untracked or failed to decode, so it has no mirror entry and no
     // cancel path.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) fn decode_order(
         &self,
         order: &OrderRecord,
@@ -164,6 +176,10 @@ impl Actor {
     }
 
     // `myTrades` omits the client_id, so the order is asked in order to find the fill's owner.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn on_trade_owner(
         &mut self,
         order: &OrderRecord,
@@ -363,6 +379,10 @@ impl Actor {
         );
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn on_order_read_failure(
         &mut self,
         subject: RejectSubject,

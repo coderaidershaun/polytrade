@@ -90,6 +90,10 @@ impl Actor {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     fn handle_effect(&mut self, effect: DriverEffect) -> Option<ws::WsCommand> {
         match effect {
             DriverEffect::Emit(mut message) => {
@@ -188,6 +192,10 @@ impl Actor {
     /// verb because it is not a query: a second ask counts a second suppression, and a window that
     /// rolls past unresolved is otherwise invisible — the quiet logs once when it opens and nothing
     /// after.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     fn withhold_while_rest_quiet(&mut self) -> bool {
         if !self.rest_quiet.is_active(Instant::now()) {
             return false;

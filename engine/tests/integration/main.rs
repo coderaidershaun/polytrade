@@ -4,6 +4,11 @@
 //! environment. None of these tests places an order. A person runs the timing test of the pinned
 //! sender on a linux host, by the latency runbook.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "these tests run against real venues in real time and time their own waits"
+)]
+
 mod binance_scale;
 mod binance_signed;
 mod observer;

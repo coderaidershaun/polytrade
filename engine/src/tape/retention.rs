@@ -34,6 +34,10 @@ impl Retention {
     /// The walk enters only date folders inside table folders, so a live run never reaches into
     /// `sim/`, whose children are table folders. It never follows a symlink, so it stays inside the
     /// run's own folder.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a writer stamps and paces its own files, which are never engine state"
+    )]
     pub(super) fn prune(&self) {
         let Some(cutoff) = SystemTime::now().checked_sub(self.max_age) else {
             return;

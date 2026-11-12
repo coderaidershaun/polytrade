@@ -126,6 +126,10 @@ impl Metrics {
     /// # Errors
     /// [`MetricsError::AnchorSpread`] when the two counter reads sit too far apart. The last good
     /// anchor stays.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the metrics thread anchors ticks to engine time and turns them into time, off the fold"
+    )]
     pub fn take_anchor(&mut self, before: Tick, at: TsUs, after: Tick) -> Result<(), MetricsError> {
         let scale = self.rollup.scale();
         let spread_ns = scale.nanos(before, after).unwrap_or(u64::MAX);
@@ -212,6 +216,10 @@ pub(super) fn metrics_bring_up(
 }
 
 /// The anchor, and the counter read after the clock, which bounds how exact the anchor is.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the metrics thread anchors ticks to engine time and turns them into time, off the fold"
+)]
 fn read_anchor(clock: &EngineClock, stamper: &Stamper) -> (TickAnchor, Tick) {
     let tick = stamper.stamp();
     let at = clock.now();
@@ -266,6 +274,10 @@ impl MetricsThread {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the metrics thread anchors ticks to engine time and turns them into time, off the fold"
+)]
 fn run(mut metrics: Metrics, clock: &EngineClock, stamper: &Stamper, stop: &AtomicBool) {
     crate::log::register_thread("metrics");
     let mut sink = NoTable;

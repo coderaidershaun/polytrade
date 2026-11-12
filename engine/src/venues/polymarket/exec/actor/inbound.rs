@@ -34,6 +34,10 @@ impl Actor {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn on_text(&mut self, text: &str, writer: &mut Writer) -> Option<SessionOutcome> {
         // This is the vendor's only non-JSON frame on this channel; the loop simply resumes
         // once it's handled.
@@ -195,6 +199,10 @@ impl Actor {
 
     /// A frame held past its TTL names a real order at the venue; resync recovers it.
     #[cold]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) fn abandon_expired_frames(&mut self) {
         let expired = self.pending.expired(self.control.clock.now());
         if expired.is_empty() {

@@ -81,6 +81,10 @@ impl Actor {
         is_queued
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) fn on_balance(
         &mut self,
         asset: AssetId,

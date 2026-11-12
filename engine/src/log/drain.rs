@@ -135,6 +135,10 @@ impl LogDrain {
 
     /// Writes every record that waits in each lane, then each new drop count. Returns whether any
     /// line was written.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a log line and its file date take wall time, which is never engine state"
+    )]
     pub fn drain_once(&mut self) -> bool {
         let absorbed = self.absorb_registrations();
         let wrote_records = self.write_records(None);
@@ -149,6 +153,10 @@ impl LogDrain {
     /// syncs the output. The calling thread's own text lane is closed first, so the drain does not
     /// wait for the thread that waits on it. A record still waiting at the deadline is lost and
     /// counted, and its lane is named in the report.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a log line and its file date take wall time, which is never engine state"
+    )]
     pub fn finish(mut self, deadline: Duration) -> DrainReport {
         close_thread_lane();
         let deadline_at = self.clock.now() + DurationUs::from_micros(deadline_micros(deadline));
@@ -209,6 +217,10 @@ impl LogDrain {
 
     /// Writes each lane's waiting records as one batch. With a deadline, stops at the first record
     /// past it and returns false.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a log line and its file date take wall time, which is never engine state"
+    )]
     fn write_records(&mut self, deadline_at: Option<TsUs>) -> bool {
         for ring in &mut self.rings {
             let is_in_time = drain_ring(ring, &mut self.output, &mut self.text, || {
@@ -233,6 +245,10 @@ impl LogDrain {
         wrote
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a log line and its file date take wall time, which is never engine state"
+    )]
     fn write_drops(&mut self) -> bool {
         let now = self.clock.now();
         let mut wrote = false;

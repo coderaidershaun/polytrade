@@ -80,6 +80,10 @@ pub(super) struct Station {
 }
 
 impl Station {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the browser workstation reads display time in its own process"
+    )]
     fn new(ctx: egui::Context, document: Document) -> Self {
         let hash = document
             .location()
@@ -103,6 +107,10 @@ impl Station {
     /// Every trigger runs this: a message, a frame, and a timer that still fires in a hidden tab.
     /// A repaint is requested only when the screen has something new, so the slow starting
     /// cadence survives.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the browser workstation reads display time in its own process"
+    )]
     pub(super) fn pump(&mut self, shared: &Rc<RefCell<Self>>) {
         let now = self.clock.now();
         let mut is_changed = false;
@@ -127,6 +135,10 @@ impl Station {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the browser workstation reads display time in its own process"
+    )]
     pub(super) fn on_frame(&mut self, frame: Frame, shared: &Rc<RefCell<Self>>) {
         let now = self.clock.now();
         match frame {
@@ -223,6 +235,10 @@ impl Station {
         self.document.set_title(&self.title);
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the browser workstation reads display time in its own process"
+    )]
     fn act_on(&mut self, action: LinkAction, shared: &Rc<RefCell<Self>>) {
         let now = self.clock.now();
         match action {

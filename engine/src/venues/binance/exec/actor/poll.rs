@@ -12,6 +12,10 @@ use super::rest::RestJob;
 use super::{Actor, Writer};
 
 impl Actor {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) async fn on_housekeeping(&mut self, writer: &mut Writer) -> Option<SessionOutcome> {
         if let Some(reason) = self.control.wanted_new_exit() {
             self.plan_exit(reason, Some(writer)).await;

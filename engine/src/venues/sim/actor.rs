@@ -124,6 +124,10 @@ impl SimActor {
         self.sync_market_recovery();
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the simulator actor stamps queued time on its answers before the tape records them"
+    )]
     fn publish(
         &mut self,
         received_ts_us: TsUs,

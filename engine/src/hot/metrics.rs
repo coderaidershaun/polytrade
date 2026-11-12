@@ -27,6 +27,10 @@ pub(crate) struct Folded<'a> {
 
 impl DriverSamples {
     #[inline]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the driver loop stamps each message twice for its latency, and the ticks never reach the fold"
+    )]
     pub(crate) fn stamp(&self) -> Tick {
         self.stamper.stamp()
     }

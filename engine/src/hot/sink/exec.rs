@@ -77,6 +77,10 @@ impl PendingCommands {
     /// False = bank full; caller must unwind (command not sent).
     #[inline]
     #[must_use]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the command sink stamps each banked command for its latency, and the fold gets nothing back"
+    )]
     pub(crate) fn bank(&mut self, command: ExecCommand) -> bool {
         if self.banked.len() == self.banked.capacity() {
             return false;

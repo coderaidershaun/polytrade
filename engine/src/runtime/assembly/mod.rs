@@ -117,6 +117,10 @@ impl Engine {
     /// # Errors
     /// Invalid config, unavailable hot_core_id, runtime build failure, failed preflights, or a
     /// pinned senders' thread that cannot pin.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the one clock of the process, started before any producer of message stamps"
+    )]
     fn start<P>(
         identity: RunIdentity,
         config: Config<P>,
