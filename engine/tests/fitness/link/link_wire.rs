@@ -25,9 +25,9 @@ use engine::msg::persist::FeatureId;
 use engine::msg::run_state::RunState;
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{
-    DomQuote, UI_BOOK_LEVELS, UI_ORDER_SNAPSHOT_CAPACITY, UI_ORDER_SNAPSHOT_MAX_TOTAL,
-    UiBookSnapshot, UiBookState, UiEvent, UiLatencyCell, UiLatencyRow, UiLatencySummary,
-    UiWorkingOrder,
+    DomQuote, LATENCY_REPORT_CELLS, LatencyCell, LatencyReport, UI_BOOK_LEVELS,
+    UI_ORDER_SNAPSHOT_CAPACITY, UI_ORDER_SNAPSHOT_MAX_TOTAL, UiBookSnapshot, UiBookState, UiEvent,
+    UiLatencyCell, UiLatencyRow, UiLatencySummary, UiWorkingOrder,
 };
 use engine::runtime::config::ExecutionMode;
 use proptest::prelude::*;
@@ -441,6 +441,35 @@ fn arb_latency() -> impl Strategy<Value = UiLatencySummary> {
         )
 }
 
+fn arb_report_cell() -> impl Strategy<Value = LatencyCell> {
+    any::<[u64; 5]>().prop_map(|[count, p50_ns, p99_ns, p999_ns, max_ns]| LatencyCell {
+        count,
+        p50_ns,
+        p99_ns,
+        p999_ns,
+        max_ns,
+    })
+}
+
+fn arb_latency_report() -> impl Strategy<Value = LinkBody> {
+    (
+        any::<i64>(),
+        prop::array::uniform3(prop::option::of(any::<i64>())),
+        prop::collection::vec(arb_report_cell(), LATENCY_REPORT_CELLS),
+        prop::option::of(arb_wire_f64()),
+    )
+        .prop_map(|(built_ts_us, ages, cells, backlog_ema)| {
+            LinkBody::Latency(LatencyReport {
+                built_ts_us: TsUs::from_micros(built_ts_us),
+                ages: ages.map(|age| age.map(DurationUs::from_micros)),
+                cells: cells
+                    .try_into()
+                    .expect("the generator draws one cell for each slot"),
+                backlog_ema,
+            })
+        })
+}
+
 fn arb_event() -> impl Strategy<Value = LinkBody> {
     let head = (any::<u16>(), any::<u64>(), any::<i64>());
     prop_oneof![
@@ -707,6 +736,8 @@ fn arb_datagram() -> impl Strategy<Value = LinkDatagram> {
                     }
                 }
             ),
+        (arb_envelope(TopicId::LATENCY), arb_latency_report())
+            .prop_map(|(envelope, body)| LinkDatagram { envelope, body }),
         (
             arb_envelope(TopicId(LINK_MAX_TOPICS as u16)),
             any::<i64>(),
@@ -822,7 +853,7 @@ fn rejects_frames_with_distinct_causes() {
 
     let drifted = LinkHash::of_fields(&["microprice", "mid", "imbalance"]);
     let book_bytes = encode(&book_datagram());
-    let unknown_topic = TopicId(TopicId::LIFECYCLE.0 + 1);
+    let unknown_topic = TopicId(TopicId::LATENCY.0 + 1);
     let forged_field_count = LINK_MAX_FIELDS as u8 + 1;
     let forged_book_len = UI_BOOK_LEVELS as u16 + 1;
     let over_capacity = (UI_ORDER_SNAPSHOT_CAPACITY + 1) as u8;
@@ -1022,6 +1053,7 @@ fn every_topic_the_engine_can_stamp_indexes_inside_its_sequence_array() {
             TopicId::CATALOG_INSTRUMENTS,
             TopicId::CATALOG_FEATURES,
             TopicId::LIFECYCLE,
+            TopicId::LATENCY,
         ] {
             assert!(
                 usize::from(engine.0) < slots,
@@ -1623,6 +1655,43 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                     },
                 },
             ),
+        ),
+        (
+            "latency-report",
+            LinkDatagram {
+                envelope: envelope(TopicId::LATENCY, 0x1010),
+                body: LinkBody::Latency(LatencyReport {
+                    built_ts_us: TsUs::from_micros(1_700_000_000_001_016),
+                    ages: [
+                        Some(DurationUs::from_micros(0x0102_0304)),
+                        None,
+                        Some(DurationUs::from_micros(-0x0506)),
+                    ],
+                    cells: std::array::from_fn(|index| {
+                        let base = 0x0100_0000_0000 * (index as u64 + 1);
+                        LatencyCell {
+                            count: base + 1,
+                            p50_ns: base + 2,
+                            p99_ns: base + 3,
+                            p999_ns: base + 4,
+                            max_ns: base + 5,
+                        }
+                    }),
+                    backlog_ema: Some(0.312_5 + 1.0e-9),
+                }),
+            },
+        ),
+        (
+            "latency-report-empty",
+            LinkDatagram {
+                envelope: envelope(TopicId::LATENCY, 0x1011),
+                body: LinkBody::Latency(LatencyReport {
+                    built_ts_us: TsUs::from_micros(1_700_000_000_001_017),
+                    ages: [None; 3],
+                    cells: [LatencyCell::EMPTY; LATENCY_REPORT_CELLS],
+                    backlog_ema: None,
+                }),
+            },
         ),
     ]
 }

@@ -3,8 +3,9 @@
 
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::Level;
-use engine::msg::time::DurationUs;
-use engine::msg::ui::{UiBookState, UiLatencyCell, UiLatencyRow, UiLatencySummary};
+use engine::msg::latency::Stage;
+use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::ui::{LatencyCell, LatencyFlow, LatencyReport, UiBookState};
 use engine::operator::workstation::chart::model::{BookContinuity, ChartModel};
 
 use crate::fixture::{self, BASE_TS, INSTRUMENT, book, px, unit};
@@ -20,7 +21,11 @@ const COMMITS_PER_BUCKET: i64 = 4;
 const TICK: Price = Price(FIXED_SCALE);
 const BASE_BID: i64 = 65_990;
 
-const LATENCY_SAMPLES: u64 = 600;
+/// Enough samples for a 99th percentile.
+const LATENCY_SAMPLES: u64 = 12_000;
+
+/// Too few samples for a 99th percentile.
+const THIN_SAMPLES: u64 = 600;
 
 /// `tick` is `Price(0)` for an instrument with no venue grid.
 pub struct ChartScene {
@@ -44,37 +49,49 @@ pub fn chart_scenes() -> Vec<ChartScene> {
     ]
 }
 
-/// Every cell of the latency grid filled, from a few microseconds to a mean past the grid's bound,
-/// so the grid shows its overflow word.
-pub fn latency_summary() -> UiLatencySummary {
-    UiLatencySummary {
-        market_data: latency_row([4_200, 38, 12, 85, 4_340, 8_900]),
-        execution: latency_row([21_500, 45, 18, 140, 21_700, 12_400_000]),
-        hot_path: latency_row([3_100, 29, 9, 61, 3_200, 6_400]),
+/// Every cell of the latency grid filled, from under a microsecond to a 99th percentile past the
+/// grid's bound, so the grid shows its overflow word, and one stage with too few samples, so it
+/// shows `thin`.
+pub fn latency_report() -> LatencyReport {
+    let cells: Vec<LatencyCell> = LatencyFlow::ALL
+        .iter()
+        .flat_map(|&flow| {
+            flow.stages()
+                .iter()
+                .map(move |&stage| report_cell(flow, stage))
+        })
+        .collect();
+    LatencyReport {
+        built_ts_us: TsUs::from_micros(BASE_TS),
+        ages: [Some(DurationUs::ZERO); 3],
+        cells: cells
+            .try_into()
+            .expect("one cell for each stage of each flow"),
         backlog_ema: Some(0.4),
     }
 }
 
-/// The means in microseconds, in the grid's column order.
-fn latency_row(means_us: [i64; 6]) -> UiLatencyRow {
-    let [
-        exchange_to_received,
-        received_to_queued,
-        queue_wait,
-        processing,
-        end_to_end,
-        order_round_trip,
-    ] = means_us.map(|mean_us| UiLatencyCell {
-        count: LATENCY_SAMPLES,
-        sum_us: mean_us * LATENCY_SAMPLES as i64,
-    });
-    UiLatencyRow {
-        exchange_to_received,
-        received_to_queued,
-        queue_wait,
-        processing,
-        end_to_end,
-        order_round_trip,
+/// The 99th percentile of each cell in microseconds, in the grid's column order.
+fn report_cell(flow: LatencyFlow, stage: Stage) -> LatencyCell {
+    let p99_us: f64 = match (flow, stage) {
+        (LatencyFlow::Execution, Stage::OrderRoundTrip) => 12_400_000.0,
+        (_, Stage::VenueToEngine) => 4_200.0,
+        (_, Stage::VenueInternal) => 1_900.0,
+        (_, Stage::WireToMessage) => 38.0,
+        (_, Stage::QueueWait) => 12.0,
+        (_, Stage::Processing) => 0.85,
+        (_, Stage::MessageToDecision) => 13.0,
+        (_, Stage::OrderRoundTrip) => 8_900.0,
+        (_, Stage::DecisionToWire | Stage::BankAndLaneWait | Stage::Send) => 21.5,
+    };
+    let count = if stage == Stage::DecisionToWire { THIN_SAMPLES } else { LATENCY_SAMPLES };
+    let p99_ns = (p99_us * 1_000.0) as u64;
+    LatencyCell {
+        count,
+        p50_ns: p99_ns / 2,
+        p99_ns,
+        p999_ns: p99_ns * 2,
+        max_ns: p99_ns * 3,
     }
 }
 

@@ -11,7 +11,7 @@ mod error;
 mod exec;
 mod exec_identity;
 mod link;
-mod metrics;
+pub mod metrics;
 mod persist;
 mod prepare;
 mod queues;
@@ -49,7 +49,7 @@ use crate::{error, info, warn};
 use drain::install_panic_hook;
 use exec::{ExecBringUp, ExecBringUpSetup, exec_bring_up};
 use link::link_bring_up;
-use metrics::MetricsHandle;
+use metrics::{MetricsBringUp, MetricsBringUpSetup, MetricsThread, metrics_bring_up};
 use persist::{PersistBringUp, PersistBringUpSetup, persist_bring_up};
 use prepare::{Prepared, prepare};
 use queues::{InputQueues, build_input_queues};
@@ -99,7 +99,7 @@ struct Engine {
     exec: Option<EdgeHandle>,
     /// Simulated venues only: the taps the venue matches against, held open across its sweep.
     exec_tap_gate: Option<Arc<SimTapGate>>,
-    metrics: MetricsHandle,
+    metrics: MetricsThread,
     fatal: FatalSignal,
     drain: DrainSignal,
     lifecycle: SyncSender<UiLifecycle>,
@@ -214,12 +214,21 @@ impl Engine {
             &restored_exposure,
         );
 
-        let (metrics_producer, metrics_consumer) =
+        // SMELL: the hot thread still rolls up its own snapshots, which nothing reads now, and it
+        // writes no sample yet, so the metrics thread reports no stage until the hot thread's driver
+        // takes these sample producers.
+        let (metrics_producer, _unread_snapshots) =
             RingBuffer::<MetricsSnapshot>::new(METRICS_RING_CAPACITY);
-        let metrics = {
-            let _guard = tokio_handle.enter();
-            MetricsHandle::spawn(metrics_consumer)
-        };
+        let MetricsBringUp {
+            thread: metrics,
+            samples: _unwritten_samples,
+            reports: latency_reports,
+        } = metrics_bring_up(MetricsBringUpSetup {
+            latency: &config.latency,
+            clock: &clock,
+            clock_source: latency_clock.unwrap_or_else(|refusal| refusal.fallback()),
+            queue_count: registry.input_queue_count(),
+        });
 
         // A dedicated ring isolates a telemetry flood from engine WARN/ERROR records.
         let (strategy_log_producer, strategy_log_consumer) =
@@ -367,6 +376,7 @@ impl Engine {
                     on_controller_loss,
                     inbound: link_producer.expect("a bound link always builds its input queue"),
                     outbound: link_feed.expect("a bound link always builds its outbound ring"),
+                    latency: latency_reports,
                     channels: ui_channels,
                     control,
                     clock: clock.clone(),

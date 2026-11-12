@@ -17,6 +17,7 @@ use crate::hot::spawn::LinkQueueProducer;
 use crate::msg::inbound::{InboundMessage, RunControl};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{DurationUs, EngineClock, TsUs};
+use crate::msg::ui::LatencyReport;
 use crate::msg::ui::channel::UiChannels;
 use crate::runtime::config::{ConfigError, ControllerLoss, ExecutionMode, PeerSubscription};
 use crate::runtime::shutdown::{RunControlGate, TaskHandle};
@@ -108,6 +109,8 @@ pub(crate) struct LinkActorSetup {
     pub inbound: LinkQueueProducer,
     pub outbound: Consumer<OutboundLink>,
     pub channels: UiChannels,
+    /// The metrics thread's reports, about one a second.
+    pub latency: Consumer<LatencyReport>,
     /// Link writes desired, reads acknowledged; dispatch does reverse, never reads desired.
     pub control: RunControlGate,
     pub clock: EngineClock,
@@ -160,6 +163,7 @@ struct Actor {
     inbound: LinkQueueProducer,
     outbound: Consumer<OutboundLink>,
     channels: UiChannels,
+    latency: Consumer<LatencyReport>,
     control: RunControlGate,
     clock: EngineClock,
     spin_interval: DurationUs,
@@ -198,6 +202,7 @@ impl Actor {
             inbound: setup.inbound,
             outbound: setup.outbound,
             channels: setup.channels,
+            latency: setup.latency,
             control: setup.control,
             clock: setup.clock,
             spin_interval: setup.spin_interval,
