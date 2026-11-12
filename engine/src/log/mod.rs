@@ -5,8 +5,8 @@
 #[cfg(target_arch = "wasm32")]
 mod console;
 mod drain;
+mod lane;
 mod output;
-mod producer;
 mod record;
 mod render;
 
@@ -20,16 +20,16 @@ pub use console::register_thread;
 #[cfg(not(target_arch = "wasm32"))]
 pub use drain::LogDrain;
 #[cfg(not(target_arch = "wasm32"))]
-pub use producer::open_hot_lane;
+pub use lane::open_hot_lane;
 #[cfg(not(target_arch = "wasm32"))]
-pub use producer::register_thread;
+pub use lane::register_thread;
 pub use record::{Callsite, HotRecord, Level, TextRecord, WORDS_PER_RECORD};
 pub use render::{LogValue, Spec};
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) use console::register_hot_lane;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use producer::{register_external_ring, register_hot_lane, tag_task};
+pub(crate) use lane::{register_external_ring, register_hot_lane, tag_task};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use record::TEXT_CAPACITY;
 pub(crate) use record::set_message_time;
@@ -40,7 +40,7 @@ pub(crate) use render::fieldless_log_value;
 pub use console::{hot_message, text_message};
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
-pub use producer::{hot_message, text_message};
+pub use lane::{hot_message, text_message};
 #[doc(hidden)]
 pub use render::{LogArgs, Renderer};
 
@@ -86,7 +86,7 @@ impl LogHandle {
 /// Panics if called more than once in a process, and in the browser build, which can start no
 /// drain thread. The browser needs no init: there the macros print straight to the console.
 pub fn init(config: &LogConfig) -> LogHandle {
-    let channels = producer::install();
+    let channels = lane::install();
     let output = output::Output::open(config);
     let drain = Arc::new(AtomicBool::new(false));
     let thread_drain = Arc::clone(&drain);

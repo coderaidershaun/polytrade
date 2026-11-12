@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use rtrb::Consumer;
 
+use super::lane::{DrainChannels, LaneReader};
 use super::output::{DropNotice, Output};
-use super::producer::{DrainChannels, LaneReader};
 use super::record::HotRecord;
 
 const IDLE_POLL: Duration = Duration::from_millis(1);

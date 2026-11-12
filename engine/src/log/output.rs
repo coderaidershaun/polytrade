@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use super::LogConfig;
-use super::producer::BacktraceMessage;
+use super::lane::BacktraceMessage;
 use super::record::Callsite;
 use crate::msg::time::{TsUs, boot_stamp_us};
 
