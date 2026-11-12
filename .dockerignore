@@ -1,0 +1,10 @@
+*
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!engine
+!strategies
+!lab
+!examples
+strategies/.venv
+strategies/*.ipynb

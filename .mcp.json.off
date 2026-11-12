@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "polysim": {
+      "command": "cargo",
+      "args": ["run", "-q", "--release", "--features", "mcp", "--bin", "polysim-mcp"]
+    }
+  }
+}

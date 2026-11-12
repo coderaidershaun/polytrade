@@ -1,0 +1,189 @@
+{
+  "provenance": "Every row is a message string quoted verbatim from POLY_API.md section 9, which transcribes Polymarket's own error reference. This venue publishes no numeric error codes, so the message text IS the contract and a paraphrase would pin nothing.",
+  "body_shape": "A JSON object is serialised as the response body; a JSON string is used as the body bytes verbatim, which is how the empty 425 body is expressed.",
+  "cases": [
+    {
+      "name": "unauthorized",
+      "status": 401,
+      "body": {
+        "error": "Unauthorized/Invalid api key"
+      }
+    },
+    {
+      "name": "invalid_l1_headers",
+      "status": 401,
+      "body": {
+        "error": "Invalid L1 Request headers"
+      }
+    },
+    {
+      "name": "invalid_order_payload",
+      "status": 400,
+      "body": {
+        "error": "Invalid order payload"
+      }
+    },
+    {
+      "name": "owner_mismatch",
+      "status": 400,
+      "body": {
+        "error": "the order owner has to be the owner of the API KEY"
+      }
+    },
+    {
+      "name": "signer_mismatch",
+      "status": 400,
+      "body": {
+        "error": "the order signer address has to be the address of the API KEY"
+      }
+    },
+    {
+      "name": "address_banned",
+      "status": 400,
+      "body": {
+        "error": "'0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266' address banned"
+      }
+    },
+    {
+      "name": "closed_only_mode",
+      "status": 400,
+      "body": {
+        "error": "'0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266' address in closed only mode"
+      }
+    },
+    {
+      "name": "not_enough_balance",
+      "status": 400,
+      "body": {
+        "error": "not enough balance / allowance"
+      }
+    },
+    {
+      "name": "tick_size_rule",
+      "status": 400,
+      "body": {
+        "error": "order 0x3f1c9b4a72e5d08a1c6b3fd2094e7a5b81c02d6e9fa473b5c8e10d92a4f67b3c is invalid. Price (0.525) breaks minimum tick size rule: 0.01"
+      }
+    },
+    {
+      "name": "below_minimum_size",
+      "status": 400,
+      "body": {
+        "error": "order 0x3f1c9b4a72e5d08a1c6b3fd2094e7a5b81c02d6e9fa473b5c8e10d92a4f67b3c is invalid. Size (4.9) lower than the minimum: 5"
+      }
+    },
+    {
+      "name": "duplicated",
+      "status": 400,
+      "body": {
+        "error": "order 0x3f1c9b4a72e5d08a1c6b3fd2094e7a5b81c02d6e9fa473b5c8e10d92a4f67b3c is invalid. Duplicated."
+      }
+    },
+    {
+      "name": "post_only_crosses_book",
+      "status": 400,
+      "body": {
+        "error": "invalid post-only order: order crosses book"
+      }
+    },
+    {
+      "name": "invalid_expiration",
+      "status": 400,
+      "body": {
+        "error": "invalid expiration"
+      }
+    },
+    {
+      "name": "fok_not_fully_filled",
+      "status": 400,
+      "body": {
+        "error": "order couldn't be fully filled. FOK orders are fully filled or killed."
+      }
+    },
+    {
+      "name": "fak_no_match",
+      "status": 400,
+      "body": {
+        "error": "no orders found to match with FAK order"
+      }
+    },
+    {
+      "name": "market_not_ready",
+      "status": 400,
+      "body": {
+        "error": "the market is not yet ready to process new orders"
+      }
+    },
+    {
+      "name": "order_match_delayed",
+      "status": 400,
+      "body": {
+        "error": "order match delayed due to market conditions"
+      }
+    },
+    {
+      "name": "ctf_contract_cancel",
+      "status": 400,
+      "body": {
+        "error": "order canceled in the CTF exchange contract"
+      }
+    },
+    {
+      "name": "matching_engine_restart",
+      "status": 425,
+      "body": ""
+    },
+    {
+      "name": "rate_limited",
+      "status": 429,
+      "body": {
+        "error": "Too Many Requests",
+        "retry_after_seconds": 3
+      }
+    },
+    {
+      "name": "order_timed_out",
+      "status": 500,
+      "body": {
+        "error": "order timed out"
+      }
+    },
+    {
+      "name": "no_matching_orders",
+      "status": 500,
+      "body": {
+        "error": "there are no matching orders"
+      }
+    },
+    {
+      "name": "rounding_issues",
+      "status": 500,
+      "body": {
+        "error": "the trade contains rounding issues"
+      }
+    },
+    {
+      "name": "trading_disabled",
+      "status": 503,
+      "body": {
+        "error": "Trading is currently disabled, please try again later"
+      }
+    },
+    {
+      "name": "cancel_only",
+      "status": 503,
+      "body": {
+        "error": "Trading is currently cancel-only, please try again later"
+      }
+    },
+    {
+      "name": "post_only_mode",
+      "status": 503,
+      "body": {
+        "error": "post-only mode: only post-only orders and cancels are allowed",
+        "code": "post_only_mode",
+        "retry_after_seconds": 120
+      }
+    }
+  ]
+}

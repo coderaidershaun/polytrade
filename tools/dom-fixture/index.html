@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>dom-fixture</title>
+    <base data-trunk-public-url />
+    <link data-trunk rel="rust" href="../../engine/Cargo.toml" data-bin="dom-fixture" data-wasm-opt="2" />
+    <style>
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            height: 100dvh;
+            overflow: hidden;
+            overscroll-behavior: none;
+            background: #0a0d12;
+        }
+
+        body {
+            position: fixed;
+            inset: 0;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+            -webkit-tap-highlight-color: transparent;
+            outline: none;
+            background: #0a0d12;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="fixture"></canvas>
+</body>
+</html>

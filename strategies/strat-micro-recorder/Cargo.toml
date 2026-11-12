@@ -1,0 +1,21 @@
+[package]
+name = "strat-micro-recorder"
+version = "0.1.0"
+edition = "2024"
+authors = ["Shaun McDonogh"]
+license = "MIT"
+
+[[bin]]
+name = "strat-micro-recorder-te-binance-spot-btcusdt"
+path = "te-binance-spot-btcusdt/main.rs"
+
+[[bin]]
+name = "strat-micro-recorder-te-polymarket-btc-updown-5m"
+path = "te-polymarket-btc-updown-5m/main.rs"
+
+[dependencies]
+engine = { path = "../../engine" }
+serde = { version = "1.0.228", default-features = false, features = ["std", "derive"] }
+
+[lints]
+workspace = true

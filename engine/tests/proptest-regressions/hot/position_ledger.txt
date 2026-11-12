@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 416f3f15b11ec27c8e46de38837823649fbce7d86c8bdecf11aa551cec2df044 # shrinks to ops = [Fill { side: Buy, price: 5000000000, qty: 12500000 }]

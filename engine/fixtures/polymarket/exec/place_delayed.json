@@ -1,0 +1,10 @@
+{
+  "success": true,
+  "errorMsg": "",
+  "orderID": "0x7d2e8a015c93b64fe0a17d3b28c95f4610ed7b3a92c4085fd61b73e2a908c54d",
+  "status": "delayed",
+  "makingAmount": "0",
+  "takingAmount": "0",
+  "transactionsHashes": [],
+  "tradeIDs": []
+}

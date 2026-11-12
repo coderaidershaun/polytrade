@@ -1,0 +1,31 @@
+{
+  "id": "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0",
+  "status": 400,
+  "error": {
+    "code": -2038,
+    "msg": "Order amend (quantity increase) is not supported."
+  },
+  "rateLimits": [
+    {
+      "rateLimitType": "ORDERS",
+      "interval": "SECOND",
+      "intervalNum": 10,
+      "limit": 100,
+      "count": 12
+    },
+    {
+      "rateLimitType": "ORDERS",
+      "interval": "DAY",
+      "intervalNum": 1,
+      "limit": 200000,
+      "count": 4043
+    },
+    {
+      "rateLimitType": "REQUEST_WEIGHT",
+      "interval": "MINUTE",
+      "intervalNum": 1,
+      "limit": 6000,
+      "count": 321
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "errorMsg": "",
+  "orderID": "0x40df4029af3a4604a82ff654ed6d35d8863b7156e2a2dfee48d44ebfeb93573e",
+  "takingAmount": "5.42553",
+  "makingAmount": "2.549999",
+  "status": "matched",
+  "transactionsHashes": [
+    "0xb5dfc61fac783fd24ff48176bab18d1a29270725483d485630046947ad090d47"
+  ],
+  "success": true
+}

@@ -8,3 +8,29 @@
 .claude/settings.local.json
 /.rex/*
 /.claude/worktrees/
+
+# Rules of polysim, joined below. Its rules `/target` and `.scratch` are already above.
+
+# Build output
+/dist
+/browser/dist
+/tools/dom-fixture/dist
+
+# Run output
+/logs
+/data
+
+# The engine's surviving position. Committing one engine's position would restore it onto every
+# checkout of this repo.
+/exposure
+
+# Secrets: config names the env vars, never holds the secret
+.env
+
+# Python
+.venv
+__pycache__/
+
+# Agent tooling and scratch work
+.claude
+.work

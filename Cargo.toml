@@ -1,26 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
-default-members = ["crates/*"]
-
-[workspace.package]
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.97"
-license = "MIT OR Apache-2.0"
-publish = false
-
-[workspace.dependencies]
-# Internal crates
-polytrade-core = { path = "crates/core" }
+members = ["engine", "lab", "strategies/strat-micro-recorder"]
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
-[workspace.lints.clippy]
-all = { level = "warn", priority = -1 }
-
-[profile.release]
-lto = "thin"
+[profile.deploy]
+inherits = "release"
+lto = "fat"
 codegen-units = 1
-strip = true

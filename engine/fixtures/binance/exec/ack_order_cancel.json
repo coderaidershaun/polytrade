@@ -1,0 +1,46 @@
+{
+  "id": "5633b6a2-90a9-4192-83e7-925c90b6a2fd",
+  "status": 200,
+  "result": {
+    "symbol": "BTCUSDT",
+    "orderId": 12510053279,
+    "orderListId": -1,
+    "clientOrderId": "4zR9HFcEq8gM1tWUqPEUHc",
+    "transactTime": 1785000000657,
+    "price": "118000.00000000",
+    "origQty": "0.00010000",
+    "executedQty": "0.00000000",
+    "origQuoteOrderQty": "0.00000000",
+    "cummulativeQuoteQty": "0.00000000",
+    "status": "CANCELED",
+    "timeInForce": "GTC",
+    "type": "LIMIT_MAKER",
+    "side": "BUY",
+    "workingTime": 1785000000657,
+    "selfTradePreventionMode": "NONE",
+    "origClientOrderId": "pd-7ad60b6c-6a64f040000c0001"
+  },
+  "rateLimits": [
+    {
+      "rateLimitType": "ORDERS",
+      "interval": "SECOND",
+      "intervalNum": 10,
+      "limit": 100,
+      "count": 12
+    },
+    {
+      "rateLimitType": "ORDERS",
+      "interval": "DAY",
+      "intervalNum": 1,
+      "limit": 200000,
+      "count": 4043
+    },
+    {
+      "rateLimitType": "REQUEST_WEIGHT",
+      "interval": "MINUTE",
+      "intervalNum": 1,
+      "limit": 6000,
+      "count": 321
+    }
+  ]
+}
