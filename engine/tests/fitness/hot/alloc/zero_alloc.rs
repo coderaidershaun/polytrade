@@ -6,13 +6,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use engine::hot::book::{Book, SnapshotOutcome};
 use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup, LinkWiring};
-use engine::hot::exec::{DesiredQuote, MAX_ORDER_INSTRUMENTS, QuoteLevel};
+use engine::hot::exec::MAX_ORDER_INSTRUMENTS;
 use engine::hot::ingress::IngressQueues;
 use engine::hot::metrics::DriverSamples;
 use engine::hot::quant::intensity::IntensityFit;
 use engine::hot::sink::{ExecSink, LinkSink};
 use engine::hot::spawn::{HotDriver, Step};
-use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
+use engine::hot::strategy::{Strategy, StrategyConfig};
 use engine::hot::tracker::MicroTracker;
 use engine::link::{
     InboundLink, LinkFrame, LinkHash, LinkOrigin, LinkPayload, OutboundLink, TopicId,
@@ -20,18 +20,16 @@ use engine::link::{
 };
 use engine::log::{HotRecord, LaneReader, TextRecord, open_hot_lane, open_text_lane};
 use engine::msg::exec::{
-    AccountChunk, ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, VenueOrderStatus,
+    AccountChunk, ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use engine::msg::inbound::{InboundMessage, RunControl, SpinTick};
+use engine::msg::ids::{AssetId, FIXED_SCALE, Price, Qty, Side};
+use engine::msg::inbound::InboundMessage;
 use engine::msg::persist::{FeatureId, PersistRecord};
-use engine::msg::run_state::RunAssertion;
-use engine::msg::run_state::RunState;
 use engine::msg::time::{DurationUs, Stamper, TsUs};
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
 use engine::runtime::config::{
     BinanceMarket, Instruments, IntensitySpec, KlineInterval, PolySeries, RecordedTables,
-    SpinField, StrategySpec, Subscriptions, TableKind, TrackerSpec, VenueMarket,
+    StrategySpec, Subscriptions, TableKind, TrackerSpec, VenueMarket,
 };
 use engine::runtime::exposure::ExposureSnapshot;
 use engine::runtime::metrics::{SampleProducers, SinkKind};
@@ -41,98 +39,15 @@ use engine::venues::exec::open_orders_snapshot_end;
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::engine_support::{
-    FillPen, NOMINAL_SPIN, ONE, account_chunk, book_reset, delta_chunk, detached_setup,
-    engine_view, engine_with_ui, engine_with_ui_and_exec, engine_without_persistence,
-    engine_without_warmup, exec_event, exposure_ring, idle_at, instrument_row, kline, persist_ring,
-    persist_ring_for, recorder_feature_id, recorder_spec, rotation, run_control, running_at,
-    snapshot_pair, spin, strategy_log_ring, tracker_spec_all, trade, ts, ui_book_ring,
-    ui_event_ring,
+    ONE, account_chunk, book_reset, delta_chunk, detached_setup, engine_view, exec_event,
+    exposure_ring, idle_at, instrument_row, kline, persist_ring_for, recorder_feature_id,
+    recorder_spec, rotation, run_control, running_at, snapshot_pair, spin, strategy_log_ring,
+    tracker_spec_all, trade, ts, ui_book_ring, ui_event_ring,
 };
 use crate::hot::driver::{Shipped, exec_settings, readiness};
+use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
 use crate::poly_strategy::{PolyUpParams, PolyUpPublisher, link_schema};
 use crate::runtime::metrics::Harness;
-
-/// Drains both UI feed consumers so the emission path exercises the ring's success push, not just
-/// the full-ring drop — and the pop path itself must not allocate.
-fn drain_ui(books: &mut Consumer<UiBookSnapshot>, events: &mut Consumer<UiEvent>) {
-    while let Ok(snapshot) = books.pop() {
-        std::hint::black_box(snapshot);
-    }
-    while let Ok(event) = events.pop() {
-        std::hint::black_box(event);
-    }
-}
-use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
-use crate::raw_recorder::RecorderStrategy;
-
-/// Returns `Some(is_closed)` on a kline so the caller can confirm both open and closed flowed.
-fn step(engine: &mut HotEngine, consumer: &mut Consumer<PersistRecord>, i: i64) -> Option<bool> {
-    let (message, kline_closed) = step_message(i);
-    // SMELL: this calls `dispatch` with a made-up pop, so the loop that pops the input rings is
-    // never measured, and no execution or account message reaches it. An allocation on either
-    // path passes this test.
-    engine.dispatch(&message);
-    while let Ok(record) = consumer.pop() {
-        std::hint::black_box(record);
-    }
-    kline_closed
-}
-
-/// The repeating message mix the steady-state windows drive, shared so the with- and
-/// without-persistence configurations are measured over the identical sequence.
-fn step_message(i: i64) -> (InboundMessage, Option<bool>) {
-    let mut kline_closed = None;
-    let message = match i % 7 {
-        0 => InboundMessage::Trade(trade(0, 100 * ONE + i, 1_000_000, Side::Buy, i)),
-        1 => InboundMessage::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, ONE + (i % 5))], i)),
-        2 => {
-            // `i % 7` is always 2 in this arm, so the closed flag is derived from `i / 7`, which
-            // actually varies.
-            let is_closed = (i / 7) % 2 == 0;
-            kline_closed = Some(is_closed);
-            InboundMessage::Kline(kline(
-                0,
-                KlineInterval::OneMinute,
-                (100 * ONE, 101 * ONE, 99 * ONE, 100 * ONE),
-                is_closed,
-                i,
-            ))
-        }
-        3 => InboundMessage::SpinTick(spin(i as u64, i)),
-        4 => InboundMessage::Trade(trade(1, 200 * ONE + i, 1_000_000, Side::Sell, i)),
-        5 => InboundMessage::Book(delta_chunk(1, Side::Sell, &[(201 * ONE, ONE + (i % 5))], i)),
-        // Rotation wipes the slot's derived state in place (Vec::clear, no realloc) and never
-        // touches the book, so instrument 0's book stays valid for the following deltas.
-        _ => InboundMessage::MarketRotation(rotation(0, 300 * ONE + i, 600 * ONE + i, i)),
-    };
-    (message, kline_closed)
-}
-
-fn recorder_all_tables() -> Box<RecorderStrategy> {
-    Box::new(RecorderStrategy::from_spec(
-        &recorder_spec(vec![
-            TableKind::Trades,
-            TableKind::BookEvents,
-            TableKind::Klines,
-            TableKind::Features,
-        ]),
-        engine_view(NOMINAL_SPIN),
-    ))
-}
-
-fn seed_two_instruments(engine: &mut HotEngine) {
-    for instrument in 0..2u16 {
-        let base = 100 * ONE * i64::from(instrument + 1);
-        let (bids, asks) = snapshot_pair(
-            instrument,
-            &[(base, 2 * ONE), (base - ONE, ONE)],
-            &[(base + ONE, ONE), (base + 2 * ONE, 2 * ONE)],
-            0,
-        );
-        engine.dispatch(&InboundMessage::Book(bids));
-        engine.dispatch(&InboundMessage::Book(asks));
-    }
-}
 
 fn seeded_book() -> Book {
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, 2 * ONE)], &[(101 * ONE, ONE)], 0);
@@ -144,100 +59,6 @@ fn seeded_book() -> Book {
         (SnapshotOutcome::Clean, SnapshotOutcome::Clean)
     );
     book
-}
-
-/// Two fully-configured instruments pumped across every category; the measured 100k-message
-/// window must not touch the allocator.
-#[test]
-fn steady_state_dispatch_does_not_allocate() {
-    let instruments = [
-        instrument_row(0, tracker_spec_all(100), 128),
-        instrument_row(1, tracker_spec_all(100), 128),
-    ];
-    let (sink, mut consumer) = persist_ring(4096);
-    let (log_sink, _log_consumer) = strategy_log_ring(64);
-    let strategy = recorder_all_tables();
-    let (mut engine, mut ui_books, mut ui_events) =
-        engine_with_ui(&instruments, strategy, sink, log_sink, DurationUs::ZERO);
-
-    seed_two_instruments(&mut engine);
-    while consumer.pop().is_ok() {}
-    drain_ui(&mut ui_books, &mut ui_events);
-
-    for i in 0..10_000i64 {
-        step(&mut engine, &mut consumer, i);
-        drain_ui(&mut ui_books, &mut ui_events);
-    }
-
-    let mut open_klines = 0u64;
-    let mut closed_klines = 0u64;
-    let before = crate::alloc_count();
-    for i in 10_000..110_000i64 {
-        match step(&mut engine, &mut consumer, i) {
-            Some(true) => closed_klines += 1,
-            Some(false) => open_klines += 1,
-            None => {}
-        }
-        drain_ui(&mut ui_books, &mut ui_events);
-    }
-    let after = crate::alloc_count();
-
-    assert_eq!(after, before, "dispatch allocated in steady state");
-    assert!(
-        open_klines > 0 && closed_klines > 0,
-        "both open and closed klines must flow: open={open_klines} closed={closed_klines}"
-    );
-
-    // A standalone tracker with the same spec samples on every bar close, so the trades in the
-    // measured window are large enough to close bars.
-    let mut tracker = MicroTracker::new(&tracker_spec_all(100), &[KlineInterval::OneMinute], None);
-    let book = seeded_book();
-    tracker.on_book(&book);
-    for when in 0..8i64 {
-        tracker.on_trade(&trade(0, 100 * ONE, 1_000_000, Side::Buy, when));
-    }
-    let samples = tracker
-        .volume_sampled(SpinField::Microprice)
-        .map_or(0, |queue| queue.len());
-    assert!(samples > 0, "the volume clock samples on every bar close");
-}
-
-/// The same window with NO persistence configured — the zero-allocation guarantee binds both
-/// configurations, and discarding a row must be at least as allocation-free as recording one.
-/// The strategy still emits into all four tables: the config is the authority, so this is the
-/// gate's worst case, one discard per emit.
-#[test]
-fn steady_state_dispatch_without_persistence_does_not_allocate() {
-    let instruments = [
-        instrument_row(0, tracker_spec_all(100), 128),
-        instrument_row(1, tracker_spec_all(100), 128),
-    ];
-    let (log_sink, _log_consumer) = strategy_log_ring(64);
-    let strategy = recorder_all_tables();
-    let mut engine = engine_without_persistence(&instruments, strategy, log_sink);
-
-    seed_two_instruments(&mut engine);
-    for i in 0..2_000i64 {
-        let (message, _) = step_message(i);
-        engine.dispatch(&message);
-    }
-
-    let before = crate::alloc_count();
-    for i in 2_000..22_000i64 {
-        let (message, _) = step_message(i);
-        engine.dispatch(&message);
-    }
-    let after = crate::alloc_count();
-
-    assert_eq!(
-        after, before,
-        "dispatch allocated in steady state with persistence off"
-    );
-    assert_eq!(
-        engine.dropped_persist_records(),
-        0,
-        "with no ring there is nothing to drop into — the rows never exist"
-    );
 }
 
 fn intensity_spec() -> TrackerSpec {
@@ -1441,114 +1262,6 @@ fn step_allocates_nothing_for_each_message_kind() {
     }
 }
 
-/// Declares a quote and banks a log line every spin, so the measured window drives the two paths the
-/// recorders never touch. The log message formats into the fixed record with no allocation.
-struct LaneProbe;
-
-impl Strategy for LaneProbe {
-    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, tick: &SpinTick) {
-        declare_quote(ctx);
-        engine::note!(ctx, "spin {}", tick.seq);
-    }
-}
-
-fn drain_lanes(persist: &mut Consumer<PersistRecord>, logs: &mut Consumer<HotRecord>) {
-    while let Ok(record) = persist.pop() {
-        std::hint::black_box(record);
-    }
-    while let Ok(record) = logs.pop() {
-        std::hint::black_box(record);
-    }
-}
-
-/// The declaration and log paths carry the same guarantee: declaring a two-sided quote plus a
-/// formatted log line every spin and draining both never touches the allocator — and they are proven
-/// live, not dead, by the log records that flow without a drop and the Quote frames the engine tees
-/// off the declarations.
-#[test]
-fn declaration_and_log_lanes_do_not_allocate() {
-    let instruments = [instrument_row(0, tracker_spec_all(100), 128)];
-    let (sink, mut consumer) = persist_ring(4096);
-    let (log_sink, mut log_consumer) = strategy_log_ring(4096);
-    let log_drops = log_sink.drops_handle();
-    let mut engine = engine_without_warmup(&instruments, Box::new(LaneProbe), sink, log_sink);
-
-    for i in 0..10_000i64 {
-        engine.dispatch(&InboundMessage::SpinTick(spin(i as u64, i)));
-        drain_lanes(&mut consumer, &mut log_consumer);
-    }
-
-    let before = crate::alloc_count();
-    for i in 10_000..110_000i64 {
-        engine.dispatch(&InboundMessage::SpinTick(spin(i as u64, i)));
-        drain_lanes(&mut consumer, &mut log_consumer);
-    }
-    let after = crate::alloc_count();
-
-    assert_eq!(
-        after, before,
-        "the declaration and log lanes allocated in steady state"
-    );
-    assert_eq!(
-        log_drops.load(Ordering::Relaxed),
-        0,
-        "the drained log lane never dropped a record"
-    );
-
-    // `orders_submitted` counts EXECUTION commands the engine banked, not intents a strategy
-    // expressed, so a run with execution off reports zero and must — a non-zero count here would
-    // mean the engine banked a command nobody asked it to send.
-    let max_orders = engine.counters().orders_submitted;
-    assert_eq!(
-        max_orders, 0,
-        "execution is off in this run, so no command may have been banked"
-    );
-}
-
-/// Exercises the UI event tees reachable from a steady-state message mix — Trade, Rotation,
-/// Position, Execution and Quote from dispatch, Feature from the strategy bank, Fill from the real
-/// inbound execution fold — inside the measured window, banking one of each per cycle. All stamp
-/// through the preallocated event ring with no allocation, and the per-kind tallies prove no
-/// path is a silent no-op passing the assertion by doing nothing.
-///
-/// OrderUpdate, Reject and Balance are NOT driven here: each needs a message this steady-state mix
-/// does not carry, and seating one per iteration would allocate in the harness rather than in the
-/// engine. They share `push_stamped` with the six below, and the UI feed tests pin that each is
-/// emitted.
-struct UiTeeProbe {
-    feature: Option<FeatureId>,
-}
-
-impl Strategy for UiTeeProbe {
-    fn features(&self) -> &'static [&'static str] {
-        &["tee"]
-    }
-    fn register(&mut self, registration: Registration<'_>) {
-        self.feature = registration.features.first().copied();
-    }
-    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
-        ctx.emit(self.feature.expect("registered"), InstrumentId(0), 1.0);
-        declare_quote(ctx);
-    }
-}
-
-/// A two-sided declaration, the shape the engine's per-spin Quote tee reads. Declaring into
-/// preallocated level state must not allocate any more than banking a row does.
-fn declare_quote(ctx: &mut StrategyCtx<'_>) {
-    for side in [Side::Buy, Side::Sell] {
-        ctx.quote(
-            InstrumentId(0),
-            side,
-            QuoteLevel::ZERO,
-            Some(DesiredQuote {
-                price: Price(100 * ONE),
-                qty: Qty(ONE),
-                style: OrderStyle::PostOnly,
-            }),
-        );
-    }
-}
-
 #[derive(Default)]
 struct TeeKinds {
     trade: u64,
@@ -1576,229 +1289,4 @@ fn drain_ui_kinds(events: &mut Consumer<UiEvent>, kinds: &mut TeeKinds) {
             | UiEvent::Balance { .. } => {}
         }
     }
-}
-
-#[test]
-fn ui_event_tees_do_not_allocate() {
-    let instruments = [instrument_row(0, tracker_spec_all(100), 128)];
-    let (sink, mut consumer) = persist_ring(4096);
-    let (log_sink, _log_consumer) = strategy_log_ring(64);
-    // Exec-wired on purpose: the gate reports itself only where an order could actually be sent, so
-    // an engine without a command ring tees no `Execution` frame at all and the assertion below
-    // would be measuring a silence rather than the tee.
-    let (mut engine, mut ui_books, mut ui_events, mut commands) = engine_with_ui_and_exec(
-        &instruments,
-        Box::new(UiTeeProbe { feature: None }),
-        sink,
-        log_sink,
-        0x5150_0002,
-    );
-
-    let (bids, asks) = snapshot_pair(0, &[(100 * ONE, 2 * ONE)], &[(101 * ONE, ONE)], 0);
-    engine.dispatch(&InboundMessage::Book(bids));
-    engine.dispatch(&InboundMessage::Book(asks));
-
-    // The buy side is seated once, here, so the measured window below only ever reports EXECUTIONS
-    // against it — [`FillPen::fill`] returns a `Vec` and would allocate on every iteration.
-    let mut pen = FillPen::new(0);
-    let adoption = pen
-        .adopt(Side::Buy, 100 * ONE, 0)
-        .expect("a fresh pen has seated nothing");
-    engine.dispatch(&adoption);
-
-    // A trade tees Trade and a venue fill tees Fill, a spin tees Feature + Quote + Execution +
-    // Position + Latency, a rotation tees Rotation (it clears derived state in place — Vec::clear, no realloc
-    // — and never touches the book). The committed delta closing the cycle re-marks the ledger the
-    // rotation just cleared, so the per-spin Position tee keeps firing instead of falling silent
-    // after the first rotation.
-    let feed = |engine: &mut HotEngine, pen: &mut FillPen, i: i64| {
-        let message = match i % 5 {
-            0 => InboundMessage::Trade(trade(0, 100 * ONE, ONE, Side::Buy, i)),
-            1 => pen.report(Side::Buy, 100 * ONE, ONE, i),
-            2 => InboundMessage::SpinTick(spin(i as u64, i)),
-            3 => InboundMessage::MarketRotation(rotation(0, 300 * ONE + i, 600 * ONE + i, i)),
-            _ => InboundMessage::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 2 * ONE)], i)),
-        };
-        engine.dispatch(&message);
-    };
-
-    for i in 0..10_000i64 {
-        feed(&mut engine, &mut pen, i);
-        while consumer.pop().is_ok() {}
-        while commands.pop().is_ok() {}
-        drain_ui(&mut ui_books, &mut ui_events);
-    }
-
-    let mut kinds = TeeKinds::default();
-    let before = crate::alloc_count();
-    for i in 10_000..110_000i64 {
-        feed(&mut engine, &mut pen, i);
-        while consumer.pop().is_ok() {}
-        while let Ok(command) = commands.pop() {
-            std::hint::black_box(command);
-        }
-        while let Ok(snapshot) = ui_books.pop() {
-            std::hint::black_box(snapshot);
-        }
-        drain_ui_kinds(&mut ui_events, &mut kinds);
-    }
-    let after = crate::alloc_count();
-
-    assert_eq!(after, before, "ui event tees allocated in steady state");
-    assert!(kinds.trade > 0, "the per-print Trade tee must have run");
-    assert!(
-        kinds.execution > 0,
-        "the per-spin Execution tee must have run — the halt latch is absolute state and a panel \
-         that stopped hearing it would keep showing ARMED"
-    );
-    assert!(kinds.feature > 0, "the FeatureRow tee must have run");
-    assert!(
-        kinds.fill > 0,
-        "the venue-fill Fill tee must have run — and with it the whole inbound exec fold, which \
-         moves the ledger on the hot thread and must allocate nothing doing it"
-    );
-    assert!(
-        kinds.rotation > 0,
-        "the rotation Rotation tee must have run"
-    );
-    assert!(kinds.quote > 0, "the simulated Quote tee must have run");
-    assert!(
-        kinds.position > 0,
-        "the per-spin Position tee must have run"
-    );
-}
-
-/// Names for the link probe's slots; the same list digests into the schema hash every frame carries.
-const LINK_FIELDS: [&str; 4] = [
-    "peer_mid",
-    "peer_spread",
-    "peer_intensity",
-    "peer_confidence",
-];
-const LINK_TOPICS: [&str; 1] = ["signals"];
-
-/// Both directions of the link seam plus a persisted feature, so the measured window covers
-/// `on_link`, `link_send` and the tape row dispatch tees for every frame.
-struct LinkPump {
-    received: Option<FeatureId>,
-    topic: Option<TopicId>,
-}
-
-impl Strategy for LinkPump {
-    fn features(&self) -> &'static [&'static str] {
-        &["peer"]
-    }
-
-    fn link_fields(&self) -> &'static [&'static str] {
-        &LINK_FIELDS
-    }
-
-    fn link_topics(&self) -> &'static [&'static str] {
-        &LINK_TOPICS
-    }
-
-    fn register(&mut self, registration: Registration<'_>) {
-        self.received = registration.features.first().copied();
-        self.topic = registration.link_topics.first().copied();
-    }
-
-    fn on_link(&mut self, ctx: &mut StrategyCtx<'_>, frame: &LinkFrame) {
-        for value in frame.payload.values() {
-            ctx.emit(self.received.expect("registered"), InstrumentId(0), *value);
-        }
-        ctx.link_send(self.topic.expect("registered"), frame.payload.values());
-    }
-
-    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, tick: &SpinTick) {
-        ctx.link_send(
-            self.topic.expect("registered"),
-            &[tick.seq as f64, 1.0, 2.0, 3.0],
-        );
-    }
-}
-
-fn link_message(seq: u64, when: i64) -> InboundMessage {
-    InboundMessage::Link(InboundLink {
-        frame: LinkFrame {
-            origin: LinkOrigin {
-                sender_te_hash: LinkHash::of_name("peer-te"),
-                boot_ts_us: TsUs::from_micros(1),
-                topic: TopicId::FIRST_STRATEGY,
-                seq,
-            },
-            payload: LinkPayload::new(
-                schema_hash_of_fields(&LINK_FIELDS),
-                TsUs::from_micros(when - 1),
-                &[1.0, 2.0, 3.0, 4.0],
-            ),
-        },
-        received_ts_us: TsUs::from_micros(when),
-        queued_ts_us: TsUs::from_micros(when),
-    })
-}
-
-/// The link seam is bound like every other hot-path lane: `on_link`, the tape row dispatch tees for
-/// each value slot, `link_send`'s bank and the drain into the outbound ring must all run without
-/// touching the allocator. The run-state marker is in the window too — a park/resume pair is rare,
-/// but `resume` walks every instrument and must not allocate while it does.
-#[test]
-fn link_dispatch_does_not_allocate() {
-    let instruments = [instrument_row(0, tracker_spec_all(100), 128)];
-    let (persistence, persist_consumer) = persist_ring_for(
-        4096,
-        RecordedTables::new(&[TableKind::Features, TableKind::LinkFrames]),
-    );
-    let (link_producer, link_consumer) = rtrb::RingBuffer::<OutboundLink>::new(1024);
-    let control = RunControlGate::new();
-    let strategy = Box::new(LinkPump {
-        received: None,
-        topic: None,
-    });
-    let mut engine = HotEngine::new(HotEngineSetup {
-        persistence: Some(persistence),
-        ui_event_sink: ui_event_ring(64).0,
-        link: Some(LinkWiring {
-            sink: LinkSink::new(link_producer),
-            acknowledged: control.acknowledged().clone(),
-        }),
-        ..detached_setup(&instruments, strategy)
-    });
-    let mut persist_consumer = persist_consumer;
-    let mut link_consumer = link_consumer;
-
-    // Warm every lane before measuring, so the window covers steady state and not first-touch.
-    for i in 0..1_000i64 {
-        engine.dispatch(&link_message(i as u64 + 1, i * 10));
-        engine.dispatch(&InboundMessage::SpinTick(spin(i as u64, i * 10 + 5)));
-        while persist_consumer.pop().is_ok() {}
-        while link_consumer.pop().is_ok() {}
-    }
-
-    let mut rows = 0u64;
-    let mut frames = 0u64;
-    let before = crate::alloc_count();
-    for i in 1_000..101_000i64 {
-        engine.dispatch(&link_message(i as u64 + 1, i * 10));
-        engine.dispatch(&InboundMessage::SpinTick(spin(i as u64, i * 10 + 5)));
-        if i % 25_000 == 0 {
-            let epoch = i as u64 / 25_000;
-            let state = if epoch.is_multiple_of(2) { RunState::Running } else { RunState::Idle };
-            engine.dispatch(&InboundMessage::RunControl(RunControl {
-                desired: RunAssertion { state, epoch },
-                received_ts_us: TsUs::from_micros(i * 10 + 7),
-                queued_ts_us: TsUs::from_micros(i * 10 + 7),
-            }));
-        }
-        while persist_consumer.pop().is_ok() {
-            rows += 1;
-        }
-        while link_consumer.pop().is_ok() {
-            frames += 1;
-        }
-    }
-    let after = crate::alloc_count();
-
-    assert_eq!(after, before, "the link seam allocated in steady state");
-    assert!(rows > 0, "the tape and the feature lane both produced rows");
-    assert!(frames > 0, "link_send reached the outbound ring");
 }
