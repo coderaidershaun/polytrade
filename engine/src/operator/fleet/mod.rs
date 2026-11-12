@@ -4,9 +4,9 @@
 mod catalog;
 mod child;
 mod error;
-mod fleet;
 mod http;
 mod reply;
+mod supervisor;
 mod tools;
 
 use std::net::SocketAddr;
@@ -16,8 +16,8 @@ use rmcp::service::{QuitReason, ServerInitializeError};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
 pub use error::FleetError;
-pub use fleet::{Fleet, FleetTiming, StopOutcome};
 pub use reply::{EngineListing, EngineSummary, ModeChange, Started, Stopped};
+pub use supervisor::{Fleet, FleetTiming, StopOutcome};
 pub use tools::PolysimMcp;
 
 #[derive(Debug)]

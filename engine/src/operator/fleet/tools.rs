@@ -13,8 +13,8 @@ use tokio::sync::Mutex;
 use crate::runtime::config::{ExecutionMode, RunIdentity};
 
 use super::error::FleetError;
-use super::fleet::{Fleet, StopOutcome};
 use super::reply::{EngineListing, ModeChange, Started, Stopped};
+use super::supervisor::{Fleet, StopOutcome};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]

@@ -64,7 +64,7 @@ mod link_session;
 mod link_wire;
 mod log_lane_ownership;
 mod loss_gate;
-/// These drive `engine::mcp` and its binary, which exist only under feature `mcp`.
+/// These drive `engine::operator::fleet` and its binary, which exist only under feature `mcp`.
 #[cfg(feature = "mcp")]
 mod mcp_fleet;
 #[cfg(feature = "mcp")]
