@@ -20,7 +20,7 @@ use crate::exec_no_clock::rust_sources;
 const THREAD_LANE_OWNERS: [(&str, &str); 4] = [
     ("src/exposure/writer.rs", "exposure"),
     ("src/hot/spawn.rs", "config.tag"),
-    ("src/runtime/mod.rs", "main"),
+    ("src/runtime/assembly/mod.rs", "main"),
     ("src/tape/drain.rs", "persist"),
 ];
 

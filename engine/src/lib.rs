@@ -35,7 +35,6 @@ pub mod venues;
 // assembly
 pub mod config;
 pub mod registry;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod runtime;
 pub mod secrets;
 pub mod shutdown;
