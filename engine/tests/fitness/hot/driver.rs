@@ -1,6 +1,5 @@
-//! FITNESS: the hot loop folds the same messages into the same outputs, byte for byte, whatever its
-//! measurement does. A fold that read a clock, or that measurement fed back into, would still print
-//! plausible rows and orders: only a comparison of every output lane shows the difference.
+//! The hot loop's driver over real input rings. Its measurement must change no byte of any output
+//! of the fold, and its stamps must reach the metrics thread with the times their stages claim.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -113,7 +112,7 @@ impl Outputs {
             digest("tape rows", &self.tape_rows),
             digest("commands", &self.commands),
             digest("ui books", &self.ui_books),
-            digest("ui events", &self.numbered_events()),
+            digest("ui events", &self.event_lines()),
             digest("exposure", &self.exposure),
             digest("hot log", &self.hot_log),
             digest("text log", &self.text_log),
@@ -121,34 +120,20 @@ impl Outputs {
         ]
     }
 
-    /// Numbered from zero again. The fold of the recording also put a latency event on each spin, a
-    /// clock reading that the recording left out and that the fold no longer makes.
-    fn numbered_events(&self) -> Vec<String> {
+    fn event_lines(&self) -> Vec<String> {
         self.ui_events
             .iter()
-            .enumerate()
-            .map(|(seq, event)| {
-                let mut event = *event;
-                event.set_seq(seq as u64);
-                format!("{event:?}")
-            })
+            .map(|event| format!("{event:?}"))
             .collect()
     }
 
     /// The first record in which two runs part, for the message of a failure.
     fn first_difference(&self, other: &Outputs) -> String {
-        let events = |outputs: &Outputs| -> Vec<String> {
-            outputs
-                .ui_events
-                .iter()
-                .map(|event| format!("{event:?}"))
-                .collect()
-        };
         let lanes = [
             ("tape rows", self.tape_rows.clone(), other.tape_rows.clone()),
             ("commands", self.commands.clone(), other.commands.clone()),
             ("ui books", self.ui_books.clone(), other.ui_books.clone()),
-            ("ui events", events(self), events(other)),
+            ("ui events", self.event_lines(), other.event_lines()),
             ("exposure", self.exposure.clone(), other.exposure.clone()),
             ("hot log", self.hot_log.clone(), other.hot_log.clone()),
             ("text log", self.text_log.clone(), other.text_log.clone()),
@@ -765,6 +750,8 @@ const fn recorded(lane: &'static str, count: usize, hash: u64) -> Digest {
     Digest { lane, count, hash }
 }
 
+/// FITNESS: the recorded tapes fold through the driver, with measurement off, into exactly the
+/// outputs that were recorded.
 #[test]
 fn fold_outputs_equal_the_recorded_outputs_of_the_entry_state() {
     let mut report = String::new();
