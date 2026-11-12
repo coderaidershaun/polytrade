@@ -1,0 +1,41 @@
+# Trivy findings of the tree of polysim at 157ace4, copied unchanged. A move changes no version,
+# so each finding stays until a later task updates its package.
+
+# pillow 12.3.0 in strategies/uv.lock: a library of the Python notebooks, never part of an engine.
+CVE-2026-112393
+CVE-2026-112398
+CVE-2026-112403
+CVE-2026-112900
+CVE-2026-96639
+CVE-2026-112390
+CVE-2026-112392
+CVE-2026-112397
+CVE-2026-112399
+CVE-2026-112400
+CVE-2026-112402
+CVE-2026-112404
+CVE-2026-112405
+CVE-2026-112406
+CVE-2026-112892
+CVE-2026-112893
+CVE-2026-112894
+CVE-2026-112895
+CVE-2026-112896
+CVE-2026-112897
+CVE-2026-112902
+CVE-2026-96637
+CVE-2026-96640
+CVE-2026-96642
+CVE-2026-96643
+CVE-2026-96644
+CVE-2026-96778
+GHSA-78g4-xqwv-q3g8
+
+# tornado 6.5.7 in strategies/uv.lock: the Jupyter kernel server of the notebooks, never part of an engine.
+CVE-2026-82397
+GHSA-c2m8-h5v5-343r
+GHSA-chx6-46f5-w4vp
+
+# Dockerfile: its last stage only exports the built binary to a local folder and never runs as a
+# container, so the root user of the build image runs nothing.
+DS-0002

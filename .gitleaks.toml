@@ -1,0 +1,13 @@
+# Gitleaks rules of this repo: the default rules, plus one file of known test keys.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Signature vectors of the Polymarket SDK. Their keys are public test keys that hold no funds."
+paths = ['''(^|/)fixtures/polymarket/sign_vectors\.json$''']
+
+[[allowlists]]
+description = "The sample WebSocket key of RFC 6455. It is the base64 form of the words 'the sample nonce', not a secret."
+regexTarget = "secret"
+regexes = ['''^dGhlIHNhbXBsZSBub25jZQ==$''']
