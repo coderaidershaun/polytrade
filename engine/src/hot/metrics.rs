@@ -3,9 +3,9 @@
 
 use crate::hot::sink::SampleSink;
 use crate::msg::exec::ExecKind;
-use crate::msg::ids::{MAX_INPUT_QUEUES, QueueId};
-use crate::msg::inbound::{BookChunkKind, InboundMessage, SpinTick};
-use crate::msg::latency::{Category, CounterSample, EngineCounters, StageSample};
+use crate::msg::ids::QueueId;
+use crate::msg::inbound::{BookChunkKind, InboundMessage};
+use crate::msg::latency::{Category, CounterSample, StageSample};
 use crate::msg::time::{Stamper, Tick, TsUs};
 
 /// The counter that the hot loop reads on each side of a fold, and the rings that its samples go
@@ -37,21 +37,6 @@ impl DriverSamples {
         if let Some(sample) = stage_sample(folded) {
             self.stages.push(sample);
         }
-    }
-
-    #[inline]
-    pub(crate) fn record_spin(
-        &mut self,
-        tick: &SpinTick,
-        backlog: [u32; MAX_INPUT_QUEUES],
-        counters: EngineCounters,
-    ) {
-        self.counters.push(CounterSample {
-            spin_ts_us: tick.received_ts_us,
-            spin_seq: tick.seq,
-            backlog,
-            counters,
-        });
     }
 }
 

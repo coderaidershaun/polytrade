@@ -13,7 +13,7 @@ mod render;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::{self, JoinHandle};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 #[cfg(target_arch = "wasm32")]
@@ -45,6 +45,8 @@ pub use lane::{hot_message, text_message};
 pub use render::{LogArgs, Renderer};
 
 use crate::msg::time::EngineClock;
+use crate::runtime::PinRefused;
+use crate::runtime::pin::spawn_pinned;
 
 const DEFAULT_FILE_STEM: &str = "polysim";
 
@@ -61,6 +63,8 @@ pub struct LogConfig {
     pub drain_deadline: Duration,
     /// Reopens of a failing log file in a row before the drain falls back to stderr.
     pub reopen_limit: u32,
+    /// The core the drain thread pins itself to before it drains. Absent, the OS places it.
+    pub core_id: Option<usize>,
 }
 
 impl Default for LogConfig {
@@ -71,6 +75,7 @@ impl Default for LogConfig {
             ring_capacity: 8_192,
             drain_deadline: Duration::from_secs(2),
             reopen_limit: 3,
+            core_id: None,
         }
     }
 }
@@ -100,21 +105,24 @@ impl LogHandle {
 /// Call at startup, before any thread logs. Text lines take their time from `clock`, the one clock
 /// of the process.
 ///
+/// # Errors
+/// [`PinRefused`] when the drain thread cannot pin itself to `config.core_id` on Linux. The drain
+/// then never runs.
+///
 /// # Panics
 /// Panics if called more than once in a process, and in the browser build, which can start no
 /// drain thread. The browser needs no init: there the macros print straight to the console.
-pub fn init(config: &LogConfig, clock: &EngineClock) -> LogHandle {
+pub fn init(config: &LogConfig, clock: &EngineClock) -> Result<LogHandle, PinRefused> {
     let channels = lane::install(clock, config.ring_capacity);
     let output = LogOutput::from_config(config);
     let log_drain = LogDrain::with_channels(output, clock.clone(), channels);
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = Arc::clone(&stop);
     let deadline = config.drain_deadline;
-    let join = thread::Builder::new()
-        .name("polysim-log".to_owned())
-        .spawn(move || drain::run(log_drain, thread_stop, deadline))
-        .expect("failed to spawn logging drain thread");
-    LogHandle { stop, join }
+    let join = spawn_pinned("polysim-log", config.core_id, move || {
+        drain::run(log_drain, thread_stop, deadline)
+    })?;
+    Ok(LogHandle { stop, join })
 }
 
 /// The call site of a text macro, made once at compile time.

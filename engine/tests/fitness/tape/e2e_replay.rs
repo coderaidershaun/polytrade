@@ -10,7 +10,7 @@ use rtrb::RingBuffer;
 use tokio::sync::mpsc;
 
 use engine::hot::ingress::IngressQueues;
-use engine::hot::spawn::{HotThreadConfig, QueueProducer, spawn_hot_thread};
+use engine::hot::spawn::{HotThreadConfig, IdleWait, QueueProducer, spawn_hot_thread};
 use engine::hot::strategy::StrategyConfig;
 use engine::msg::ids::{FIXED_SCALE, QueueId, SourceId};
 use engine::msg::inbound::InboundMessage;
@@ -278,6 +278,7 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
             core_id: None,
             tag: "e2e-hot",
             samples: None,
+            idle: IdleWait::Spin,
         },
         ingress,
         engine,

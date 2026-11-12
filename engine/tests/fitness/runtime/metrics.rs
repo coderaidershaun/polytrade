@@ -246,6 +246,7 @@ fn spin_counters(spin_us: i64, backlog: [u32; 2]) -> CounterSample {
         spin_seq: 0,
         backlog: waiting,
         counters: EngineCounters::default(),
+        idle_parks: 0,
     }
 }
 
@@ -927,6 +928,7 @@ proptest! {
                 spin_seq: 0,
                 backlog,
                 counters: EngineCounters::default(),
+                idle_parks: 0,
             });
         }
         harness.pass(DISPLAY.micros());

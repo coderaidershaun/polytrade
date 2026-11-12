@@ -2,8 +2,9 @@
 //! of the fold, and its stamps must reach the metrics thread with the times their stages claim.
 
 use std::fmt::Write as _;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{
@@ -13,9 +14,9 @@ use engine::hot::exec::{
 use engine::hot::ingress::IngressQueues;
 use engine::hot::metrics::DriverSamples;
 use engine::hot::sink::ExecSink;
-use engine::hot::spawn::{HotDriver, Step};
+use engine::hot::spawn::{HotDriver, HotThreadConfig, IdleWait, Step, spawn_hot_thread};
 use engine::hot::strategy::{Strategy, StrategyConfig, StrategyCtx};
-use engine::log::{HotRecord, TextRecord, open_hot_lane, open_text_lane};
+use engine::log::{HotRecord, LaneReader, TextRecord, open_hot_lane, open_text_lane};
 use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, Provenance, StampedExecCommand,
     VenueOrderStatus,
@@ -33,6 +34,7 @@ use engine::runtime::config::{
 use engine::runtime::exposure::ExposureSnapshot;
 use engine::runtime::metrics::{SampleProducers, SinkKind};
 use engine::runtime::registry::InstrumentRow;
+use engine::runtime::shutdown::{DrainSignal, FatalSignal};
 use engine::venues::binance::depth::{ChainRule, DepthSequencer, DiffOutcome, SnapshotOutcome};
 use engine::venues::binance::parse::{
     DepthDiff, DepthSnapshot, ParseContext, parse_agg_trade, parse_combined_frame,
@@ -1033,5 +1035,94 @@ fn held_command_keeps_its_issue_tick() {
         harness.rows.dropped_total(SinkKind::WireSamples),
         Some(0),
         "no sample lost"
+    );
+}
+
+/// Keeps the sequence number of each spin it is called for, in the order the fold calls it.
+struct SeenSpins(Arc<Mutex<Vec<u64>>>);
+
+impl Strategy for SeenSpins {
+    fn on_spin(&mut self, _ctx: &mut StrategyCtx<'_>, tick: &SpinTick) {
+        self.0
+            .lock()
+            .expect("the probe lock is never poisoned")
+            .push(tick.seq);
+    }
+}
+
+/// The park count of the counters line that the metrics thread wrote on this thread's text lane.
+fn idle_parks_logged(text_log: &mut LaneReader<TextRecord>) -> Option<u64> {
+    let mut parks = None;
+    while let Some(record) = text_log.pop() {
+        let Some(counters) = record.text().strip_prefix("metrics counters") else {
+            continue;
+        };
+        parks = counters
+            .split_whitespace()
+            .find_map(|word| word.strip_prefix("idle_parks="))
+            .and_then(|count| count.parse().ok());
+    }
+    parks
+}
+
+/// A parking hot loop sleeps while every queue is empty, and it still folds each message once and
+/// in push order. The count of its sleeps reaches the metrics thread with each spin.
+#[test]
+fn park_setting_parks_idle_loop() {
+    const INTERVAL_US: i64 = 60_000_000;
+    const GAP: Duration = Duration::from_millis(20);
+    let mut text_log = open_text_lane(64);
+    let mut harness = Harness::new(10);
+    let SampleProducers {
+        stages, counters, ..
+    } = harness.samples;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let instruments = [instrument_row(0, TrackerSpec::default(), 64)];
+    let strategy = SeenSpins(Arc::clone(&seen));
+    let engine = HotEngine::new(detached_setup(&instruments, Box::new(strategy)));
+    let (mut input, queue) = RingBuffer::new(4);
+    let drain = DrainSignal::new();
+    let hot = spawn_hot_thread(
+        HotThreadConfig {
+            core_id: None,
+            tag: "fitness-idle",
+            samples: Some(DriverSamples {
+                stamper: harness.counter.stamper.clone(),
+                stages,
+                counters,
+            }),
+            idle: IdleWait::Park(Duration::from_micros(50)),
+        },
+        IngressQueues::new(vec![queue]),
+        engine,
+        FatalSignal::new(),
+        drain.clone(),
+    );
+    for seq in 0..3u64 {
+        if seq > 0 {
+            std::thread::sleep(GAP);
+        }
+        input
+            .push(InboundMessage::SpinTick(spin(seq, 10 * (seq as i64 + 1))))
+            .expect("the input ring has room");
+    }
+    drain.request();
+    hot.join()
+        .expect("the hot thread ends once the drain finds every queue empty");
+
+    let folded = seen
+        .lock()
+        .expect("the probe lock is never poisoned")
+        .clone();
+    assert_eq!(
+        folded,
+        vec![0, 1, 2],
+        "each message folded once, in push order"
+    );
+    harness.metrics.pass(ts(INTERVAL_US), &mut harness.rows);
+    let parks = idle_parks_logged(&mut text_log);
+    assert!(
+        parks.is_some_and(|count| count > 0),
+        "the loop slept in the gaps between pushes, and its counter sample said so: {parks:?}"
     );
 }

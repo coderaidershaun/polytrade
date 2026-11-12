@@ -19,8 +19,10 @@ pub enum ConfigError {
         raw: Box<str>,
         reason: &'static str,
     },
-    #[error("engine.hot_core_id is required on linux — add a core id to pin the hot thread")]
-    MissingHotCoreId,
+    #[error(
+        "engine.idle is spin and engine.hot_core_id is not set — on linux a spinning hot thread takes a whole core, so name an isolated core in engine.hot_core_id, or set engine.idle: park"
+    )]
+    SpinWithoutHotCore,
     #[error(
         "logging.drain_deadline_ms = {log_deadline_ms} is not below engine.drain_deadline_ms = {engine_deadline_ms} — the engine's drain watchdog would cut the last log lines off; set logging.drain_deadline_ms below {engine_deadline_ms}"
     )]

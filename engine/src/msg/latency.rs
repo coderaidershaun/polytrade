@@ -152,6 +152,8 @@ pub struct CounterSample {
     /// Messages that wait in each input queue, by queue id, once the spin itself is popped.
     pub backlog: [u32; MAX_INPUT_QUEUES],
     pub counters: EngineCounters,
+    /// The times the hot loop slept since the start because every queue was empty.
+    pub idle_parks: u64,
 }
 
 const _: () = {
@@ -160,6 +162,7 @@ const _: () = {
     assert!(offset_of!(CounterSample, spin_seq) == 8);
     assert!(offset_of!(CounterSample, backlog) == 16);
     assert!(offset_of!(CounterSample, counters) == 96);
+    assert!(offset_of!(CounterSample, idle_parks) == 216);
 };
 
 /// The drop and event counts of the fold since the start of the run, carried in each counter

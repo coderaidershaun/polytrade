@@ -5,12 +5,11 @@
 use hdrhistogram::Histogram;
 
 use crate::msg::ids::{MAX_INPUT_QUEUES, QueueId};
-use crate::msg::latency::{
-    Category, CounterSample, EngineCounters, Stage, StageSample, WireSample,
-};
+use crate::msg::latency::{Category, CounterSample, Stage, StageSample, WireSample};
 use crate::msg::time::{ClockSource, DurationUs, TickScale, TsUs};
 use crate::msg::ui::{LatencyCell, LatencyFlow, Percentile};
 
+use super::report::RunCounts;
 use super::ring::SampleRing;
 use super::rows::{BacklogRow, DropRow, LatencyRow, RollupRow, RollupSink, SinkKind};
 use super::stage::{Fault, PAIRS, stage_nanos, wire_nanos};
@@ -116,7 +115,7 @@ pub(super) struct LatencyRollup {
     backlog_max: [u32; MAX_INPUT_QUEUES],
     drop_totals: [u64; SinkKind::ALL.len()],
     drops_at_interval_start: [u64; SinkKind::ALL.len()],
-    counters: EngineCounters,
+    counts: RunCounts,
     scratch: Interval,
     rows: Vec<LatencyRow>,
 }
@@ -145,7 +144,7 @@ impl LatencyRollup {
             backlog_max: [0; MAX_INPUT_QUEUES],
             drop_totals: [0; SinkKind::ALL.len()],
             drops_at_interval_start: [0; SinkKind::ALL.len()],
-            counters: EngineCounters::default(),
+            counts: RunCounts::default(),
             scratch: Interval::new(),
             rows: Vec::with_capacity(PAIRS.len()),
         }
@@ -210,7 +209,10 @@ impl LatencyRollup {
             ));
         }
         self.backlog_total = Some(Ema::folded(self.backlog_total, total as f64, at));
-        self.counters = sample.counters;
+        self.counts = RunCounts {
+            counters: sample.counters,
+            idle_parks: sample.idle_parks,
+        };
         let counters = &sample.counters;
         for (sink, total) in [
             (SinkKind::Persist, counters.persist_dropped),
@@ -311,7 +313,7 @@ impl LatencyRollup {
                 ema: ema.value,
             }));
         }
-        super::report::log_interval(&self.rows, &self.interval_drops(), &self.counters);
+        super::report::log_interval(&self.rows, &self.interval_drops(), &self.counts);
         self.backlog_max = [0; MAX_INPUT_QUEUES];
         self.drops_at_interval_start = self.drop_totals;
     }
