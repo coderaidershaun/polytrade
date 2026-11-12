@@ -2,12 +2,12 @@
 //! A timestamp is microseconds since the Unix epoch in a typed wrapper; a tick is never a time.
 
 use core::ops::{Add, Sub};
-
-use crate::msg::labelled_enum::labelled_enum;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 #[cfg(target_arch = "wasm32")]
 use web_time::{Instant, SystemTime, UNIX_EPOCH};
+
+use crate::msg::labelled_enum::labelled_enum;
 
 /// Microseconds since the Unix epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -212,7 +212,7 @@ labelled_enum! {
         Tsc = "tsc",
         /// The virtual counter of an aarch64 cpu.
         Cntvct = "cntvct_el0",
-        /// The monotonic clock of the os: slower to read, and coarser.
+        /// The monotonic clock of the os, which costs more to read than a cpu counter.
         Monotonic = "monotonic",
     }
     pub fn label;

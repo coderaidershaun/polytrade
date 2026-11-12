@@ -34,8 +34,8 @@ labelled_enum! {
 }
 
 labelled_enum! {
-    /// Each span that latency is reported for. Four of them carry a budget, and the rest split one
-    /// of those four into its parts.
+    /// Each span that latency is reported for: the four stages from the venue to the wire, their
+    /// parts, and the round trip of an order.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum Stage {
         /// From the venue's send stamp, or its event stamp when it sends none, to our receive.
@@ -46,12 +46,15 @@ labelled_enum! {
         WireToMessage = "wire_to_message",
         /// From the push into an input queue to the end of the fold of that message.
         MessageToDecision = "message_to_decision",
+        /// From the push into an input queue to the pop.
         QueueWait = "queue_wait",
         /// The whole fold of one message, the execution pass and the emits included.
         Processing = "processing",
         /// From the moment a command enters the bank to the moment the transport takes its bytes.
         DecisionToWire = "decision_to_wire",
+        /// From the moment a command enters the bank to the pop by its sender.
         BankAndLaneWait = "bank_and_lane_wait",
+        /// From the pop by the sender to the moment the transport takes the bytes.
         Send = "send",
         /// From our send of a request to our receive of its answer.
         OrderRoundTrip = "order_round_trip",
