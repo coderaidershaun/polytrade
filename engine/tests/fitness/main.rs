@@ -17,8 +17,6 @@ mod chart_projection;
 mod config_guards;
 mod dom_grouping;
 mod dom_projection;
-mod e2e_replay;
-mod e2e_scenario;
 mod engine_support;
 mod exec_support;
 mod execution_lease;
@@ -45,10 +43,6 @@ mod monitor_fit;
 mod monitor_pin;
 mod monitor_projection;
 mod parquet_readback;
-mod persist_drain;
-mod persist_exec;
-mod persist_retention;
-mod persist_tables;
 /// The second trading engine of the same strategy, included from its folder for the same reason
 /// `micro_strategy` is: the suite drives the real publisher, not a copy of it.
 ///
@@ -64,6 +58,7 @@ mod raw_recorder;
 mod runtime_exit;
 mod scans;
 mod suite_integrity;
+mod tape;
 mod venues;
 /// These drive `engine::operator::relay` and its binary, which exist only under feature `web`.
 #[cfg(feature = "web")]

@@ -22,7 +22,6 @@ use engine::runtime::config::{
 use engine::runtime::shutdown::{DrainSignal, FatalSignal};
 use engine::tape::{PersistConfig, PersistWriter, RunMeta};
 
-use crate::e2e_scenario::{HOUR_US, ROTATIONS, message_sequence};
 use crate::engine_support::{
     ALL_TABLES, NOMINAL_SPIN, engine_view, engine_without_warmup, instrument_row, metrics_ring,
     persist_ring, recorder_spec, strategy_log_ring, tracker_spec_all,
@@ -31,6 +30,7 @@ use crate::parquet_readback::{
     Cell, FileData, TempDir, drain_blocking, parquet_files, read_parquet_file, run_dir,
 };
 use crate::raw_recorder::RecorderStrategy;
+use crate::tape::e2e_scenario::{HOUR_US, ROTATIONS, message_sequence};
 
 /// What a clean run must produce: column names, the rotation-timestamp column, and the exact row
 /// count — a full persistence ring would leave the count short.
