@@ -17,8 +17,8 @@ use engine::operator::workstation::link::session::{Delivery, LinkSession, LinkTa
 use engine::operator::workstation::model::UiModel;
 use engine::runtime::config::{LatencyConfig, StrategyId};
 use engine::runtime::metrics::{
-    LatencyRow, Metrics, MetricsParts, MetricsSetup, RollupRow, RollupSink, SampleProducers,
-    SinkKind,
+    LatencyRow, Metrics, MetricsError, MetricsParts, MetricsSetup, RollupRow, RollupSink,
+    SampleProducers, SinkKind,
 };
 use proptest::prelude::*;
 use rtrb::Consumer;
@@ -290,11 +290,8 @@ fn backward_pair_is_counted_not_recorded() {
     let mut harness = Harness::new(10);
     let backward = harness.message(Category::Trade, POP_TICK, POP_TICK - 10_000);
     harness.samples.stages.push(backward);
-    let venue_ahead = StageSample {
-        exchange_sent_ts_us: ts(RECEIVED_US + 500),
-        ..harness.trade()
-    };
-    harness.samples.stages.push(venue_ahead);
+    let forward = harness.trade();
+    harness.samples.stages.push(forward);
     let command = harness.command(2_000, 1_000, 3_000);
     harness.samples.wires.push(command);
     harness.pass(QUEUED_US + 100);
@@ -311,18 +308,100 @@ fn backward_pair_is_counted_not_recorded() {
     );
     assert_eq!(processing.max_ns, 800);
 
-    let venue = rows
-        .stage(Category::Trade, Stage::VenueToEngine)
-        .expect("a negative venue stage still has its row");
-    assert_eq!(venue.negative, 1);
-    assert_eq!(venue.count, 1);
-
     let bank = rows
         .stage(Category::Command, Stage::BankAndLaneWait)
         .expect("a command that popped before it was banked still has its row");
     assert_eq!((bank.count, bank.backward), (0, 1));
     assert_exact(rows, Category::Command, Stage::Send, 2_000);
     assert_exact(rows, Category::Command, Stage::DecisionToWire, 1_000);
+}
+
+#[test]
+fn negative_venue_stage_is_counted_and_keeps_the_last_value() {
+    let mut harness = Harness::new(10);
+    let good = harness.trade();
+    harness.samples.stages.push(good);
+    let venue_ahead = StageSample {
+        exchange_sent_ts_us: ts(RECEIVED_US + 500),
+        ..harness.trade()
+    };
+    harness.samples.stages.push(venue_ahead);
+    harness.pass(DISPLAY.micros());
+    let report = harness
+        .latest_report()
+        .expect("a report once the display period passed");
+    harness.pass(INTERVAL_US);
+
+    let venue = harness
+        .rows
+        .stage(Category::Trade, Stage::VenueToEngine)
+        .expect("a negative venue stage still has its row");
+    assert_eq!(
+        venue.negative, 1,
+        "the venue stamp after our receive is counted"
+    );
+    assert_eq!(venue.count, 1, "and kept out of the histogram");
+    assert_eq!(
+        venue.max_ns, 3_000_000,
+        "the stage keeps the last good value rather than a zero or a wrapped number"
+    );
+    let shown = report
+        .cell(LatencyFlow::MarketData, Stage::VenueToEngine)
+        .expect("the market data row shows the venue stage");
+    assert_eq!((shown.count, shown.max_ns), (1, 3_000_000));
+}
+
+#[test]
+fn anchor_spread_keeps_the_last_good_scale() {
+    const LATER_TICK: u64 = 2_000_000_000;
+    let mut harness = Harness::new(10);
+    let later = |harness: &Harness, spread: u64| {
+        let before = harness.counter.at(LATER_TICK);
+        let after = harness.counter.at(LATER_TICK + spread);
+        (before, after)
+    };
+    let processing_max = |harness: &mut Harness, interval: i64| {
+        let sample = harness.trade();
+        harness.samples.stages.push(sample);
+        harness.pass((interval + 1) * INTERVAL_US);
+        harness
+            .rows
+            .latency()
+            .into_iter()
+            .filter(|row| row.stage == Stage::Processing)
+            .find(|row| row.interval_start_ts_us == ts(interval * INTERVAL_US))
+            .map(|row| row.max_ns)
+    };
+
+    // An anchor that would make one tick 0.75 ns, read across a gap far wider than the limit.
+    let (before, after) = later(&harness, 50_000);
+    let refusal = harness.metrics.take_anchor(before, ts(1_500_000), after);
+    assert!(
+        matches!(
+            refusal,
+            Err(MetricsError::AnchorSpread {
+                spread_ns: 50_000,
+                limit_ns: 20_000
+            })
+        ),
+        "the anchor is refused with the spread it saw: {refusal:?}"
+    );
+    assert_eq!(
+        processing_max(&mut harness, 0),
+        Some(800),
+        "the refused anchor left the rate of the last good one"
+    );
+
+    let (before, after) = later(&harness, 100);
+    assert_eq!(
+        harness.metrics.take_anchor(before, ts(1_500_000), after),
+        Ok(())
+    );
+    assert_eq!(
+        processing_max(&mut harness, 1),
+        Some(600),
+        "a tight anchor is taken and moves the rate"
+    );
 }
 
 fn engine_identity() -> LinkIdentity {
