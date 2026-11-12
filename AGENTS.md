@@ -62,5 +62,6 @@ Words: the main checkout is the folder of this repo that is not below `.rex/work
 - [ ] No agent starts the server that `.mcp.json.off` names (`polysim-mcp`), and no agent calls its tools `set_execution_mode` or `start_strategy`: they set an engine to `live` and start it with no guard.
 - [ ] A worktree holds no plan file, no skill, and no architecture file: Git tracks none of them. Each brief gives absolute paths.
 - [ ] No agent runs `git stash`, `git checkout`, `git restore`, or `git reset` while a parallel agent works.
+- [ ] The repo is public on GitHub, and each push publishes it. An agent stages each file by its name: no `git add -A`, no `git add .`. No commit and no push uses `--no-verify`. `gitleaks` passes on each commit.
 
 `.mcp.json.off` is off on purpose: its server has tools that set an engine to `live` and start it with no guard. Do not rename it to `.mcp.json` and do not start its server. The file gets its name back when that guard exists.

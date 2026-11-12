@@ -31,7 +31,8 @@ The repo is one Cargo workspace. Run each command of this file at its root.
 
 ```shell
 # Credentials — copy the template, then fill it in. .env is never tracked.
-mv .env.example .env
+# While a build job runs, the keys sit in the key file ../polytrade-live/.env, not in this checkout.
+cp .env.example .env
 
 # Trading engines — headless, one process per data source
 cargo run --release --bin strat-micro-recorder-te-binance-spot-btcusdt
