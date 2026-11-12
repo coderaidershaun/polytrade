@@ -1,5 +1,10 @@
 //! The market-data and quant engine: each part that a live trading engine links.
 //!
+//! Priorities, in order: determinism, self-evident architecture, adaptation (venues, market kinds, engines, regions), low latency.
+//! Never: give a different state or different orders for the same messages in the same order.
+//! Never: send a request again after a timeout.
+//! Never: touch an order that this engine did not place.
+//!
 //! The binaries and examples only compose this library. The vocabulary in `msg` is the plain data
 //! that crosses from one domain into another, and nothing else crosses.
 //!
