@@ -88,6 +88,31 @@ fn every_fitness_module_on_disk_is_declared_and_therefore_runs() {
         &["mod.rs"],
     );
     assert_undeclared_is_empty(
+        "tests/fitness/operator",
+        "tests/fitness/operator/mod.rs",
+        &["mod.rs"],
+    );
+    assert_undeclared_is_empty(
+        "tests/fitness/operator/fleet",
+        "tests/fitness/operator/fleet/mod.rs",
+        &["mod.rs"],
+    );
+    assert_undeclared_is_empty(
+        "tests/fitness/operator/workstation",
+        "tests/fitness/operator/workstation/mod.rs",
+        &["mod.rs"],
+    );
+    assert_undeclared_is_empty(
+        "tests/fitness/operator/workstation/chart",
+        "tests/fitness/operator/workstation/chart/mod.rs",
+        &["mod.rs"],
+    );
+    assert_undeclared_is_empty(
+        "tests/fitness/operator/workstation/monitor",
+        "tests/fitness/operator/workstation/monitor/mod.rs",
+        &["mod.rs"],
+    );
+    assert_undeclared_is_empty(
         "tests/fitness/scans",
         "tests/fitness/scans/mod.rs",
         &["mod.rs"],

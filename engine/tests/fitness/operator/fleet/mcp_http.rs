@@ -17,7 +17,7 @@ use rmcp::{RoleClient, ServiceExt};
 use rustix::process::{Pid, Signal, kill_process, test_kill_process};
 use serde_json::{Value, json};
 
-use crate::mcp_support::{
+use crate::operator::fleet::mcp_support::{
     EngineTree, FRESH_SCRIPT_DEADLINE, IGNORE_TERM, MODE_OFF, TRAP_TERM, reply_of, text_of,
 };
 

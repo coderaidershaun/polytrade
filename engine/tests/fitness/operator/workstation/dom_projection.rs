@@ -20,7 +20,9 @@ use engine::operator::workstation::format::{MISSING, write_mid, write_opt_qty, w
 use engine::operator::workstation::model::UiModel;
 use proptest::prelude::*;
 
-use crate::workstation_support::{BookFixture, NamedCase, book_snapshot, overlay};
+use crate::operator::workstation::workstation_support::{
+    BookFixture, NamedCase, book_snapshot, overlay,
+};
 
 /// A one-mantissa tick, so a price mantissa reads directly as its tick index and the ladder math is
 /// legible in the assertions.

@@ -14,7 +14,7 @@ use engine::operator::workstation::chart::position_view::{RiskSeries, bounds, vi
 use engine::operator::workstation::chart::view::{ChartDomain, domain, x_fraction};
 use proptest::prelude::*;
 
-use crate::workstation_support::{
+use crate::operator::workstation::workstation_support::{
     CAPACITY, SPIN, TICK, at, chart_model, commit_at, rotation_event,
 };
 

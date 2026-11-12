@@ -7,7 +7,7 @@ use engine::msg::ids::Side;
 use engine::msg::persist::FeatureId;
 use engine::operator::workstation::monitor::view::{Channel, MonitorDetail, MonitorUiState};
 
-use crate::workstation_support::NamedCase;
+use crate::operator::workstation::workstation_support::NamedCase;
 
 /// One of each kind, and pairs that differ in only one part: the side, the feature, the ordinal and
 /// the channel.

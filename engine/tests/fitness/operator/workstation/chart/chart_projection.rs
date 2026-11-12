@@ -18,7 +18,7 @@ use engine::operator::workstation::chart::view::{
 };
 use proptest::prelude::*;
 
-use crate::workstation_support::{
+use crate::operator::workstation::workstation_support::{
     CAPACITY, SPIN, TICK, chart_book, chart_model, chart_with_ticks, rotation_event, valid_book,
 };
 

@@ -26,7 +26,7 @@ use engine::operator::workstation::format::{
 use engine::operator::workstation::model::UiModel;
 use proptest::prelude::*;
 
-use crate::workstation_support::{BookFixture, book_snapshot, overlay};
+use crate::operator::workstation::workstation_support::{BookFixture, book_snapshot, overlay};
 
 /// A one-mantissa tick, so a price mantissa reads directly as its tick index and the bucket math is
 /// legible in the assertions.

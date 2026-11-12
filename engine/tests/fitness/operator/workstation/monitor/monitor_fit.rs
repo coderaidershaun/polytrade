@@ -11,7 +11,7 @@ use engine::operator::workstation::monitor::fit::{
 };
 use engine::operator::workstation::monitor::view::Channel;
 
-use crate::workstation_support::NamedCase;
+use crate::operator::workstation::workstation_support::NamedCase;
 
 /// The column widths the browser workstation passes in. They mirror its theme metrics, which exist
 /// only in the wasm build.

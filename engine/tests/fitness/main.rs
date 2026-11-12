@@ -11,33 +11,15 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-mod chart_axis;
-mod chart_pane;
-mod chart_projection;
-mod dom_grouping;
-mod dom_projection;
 mod engine_support;
 mod exec_support;
 mod hot;
 mod link;
-mod link_bar;
-mod link_session;
-/// These drive `engine::operator::fleet` and its binary, which exist only under feature `mcp`.
-#[cfg(feature = "mcp")]
-mod mcp_fleet;
-#[cfg(feature = "mcp")]
-mod mcp_http;
-#[cfg(feature = "mcp")]
-mod mcp_support;
-#[cfg(feature = "mcp")]
-mod mcp_tools;
 /// The shipped strategy, included from its folder so the fitness suite drives the real thing. One
 /// include point only — a second would mint a distinct `MicroRecorder` type.
 #[path = "../../../strategies/strat-micro-recorder/te-binance-spot-btcusdt/strategy.rs"]
 mod micro_strategy;
-mod monitor_fit;
-mod monitor_pin;
-mod monitor_projection;
+mod operator;
 mod parquet_readback;
 /// The second trading engine of the same strategy, included from its folder for the same reason
 /// `micro_strategy` is: the suite drives the real publisher, not a copy of it.
@@ -49,19 +31,12 @@ mod parquet_readback;
 #[allow(clippy::duplicate_mod)]
 #[path = "../../../strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/strategy.rs"]
 mod poly_strategy;
-mod position_projection;
 mod raw_recorder;
 mod runtime;
 mod scans;
 mod suite_integrity;
 mod tape;
 mod venues;
-/// These drive `engine::operator::relay` and its binary, which exist only under feature `web`.
-#[cfg(feature = "web")]
-mod web_http;
-mod workstation_format;
-mod workstation_shell;
-mod workstation_support;
 
 thread_local! {
     static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };

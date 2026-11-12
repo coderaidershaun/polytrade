@@ -29,7 +29,7 @@ use engine::operator::workstation::model::UiModel;
 use engine::runtime::config::{ExecutionMode, StrategyId};
 use proptest::prelude::*;
 
-use crate::workstation_support::BookFixture;
+use crate::operator::workstation::workstation_support::BookFixture;
 
 const STRATEGY: &str = "strat-fitness";
 const CATALOG_EPOCH: TsUs = TsUs::from_micros(1_700_000_000_000_000);
@@ -527,7 +527,7 @@ fn the_catalog_is_delivered_once_per_catalog_epoch() {
 }
 
 fn book_snapshot(seq: u64, best_bid: i64) -> UiBookSnapshot {
-    crate::workstation_support::book_snapshot(BookFixture {
+    crate::operator::workstation::workstation_support::book_snapshot(BookFixture {
         instrument: 0,
         seq,
         event_ts: seq as i64 * 1_000,

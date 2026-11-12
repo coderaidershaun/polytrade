@@ -26,7 +26,7 @@ use engine::operator::workstation::monitor::view::{
 };
 use engine::runtime::config::ExecutionMode;
 
-use crate::workstation_support::{BookFixture, NamedCase, book_snapshot};
+use crate::operator::workstation::workstation_support::{BookFixture, NamedCase, book_snapshot};
 
 /// One-mantissa tick, so a price reads directly as its tick index in the assertions.
 const TICK: Price = Price(1);
