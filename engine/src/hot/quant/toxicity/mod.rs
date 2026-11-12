@@ -5,7 +5,7 @@ mod markouts;
 mod vpin;
 
 pub use markouts::{MarkoutFill, MarkoutSide, MarkoutTracker, SideMarkouts};
-pub use vpin::{VpinEstimate, vpin};
+pub use vpin::{VolumeBar, VpinEstimate, vpin};
 
 use crate::msg::time::DurationUs;
 

@@ -1,7 +1,20 @@
 //! VPIN: avg absolute classified imbalance / bucket volume over equal-notional bars. Directionless
 //! by construction; signed-flow companion. Integer-sum, one f64 divide.
 
-use crate::hot::tracker::VolumeBar;
+use crate::msg::time::TsUs;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VolumeBar {
+    pub open_ts_us: TsUs,
+    pub close_ts_us: TsUs,
+    pub buy_notional: i64,
+    pub sell_notional: i64,
+    pub target: i64,
+    /// Trades that ARRIVED while this bar was open, which partitions the tape across bars rather
+    /// than measuring each bar's activity: a trade worth several targets books its one arrival to
+    /// the bar it landed in, and the bars its notional pours through carry a full target and zero.
+    pub trade_arrivals: u32,
+}
 
 /// Directionless toxicity + signed flow over completed buckets.
 #[derive(Debug, Clone, Copy, PartialEq)]

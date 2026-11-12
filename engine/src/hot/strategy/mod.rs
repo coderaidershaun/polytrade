@@ -32,7 +32,7 @@ pub use crate::msg::ui::DomQuote;
 /// declared column's id, what a book read reports — each homed in engine plumbing rather than in
 /// strategy vocabulary; re-exported for the reason above.
 pub use crate::hot::book::BookState;
-pub use crate::hot::tracker::VolumeBar;
+pub use crate::hot::quant::toxicity::VolumeBar;
 pub use crate::link::{LinkFrame, TopicId};
 pub use crate::msg::persist::FeatureId;
 pub use crate::runtime::registry::InstrumentRow;

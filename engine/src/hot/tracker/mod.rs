@@ -18,7 +18,7 @@ use crate::runtime::config::{KlineInterval, SpinField, TrackerSpec};
 use crate::warn;
 
 pub use candles::{Candle, CandleSeries};
-pub use volume::{VolumeBar, VolumeBarSeries};
+pub use volume::VolumeBarSeries;
 
 /// Backing multiple for every tracker FastQueue.
 const BACKING_MULTIPLE: usize = 20;

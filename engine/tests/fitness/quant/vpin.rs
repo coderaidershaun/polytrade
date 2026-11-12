@@ -2,8 +2,8 @@
 //! ungated zero-target window produces a plausible-looking toxicity number (or a NaN) that lands in
 //! the research tape unremarked.
 
+use engine::hot::quant::toxicity::VolumeBar;
 use engine::hot::quant::toxicity::vpin;
-use engine::hot::tracker::VolumeBar;
 use engine::msg::time::TsUs;
 
 fn bar(buy: i64, sell: i64, target: i64) -> VolumeBar {

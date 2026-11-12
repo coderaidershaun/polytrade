@@ -3,8 +3,9 @@
 //! arms only on a trailing average it can stand behind and never moves under an open bar; and the
 //! dispatch fan-out hands the strategy exactly the bars that closed, oldest first.
 
+use engine::hot::quant::toxicity::VolumeBar;
 use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
-use engine::hot::tracker::{MicroTracker, VolumeBar, VolumeBarSeries};
+use engine::hot::tracker::{MicroTracker, VolumeBarSeries};
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, KlineEvent};
 use engine::msg::persist::{FeatureId, PersistRecord};

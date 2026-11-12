@@ -4,6 +4,7 @@
 
 use super::sampling::{FieldSeries, TradeAggregates, notional_i128};
 use super::{BACKING_MULTIPLE, CandleSeries, Latest};
+use crate::hot::quant::toxicity::VolumeBar;
 use crate::hot::series::{Element, FastQueue};
 use crate::msg::ids::{FIXED_SCALE, Side};
 use crate::msg::inbound::TradeEvent;
@@ -13,19 +14,6 @@ use crate::runtime::config::{TARGET_WINDOW_CANDLES, VolumeBarsSpec, VolumeThresh
 const MIN_TARGET_CANDLES: usize = 60;
 
 const MIN_TARGET_NOTIONAL: i128 = FIXED_SCALE as i128;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct VolumeBar {
-    pub open_ts_us: TsUs,
-    pub close_ts_us: TsUs,
-    pub buy_notional: i64,
-    pub sell_notional: i64,
-    pub target: i64,
-    /// Trades that ARRIVED while this bar was open, which partitions the tape across bars rather
-    /// than measuring each bar's activity: a trade worth several targets books its one arrival to
-    /// the bar it landed in, and the bars its notional pours through carry a full target and zero.
-    pub trade_arrivals: u32,
-}
 
 impl crate::hot::series::sealed::Sealed for VolumeBar {}
 impl Element for VolumeBar {}
