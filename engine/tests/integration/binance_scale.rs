@@ -6,9 +6,9 @@
 //! An agent runs these reads only where a plan names them, by their exact names and with an empty
 //! environment.
 
-use engine::adapters::binance::preflight::check_order_rate_limits;
-use engine::adapters::binance::rest::{BinanceEnv, RestClient, RestError};
 use engine::config::BinanceMarket;
+use engine::venues::binance::preflight::check_order_rate_limits;
+use engine::venues::binance::rest::{BinanceEnv, RestClient, RestError};
 
 #[ignore = "live network, public production call: an agent runs it only where a plan names it, by its exact name and with an empty environment"]
 #[tokio::test]

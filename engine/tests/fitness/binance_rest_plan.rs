@@ -4,12 +4,12 @@
 //! rejected order or gives up on a transient one. The live integration suite never runs in CI, so
 //! this is the only standing guard on the table.
 
-use engine::adapters::binance::rest::{
+use engine::config::{BinanceMarket, KlineInterval};
+use engine::venues::binance::rest::{
     AccountInfo, BinanceEnv, FailureVerdict, HttpMethod, KlineQuery, OrderCountWindow, OrderRecord,
     RequestAuth, RestClient, RestError, RestRequest,
 };
-use engine::adapters::http::TransportError;
-use engine::config::{BinanceMarket, KlineInterval};
+use engine::venues::http::TransportError;
 
 /// Weights verified against <https://developers.binance.com/docs/binance-spot-api-docs/rest-api>
 /// on 2026-07-27 — account 20, myTrades 20 without `orderId`, openOrders 6 for one symbol,

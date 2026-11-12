@@ -24,13 +24,13 @@ pub mod msg;
 pub mod hot;
 
 // async edge
-#[cfg(not(target_arch = "wasm32"))]
-pub mod adapters;
 pub mod exposure;
 pub mod link;
 pub mod log;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod persist;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod venues;
 
 // assembly
 pub mod config;

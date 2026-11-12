@@ -7,12 +7,12 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use engine::adapters::polymarket::exec::POLYMARKET_CREDENTIAL_VARIABLES;
-use engine::adapters::polymarket::exec::probe::{
+use engine::secrets::EnvFile;
+use engine::venues::polymarket::exec::POLYMARKET_CREDENTIAL_VARIABLES;
+use engine::venues::polymarket::exec::probe::{
     CredentialSource, Probe, ProbeReport, ResponseShape, WalletCandidate,
 };
-use engine::adapters::polymarket::exec::sign::key::SigningKey;
-use engine::secrets::EnvFile;
+use engine::venues::polymarket::exec::sign::key::SigningKey;
 
 #[tokio::main]
 async fn main() -> Result<()> {

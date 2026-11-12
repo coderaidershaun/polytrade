@@ -15,7 +15,6 @@
 //! and a change to the role rule that this file caught on one side and not the other would be a
 //! strategy publishing one market while trading another.
 
-use engine::adapters::exec::open_orders_snapshot_end;
 use engine::config::{
     Instruments, IntensitySpec, PolySeries, RecordedTables, StrategySpec, Subscriptions, TableKind,
     TrackerSpec, VenueMarket,
@@ -39,6 +38,7 @@ use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::time::DurationUs;
 use engine::msg::ui::{DomQuote, UiEvent};
 use engine::registry::InstrumentRow;
+use engine::venues::exec::open_orders_snapshot_end;
 use proptest::prelude::*;
 use rtrb::{Consumer, RingBuffer};
 

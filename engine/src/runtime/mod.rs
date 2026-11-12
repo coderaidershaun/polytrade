@@ -27,10 +27,6 @@ use rtrb::RingBuffer;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
-use crate::adapters::exec::EdgeHandle;
-use crate::adapters::venue::{
-    MarketDataWiring, WindowAssignment, spawn_market_data, tap_heartbeat,
-};
 use crate::config::{Config, ExecutionMode, RunIdentity};
 use crate::exposure::{ExposureHandle, ExposureWriter, ExposureWriterConfig};
 use crate::hot::dispatch::{ExposureWiring, HotEngine, HotEngineSetup, LinkWiring};
@@ -45,6 +41,8 @@ use crate::msg::time::{DurationUs, EngineClock};
 use crate::msg::ui::{UiCatalog, UiLifecycle, UiWiring, ui_channel};
 use crate::persist::PersistHandle;
 use crate::shutdown::{DrainSignal, FatalSignal, RunControlGate, TaskHandle};
+use crate::venues::exec::EdgeHandle;
+use crate::venues::venue::{MarketDataWiring, WindowAssignment, spawn_market_data, tap_heartbeat};
 use crate::{error, info};
 
 use drain::install_panic_hook;

@@ -1,14 +1,14 @@
 //! Binance depth sequencing goldens: the depth state machines over recorded prod fixtures plus
 //! the synthetic spot/perp equal-boundary asymmetry a fixture can't force.
 
-use engine::adapters::binance::depth::{ChainRule, DepthSequencer, DiffOutcome, SnapshotOutcome};
-use engine::adapters::binance::parse::{
-    DepthDiff, DepthSnapshot, ParseContext, parse_combined_frame, parse_perp_depth_diff,
-    parse_spot_depth_diff,
-};
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunkKind, InboundMessage};
 use engine::msg::time::TsUs;
+use engine::venues::binance::depth::{ChainRule, DepthSequencer, DiffOutcome, SnapshotOutcome};
+use engine::venues::binance::parse::{
+    DepthDiff, DepthSnapshot, ParseContext, parse_combined_frame, parse_perp_depth_diff,
+    parse_spot_depth_diff,
+};
 
 use crate::engine_support::level;
 

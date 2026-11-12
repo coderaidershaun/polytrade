@@ -5,20 +5,20 @@
 //! both venue ticks (0.01 and the 0.001 endgame tick) pass, a drifted tick or absent min size
 //! refuses. `check_symbol_scale` and `check_poly_market` are pure.
 
-use engine::adapters::binance::preflight::{
-    ScaleError, check_order_rate_limits, check_symbol_scale, order_budget,
-};
-use engine::adapters::binance::rest::{ExchangeInfo, SymbolFilter, SymbolInfo};
-use engine::adapters::polymarket::preflight::{
-    ScaleError as PolyScaleError, check_poly_market, stamp_poly_scales,
-};
-use engine::adapters::polymarket::rest::GammaMarket;
 use engine::config::{BinanceEnv, BinanceMarket, VenueMarket};
 use engine::hot::exec::{MAX_ORDER_BUDGET_WINDOWS, OrderBudgetWindow};
 use engine::msg::ids::{AssetId, Price, Qty};
 use engine::msg::time::{DurationUs, TsUs};
 use engine::registry::{InstrumentRow, OrderRateLimit, RateInterval, Registry};
 use engine::runtime::{EngineError, check_symbol_order_capacity};
+use engine::venues::binance::preflight::{
+    ScaleError, check_order_rate_limits, check_symbol_scale, order_budget,
+};
+use engine::venues::binance::rest::{ExchangeInfo, SymbolFilter, SymbolInfo};
+use engine::venues::polymarket::preflight::{
+    ScaleError as PolyScaleError, check_poly_market, stamp_poly_scales,
+};
+use engine::venues::polymarket::rest::GammaMarket;
 
 use crate::engine_support::{ONE, instrument_row, tracker_spec_all};
 

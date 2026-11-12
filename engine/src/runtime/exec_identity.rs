@@ -4,7 +4,7 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use crate::adapters::exec::{EngineIdentity, LeaseNamespace, TeTag};
+use crate::venues::exec::{EngineIdentity, LeaseNamespace, TeTag};
 
 use super::EngineError;
 

@@ -8,10 +8,6 @@ use std::time::Duration;
 use rtrb::RingBuffer;
 use tokio::sync::mpsc;
 
-use crate::adapters::backoff::BackoffCaps;
-use crate::adapters::edge::{EdgeInputs, EdgeSettings, EdgeSpawn, VenueEdge};
-use crate::adapters::exec::{TeTag, VenueCapabilities};
-use crate::adapters::venue::{ExecutionVenue, WindowAssignment};
 use crate::config::{
     DEFAULT_QUOTE_STOP_MARGIN_MS, ExecutionConfig, ExecutionMode, RunIdentity, validated_mantissa,
 };
@@ -26,6 +22,10 @@ use crate::msg::exec::ExecLaneItem;
 use crate::msg::time::{DurationUs, EngineClock};
 use crate::registry::Registry;
 use crate::shutdown::{FatalSignal, RunStateCell};
+use crate::venues::backoff::BackoffCaps;
+use crate::venues::edge::{EdgeInputs, EdgeSettings, EdgeSpawn, VenueEdge};
+use crate::venues::exec::{TeTag, VenueCapabilities};
+use crate::venues::venue::{ExecutionVenue, WindowAssignment};
 
 use super::EngineError;
 use super::exec_identity::ExecutionLease;

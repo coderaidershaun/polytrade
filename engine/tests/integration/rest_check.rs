@@ -4,8 +4,8 @@
 
 use std::collections::BTreeSet;
 
-use engine::adapters::polymarket::rest::{PolyRest, book_url};
 use engine::msg::time::TsUs;
+use engine::venues::polymarket::rest::{PolyRest, book_url};
 use serde::Deserialize;
 
 use crate::observer::RotationObserver;

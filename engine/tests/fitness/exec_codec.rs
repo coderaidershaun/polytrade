@@ -5,15 +5,6 @@
 //! `(x, X)` → `(ExecKind, VenueOrderStatus)` table, the error-code → [`RejectClass`] table, and the
 //! client-id → [`Provenance`] test that decides whether the engine may touch an order.
 
-use engine::adapters::binance::exec::{
-    CLIENT_ORDER_ID_LEN, ClockOffset, DecodedResponse, IgnoredReason, RecvWindow, RejectSubject,
-    RequestSigner, ResponseContext, StreamEvent, WireError, classify_client_order_id,
-    classify_error, decode_order_record, decode_response, decode_stream_event, encode_request,
-    format_client_order_id, parse_client_order_id,
-};
-use engine::adapters::binance::rest::OrderRecord;
-use engine::adapters::decode::DecimalFault;
-use engine::adapters::exec::{EngineIdentity, ExecRequest, TeTag, TimeoutFallout};
 use engine::config::RunIdentity;
 use engine::msg::exec::{
     AccountChunkKind, ExecEvent, ExecKind, Liquidity, OrderStyle, Provenance, RejectClass,
@@ -22,6 +13,15 @@ use engine::msg::exec::{
 use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::time::TsUs;
 use engine::secrets::Secret;
+use engine::venues::binance::exec::{
+    CLIENT_ORDER_ID_LEN, ClockOffset, DecodedResponse, IgnoredReason, RecvWindow, RejectSubject,
+    RequestSigner, ResponseContext, StreamEvent, WireError, classify_client_order_id,
+    classify_error, decode_order_record, decode_response, decode_stream_event, encode_request,
+    format_client_order_id, parse_client_order_id,
+};
+use engine::venues::binance::rest::OrderRecord;
+use engine::venues::decode::DecimalFault;
+use engine::venues::exec::{EngineIdentity, ExecRequest, TeTag, TimeoutFallout};
 use proptest::prelude::*;
 
 use crate::fake_venue::{Delivery, FakeVenue, exec_events};

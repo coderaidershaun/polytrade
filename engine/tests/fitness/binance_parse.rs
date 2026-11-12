@@ -5,15 +5,15 @@
 //! No recorder tool exists for `fixtures/`, so these committed goldens are the sole source of
 //! truth: to change them, re-record by hand from the live venue.
 
-use engine::adapters::binance::parse::{
-    DepthDiff, ParseContext, RestKlineTail, parse_agg_trade, parse_combined_frame,
-    parse_perp_depth_diff, parse_rest_klines,
-};
-use engine::adapters::venue_clock::MAX_VENUE_SKEW_US;
 use engine::config::KlineInterval;
 use engine::msg::ids::{InstrumentId, Price, Side};
 use engine::msg::inbound::TradeEvent;
 use engine::msg::time::TsUs;
+use engine::venues::binance::parse::{
+    DepthDiff, ParseContext, RestKlineTail, parse_agg_trade, parse_combined_frame,
+    parse_perp_depth_diff, parse_rest_klines,
+};
+use engine::venues::venue_clock::MAX_VENUE_SKEW_US;
 use proptest::prelude::*;
 
 use crate::engine_support::level;

@@ -5,11 +5,6 @@
 //! a resent request can leave two live orders where one was meant, and an inherited order taken for
 //! this run's own is never cancelled.
 
-use engine::adapters::exec::{
-    ExecCore, ExecEffect, ExecRequest, ExecSession, InFlightRequest, MAX_RESYNC_ATTEMPTS,
-    MirroredOrder, Outgoing, Phase, PlaceNotSentReason, REQUEST_TIMEOUT, ResyncPoll, SessionSetup,
-    TimeoutFallout,
-};
 use engine::msg::exec::{
     CancelReason, ExecCommand, ExecEvent, ExecKind, OrderStyle, Provenance, RejectClass,
     VenueOrderStatus,
@@ -17,6 +12,11 @@ use engine::msg::exec::{
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::time::{DurationUs, TsUs};
 use engine::shutdown::FatalSignal;
+use engine::venues::exec::{
+    ExecCore, ExecEffect, ExecRequest, ExecSession, InFlightRequest, MAX_RESYNC_ATTEMPTS,
+    MirroredOrder, Outgoing, Phase, PlaceNotSentReason, REQUEST_TIMEOUT, ResyncPoll, SessionSetup,
+    TimeoutFallout,
+};
 
 type Session = ExecSession<Vec<ExecEvent>>;
 

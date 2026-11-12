@@ -4,12 +4,12 @@
 //! `Foreign` order is a human's order destroyed, and a sweep that reports complete while an order
 //! still rests leaves a position nobody is watching after the process exits.
 
-use engine::adapters::exec::{
+use engine::msg::exec::{CancelReason, ExecCommand, OrderStyle, Provenance};
+use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
+use engine::venues::exec::{
     ExecCore, ExecEffect, ExecRequest, MirroredOrder, ObserveOrderError, Phase, PlaceNotSentReason,
     SkipReason,
 };
-use engine::msg::exec::{CancelReason, ExecCommand, OrderStyle, Provenance};
-use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 
 const INSTRUMENT: InstrumentId = InstrumentId(0);
 const OTHER_INSTRUMENT: InstrumentId = InstrumentId(1);

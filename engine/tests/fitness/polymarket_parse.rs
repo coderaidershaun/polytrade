@@ -4,14 +4,14 @@
 
 use std::collections::BTreeMap;
 
-use engine::adapters::decode::DecimalFault;
-use engine::adapters::polymarket::book::{BookNormaliser, ChunkStamps};
-use engine::adapters::polymarket::parse::{ParseError, PolyFrame, parse_market_frame};
-use engine::adapters::venue_clock::MAX_VENUE_SKEW_US;
 use engine::hot::book::{Book, SnapshotOutcome};
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BookChunkKind, InboundMessage, Level};
 use engine::msg::time::TsUs;
+use engine::venues::decode::DecimalFault;
+use engine::venues::polymarket::book::{BookNormaliser, ChunkStamps};
+use engine::venues::polymarket::parse::{ParseError, PolyFrame, parse_market_frame};
+use engine::venues::venue_clock::MAX_VENUE_SKEW_US;
 use proptest::prelude::*;
 
 use crate::engine_support::level;
@@ -485,7 +485,7 @@ mod delta_model {
     fn poly_book(
         bids: &BTreeMap<i64, i64>,
         asks: &BTreeMap<i64, i64>,
-    ) -> engine::adapters::polymarket::parse::PolyBook {
+    ) -> engine::venues::polymarket::parse::PolyBook {
         let render = |model: &BTreeMap<i64, i64>| {
             model
                 .iter()

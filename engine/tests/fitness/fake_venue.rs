@@ -1,20 +1,18 @@
 //! Deterministic Binance Spot scenarios over the production simulator.
 
-use engine::adapters::binance::exec::{
-    DecodeContext, EncodeContext, ResponseContext, SymbolTable, encode_request,
-};
-use engine::adapters::exchange_sim::core::orders::{CORPUS_VENUE_ORDER_ID, SimOrder};
-use engine::adapters::exchange_sim::core::wallet::FillSettlement;
-use engine::adapters::exchange_sim::wire::{
-    SimFill, VenueWire, response_messages, stream_messages,
-};
-use engine::adapters::exec::{EngineIdentity, ExecRequest, TeTag};
 use engine::config::RunIdentity;
 use engine::msg::exec::{ExecEvent, OrderStyle, VenueOrderStatus};
 use engine::msg::ids::{AssetId, ClientOrderId, Price, Qty, Side, TradeId, VenueOrderId};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::time::TsUs;
 use engine::registry::{AssetDictionary, Registry};
+use engine::venues::binance::exec::{
+    DecodeContext, EncodeContext, ResponseContext, SymbolTable, encode_request,
+};
+use engine::venues::exchange_sim::core::orders::{CORPUS_VENUE_ORDER_ID, SimOrder};
+use engine::venues::exchange_sim::core::wallet::FillSettlement;
+use engine::venues::exchange_sim::wire::{SimFill, VenueWire, response_messages, stream_messages};
+use engine::venues::exec::{EngineIdentity, ExecRequest, TeTag};
 
 pub const STRATEGY_ID: &str = "strat-micro-recorder";
 pub const TE_ID: &str = "te-binance-spot-btcusdt";

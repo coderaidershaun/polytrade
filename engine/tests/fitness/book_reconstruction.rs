@@ -3,12 +3,12 @@
 
 use std::collections::BTreeMap;
 
-use engine::adapters::polymarket::book::BookNormaliser;
-use engine::adapters::polymarket::parse::PolyBook;
 use engine::hot::book::{Book, BookState, SnapshotOutcome};
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, InboundMessage, Level};
 use engine::msg::time::TsUs;
+use engine::venues::polymarket::book::BookNormaliser;
+use engine::venues::polymarket::parse::PolyBook;
 use proptest::prelude::*;
 
 use crate::engine_support::{

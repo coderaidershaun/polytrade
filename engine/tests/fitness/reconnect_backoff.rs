@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use engine::adapters::backoff::BackoffCaps;
+use engine::venues::backoff::BackoffCaps;
 use proptest::prelude::*;
 
 /// Wide enough that two independent draws colliding, or one landing on zero, is a once-in-a-million

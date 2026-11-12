@@ -3,12 +3,12 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use engine::adapters::binance::exec as binance_exec;
-use engine::adapters::exchange_sim;
-use engine::adapters::exec::TeTag;
-use engine::adapters::polymarket::exec as polymarket_exec;
 use engine::config::{BinanceEnv, RunIdentity};
 use engine::runtime::{EngineError, ExecutionLease};
+use engine::venues::binance::exec as binance_exec;
+use engine::venues::exchange_sim;
+use engine::venues::exec::TeTag;
+use engine::venues::polymarket::exec as polymarket_exec;
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 static NEXT_TE: AtomicU64 = AtomicU64::new(0);

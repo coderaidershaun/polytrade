@@ -5,13 +5,13 @@
 
 use std::sync::Arc;
 
-use engine::adapters::polymarket::discovery::PolySchedule;
-use engine::adapters::polymarket::rotation::{
+use engine::msg::ids::InstrumentId;
+use engine::msg::time::DurationUs;
+use engine::venues::polymarket::discovery::PolySchedule;
+use engine::venues::polymarket::rotation::{
     ForceTeardownFacts, OutcomeLeg, ProbeOutcome, RotationFacts, SlotAction, SlotInput,
     SlotMachine, SlotState, TokenId, WindowAssignment, WindowTokens,
 };
-use engine::msg::ids::InstrumentId;
-use engine::msg::time::DurationUs;
 
 use crate::engine_support::ts_secs;
 

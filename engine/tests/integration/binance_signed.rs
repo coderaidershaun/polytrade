@@ -10,9 +10,9 @@
 //!
 //! Only the live-runner role of a job runs these signed tests, by their runbook and the live policy.
 
-use engine::adapters::binance::exec::{ExecutionPreflight, preflight_execution};
-use engine::adapters::binance::rest::BinanceEnv;
-use engine::adapters::rest_quiet::SharedRestQuiet;
+use engine::venues::binance::exec::{ExecutionPreflight, preflight_execution};
+use engine::venues::binance::rest::BinanceEnv;
+use engine::venues::rest_quiet::SharedRestQuiet;
 
 const SYMBOL: &str = "BTCUSDT";
 
@@ -99,7 +99,7 @@ async fn signed_reads_return_well_formed_payloads() {
 #[ignore = "live network, signed production call: only the live-runner role of a job runs it, by its runbook and the live policy"]
 #[tokio::test]
 async fn a_missing_order_reads_as_routine_not_as_a_credential_failure() {
-    use engine::adapters::binance::rest::FailureVerdict;
+    use engine::venues::binance::rest::FailureVerdict;
 
     let ExecutionPreflight {
         rest: mut client, ..

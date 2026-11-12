@@ -8,10 +8,10 @@ use std::time::Duration;
 
 use tokio::signal::unix::{SignalKind, signal};
 
-use crate::adapters::exec::EdgeHandle;
 use crate::hot::spawn::SimTapGate;
 use crate::msg::ui::UiLifecycle;
 use crate::shutdown::{FatalSignal, TaskHandle, panic_text};
+use crate::venues::exec::EdgeHandle;
 use crate::{error, info, warn};
 
 use super::{Engine, ExitReport};

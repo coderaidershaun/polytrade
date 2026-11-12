@@ -15,9 +15,14 @@
 
 use std::collections::BTreeSet;
 
-use engine::adapters::decode::DecimalFault;
-use engine::adapters::exec::ExecRequest;
-use engine::adapters::polymarket::exec::codec::{
+use engine::msg::exec::{
+    AccountChunkKind, ExecEvent, ExecKind, Liquidity, OrderStyle, RejectClass, VenueOrderStatus,
+};
+use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::time::TsUs;
+use engine::venues::decode::DecimalFault;
+use engine::venues::exec::ExecRequest;
+use engine::venues::polymarket::exec::codec::{
     AccountStamps, DecodeContext, EncodeContext, HttpAnswer, IgnoredReason, KnownOrder, OrderIndex,
     OrderSigner, OrderSignerSetup, OrdersRead, PROTOCOL_VERSION, PlaceRequestContext,
     PlacementStatus, RejectSubject, RejectVerdict, SettlementWatermark, StreamEvent, TokenBinding,
@@ -27,13 +32,8 @@ use engine::adapters::polymarket::exec::codec::{
     decode_protocol_version, decode_single_order, decode_stream_frame, decode_trades_page,
     encode_request,
 };
-use engine::adapters::polymarket::exec::sign::address::Address;
-use engine::adapters::polymarket::exec::sign::order::SignatureType;
-use engine::msg::exec::{
-    AccountChunkKind, ExecEvent, ExecKind, Liquidity, OrderStyle, RejectClass, VenueOrderStatus,
-};
-use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use engine::msg::time::TsUs;
+use engine::venues::polymarket::exec::sign::address::Address;
+use engine::venues::polymarket::exec::sign::order::SignatureType;
 use serde_json::Value;
 
 use crate::poly_sign::{text, wallet_key};

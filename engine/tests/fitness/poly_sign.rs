@@ -8,19 +8,19 @@
 //! reaches a socket. Nothing here can be checked by reasoning about our own code, so all of it is
 //! pinned against an oracle we did not write.
 
-use engine::adapters::polymarket::exec::sign::address::Address;
-use engine::adapters::polymarket::exec::sign::amount::{AmountRequest, order_amounts};
-use engine::adapters::polymarket::exec::sign::eip712::{word_from_decimal, word_from_uint};
-use engine::adapters::polymarket::exec::sign::key::SigningKey;
-use engine::adapters::polymarket::exec::sign::l1::{ClobAuthRequest, clob_auth_headers};
-use engine::adapters::polymarket::exec::sign::l2::{
-    ApiCredentials, HttpMethod, RequestSigner, RequestToSign,
-};
-use engine::adapters::polymarket::exec::sign::order::{
-    Exchange, ExchangeDomain, OrderSide, SignatureType, SignedOrderFields, TokenId, sign_order,
-};
 use engine::msg::ids::{Price, Qty};
 use engine::secrets::Secret;
+use engine::venues::polymarket::exec::sign::address::Address;
+use engine::venues::polymarket::exec::sign::amount::{AmountRequest, order_amounts};
+use engine::venues::polymarket::exec::sign::eip712::{word_from_decimal, word_from_uint};
+use engine::venues::polymarket::exec::sign::key::SigningKey;
+use engine::venues::polymarket::exec::sign::l1::{ClobAuthRequest, clob_auth_headers};
+use engine::venues::polymarket::exec::sign::l2::{
+    ApiCredentials, HttpMethod, RequestSigner, RequestToSign,
+};
+use engine::venues::polymarket::exec::sign::order::{
+    Exchange, ExchangeDomain, OrderSide, SignatureType, SignedOrderFields, TokenId, sign_order,
+};
 use proptest::prelude::*;
 use serde_json::Value;
 

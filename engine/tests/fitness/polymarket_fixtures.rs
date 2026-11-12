@@ -8,15 +8,15 @@
 
 use std::collections::HashMap;
 
-use engine::adapters::polymarket::book::{BookNormaliser, ChunkStamps};
-use engine::adapters::polymarket::parse::{
-    PolyBook, PolyDelta, PolyFrame, is_frameless, parse_market_frame,
-};
-use engine::adapters::polymarket::rest::parse_events;
 use engine::config::PolySeries;
 use engine::hot::book::{Book, BookState};
 use engine::msg::ids::{InstrumentId, Price};
 use engine::msg::time::TsUs;
+use engine::venues::polymarket::book::{BookNormaliser, ChunkStamps};
+use engine::venues::polymarket::parse::{
+    PolyBook, PolyDelta, PolyFrame, is_frameless, parse_market_frame,
+};
+use engine::venues::polymarket::rest::parse_events;
 
 use crate::polymarket_parse::apply;
 
@@ -250,9 +250,9 @@ mod head {
 
 mod collapse {
     use super::*;
-    use engine::adapters::polymarket::teardown::{CollapseDetector, CollapseSignal, LevelUpdate};
     use engine::msg::ids::{Qty, Side};
     use engine::msg::inbound::Level;
+    use engine::venues::polymarket::teardown::{CollapseDetector, CollapseSignal, LevelUpdate};
 
     const GAMMA_NEXT: &str = include_str!("../../fixtures/polymarket/gamma_event_next.json");
 

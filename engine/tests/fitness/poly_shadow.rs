@@ -4,10 +4,10 @@
 //! deliberately order-sensitive — it expects the venue's native ascending-by-price arrays, so
 //! callers reverse best-first bids before validating.
 
-use engine::adapters::polymarket::shadow::{BookFrameOutcome, ShadowValidator};
-use engine::adapters::polymarket::teardown::{CollapseDetector, CollapseSignal, LevelUpdate};
 use engine::msg::ids::{Price, Qty, Side};
 use engine::msg::time::TsUs;
+use engine::venues::polymarket::shadow::{BookFrameOutcome, ShadowValidator};
+use engine::venues::polymarket::teardown::{CollapseDetector, CollapseSignal, LevelUpdate};
 
 use crate::engine_support::level;
 

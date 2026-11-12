@@ -12,9 +12,6 @@
 //! so these drive the real constructor, and the last of them pins the diagnostic that turns the
 //! failure into a one-minute read.
 
-use engine::adapters::exec::{
-    MAX_RESYNC_ATTEMPTS, ResyncPass, ResyncStep, open_orders_snapshot_end,
-};
 use engine::hot::exec::{
     OrderClaim, OrderTable, QuoteLevel, ReadinessGap, ReconcilePass, RejectReason,
 };
@@ -22,6 +19,7 @@ use engine::msg::exec::{ExecKind, OrderStyle};
 use engine::msg::ids::{Price, Qty, Side};
 use engine::msg::time::TsUs;
 use engine::msg::ui::UiEvent;
+use engine::venues::exec::{MAX_RESYNC_ATTEMPTS, ResyncPass, ResyncStep, open_orders_snapshot_end};
 
 use proptest::prelude::*;
 

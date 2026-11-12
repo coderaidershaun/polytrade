@@ -6,14 +6,14 @@
 
 use std::sync::Arc;
 
-use engine::adapters::polymarket::actor::{DriverEffect, PolyDriverCore, SlotLegs};
-use engine::adapters::polymarket::discovery::PolySchedule;
-use engine::adapters::polymarket::parse::{PolyBook, PolyFrame};
-use engine::adapters::polymarket::rotation::{
-    OutcomeLeg, ProbeOutcome, TokenId, WindowAssignment, WindowTokens,
-};
 use engine::msg::ids::{InstrumentId, Price, Qty};
 use engine::msg::inbound::{BookChunkKind, InboundMessage, Level};
+use engine::venues::polymarket::actor::{DriverEffect, PolyDriverCore, SlotLegs};
+use engine::venues::polymarket::discovery::PolySchedule;
+use engine::venues::polymarket::parse::{PolyBook, PolyFrame};
+use engine::venues::polymarket::rotation::{
+    OutcomeLeg, ProbeOutcome, TokenId, WindowAssignment, WindowTokens,
+};
 
 use crate::engine_support::ts_secs;
 

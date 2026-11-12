@@ -18,9 +18,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use rtrb::{Consumer, RingBuffer};
 use tokio::sync::mpsc;
 
-use engine::adapters::backoff::BackoffCaps;
-use engine::adapters::polymarket::actor::{PolymarketAdapter, PolymarketAdapterContext};
-use engine::adapters::polymarket::rest::PolyRest;
 use engine::config::PolySeries;
 use engine::config::{
     Config, ExecutionMode, RecordedTables, StrategyId, TradingEngineId, VenueMarket,
@@ -34,6 +31,9 @@ use engine::msg::time::EngineClock;
 use engine::persist::{PersistConfig, PersistWriter, RunMeta};
 use engine::registry::Registry;
 use engine::shutdown::{FatalSignal, RunStateCell};
+use engine::venues::backoff::BackoffCaps;
+use engine::venues::polymarket::actor::{PolymarketAdapter, PolymarketAdapterContext};
+use engine::venues::polymarket::rest::PolyRest;
 
 use crate::observer::RotationObserver;
 use crate::rotations_parquet::rotation_instruments;

@@ -1,9 +1,9 @@
 //! Every way a run can refuse to start, after the config itself parsed: an unavailable core, an
 //! unreachable venue, a scale or limit the engine cannot represent, a lease another process holds.
 
-use crate::adapters::VenueError;
 use crate::config::ConfigError;
 use crate::exposure::ExposureError;
+use crate::venues::VenueError;
 use std::path::{Path, PathBuf};
 
 #[derive(thiserror::Error, Debug)]
