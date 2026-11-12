@@ -22,7 +22,7 @@ use engine::log::{HotRecord, LaneReader, TextRecord, open_hot_lane, open_text_la
 use engine::msg::exec::{
     AccountChunk, ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, FIXED_SCALE, Price, Qty, Side};
+use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::time::{DurationUs, Stamper, TsUs};
@@ -724,69 +724,119 @@ fn push_extras(inputs: &mut Inputs, shipped: Shipped, peers: &PeerFrames, i: i64
     }
 }
 
-/// Answers each command as a venue would: each placement is acknowledged and then fills in full, so
-/// the next spin places again, and each cancel, amend and reconcile gets its answer.
-fn answer(inputs: &mut Inputs, command: ExecCommand, when: i64) {
-    let answer = match command {
-        ExecCommand::Place {
-            instrument,
-            client_id,
-            side,
-            price,
-            qty,
-            ..
-        } => {
-            let placed = ExecEvent {
-                kind: ExecKind::AckPlaced,
-                status: Some(VenueOrderStatus::New),
+/// How often the stand-in venue's market trades through each resting order. A fill on every spin
+/// would flip the publisher's one quoted side on every spin, which no market does.
+const FILL_EVERY: i64 = 60;
+
+/// One acknowledged placement, resting until the venue fills or cancels it.
+#[derive(Debug, Clone, Copy)]
+struct Resting {
+    instrument: InstrumentId,
+    client_id: ClientOrderId,
+    side: Side,
+    price: Price,
+    qty: Qty,
+}
+
+/// Answers each command as a venue would: a placement is acknowledged and rests until the next
+/// fill, and each cancel, amend and reconcile gets its answer at once.
+#[derive(Default)]
+struct Venue {
+    resting: Vec<Resting>,
+}
+
+impl Venue {
+    fn answer(&mut self, inputs: &mut Inputs, command: ExecCommand, when: i64) {
+        let answer = match command {
+            ExecCommand::Place {
+                instrument,
+                client_id,
+                side,
+                price,
                 qty,
-                ..exec_event(instrument, client_id, side, price.0, when)
-            };
-            inputs.push(Queue::Venue, InboundMessage::Exec(placed));
-            ExecEvent {
+                ..
+            } => {
+                self.resting.push(Resting {
+                    instrument,
+                    client_id,
+                    side,
+                    price,
+                    qty,
+                });
+                ExecEvent {
+                    kind: ExecKind::AckPlaced,
+                    status: Some(VenueOrderStatus::New),
+                    qty,
+                    ..exec_event(instrument, client_id, side, price.0, when)
+                }
+            }
+            ExecCommand::Cancel {
+                instrument,
+                client_id,
+            } => {
+                self.resting.retain(|order| order.client_id != client_id);
+                ExecEvent {
+                    kind: ExecKind::AckCanceled,
+                    status: Some(VenueOrderStatus::Canceled),
+                    ..exec_event(instrument, client_id, Side::Buy, 0, when)
+                }
+            }
+            ExecCommand::AmendQty {
+                instrument,
+                client_id,
+                qty,
+            } => {
+                for order in &mut self.resting {
+                    if order.client_id == client_id {
+                        order.qty = qty;
+                    }
+                }
+                ExecEvent {
+                    kind: ExecKind::AckAmended,
+                    status: Some(VenueOrderStatus::New),
+                    qty,
+                    ..exec_event(instrument, client_id, Side::Buy, 0, when)
+                }
+            }
+            ExecCommand::ReconcileOrder {
+                instrument,
+                recon_seq,
+                ..
+            }
+            | ExecCommand::ReconcileOpenOrders {
+                instrument,
+                recon_seq,
+            } => ExecEvent {
+                recon_seq,
+                ..open_orders_snapshot_end(instrument, ts(when))
+            },
+            ExecCommand::CancelOurs { .. } | ExecCommand::CancelPriorRun { .. } => return,
+        };
+        inputs.push(Queue::Venue, InboundMessage::Exec(answer));
+    }
+
+    /// The market trades through each resting order in full.
+    fn fill_resting(&mut self, inputs: &mut Inputs, when: i64) {
+        for order in self.resting.drain(..) {
+            let fill = ExecEvent {
                 kind: ExecKind::ReportTrade,
                 status: Some(VenueOrderStatus::Filled),
-                qty,
-                last_price: price,
-                last_qty: qty,
-                cumulative_qty: qty,
-                cumulative_quote: price.notional(qty),
-                ..exec_event(instrument, client_id, side, price.0, when)
-            }
+                qty: order.qty,
+                last_price: order.price,
+                last_qty: order.qty,
+                cumulative_qty: order.qty,
+                cumulative_quote: order.price.notional(order.qty),
+                ..exec_event(
+                    order.instrument,
+                    order.client_id,
+                    order.side,
+                    order.price.0,
+                    when,
+                )
+            };
+            inputs.push(Queue::Venue, InboundMessage::Exec(fill));
         }
-        ExecCommand::Cancel {
-            instrument,
-            client_id,
-        } => ExecEvent {
-            kind: ExecKind::AckCanceled,
-            status: Some(VenueOrderStatus::Canceled),
-            ..exec_event(instrument, client_id, Side::Buy, 0, when)
-        },
-        ExecCommand::AmendQty {
-            instrument,
-            client_id,
-            qty,
-        } => ExecEvent {
-            kind: ExecKind::AckAmended,
-            status: Some(VenueOrderStatus::New),
-            qty,
-            ..exec_event(instrument, client_id, Side::Buy, 0, when)
-        },
-        ExecCommand::ReconcileOrder {
-            instrument,
-            recon_seq,
-            ..
-        }
-        | ExecCommand::ReconcileOpenOrders {
-            instrument,
-            recon_seq,
-        } => ExecEvent {
-            recon_seq,
-            ..open_orders_snapshot_end(instrument, ts(when))
-        },
-        ExecCommand::CancelOurs { .. } | ExecCommand::CancelPriorRun { .. } => return,
-    };
-    inputs.push(Queue::Venue, InboundMessage::Exec(answer));
+    }
 }
 
 fn recorder_row_at(id: u16) -> InstrumentRow {
@@ -980,6 +1030,7 @@ impl Readers {
         &mut self,
         window: &mut Window,
         columns: &RecorderColumns,
+        venue: &mut Venue,
         inputs: &mut Inputs,
         when: i64,
     ) {
@@ -996,7 +1047,7 @@ impl Readers {
                 continue;
             };
             window.commands += 1;
-            answer(inputs, stamped.command, when);
+            venue.answer(inputs, stamped.command, when);
         }
         while let Ok(snapshot) = self.ui_books.pop() {
             std::hint::black_box(snapshot);
@@ -1062,6 +1113,7 @@ fn drive_on_this_thread(shipped: Shipped) -> Window {
     let mut driver = HotDriver::new(queues, engine, Some(samples));
     let columns = RecorderColumns::resolve();
     let peers = PeerFrames::new();
+    let mut venue = Venue::default();
     let mut window = Window::default();
 
     // A rotation names a new market to execution, which then waits for its readiness again, so the
@@ -1075,6 +1127,7 @@ fn drive_on_this_thread(shipped: Shipped) -> Window {
             &mut readers,
             &mut window,
             &columns,
+            &mut venue,
             &mut inputs,
             0,
         );
@@ -1085,6 +1138,7 @@ fn drive_on_this_thread(shipped: Shipped) -> Window {
         &mut readers,
         &mut window,
         &columns,
+        &mut venue,
         &mut inputs,
         0,
     );
@@ -1113,6 +1167,9 @@ fn drive_on_this_thread(shipped: Shipped) -> Window {
         }
         inputs.push(queue, message);
         push_extras(&mut inputs, shipped, &peers, i);
+        if i % FILL_EVERY == 0 {
+            venue.fill_resting(&mut inputs, when);
+        }
         match parked_at {
             None if window.steps >= PARK_AT_STEP => {
                 inputs.push(Queue::Link, run_control(idle_at(1), when));
@@ -1136,7 +1193,7 @@ fn drive_on_this_thread(shipped: Shipped) -> Window {
             if is_measured {
                 window.steps += 1;
             }
-            readers.drain(&mut window, &columns, &mut inputs, when);
+            readers.drain(&mut window, &columns, &mut venue, &mut inputs, when);
             if !is_measured || window.steps < MEASURED_STEPS / 2 {
                 metrics.pass(ts(0), &mut sample_rows);
             }
@@ -1160,11 +1217,12 @@ fn step_to_idle(
     readers: &mut Readers,
     window: &mut Window,
     columns: &RecorderColumns,
+    venue: &mut Venue,
     inputs: &mut Inputs,
     when: i64,
 ) {
     while driver.step() == Step::Folded {
-        readers.drain(window, columns, inputs, when);
+        readers.drain(window, columns, venue, inputs, when);
     }
 }
 
