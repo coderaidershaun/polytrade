@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::scans::rust_sources;
+use crate::operator::rust_sources;
 
 const CLOCK_START: &str = "EngineClock::start(";
 

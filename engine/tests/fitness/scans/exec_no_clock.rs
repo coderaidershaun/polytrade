@@ -28,6 +28,8 @@
 
 use std::path::Path;
 
+use crate::operator::rust_sources;
+
 /// Spellings that reach a clock. `now` alone covers `Instant::now`, `SystemTime::now`,
 /// `EngineClock::now` and any method a future type calls the same thing, which is the point: the
 /// scan is over the WORD, so a new clock type is caught before it is named here.
@@ -80,21 +82,4 @@ fn the_execution_engine_reads_no_clock() {
          the time it needs from its caller, and the simulated venue must decide what to emit from \
          the stamps on its input alone: {offences:?}"
     );
-}
-
-pub fn rust_sources(directory: &Path) -> Vec<std::path::PathBuf> {
-    let entries = std::fs::read_dir(directory)
-        .unwrap_or_else(|error| panic!("cannot read {}: {error}", directory.display()));
-    let mut sources = Vec::new();
-    for path in entries.filter_map(|entry| entry.ok().map(|entry| entry.path())) {
-        match path.is_dir() {
-            true => sources.extend(rust_sources(&path)),
-            false if path.extension().is_some_and(|extension| extension == "rs") => {
-                sources.push(path);
-            }
-            false => {}
-        }
-    }
-    sources.sort();
-    sources
 }

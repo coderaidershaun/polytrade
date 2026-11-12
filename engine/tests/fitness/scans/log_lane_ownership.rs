@@ -12,7 +12,7 @@
 
 use std::path::Path;
 
-use crate::scans::exec_no_clock::rust_sources;
+use crate::operator::rust_sources;
 
 /// This engine's complete census of thread lanes: the text lane of each OS thread it owns (the
 /// process entry, the single hot thread, the metrics thread, the pinned senders' thread, and the

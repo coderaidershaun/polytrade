@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::scans::rust_sources;
+use crate::operator::rust_sources;
 
 const TESTS_FOLDER: &str = "tests";
 const FITNESS_ROOT: &str = "tests/fitness";

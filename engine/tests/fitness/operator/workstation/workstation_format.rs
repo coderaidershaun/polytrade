@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use crate::scans::rust_sources;
+use super::workstation_support::rust_sources;
 
 use engine::operator::workstation::format::{
     MISSING, write_latency_micros, write_opt_latency_micros, write_opt_slots, write_slots,
