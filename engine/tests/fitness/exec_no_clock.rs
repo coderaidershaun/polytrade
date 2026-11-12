@@ -39,8 +39,8 @@ pub const CLOCK_SPELLINGS: [&str; 5] =
 const SCANNED: [(&str, usize); 4] = [
     ("src/hot/exec", 10),
     ("src/venues/exec", 6),
-    ("src/venues/exchange_sim/core", 8),
-    ("src/venues/exchange_sim/driver", 3),
+    ("src/venues/sim/core", 8),
+    ("src/venues/sim/driver", 3),
 ];
 
 #[test]

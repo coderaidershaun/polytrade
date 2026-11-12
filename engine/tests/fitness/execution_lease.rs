@@ -6,9 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use engine::config::{BinanceEnv, RunIdentity};
 use engine::runtime::{EngineError, ExecutionLease};
 use engine::venues::binance::exec as binance_exec;
-use engine::venues::exchange_sim;
 use engine::venues::exec::TeTag;
 use engine::venues::polymarket::exec as polymarket_exec;
+use engine::venues::sim;
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 static NEXT_TE: AtomicU64 = AtomicU64::new(0);
@@ -78,10 +78,7 @@ fn each_venue_keeps_the_nonce_file_name_it_shipped_with() {
                 fingerprint(signer.as_bytes())
             ),
         ),
-        (
-            exchange_sim::lease_namespace(),
-            format!(".exec-sim-{te:08x}.nonce"),
-        ),
+        (sim::lease_namespace(), format!(".exec-sim-{te:08x}.nonce")),
     ] {
         // Released before the next acquisition: one host lock covers all four.
         drop(

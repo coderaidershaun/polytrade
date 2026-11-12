@@ -21,7 +21,6 @@ use crate::venues::binance::exec::{
 use crate::venues::binance::preflight as binance_preflight;
 use crate::venues::binance::rest::BinanceEnv;
 use crate::venues::edge::{EdgeInputs, VenueEdge};
-use crate::venues::exchange_sim::{self, SimVenueError};
 use crate::venues::exec::{LeaseNamespace, VenueCapabilities};
 use crate::venues::polymarket::actor::{PolymarketAdapter, PolymarketAdapterContext};
 use crate::venues::polymarket::exec as polymarket_exec;
@@ -30,6 +29,7 @@ use crate::venues::polymarket::exec::handle::{
 };
 use crate::venues::polymarket::preflight as polymarket_preflight;
 use crate::venues::rest_quiet::SharedRestQuiet;
+use crate::venues::sim::{self, SimVenueError};
 
 pub(crate) use crate::venues::polymarket::rotation::WindowAssignment;
 
@@ -118,7 +118,7 @@ impl ExecutionVenue {
         registry: &Registry,
     ) -> Result<VenueCapabilities, VenueError> {
         Ok(match self {
-            Self::Simulated => exchange_sim::capabilities(),
+            Self::Simulated => sim::capabilities(),
             Self::Binance { .. } => binance_exec::capabilities(binance_preflight::order_budget(
                 registry.order_rate_limits(),
             )?),
@@ -133,7 +133,7 @@ impl ExecutionVenue {
         acquire: impl FnOnce(&LeaseNamespace<'_>) -> R,
     ) -> R {
         match self {
-            Self::Simulated => acquire(&exchange_sim::lease_namespace()),
+            Self::Simulated => acquire(&sim::lease_namespace()),
             Self::Binance { gate, env } => acquire(&binance_exec::lease_namespace(
                 *env,
                 gate.credentials.api_key().expose_bytes(),
@@ -160,7 +160,7 @@ impl ExecutionVenue {
         assignments: mpsc::Receiver<WindowAssignment>,
     ) -> Result<VenueEdge, VenueError> {
         match self {
-            Self::Simulated => Ok(exchange_sim::bring_up(inputs)?),
+            Self::Simulated => Ok(sim::bring_up(inputs)?),
             Self::Binance { gate, env } => {
                 binance_exec::bring_up(*gate, env, inputs).map_err(VenueError::BinanceRecvWindow)
             }

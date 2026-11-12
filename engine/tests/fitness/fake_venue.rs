@@ -9,10 +9,10 @@ use engine::registry::{AssetDictionary, Registry};
 use engine::venues::binance::exec::{
     DecodeContext, EncodeContext, ResponseContext, SymbolTable, encode_request,
 };
-use engine::venues::exchange_sim::core::orders::{CORPUS_VENUE_ORDER_ID, SimOrder};
-use engine::venues::exchange_sim::core::wallet::FillSettlement;
-use engine::venues::exchange_sim::wire::{SimFill, VenueWire, response_messages, stream_messages};
 use engine::venues::exec::{EngineIdentity, ExecRequest, TeTag};
+use engine::venues::sim::core::orders::{CORPUS_VENUE_ORDER_ID, SimOrder};
+use engine::venues::sim::core::wallet::FillSettlement;
+use engine::venues::sim::wire::{SimFill, VenueWire, response_messages, stream_messages};
 
 pub const STRATEGY_ID: &str = "strat-micro-recorder";
 pub const TE_ID: &str = "te-binance-spot-btcusdt";
