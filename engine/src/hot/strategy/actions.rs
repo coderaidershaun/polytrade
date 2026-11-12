@@ -7,6 +7,7 @@
 use crate::hot::sink::{LinkSink, PersistSink, StrategyLogSink, UiEventSink};
 use crate::link::{LinkHash, LinkPayload, OutboundLink, TopicId};
 use crate::log::HotRecord;
+use crate::msg::latency::LaneDrops;
 use crate::msg::persist::{FeatureRow, PersistRecord};
 use crate::msg::time::TsUs;
 use crate::msg::ui::UiEvent;
@@ -25,15 +26,6 @@ pub(crate) const LOG_LANE_CAPACITY: usize = 64;
 
 /// Few topics/callback; backlog pointless (far side sees only newest STATE). ~9 KB.
 pub(crate) const LINK_LANE_CAPACITY: usize = 32;
-
-/// Dropped records per lane: lane full on push (output drop+count, never fatal).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub struct LaneDrops {
-    pub features: u64,
-    pub persist: u64,
-    pub logs: u64,
-    pub link: u64,
-}
 
 /// Bank config: disk permissions + strategy link_fields digest (every payload carries it).
 pub(crate) struct ActionsSetup {

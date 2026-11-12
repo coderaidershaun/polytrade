@@ -1,8 +1,7 @@
 //! What the metrics thread tells people: the report that the workstation paints about once a
 //! second, and the log lines of each closed interval. No cell and no line holds a mean.
 
-use crate::hot::metrics::EngineCounters;
-use crate::msg::latency::Category;
+use crate::msg::latency::{Category, EngineCounters};
 use crate::msg::ui::{
     LATENCY_REPORT_CELLS, LatencyCell, LatencyFlow, LatencyReading, LatencyReport, Percentile,
 };

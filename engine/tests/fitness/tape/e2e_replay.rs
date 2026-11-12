@@ -270,7 +270,7 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
         ]),
         engine_view(NOMINAL_SPIN),
     );
-    let mut engine = engine_without_warmup(
+    let engine = engine_without_warmup(
         &instruments,
         Box::new(strategy),
         sink,
@@ -312,11 +312,12 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
         HotThreadConfig {
             core_id: None,
             tag: "e2e-hot",
+            samples: None,
         },
         ingress,
+        engine,
         fatal.clone(),
         drain.clone(),
-        move |pop, message| engine.dispatch(pop, &message),
     );
 
     for message in message_sequence() {

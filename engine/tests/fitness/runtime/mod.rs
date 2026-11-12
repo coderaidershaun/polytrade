@@ -6,5 +6,5 @@ mod config_guards;
 mod execution_lease;
 mod exposure_boot;
 mod exposure_state;
-mod metrics;
+pub(crate) mod metrics;
 mod runtime_exit;

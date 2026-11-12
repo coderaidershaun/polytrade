@@ -18,6 +18,9 @@ pub struct SourceId(pub u16);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct QueueId(pub u8);
 
+/// The most input queues the hot thread reads.
+pub(crate) const MAX_INPUT_QUEUES: usize = 20;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AssetId(pub u16);
 

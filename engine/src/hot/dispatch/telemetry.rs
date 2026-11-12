@@ -1,10 +1,11 @@
 //! Per-message latency stamps, per-spin metrics snapshot, drop counters per sink. Machine reads only, never market.
 
 use crate::hot::book::Book;
-use crate::hot::metrics::{EngineCounters, MessageMeta, Stage};
+use crate::hot::metrics::{MessageMeta, Stage};
 use crate::hot::quant::intensity::IntensityCounts;
 use crate::hot::sink::LinkSink;
 use crate::hot::tracker::MicroTracker;
+use crate::msg::latency::EngineCounters;
 use crate::msg::time::TsUs;
 use crate::msg::ui::UiLatencySummary;
 
@@ -99,8 +100,9 @@ impl HotEngine {
             .sum()
     }
 
-    pub(super) fn emit_snapshot(&mut self, now: TsUs) {
-        let counters = EngineCounters {
+    /// The drop and event counts since the start of the run, which the hot loop reads once a spin.
+    pub fn counters(&self) -> EngineCounters {
+        EngineCounters {
             persist_dropped: self.state.persist_dropped(),
             book_trimmed: self.state.books.iter().map(Book::trimmed_count).sum(),
             book_remove_missing: self
@@ -125,7 +127,11 @@ impl HotEngine {
             ui_events_dropped: self.ui.dropped_events(),
             link_dropped: self.dropped_link_frames(),
             exposure_superseded: self.state.exposure.superseded(),
-        };
+        }
+    }
+
+    pub(super) fn emit_snapshot(&mut self, now: TsUs) {
+        let counters = self.counters();
         self.metrics.record_counters(counters);
         let snapshot = self.metrics.snapshot(now);
         self.metrics_sink.push(snapshot);

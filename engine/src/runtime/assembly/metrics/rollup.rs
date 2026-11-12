@@ -4,10 +4,9 @@
 
 use hdrhistogram::Histogram;
 
-use crate::hot::metrics::EngineCounters;
-use crate::msg::ids::QueueId;
+use crate::msg::ids::{MAX_INPUT_QUEUES, QueueId};
 use crate::msg::latency::{
-    Category, CounterSample, MAX_INPUT_QUEUES, Stage, StageSample, WireSample,
+    Category, CounterSample, EngineCounters, Stage, StageSample, WireSample,
 };
 use crate::msg::time::{ClockSource, DurationUs, TickScale, TsUs};
 use crate::msg::ui::{LatencyCell, LatencyFlow, Percentile};

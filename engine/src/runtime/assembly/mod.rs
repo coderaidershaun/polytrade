@@ -28,6 +28,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
 use crate::hot::dispatch::{ExposureWiring, HotEngine, HotEngineSetup, LinkWiring};
+use crate::hot::metrics::DriverSamples;
 use crate::hot::metrics::MetricsSnapshot;
 use crate::hot::sink::{LinkSink, MetricsSink, StrategyLogSink};
 use crate::hot::spawn::{HotThreadConfig, SimTapGate, spawn_hot_thread};
@@ -35,7 +36,7 @@ use crate::hot::strategy::Strategy;
 use crate::link::{LinkActor, LinkActorSetup, OutboundLink};
 use crate::log::{self, LaneReader, LogConfig, LogHandle};
 use crate::msg::persist::RotationRow;
-use crate::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter};
+use crate::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, Stamper};
 use crate::msg::ui::UiCatalog;
 use crate::msg::ui::channel::{UiLifecycle, UiWiring, ui_channel};
 use crate::runtime::config::{Config, ExecutionMode, RunIdentity};
@@ -49,7 +50,9 @@ use crate::{error, info, warn};
 use drain::install_panic_hook;
 use exec::{ExecBringUp, ExecBringUpSetup, exec_bring_up};
 use link::link_bring_up;
-use metrics::{MetricsBringUp, MetricsBringUpSetup, MetricsThread, metrics_bring_up};
+use metrics::{
+    MetricsBringUp, MetricsBringUpSetup, MetricsThread, SampleProducers, metrics_bring_up,
+};
 use persist::{PersistBringUp, PersistBringUpSetup, persist_bring_up};
 use prepare::{Prepared, prepare};
 use queues::{InputQueues, build_input_queues};
@@ -120,6 +123,8 @@ impl Engine {
         // still keeps a clock of its own, for its latency figures only.
         let clock = EngineClock::start();
         let latency_clock = ClockSource::check(InvariantCounter::detect());
+        // The one counter of the process: every latency stamp reads it. Building it calibrates it.
+        let stamper = Stamper::Counter(quanta::Clock::new());
 
         // The workstation feed is built here. Its receiving end goes to the link actor, which is
         // the only reader.
@@ -219,21 +224,27 @@ impl Engine {
             &restored_exposure,
         );
 
-        // SMELL: the hot thread still rolls up its own snapshots, which nothing reads now, and it
-        // writes no sample yet, so the metrics thread reports no stage until the hot thread's driver
-        // takes these sample producers.
+        // SMELL: the hot thread still rolls up its own snapshots, which nothing reads now.
         let (metrics_producer, _unread_snapshots) =
             RingBuffer::<MetricsSnapshot>::new(METRICS_RING_CAPACITY);
         let MetricsBringUp {
             thread: metrics,
-            samples: _unwritten_samples,
+            samples,
             reports: latency_reports,
         } = metrics_bring_up(MetricsBringUpSetup {
             latency: &config.latency,
             clock: &clock,
+            stamper: &stamper,
             clock_source: latency_clock.unwrap_or_else(|refusal| refusal.fallback()),
             queue_count: registry.input_queue_count(),
         });
+        // SMELL: the metrics thread reads a ring of wire samples that nothing writes, so the
+        // decision-to-wire stage stays empty until a sender stamps each command it sends.
+        let SampleProducers {
+            stages,
+            counters,
+            wires: _unwritten_wires,
+        } = samples;
 
         // A dedicated ring isolates a telemetry flood from engine WARN/ERROR records.
         let (strategy_log_producer, strategy_log_consumer) =
@@ -307,7 +318,7 @@ impl Engine {
         };
 
         let metrics_sink = MetricsSink::new(metrics_producer);
-        let mut hot_engine = HotEngine::new(HotEngineSetup {
+        let hot_engine = HotEngine::new(HotEngineSetup {
             exec: exec_wiring,
             instruments: registry.instruments(),
             strategy,
@@ -327,11 +338,16 @@ impl Engine {
             HotThreadConfig {
                 core_id: config.engine.hot_core_id,
                 tag: "hot",
+                samples: Some(DriverSamples {
+                    stamper: stamper.clone(),
+                    stages,
+                    counters,
+                }),
             },
             ingress,
+            hot_engine,
             fatal.clone(),
             drain.clone(),
-            move |pop, message| hot_engine.dispatch(pop, &message),
         );
 
         let timer = spawn_timer(spin_interval, timer_producer, &clock, &tokio_handle);

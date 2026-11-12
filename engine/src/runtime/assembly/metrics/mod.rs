@@ -164,12 +164,14 @@ pub(super) struct MetricsBringUp {
 pub(super) struct MetricsBringUpSetup<'a> {
     pub latency: &'a LatencyConfig,
     pub clock: &'a EngineClock,
+    /// The counter every latency stamp of the process reads, so the anchors place each tick.
+    pub stamper: &'a Stamper,
     pub clock_source: ClockSource,
     pub queue_count: usize,
 }
 
 pub(super) fn metrics_bring_up(setup: MetricsBringUpSetup<'_>) -> MetricsBringUp {
-    let stamper = Stamper::Counter(quanta::Clock::new());
+    let stamper = setup.stamper.clone();
     let first = read_anchor(setup.clock, &stamper).0;
     std::thread::sleep(FIRST_ANCHOR_GAP);
     let second = read_anchor(setup.clock, &stamper).0;

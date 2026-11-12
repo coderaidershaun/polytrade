@@ -37,8 +37,8 @@ pub use crate::link::{LinkFrame, TopicId};
 pub use crate::msg::persist::FeatureId;
 pub use crate::runtime::registry::InstrumentRow;
 
+pub use actions::ClientOrderId;
 pub(crate) use actions::{Actions, ActionsSetup, DrainSinks};
-pub use actions::{ClientOrderId, LaneDrops};
 
 /// Callbacks default no-ops; override only events of interest. State pre-applied; read via ctx, don't re-derive.
 pub trait Strategy: Send {

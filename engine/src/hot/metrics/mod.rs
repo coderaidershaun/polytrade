@@ -1,15 +1,20 @@
 //! Engine self-observability — the machine's health, not the market's data. Per category × stage, a
 //! 60-slot ring of ten-second buckets gives a running ten-minute rollup; buckets age out by key, so rollups overlap rather than reset.
 
+mod sampler;
 mod snapshot;
 
 use crate::msg::exec::ExecKind;
 use crate::msg::ids::QueueId;
 use crate::msg::inbound::{BookChunkKind, InboundMessage};
 use crate::msg::labelled_enum::labelled_enum;
+use crate::msg::latency::EngineCounters;
 use crate::msg::time::{DurationUs, TsUs};
 
-pub use snapshot::{EngineCounters, MetricsSnapshot};
+pub use sampler::DriverSamples;
+pub use snapshot::MetricsSnapshot;
+
+pub(crate) use sampler::Folded;
 
 labelled_enum! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

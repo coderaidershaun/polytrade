@@ -3,16 +3,9 @@
 
 use core::mem::offset_of;
 
-// SMELL: the counters are declared by the hot thread's metrics code, so this shared vocabulary
-// depends on that code. They belong here, beside the sample that carries them.
-use crate::hot::metrics::EngineCounters;
-use crate::msg::ids::{ClientOrderId, QueueId};
+use crate::msg::ids::{ClientOrderId, MAX_INPUT_QUEUES, QueueId};
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::time::{Tick, TsUs};
-
-// SMELL: the registry keeps the same limit of 20 input queues as a constant of its own, so the two
-// can drift apart. The registry should read this one.
-pub(crate) const MAX_INPUT_QUEUES: usize = 20;
 
 labelled_enum! {
     /// What a sample times.
@@ -168,3 +161,33 @@ const _: () = {
     assert!(offset_of!(CounterSample, backlog) == 16);
     assert!(offset_of!(CounterSample, counters) == 96);
 };
+
+/// The drop and event counts of the fold since the start of the run, carried in each counter
+/// sample.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EngineCounters {
+    pub persist_dropped: u64,
+    pub book_trimmed: u64,
+    pub book_remove_missing: u64,
+    pub klines_unconfigured: u64,
+    pub intensity_inside_spread: u64,
+    pub intensity_without_book: u64,
+    pub snapshots_dropped: u64,
+    pub orders_submitted: u64,
+    pub bank_drops: LaneDrops,
+    pub ui_books_dropped: u64,
+    pub ui_events_dropped: u64,
+    pub link_dropped: u64,
+    /// Position snapshots replaced before the exposure writer took them. Nonzero means the file on
+    /// disk trails the hot side, so a hard kill would restore a stale position.
+    pub exposure_superseded: u64,
+}
+
+/// Dropped records per lane: lane full on push (output drop+count, never fatal).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct LaneDrops {
+    pub features: u64,
+    pub persist: u64,
+    pub logs: u64,
+    pub link: u64,
+}

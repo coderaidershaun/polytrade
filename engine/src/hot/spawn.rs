@@ -1,5 +1,6 @@
-//! Hot-thread spawn + input producers. Full queue = fatal (engine stalled).
-//! [`LinkQueueProducer`] exception: drop+count (untrusted remote, not engine-fed).
+//! The hot thread, the driver that runs its loop one message at a time, and the producers of its
+//! input queues. Full queue = fatal (engine stalled). [`LinkQueueProducer`] exception: drop+count
+//! (untrusted remote, not engine-fed).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -7,7 +8,9 @@ use std::thread::{self, JoinHandle};
 
 use rtrb::Producer;
 
+use super::dispatch::HotEngine;
 use super::ingress::{IngressQueues, QueueSample};
+use super::metrics::{DriverSamples, Folded};
 use crate::log::{hot_error, hot_warn};
 use crate::msg::ids::{QueueId, SourceId};
 use crate::msg::inbound::{InboundMessage, MarketTapItem, TappedMessage, VenueMeta};
@@ -233,48 +236,107 @@ impl LinkQueueProducer {
     }
 }
 
+/// What the hot thread is built with. With no samples it reads no counter and pushes nothing, so a
+/// replay folds exactly what a live run folds.
 pub struct HotThreadConfig {
     pub core_id: Option<usize>,
     pub tag: &'static str,
+    pub samples: Option<DriverSamples>,
 }
 
-/// Spawn pinned hot loop: pop oldest, dispatch. Fatal stops immediately. Drain drains first.
+/// What one step of the hot loop did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Step {
+    /// The oldest message of all the queues was folded.
+    Folded,
+    /// Every queue was empty.
+    Idle,
+}
+
+/// The body of the hot loop. Each step pops the oldest message, folds it, and records what the
+/// samples ask for, on the caller's thread.
+pub struct HotDriver {
+    queues: IngressQueues,
+    engine: HotEngine,
+    samples: Option<DriverSamples>,
+    pops: u32,
+}
+
+impl HotDriver {
+    pub fn new(
+        queues: IngressQueues,
+        engine: HotEngine,
+        samples: Option<DriverSamples>,
+    ) -> HotDriver {
+        HotDriver {
+            queues,
+            engine,
+            samples,
+            pops: 0,
+        }
+    }
+
+    #[inline]
+    pub fn step(&mut self) -> Step {
+        let Some((queue, message)) = self.queues.pop_next() else {
+            return Step::Idle;
+        };
+        let spin_backlog =
+            matches!(message, InboundMessage::SpinTick(_)).then(|| self.queues.backlog());
+        let pop = QueueSample {
+            queue_id: queue,
+            depth: self.queues.occupancy(queue),
+            spin_backlog,
+        };
+        let Some(samples) = self.samples.as_mut() else {
+            self.engine.dispatch(pop, &message);
+            return Step::Folded;
+        };
+        let pop_tick = samples.stamp();
+        self.engine.dispatch(pop, &message);
+        let done_tick = samples.stamp();
+        samples.record_stage(&Folded {
+            message: &message,
+            queue,
+            pop_tick,
+            done_tick,
+            pop_seq: self.pops,
+        });
+        self.pops = self.pops.wrapping_add(1);
+        if let InboundMessage::SpinTick(tick) = &message {
+            samples.record_spin(tick, self.queues.backlog_by_queue(), self.engine.counters());
+        }
+        Step::Folded
+    }
+}
+
+/// The hot thread pins itself, builds its hot lane on that core, and steps the driver until a fatal
+/// stops it at once, or a drain request finds every queue empty.
 pub fn spawn_hot_thread(
     config: HotThreadConfig,
-    mut queues: IngressQueues,
+    queues: IngressQueues,
+    engine: HotEngine,
     fatal: FatalSignal,
     drain: DrainSignal,
-    mut dispatch: impl FnMut(QueueSample, InboundMessage) + Send + 'static,
 ) -> JoinHandle<()> {
     thread::Builder::new()
         .name("polysim-hot".to_owned())
         .spawn(move || {
             crate::log::register_thread(config.tag);
-            crate::log::register_hot_lane(config.tag);
             if let Some(core_id) = config.core_id {
                 pin_current_thread(core_id, &fatal);
             }
+            crate::log::register_hot_lane(config.tag);
+            let mut driver = HotDriver::new(queues, engine, config.samples);
             loop {
                 if fatal.is_tripped() {
                     return;
                 }
-                let Some((queue_id, message)) = queues.pop_next() else {
-                    if drain.is_requested() {
-                        return;
-                    }
-                    std::hint::spin_loop();
-                    continue;
-                };
-                let spin_backlog =
-                    matches!(message, InboundMessage::SpinTick(_)).then(|| queues.backlog());
-                dispatch(
-                    QueueSample {
-                        queue_id,
-                        depth: queues.occupancy(queue_id),
-                        spin_backlog,
-                    },
-                    message,
-                );
+                match driver.step() {
+                    Step::Folded => {}
+                    Step::Idle if drain.is_requested() => return,
+                    Step::Idle => std::hint::spin_loop(),
+                }
             }
         })
         .expect("failed to spawn hot thread")

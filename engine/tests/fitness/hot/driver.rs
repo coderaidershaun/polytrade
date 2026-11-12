@@ -8,11 +8,14 @@ use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetu
 use engine::hot::exec::{
     ClientIdLayout, ExecLimits, ExecSettings, FeeModel, OrderBudget, side_base,
 };
+use engine::hot::ingress::IngressQueues;
+use engine::hot::metrics::DriverSamples;
 use engine::hot::sink::ExecSink;
+use engine::hot::spawn::{HotDriver, Step};
 use engine::hot::strategy::{Strategy, StrategyConfig};
 use engine::log::{HotRecord, TextRecord, open_hot_lane, open_text_lane};
 use engine::msg::exec::{ExecEvent, ExecKind, ExecLaneItem, Provenance, VenueOrderStatus};
-use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty, QueueId, Side};
 use engine::msg::inbound::{InboundMessage, TradeEvent};
 use engine::msg::persist::PersistRecord;
 use engine::msg::time::DurationUs;
@@ -35,13 +38,16 @@ use engine::venues::polymarket::parse::{PolyFrame, is_frameless, parse_market_fr
 use engine::venues::polymarket::rotation::{OutcomeLeg, TokenId, WindowAssignment};
 use rtrb::{Consumer, RingBuffer};
 
+use engine::runtime::metrics::SampleProducers;
+
 use crate::engine_support::{
-    ONE, account_chunk, detached_setup, engine_view, exec_event, exposure_ring, instrument_row,
-    level, persist_ring_for, pop, spin, strategy_log_ring, stream_ready, tracker_spec_all, ts,
-    ui_book_ring, ui_event_ring,
+    Idle, ONE, account_chunk, detached_setup, engine_view, exec_event, exposure_ring,
+    instrument_row, level, persist_ring_for, pop, spin, strategy_log_ring, stream_ready,
+    tracker_spec_all, ts, ui_book_ring, ui_event_ring,
 };
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
 use crate::poly_strategy::{PolyUpParams, PolyUpPublisher};
+use crate::runtime::metrics::Harness;
 
 const BINANCE_TRADES: &str = include_str!("../../../fixtures/binance/spot_aggTrade.jsonl");
 const BINANCE_DEPTH: &str = include_str!("../../../fixtures/binance/spot_depth.jsonl");
@@ -643,4 +649,44 @@ fn fold_outputs_equal_the_recorded_outputs_of_the_entry_state() {
             "the {shipped:?} tape folds into other outputs than the recorded ones:\n{report}"
         );
     }
+}
+
+/// The spin is the oldest head, so the driver pops it first, and the backlog it reports is what the
+/// spin left behind in each queue.
+#[test]
+fn backlog_counts_each_queue_and_not_the_popped_message() {
+    const INTERVAL_US: i64 = 60_000_000;
+    let mut harness = Harness::new(10);
+    let SampleProducers {
+        stages, counters, ..
+    } = harness.samples;
+    let samples = DriverSamples {
+        stamper: harness.counter.stamper.clone(),
+        stages,
+        counters,
+    };
+    let mut consumers = Vec::new();
+    for spins in [[(0, 10), (1, 20), (2, 30)], [(3, 15), (4, 25), (5, 35)]] {
+        let (mut producer, consumer) = RingBuffer::new(spins.len());
+        for (seq, when) in spins {
+            producer
+                .push(InboundMessage::SpinTick(spin(seq, when)))
+                .expect("the ring holds its own spins");
+        }
+        consumers.push(consumer);
+    }
+    let instruments = [instrument_row(0, TrackerSpec::default(), 64)];
+    let engine = HotEngine::new(detached_setup(&instruments, Box::new(Idle)));
+    let mut driver = HotDriver::new(IngressQueues::new(consumers), engine, Some(samples));
+
+    assert_eq!(driver.step(), Step::Folded);
+    harness.metrics.pass(ts(INTERVAL_US), &mut harness.rows);
+
+    let waiting = [QueueId(0), QueueId(1)].map(|queue| harness.rows.backlog_max(queue));
+    assert_eq!(
+        waiting,
+        [Some(2), Some(3)],
+        "the spin's own queue counts only what waits behind it, and the other queue counts all of \
+         its messages"
+    );
 }

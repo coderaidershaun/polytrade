@@ -2,7 +2,7 @@
 //! the accumulators so the report's shape — the one thing every downstream reader parses — reads
 //! without the recording machinery around it.
 
-use crate::hot::strategy::LaneDrops;
+use crate::msg::latency::EngineCounters;
 use crate::msg::time::TsUs;
 
 use super::{CATEGORIES, Category, MAX_QUEUES, QueueDepthStat, STAGES, Stage, StageStat};
@@ -30,23 +30,4 @@ impl MetricsSnapshot {
             .iter()
             .any(|stat| stat.count > 0)
     }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct EngineCounters {
-    pub persist_dropped: u64,
-    pub book_trimmed: u64,
-    pub book_remove_missing: u64,
-    pub klines_unconfigured: u64,
-    pub intensity_inside_spread: u64,
-    pub intensity_without_book: u64,
-    pub snapshots_dropped: u64,
-    pub orders_submitted: u64,
-    pub bank_drops: LaneDrops,
-    pub ui_books_dropped: u64,
-    pub ui_events_dropped: u64,
-    pub link_dropped: u64,
-    /// Position snapshots replaced before the exposure writer took them. Nonzero means the file on
-    /// disk trails the hot side, so a hard kill would restore a stale position.
-    pub exposure_superseded: u64,
 }

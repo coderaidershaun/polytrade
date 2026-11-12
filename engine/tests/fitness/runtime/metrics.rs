@@ -5,23 +5,35 @@
 
 use std::sync::Arc;
 
-use engine::hot::metrics::EngineCounters;
+use engine::hot::dispatch::HotEngine;
+use engine::hot::ingress::IngressQueues;
+use engine::hot::metrics::DriverSamples;
+use engine::hot::spawn::{HotDriver, Step};
+use engine::hot::strategy::{Strategy as EngineStrategy, StrategyCtx};
 use engine::link::{
     Envelope, LINK_MAX_DATAGRAM, LinkBody, LinkDatagram, LinkHash, LinkIdentity, TopicId,
 };
-use engine::msg::ids::{ClientOrderId, InstrumentId, QueueId};
-use engine::msg::latency::{Category, CommandKind, CounterSample, Stage, StageSample, WireSample};
+use engine::msg::exec::{ExecEvent, ExecKind};
+use engine::msg::ids::{ClientOrderId, InstrumentId, QueueId, Side};
+use engine::msg::inbound::{BookChunk, InboundMessage, KlineEvent, TradeEvent};
+use engine::msg::latency::{
+    Category, CommandKind, CounterSample, EngineCounters, Stage, StageSample, WireSample,
+};
 use engine::msg::time::{ClockSource, DurationUs, Stamper, Tick, TickAnchor, TickScale, TsUs};
 use engine::msg::ui::{LatencyFlow, LatencyReading, LatencyReport, Percentile, UiEvent};
 use engine::operator::workstation::link::session::{Delivery, LinkSession, LinkTarget};
 use engine::operator::workstation::model::UiModel;
-use engine::runtime::config::{LatencyConfig, StrategyId};
+use engine::runtime::config::{KlineInterval, LatencyConfig, StrategyId, TrackerSpec};
 use engine::runtime::metrics::{
     LatencyRow, Metrics, MetricsError, MetricsParts, MetricsSetup, RollupRow, RollupSink,
     SampleProducers, SinkKind,
 };
 use proptest::prelude::*;
-use rtrb::Consumer;
+use rtrb::{Consumer, RingBuffer};
+
+use crate::engine_support::{
+    ONE, delta_chunk, detached_setup, exec_event, instrument_row, kline, trade,
+};
 
 const INTERVAL_US: i64 = 60_000_000;
 const DISPLAY: DurationUs = DurationUs::from_millis(1_000);
@@ -38,7 +50,7 @@ const POP_TICK: u64 = 1_000_050_000;
 const DONE_TICK: u64 = 1_000_050_800;
 
 #[derive(Default)]
-struct Rows(Vec<RollupRow>);
+pub(crate) struct Rows(Vec<RollupRow>);
 
 impl RollupSink for Rows {
     fn write(&mut self, row: RollupRow) {
@@ -47,7 +59,7 @@ impl RollupSink for Rows {
 }
 
 impl Rows {
-    fn latency(&self) -> Vec<LatencyRow> {
+    pub(crate) fn latency(&self) -> Vec<LatencyRow> {
         self.0
             .iter()
             .filter_map(|row| match row {
@@ -57,24 +69,32 @@ impl Rows {
             .collect()
     }
 
-    fn stage(&self, category: Category, stage: Stage) -> Option<LatencyRow> {
+    pub(crate) fn stage(&self, category: Category, stage: Stage) -> Option<LatencyRow> {
         self.latency()
             .into_iter()
             .find(|row| row.category == category && row.stage == stage)
     }
 
-    fn dropped_total(&self, sink: SinkKind) -> Option<u64> {
+    pub(crate) fn dropped_total(&self, sink: SinkKind) -> Option<u64> {
         self.0.iter().rev().find_map(|row| match row {
             RollupRow::Drop(row) if row.sink == sink => Some(row.dropped_total),
+            _ => None,
+        })
+    }
+
+    /// The most messages that waited in `queue` at a spin of the interval that closed last.
+    pub(crate) fn backlog_max(&self, queue: QueueId) -> Option<u32> {
+        self.0.iter().rev().find_map(|row| match row {
+            RollupRow::Backlog(row) if row.queue == queue => Some(row.max),
             _ => None,
         })
     }
 }
 
 /// A counter that the test sets, so each tick is a literal. One tick is one nanosecond.
-struct Counter {
-    stamper: Stamper,
-    mock: Arc<quanta::Mock>,
+pub(crate) struct Counter {
+    pub(crate) stamper: Stamper,
+    pub(crate) mock: Arc<quanta::Mock>,
 }
 
 impl Counter {
@@ -86,7 +106,7 @@ impl Counter {
         }
     }
 
-    fn at(&self, value: u64) -> Tick {
+    pub(crate) fn at(&self, value: u64) -> Tick {
         let current = self.mock.value();
         if value >= current {
             self.mock.increment(value - current);
@@ -123,27 +143,32 @@ fn config(window_intervals: u64) -> LatencyConfig {
     }
 }
 
-struct Harness {
-    counter: Counter,
-    metrics: Metrics,
-    samples: SampleProducers,
+/// The metrics core with time passed in, the write ends of its rings, and the rows it wrote.
+pub(crate) struct Harness {
+    pub(crate) counter: Counter,
+    pub(crate) metrics: Metrics,
+    pub(crate) samples: SampleProducers,
     reports: Consumer<LatencyReport>,
-    rows: Rows,
+    pub(crate) rows: Rows,
 }
 
 impl Harness {
-    fn new(window_intervals: u64) -> Harness {
+    pub(crate) fn new(window_intervals: u64) -> Harness {
         Harness::with_source(window_intervals, ClockSource::Tsc)
     }
 
     fn with_source(window_intervals: u64, clock_source: ClockSource) -> Harness {
+        Harness::built(config(window_intervals), clock_source)
+    }
+
+    fn built(latency: LatencyConfig, clock_source: ClockSource) -> Harness {
         let counter = Counter::new();
         let MetricsParts {
             metrics,
             samples,
             reports,
         } = Metrics::with_rings(MetricsSetup {
-            latency: config(window_intervals),
+            latency,
             clock_source,
             queue_count: 2,
             scale: counter.scale(),
@@ -158,7 +183,7 @@ impl Harness {
         }
     }
 
-    fn pass(&mut self, now_us: i64) {
+    pub(crate) fn pass(&mut self, now_us: i64) {
         self.metrics.pass(ts(now_us), &mut self.rows);
     }
 
@@ -240,7 +265,61 @@ fn each_stage_subtracts_the_stamps_its_name_claims() {
     harness.pass(QUEUED_US + 100);
     harness.pass(INTERVAL_US);
 
+    assert_trade_stages(&harness.rows);
     let rows = &harness.rows;
+    assert_exact(rows, Category::Exec, Stage::OrderRoundTrip, 8_000_000);
+    assert!(
+        rows.stage(Category::Exec, Stage::VenueToEngine).is_none(),
+        "an answer with no venue stamp, such as one the edge made itself, times no venue stage"
+    );
+
+    let driven = rows_of_the_real_driver();
+    assert_trade_stages(&driven);
+    assert_exact(
+        &driven,
+        Category::BookDelta,
+        Stage::VenueToEngine,
+        1_500_000,
+    );
+    assert!(
+        driven
+            .stage(Category::BookDelta, Stage::VenueInternal)
+            .is_none(),
+        "a lone venue stamp yields no match to send gap"
+    );
+    assert_exact(&driven, Category::Exec, Stage::VenueToEngine, 4_000_000);
+    assert_exact(&driven, Category::Exec, Stage::OrderRoundTrip, 8_000_000);
+    let exec_messages = driven
+        .stage(Category::Exec, Stage::MessageToDecision)
+        .map(|row| row.count);
+    assert_eq!(
+        exec_messages,
+        Some(2),
+        "both answers were folded: the driver drops the stamp the edge made, not the message"
+    );
+    assert_exact(&driven, Category::Kline, Stage::VenueToEngine, 2_500_000);
+    assert!(
+        driven
+            .stage(Category::Kline, Stage::VenueInternal)
+            .is_none(),
+        "a candle has no match stamp to gap against its send"
+    );
+    for stage in [
+        Stage::WireToMessage,
+        Stage::QueueWait,
+        Stage::Processing,
+        Stage::MessageToDecision,
+    ] {
+        let candles = driven.stage(Category::Kline, stage).map(|row| row.count);
+        assert_eq!(
+            candles,
+            Some(2),
+            "a backfilled candle is timed in {stage:?}, only its venue stage is left out"
+        );
+    }
+}
+
+fn assert_trade_stages(rows: &Rows) {
     assert_exact(rows, Category::Trade, Stage::VenueToEngine, 3_000_000);
     assert_exact(rows, Category::Trade, Stage::VenueInternal, 2_000_000);
     assert_exact(rows, Category::Trade, Stage::WireToMessage, 10_000);
@@ -253,12 +332,122 @@ fn each_stage_subtracts_the_stamps_its_name_claims() {
         .filter(|row| row.category == Category::Trade)
         .count();
     assert_eq!(trade_stages, 6, "no other stage of a trade takes a sample");
+}
 
-    assert_exact(rows, Category::Exec, Stage::OrderRoundTrip, 8_000_000);
-    assert!(
-        rows.stage(Category::Exec, Stage::VenueToEngine).is_none(),
-        "an answer with no venue stamp, such as one the edge made itself, times no venue stage"
+/// Moves the counter in a trade's fold by as much as the fold is meant to take, so the driver's two
+/// reads frame exactly that.
+struct TradeTakes800 {
+    mock: Arc<quanta::Mock>,
+}
+
+impl EngineStrategy for TradeTakes800 {
+    fn on_trade(&mut self, _ctx: &mut StrategyCtx<'_>, _event: &TradeEvent) {
+        self.mock.increment(DONE_TICK - POP_TICK);
+    }
+}
+
+/// A backfilled candle stamps its venue time from the candle it closes, hours behind the fetch that
+/// carried it. Timing it as a wire delay would record that age as latency, silently and without
+/// bound.
+const BACKFILLED_CANDLE_AGE_US: i64 = 6 * 60 * 60 * 1_000_000;
+
+/// The messages of each kind that the hot loop times, with the stamps of each stage distinct, and
+/// two the edge or a REST backfill stamped itself.
+fn stamped_messages() -> Vec<InboundMessage> {
+    let stamped = |when: i64| (ts(RECEIVED_US), ts(QUEUED_US), when);
+    let (received_ts_us, queued_ts_us, _) = stamped(0);
+    let candle = kline(
+        0,
+        KlineInterval::OneMinute,
+        (100 * ONE, 100 * ONE, 100 * ONE, 100 * ONE),
+        true,
+        RECEIVED_US,
     );
+    let answer = |kind: ExecKind, client: u64, venue_us: i64, request: Option<i64>| ExecEvent {
+        kind,
+        exchange_ts_us: ts(venue_us),
+        request_sent_ts_us: request.map(ts),
+        received_ts_us,
+        queued_ts_us,
+        ..exec_event(
+            InstrumentId(0),
+            ClientOrderId(client),
+            Side::Buy,
+            100 * ONE,
+            RECEIVED_US,
+        )
+    };
+    vec![
+        InboundMessage::Trade(TradeEvent {
+            exchange_ts_us: ts(VENUE_MATCH_US),
+            exchange_sent_ts_us: Some(ts(VENUE_SENT_US)),
+            received_ts_us,
+            queued_ts_us,
+            ..trade(0, 100 * ONE, ONE, Side::Buy, RECEIVED_US)
+        }),
+        InboundMessage::Book(BookChunk {
+            exchange_ts_us: Some(ts(RECEIVED_US - 1_500)),
+            received_ts_us,
+            queued_ts_us,
+            ..delta_chunk(0, Side::Buy, &[(100 * ONE, ONE)], RECEIVED_US)
+        }),
+        InboundMessage::Exec(answer(
+            ExecKind::ReportNew,
+            1,
+            RECEIVED_US - 4_000,
+            Some(RECEIVED_US - 8_000),
+        )),
+        InboundMessage::Exec(answer(
+            ExecKind::PlaceNotSent,
+            2,
+            RECEIVED_US - 60_000,
+            None,
+        )),
+        InboundMessage::Kline(KlineEvent {
+            exchange_ts_us: ts(RECEIVED_US - 2_500),
+            exchange_sent_ts_us: Some(ts(RECEIVED_US - 2_500)),
+            received_ts_us,
+            queued_ts_us,
+            ..candle
+        }),
+        InboundMessage::Kline(KlineEvent {
+            exchange_ts_us: ts(RECEIVED_US - BACKFILLED_CANDLE_AGE_US),
+            exchange_sent_ts_us: None,
+            received_ts_us,
+            queued_ts_us,
+            ..candle
+        }),
+    ]
+}
+
+/// The rows of one interval in which the hot loop's own driver folded [`stamped_messages`] with the
+/// counter at [`POP_TICK`] when the trade was popped.
+fn rows_of_the_real_driver() -> Rows {
+    let mut harness = Harness::new(10);
+    let SampleProducers {
+        stages, counters, ..
+    } = harness.samples;
+    let samples = DriverSamples {
+        stamper: harness.counter.stamper.clone(),
+        stages,
+        counters,
+    };
+    let instruments = [instrument_row(0, TrackerSpec::default(), 64)];
+    let strategy = TradeTakes800 {
+        mock: Arc::clone(&harness.counter.mock),
+    };
+    let engine = HotEngine::new(detached_setup(&instruments, Box::new(strategy)));
+    let messages = stamped_messages();
+    let (mut input, queue) = RingBuffer::new(messages.len());
+    for message in messages {
+        input.push(message).expect("the ring holds every message");
+    }
+    let mut driver = HotDriver::new(IngressQueues::new(vec![queue]), engine, Some(samples));
+    harness.counter.at(POP_TICK);
+    while driver.step() == Step::Folded {}
+    harness.metrics.pass(ts(QUEUED_US + 100), &mut harness.rows);
+    harness.metrics.pass(ts(INTERVAL_US), &mut harness.rows);
+    harness.rows
 }
 
 #[test]

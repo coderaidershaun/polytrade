@@ -4,7 +4,7 @@
 
 use rtrb::Consumer;
 
-use crate::msg::ids::QueueId;
+use crate::msg::ids::{MAX_INPUT_QUEUES, QueueId};
 use crate::msg::inbound::InboundMessage;
 use crate::msg::time::TsUs;
 
@@ -24,7 +24,14 @@ pub struct IngressQueues {
 }
 
 impl IngressQueues {
+    /// # Panics
+    /// More than [`MAX_INPUT_QUEUES`] queues, which the registry never builds.
     pub fn new(consumers: Vec<Consumer<InboundMessage>>) -> Self {
+        assert!(
+            consumers.len() <= MAX_INPUT_QUEUES,
+            "{} input queues, max {MAX_INPUT_QUEUES}",
+            consumers.len()
+        );
         Self { consumers }
     }
 
@@ -54,5 +61,16 @@ impl IngressQueues {
     #[inline]
     pub fn backlog(&self) -> usize {
         self.consumers.iter().map(Consumer::slots).sum()
+    }
+
+    /// Messages that wait in each queue, by queue id. Each count is one read of an index that
+    /// another core writes, so the hot loop takes it once a spin, never once a message.
+    #[inline]
+    pub fn backlog_by_queue(&self) -> [u32; MAX_INPUT_QUEUES] {
+        let mut waiting = [0; MAX_INPUT_QUEUES];
+        for (count, consumer) in waiting.iter_mut().zip(&self.consumers) {
+            *count = u32::try_from(consumer.slots()).unwrap_or(u32::MAX);
+        }
+        waiting
     }
 }
