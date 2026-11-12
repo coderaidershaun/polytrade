@@ -9,10 +9,8 @@ use rtrb::RingBuffer;
 use tokio::sync::mpsc;
 
 use crate::hot::dispatch::ExecWiring;
-use crate::hot::exec::{
-    ExecLaneBudget, ExecLimits, ExecSettings, FeeModel, MAX_ORDER_INSTRUMENTS, exec_lane_capacity,
-};
-use crate::hot::sink::ExecSink;
+use crate::hot::exec::{ExecLimits, ExecSettings, FeeModel, MAX_ORDER_INSTRUMENTS};
+use crate::hot::sink::{ExecLaneBudget, ExecSink, exec_lane_capacity};
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::info;
 use crate::msg::exec::ExecLaneItem;

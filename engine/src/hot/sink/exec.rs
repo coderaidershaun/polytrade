@@ -2,10 +2,9 @@
 
 use rtrb::Producer;
 
+use crate::hot::exec::{MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS};
 use crate::msg::exec::{ExecCommand, ExecLaneItem, StampedExecCommand};
 use crate::msg::time::{DurationUs, TsUs};
-
-use super::order::{MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS};
 
 /// Commands one spin can produce for an instrument beyond the order table itself: an open-orders
 /// request, a flatten, one action per side, the sweep a halt issues, and a prior-run cancel.
