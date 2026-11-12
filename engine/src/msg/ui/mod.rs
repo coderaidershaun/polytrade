@@ -1,14 +1,10 @@
 //! What the engine tells a workstation: its lifecycle, its instrument catalog, and the live book
 //! and event feed. Nothing here names a GUI toolkit, so the engine never depends on one.
 
+pub(crate) mod channel;
 mod latency;
 
-use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-
-use rtrb::{Consumer, RingBuffer};
-
 use crate::hot::exec::{ExecHalt, OrderState, QuoteLevel, RejectOrigin};
-use crate::hot::sink::{UiBookSink, UiEventSink};
 use crate::msg::exec::Liquidity;
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use crate::msg::inbound::Level;
@@ -18,10 +14,6 @@ use crate::runtime::config::{ExecutionMode, StrategyId};
 use crate::runtime::registry::Registry;
 
 pub use latency::{UiLatencyCell, UiLatencyRow, UiLatencySummary};
-
-/// A run sends only a handful of lifecycle messages, and each is sent with `try_send`, so a full
-/// channel drops a message instead of stalling the engine.
-const LIFECYCLE_CAPACITY: usize = 16;
 
 /// Book levels per side. The ladder shows 12 rows a side, but a grouped row sums several ticks, so
 /// a 16-level feed would leave a grouped ladder half empty.
@@ -47,14 +39,6 @@ pub const UI_BOOK_RING_CAPACITY: usize = 1024;
 /// The event ring takes every public trade plus at least 63 features a spin, which is hundreds of
 /// events a second. When it is full an event is dropped and counted.
 pub const UI_EVENT_RING_CAPACITY: usize = 16_384;
-
-/// The engine's own rare state changes. There is no starting phase, because a workstation only ever
-/// attaches to an engine that is already running.
-#[derive(Debug, Clone)]
-pub(crate) enum UiLifecycle {
-    Ready(UiCatalog),
-    Draining,
-}
 
 /// The fixed shape of a run, copied from the registry once preflight has frozen it. Public because
 /// a workstation rebuilds it from link frames.
@@ -368,36 +352,3 @@ impl UiEvent {
 // Quote is the widest variant. Its 16 levels make it large, but they publish the whole ladder at a
 // fixed size without allocating.
 const _: () = assert!(size_of::<UiEvent>() <= 416);
-
-/// The engine's end of the workstation feed.
-pub(crate) struct UiWiring {
-    pub lifecycle: SyncSender<UiLifecycle>,
-    pub books: UiBookSink,
-    pub events: UiEventSink,
-}
-
-/// The link actor's end of the workstation feed.
-pub(crate) struct UiChannels {
-    pub lifecycle: Receiver<UiLifecycle>,
-    pub books: Consumer<UiBookSnapshot>,
-    pub events: Consumer<UiEvent>,
-}
-
-/// Both rings are allocated here at startup, so the hot thread never allocates to publish.
-pub(crate) fn ui_channel() -> (UiWiring, UiChannels) {
-    let (lifecycle_tx, lifecycle_rx) = sync_channel(LIFECYCLE_CAPACITY);
-    let (book_producer, book_consumer) = RingBuffer::<UiBookSnapshot>::new(UI_BOOK_RING_CAPACITY);
-    let (event_producer, event_consumer) = RingBuffer::<UiEvent>::new(UI_EVENT_RING_CAPACITY);
-    (
-        UiWiring {
-            lifecycle: lifecycle_tx,
-            books: UiBookSink::new(book_producer),
-            events: UiEventSink::new(event_producer),
-        },
-        UiChannels {
-            lifecycle: lifecycle_rx,
-            books: book_consumer,
-            events: event_consumer,
-        },
-    )
-}

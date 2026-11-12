@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 
 use crate::hot::spawn::SimTapGate;
-use crate::msg::ui::UiLifecycle;
+use crate::msg::ui::channel::UiLifecycle;
 use crate::runtime::shutdown::{FatalSignal, TaskHandle, panic_text};
 use crate::venues::exec::EdgeHandle;
 use crate::{error, info, warn};

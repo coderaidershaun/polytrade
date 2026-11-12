@@ -5,7 +5,8 @@ use std::net::SocketAddr;
 
 use crate::msg::persist::FeatureId;
 use crate::msg::time::TsUs;
-use crate::msg::ui::{UiCatalog, UiLifecycle};
+use crate::msg::ui::UiCatalog;
+use crate::msg::ui::channel::UiLifecycle;
 
 use super::super::control::{CatalogFeature, CatalogInstrument, Lifecycle, RunPhase, Subscribe};
 use super::super::envelope::{Envelope, TopicId, WireName};

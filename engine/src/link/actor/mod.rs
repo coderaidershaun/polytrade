@@ -17,7 +17,7 @@ use crate::hot::spawn::LinkQueueProducer;
 use crate::msg::inbound::{InboundMessage, RunControl};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{DurationUs, EngineClock, TsUs};
-use crate::msg::ui::UiChannels;
+use crate::msg::ui::channel::UiChannels;
 use crate::runtime::config::{ConfigError, ControllerLoss, ExecutionMode, PeerSubscription};
 use crate::runtime::shutdown::{RunControlGate, TaskHandle};
 use crate::{info, warn, warn_repeating};
