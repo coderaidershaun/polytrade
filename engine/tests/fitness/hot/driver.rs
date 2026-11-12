@@ -79,7 +79,7 @@ const OUTPUT_RING: usize = 65_536;
 
 /// The two trading engines that ship, each with a tape from the recorded frames of its venue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Shipped {
+pub(crate) enum Shipped {
     Recorder,
     Publisher,
 }
@@ -358,7 +358,7 @@ fn strategy(shipped: Shipped) -> Box<dyn Strategy> {
     }
 }
 
-fn exec_settings(shipped: Shipped) -> ExecSettings {
+pub(crate) fn exec_settings(shipped: Shipped) -> ExecSettings {
     match shipped {
         Shipped::Recorder => settings(FeeModel::None, true),
         Shipped::Publisher => settings(FeeModel::BinaryOutcome, false),
@@ -367,7 +367,7 @@ fn exec_settings(shipped: Shipped) -> ExecSettings {
 
 /// The three facts that let an order be sent: the stream is up, the open orders are known, and so
 /// are the balances.
-fn readiness(at: i64) -> [InboundMessage; 3] {
+pub(crate) fn readiness(at: i64) -> [InboundMessage; 3] {
     [
         stream_ready(InstrumentId(0), at),
         InboundMessage::Exec(open_orders_snapshot_end(InstrumentId(0), ts(at))),

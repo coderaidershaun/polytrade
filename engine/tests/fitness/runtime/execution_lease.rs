@@ -1,6 +1,8 @@
 //! The execution lease's host lock and on-disk nonce history must be keyed correctly. A wrong key
 //! lets a second process arm the same account, or re-mint client order ids a venue has already seen.
 
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use engine::runtime::config::{BinanceEnv, RunIdentity};
@@ -13,12 +15,47 @@ use engine::venues::sim;
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 static NEXT_TE: AtomicU64 = AtomicU64::new(0);
 
-fn fresh_directory() -> std::path::PathBuf {
-    std::env::temp_dir().join(format!(
+/// A folder in the temp folder that one test owns. A process ID is reused, so a folder of the same
+/// name can still hold the nonce history of an earlier process: it goes before use, and the test's
+/// own folder goes when the test ends, a failing test included.
+struct LeaseDirectory {
+    path: PathBuf,
+}
+
+impl Deref for LeaseDirectory {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for LeaseDirectory {
+    fn drop(&mut self) {
+        let removed = std::fs::remove_dir_all(&self.path);
+        // A second panic while a failing test unwinds would abort the whole test binary.
+        if !std::thread::panicking() {
+            expect_removed(removed, &self.path);
+        }
+    }
+}
+
+fn expect_removed(removed: std::io::Result<()>, path: &Path) {
+    match removed {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => panic!("cannot remove {}: {error}", path.display()),
+    }
+}
+
+fn fresh_directory() -> LeaseDirectory {
+    let path = std::env::temp_dir().join(format!(
         "polysim-exec-lease-{}-{}",
         std::process::id(),
         NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
-    ))
+    ));
+    expect_removed(std::fs::remove_dir_all(&path), &path);
+    LeaseDirectory { path }
 }
 
 /// Avoids collisions with concurrent test processes.
@@ -88,7 +125,8 @@ fn each_venue_keeps_the_nonce_file_name_it_shipped_with() {
         assert!(
             directory.join(&expected).exists(),
             "expected the nonce history at {expected}, found {:?}",
-            std::fs::read_dir(&directory)
+            directory
+                .read_dir()
                 .expect("the lease created the directory")
                 .filter_map(|entry| Some(entry.ok()?.file_name()))
                 .collect::<Vec<_>>()

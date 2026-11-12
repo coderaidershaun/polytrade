@@ -13,7 +13,7 @@ const TARGET_ROOT_FILE: &str = "main.rs";
 
 /// Each fitness test that a gate step selects by a name filter. A filter that matches no test
 /// passes with zero tests, so a renamed test would switch that step off without a red line.
-const FILTERED_TEST_NAMES: &[&str] = &[];
+const FILTERED_TEST_NAMES: &[&str] = &["step_allocates_nothing_for_each_message_kind"];
 
 #[test]
 fn each_test_file_is_declared_and_none_is_ignored() {

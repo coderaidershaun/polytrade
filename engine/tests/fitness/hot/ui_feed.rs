@@ -621,6 +621,28 @@ fn the_execution_gate_tee_reflects_whether_a_command_ring_is_wired() {
     );
 }
 
+/// `orders_submitted` counts the commands the engine banked, not the intents a strategy declared.
+/// With execution off a declared quote is teed and never banked: a count above zero would be a
+/// command that nobody asked the engine to send.
+#[test]
+fn declared_quotes_bank_no_command_while_execution_is_off() {
+    let level = Some((Price(100 * ONE), Qty(ONE)));
+    let probe = QuoteProbe {
+        bid: level,
+        ask: level,
+    };
+    let (mut engine, _books, mut events) = ui_engine(Box::new(probe), DurationUs::ZERO);
+    for seq in 0..10_000u64 {
+        engine.dispatch(&InboundMessage::SpinTick(spin(seq, seq as i64)));
+        drain(&mut events);
+    }
+    assert_eq!(
+        engine.counters().orders_submitted,
+        0,
+        "execution is off in this run, so no command may have been banked"
+    );
+}
+
 /// One venue fill tees its resulting absolute OrderUpdate and exactly one Fill event carrying THAT
 /// fill's own side, price, qty and event time, taking their place on the one lane behind the public
 /// print that preceded it.
