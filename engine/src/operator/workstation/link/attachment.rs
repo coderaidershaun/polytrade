@@ -5,12 +5,12 @@ use crate::msg::run_state::RunState;
 use crate::msg::time::TsUs;
 use crate::msg::ui::UiCatalog;
 
-use super::dom_view::FeedStatus;
-use super::link_model::{ConnectionState, LinkStatus};
-use super::link_session::{Delivery, LinkSession};
-use super::model::UiModel;
-use super::monitor::model::SystemNote;
-use super::monitor::view::MonitorUiState;
+use super::super::dom_view::FeedStatus;
+use super::super::model::UiModel;
+use super::super::monitor::model::SystemNote;
+use super::super::monitor::view::MonitorUiState;
+use super::model::{ConnectionState, LinkStatus};
+use super::session::{Delivery, LinkSession};
 
 /// `Starting` means no engine has announced its catalog yet, which the workstation decides for
 /// itself rather than being told.

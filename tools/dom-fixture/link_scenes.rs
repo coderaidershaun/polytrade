@@ -9,8 +9,8 @@ use engine::link::RunPhase;
 use engine::msg::run_state::RunState;
 use engine::msg::time::DurationUs;
 use engine::operator::workstation::browser::link_bar::{self, LinkAction, LinkBarFrame};
-use engine::operator::workstation::link_model::{ConnectionState, ControlVerdict, LinkStatus};
-use engine::operator::workstation::link_view::RunConfirm;
+use engine::operator::workstation::link::model::{ConnectionState, ControlVerdict, LinkStatus};
+use engine::operator::workstation::link::view::RunConfirm;
 
 const LOCAL_ENGINE: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9310);
 const LOST_EPOCH: u64 = 1_761_508_800_123_457;

@@ -4,7 +4,7 @@
 use crate::link::RunPhase;
 use crate::msg::run_state::RunState;
 use crate::operator::workstation::format::MISSING;
-use crate::operator::workstation::link_model::{ConnectionState, ControlVerdict, LinkStatus};
+use crate::operator::workstation::link::model::{ConnectionState, ControlVerdict, LinkStatus};
 
 use super::tone::Tone;
 

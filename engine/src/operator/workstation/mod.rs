@@ -12,7 +12,6 @@
 // SMELL: many model, view and `format` items are `pub` only because the fitness suite names them,
 // which the project's rules do not accept as a reason. Narrowing them means re-expressing those
 // tests through what stays public.
-pub(crate) mod attachment;
 #[cfg(target_arch = "wasm32")]
 pub mod browser;
 pub mod chart;
@@ -20,9 +19,7 @@ pub mod dom_view;
 pub mod exec_model;
 pub mod format;
 mod history;
-pub mod link_model;
-pub mod link_session;
-pub mod link_view;
+pub mod link;
 pub mod model;
 pub mod monitor;
 pub mod shell;

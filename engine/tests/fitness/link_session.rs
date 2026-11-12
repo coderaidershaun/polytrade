@@ -21,8 +21,8 @@ use engine::msg::persist::FeatureId;
 use engine::msg::run_state::RunState;
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{UiBookSnapshot, UiBookState, UiCatalog, UiEvent};
-use engine::operator::workstation::link_model::{ConnectionState, ControlVerdict};
-use engine::operator::workstation::link_session::{
+use engine::operator::workstation::link::model::{ConnectionState, ControlVerdict};
+use engine::operator::workstation::link::session::{
     Delivery, LinkSession, LinkSessionError, LinkTarget,
 };
 use engine::operator::workstation::model::UiModel;

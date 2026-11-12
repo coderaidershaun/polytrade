@@ -11,8 +11,8 @@ use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use engine::link::RunPhase;
 use engine::msg::run_state::RunState;
 use engine::msg::time::DurationUs;
-use engine::operator::workstation::link_model::{ConnectionState, ControlVerdict, LinkStatus};
-use engine::operator::workstation::link_view::{ChipKind, LinkBarLayout, PlacedChip, RunConfirm};
+use engine::operator::workstation::link::model::{ConnectionState, ControlVerdict, LinkStatus};
+use engine::operator::workstation::link::view::{ChipKind, LinkBarLayout, PlacedChip, RunConfirm};
 use proptest::prelude::*;
 
 /// The bar's monospace font, Hack at 11 points, advances this far per character, so a page width

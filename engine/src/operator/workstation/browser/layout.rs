@@ -8,7 +8,6 @@ use super::chrome::{self, ChromeAction, TopBarFrame};
 use super::controls::{self, DropdownSpec};
 use super::latency::{self, LatencyFrame};
 use super::theme;
-use crate::operator::workstation::attachment::Attachment;
 use crate::operator::workstation::browser::chart::stack::{self, ChartStackFrame};
 use crate::operator::workstation::browser::dom::{self, DomFrame, ladder};
 use crate::operator::workstation::browser::monitor::bands;
@@ -17,6 +16,7 @@ use crate::operator::workstation::dom_view::{
     DomUnit, FeedStatus, MAX_ROWS_PER_SIDE, MIN_ROWS_PER_SIDE,
 };
 use crate::operator::workstation::format;
+use crate::operator::workstation::link::attachment::Attachment;
 use crate::operator::workstation::model::UiModel;
 use crate::operator::workstation::monitor::view::{MonitorFrame, MonitorUiState, instrument_names};
 use crate::operator::workstation::shell::{Arrangement, Pane, Selection, View};

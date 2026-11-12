@@ -14,7 +14,7 @@ use crate::msg::ui::{UiBookSnapshot, UiCatalog, UiEvent};
 use crate::runtime::config::StrategyId;
 use crate::{info, warn, warn_repeating};
 
-use super::link_model::{
+use super::model::{
     CatalogAssembly, ConnectionState, Controller, LinkStatus, PEER_SILENCE_LIMIT, RemoteRunGate,
     RunObservation,
 };

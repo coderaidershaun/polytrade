@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 
 use crate::msg::run_state::RunState;
 use crate::msg::time::DurationUs;
-use crate::operator::workstation::link_model::LinkStatus;
+use crate::operator::workstation::link::model::LinkStatus;
 use crate::operator::workstation::text::{self, ChipWords, Tone};
 
 /// The bar shows chips left to right in the order these variants are declared.

@@ -10,8 +10,8 @@ use crate::msg::run_state::RunState;
 use crate::msg::time::DurationUs;
 
 use super::theme::{self, DARK};
-use crate::operator::workstation::link_model::LinkStatus;
-use crate::operator::workstation::link_view::{ChipKind, LEFT_PAD, LinkBarLayout, RunConfirm};
+use crate::operator::workstation::link::model::LinkStatus;
+use crate::operator::workstation::link::view::{ChipKind, LEFT_PAD, LinkBarLayout, RunConfirm};
 use crate::operator::workstation::text::{self, Tone};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
