@@ -1,0 +1,135 @@
+{
+  "provenance": "L1 and the first L2 row are the official SDK's own published vectors (rs-clob-client-v2 v0.7.0, src/auth.rs). The order rows were minted by running that SDK against the live venue with the throwaway key below. Remaining L2 rows and the EIP-55 rows come from independent implementations (python hmac/base64, the EIP-55 reference vectors); the SDK rows pin the preimage layout those inherit.",
+  "throwaway_key_note": "0xac09...ff80 is anvil account #0, published in the SDK's own test suite. It holds nothing, anywhere. No real key ever enters this file.",
+  "clob_auth": {
+    "note": "rs-clob-client-v2 v0.7.0 src/auth.rs l1_headers_should_succeed",
+    "private_key": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+    "expected_address_lowercase": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+    "chain_id": 80002,
+    "timestamp_secs": 10000000,
+    "nonce": 23,
+    "expected_signature": "0xf62319a987514da40e57e2f4d7529f7bac38f0355bd88bb5adbb3768d80de6c1682518e0af677d5260366425f4361e7b70c25ae232aff0ab2331e2b164a1aedc1b"
+  },
+  "l2_requests": [
+    {
+      "secret": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "timestamp_secs": 1,
+      "method": "GET",
+      "path": "/",
+      "body": "",
+      "expected_signature": "eHaylCwqRSOa2LFD77Nt_SaTpbsxzN8eTEI3LryhEj4=",
+      "note": "rs-clob-client-v2 v0.7.0 src/auth.rs l2_headers_should_succeed"
+    },
+    {
+      "secret": "X-zrZv_IbzjZUnhsbWlsecLbwjndTpG0ZynXOif7V-k=",
+      "timestamp_secs": 1786085842,
+      "method": "GET",
+      "path": "/balance-allowance",
+      "body": "",
+      "expected_signature": "OPRdPwoqfSaH_ZXTYZrAx49KDonBagJeN2lE-VVr0gI=",
+      "note": "query string is EXCLUDED from the preimage; the caller signs the bare path"
+    },
+    {
+      "secret": "X-zrZv_IbzjZUnhsbWlsecLbwjndTpG0ZynXOif7V-k=",
+      "timestamp_secs": 1786085842,
+      "method": "GET",
+      "path": "/data/order/0xa1449ec0831c7d62f887c4653d0917f2445783ff30f0ca713d99c667fef17f2c",
+      "body": "",
+      "expected_signature": "ipUikanBHZ_p0zzQWhytapfRznFKvR-Q05Ic-SwrvkQ=",
+      "note": "path parameters ARE included"
+    },
+    {
+      "secret": "X-zrZv_IbzjZUnhsbWlsecLbwjndTpG0ZynXOif7V-k=",
+      "timestamp_secs": 1786085842,
+      "method": "POST",
+      "path": "/order",
+      "body": "{\"order\":{\"salt\":479249096354,\"maker\":\"0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266\"},\"owner\":\"f4f247b7-4ac7-ff29-a152-04fda0a8755a\",\"orderType\":\"GTC\"}",
+      "expected_signature": "BXzoIdtDl7m78CwsTa7NHTkRsVqAxTHAquAYgflZXF4=",
+      "note": "the signed body must be the exact bytes on the wire"
+    },
+    {
+      "secret": "X-zrZv_IbzjZUnhsbWlsecLbwjndTpG0ZynXOif7V-k=",
+      "timestamp_secs": 1786085842,
+      "method": "DELETE",
+      "path": "/order",
+      "body": "{\"orderID\":\"0xa1449ec0831c7d62f887c4653d0917f2445783ff30f0ca713d99c667fef17f2c\"}",
+      "expected_signature": "a78si505wHlzMdI-TdMa41-3vueyG6RkTW2P4VgAbDk=",
+      "note": "cancels are L2-signed like any other private call"
+    }
+  ],
+  "checksum_addresses": [
+    {
+      "lowercase": "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed",
+      "checksummed": "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
+    },
+    {
+      "lowercase": "0xfb6916095ca1df60bb79ce92ce3ea74c37c5d359",
+      "checksummed": "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359"
+    },
+    {
+      "lowercase": "0xdbf03b407c01e7cd3cbea99509d93f8dddc8c6fb",
+      "checksummed": "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB"
+    },
+    {
+      "lowercase": "0xd1220a0cf47c7b9be7a2e6ba89f429762e7b9adb",
+      "checksummed": "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb"
+    },
+    {
+      "lowercase": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+      "checksummed": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+    }
+  ],
+  "orders": [
+    {
+      "builder": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "expected_signature": "0xade7b7c8c66b751210ba17944abd9824e8cb2be03b5c8798e117e45fa392f45c25d0a85c548c6225d2027fc618d4a9eb4b9bfbc13ac22c2a60732736ad97557b1c",
+      "maker": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+      "maker_amount": "5200000",
+      "metadata": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "neg_risk": false,
+      "note": "minted by rs-clob-client-v2 v0.7.0, signatureType 0",
+      "private_key": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+      "salt": "479249096354",
+      "side": 0,
+      "signature_type": 0,
+      "signer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+      "taker_amount": "10000000",
+      "timestamp_millis": "1786087544475",
+      "token_id": "1131009172729899606011874849428429881650433282663240107668727694756629729168"
+    },
+    {
+      "builder": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "expected_signature": "0xe7ff4d24bd9e0b4e576a9f60ed2397c90ba469ed500fb37c655805532f1df8af22b735f379732bf0ea98af18cc96b05aee5e270e30afcaf24345c0c8f57c43671b",
+      "maker": "0x2222222222222222222222222222222222222222",
+      "maker_amount": "5200000",
+      "metadata": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "neg_risk": false,
+      "note": "minted by rs-clob-client-v2 v0.7.0, signatureType 2",
+      "private_key": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+      "salt": "479249096354",
+      "side": 0,
+      "signature_type": 2,
+      "signer": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+      "taker_amount": "10000000",
+      "timestamp_millis": "1786087544779",
+      "token_id": "1131009172729899606011874849428429881650433282663240107668727694756629729168"
+    },
+    {
+      "builder": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "expected_signature": "0x4f54f55f501269d6c0523d94bb33f57378bf7cf4cb452539a98fcac4d5c5c1fb17e836821013503b5c6e14a321e01fc865e07ee7e641ee81fcdfad01c39ab88c1c3264e159346253e26a64e00b69032db0e7d32f94628de3e6eecb50304d7af3d2fd26ab534199451092cedadbc8d16dc8ee79b9aa5e805625f2025ffca722838b4f726465722875696e743235362073616c742c61646472657373206d616b65722c61646472657373207369676e65722c75696e7432353620746f6b656e49642c75696e74323536206d616b6572416d6f756e742c75696e743235362074616b6572416d6f756e742c75696e743820736964652c75696e7438207369676e6174757265547970652c75696e743235362074696d657374616d702c62797465733332206d657461646174612c62797465733332206275696c6465722900ba",
+      "maker": "0x1111111111111111111111111111111111111111",
+      "maker_amount": "5200000",
+      "metadata": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "neg_risk": false,
+      "note": "minted by rs-clob-client-v2 v0.7.0, signatureType 3",
+      "private_key": "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80",
+      "salt": "479249096354",
+      "side": 0,
+      "signature_type": 3,
+      "signer": "0x1111111111111111111111111111111111111111",
+      "taker_amount": "10000000",
+      "timestamp_millis": "1786087545103",
+      "token_id": "1131009172729899606011874849428429881650433282663240107668727694756629729168"
+    }
+  ]
+}

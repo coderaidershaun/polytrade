@@ -1,0 +1,59 @@
+{
+  "id": "55f07876-4f6f-4c47-87dc-43e5fff3f2e7",
+  "status": 200,
+  "result": [
+    {
+      "symbol": "BTCUSDT",
+      "orderId": 12510053279,
+      "orderListId": -1,
+      "clientOrderId": "pd-7ad60b6c-6a64f040000c0001",
+      "price": "118000.00000000",
+      "origQty": "0.00010000",
+      "executedQty": "0.00004000",
+      "cummulativeQuoteQty": "4.72000000",
+      "status": "PARTIALLY_FILLED",
+      "timeInForce": "GTC",
+      "type": "LIMIT_MAKER",
+      "side": "BUY",
+      "stopPrice": "0.00000000",
+      "icebergQty": "0.00000000",
+      "time": 1785000000600,
+      "updateTime": 1785000000657,
+      "isWorking": true,
+      "workingTime": 1785000000600,
+      "origQuoteOrderQty": "0.00000000",
+      "selfTradePreventionMode": "NONE"
+    },
+    {
+      "symbol": "BTCUSDT",
+      "orderId": 12510053290,
+      "orderListId": -1,
+      "clientOrderId": "web_a1b2c3d4e5f6",
+      "price": "110000.00000000",
+      "origQty": "0.00050000",
+      "executedQty": "0.00000000",
+      "cummulativeQuoteQty": "0.00000000",
+      "status": "NEW",
+      "timeInForce": "GTC",
+      "type": "LIMIT",
+      "side": "BUY",
+      "stopPrice": "0.00000000",
+      "icebergQty": "0.00000000",
+      "time": 1785000000100,
+      "updateTime": 1785000000100,
+      "isWorking": true,
+      "workingTime": 1785000000100,
+      "origQuoteOrderQty": "0.00000000",
+      "selfTradePreventionMode": "NONE"
+    }
+  ],
+  "rateLimits": [
+    {
+      "rateLimitType": "REQUEST_WEIGHT",
+      "interval": "MINUTE",
+      "intervalNum": 1,
+      "limit": 6000,
+      "count": 6
+    }
+  ]
+}

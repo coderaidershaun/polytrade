@@ -1,0 +1,8 @@
+{
+  "success": false,
+  "errorMsg": "not enough balance / allowance",
+  "orderID": "",
+  "status": "",
+  "makingAmount": "",
+  "takingAmount": ""
+}

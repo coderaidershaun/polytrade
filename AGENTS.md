@@ -18,3 +18,9 @@ Every source file opens with a comment of one or two lines that says what the fi
 Run this command to find each known problem that was flagged and left in the code. It reads every `.rs` file and skips the files that git ignores.
 
 - `rex smells`: one `path:line` for each `SMELL` flag comment in the Rust files, then the count of them all.
+
+<!-- instructions -->
+
+Read @CONSTITUTION.md
+
+Working on src/adapters/? Read src/adapters/exec/README.md first — it is the adapter execution contract.

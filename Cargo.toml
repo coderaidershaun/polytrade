@@ -1,26 +1,91 @@
-[workspace]
-resolver = "3"
-members = ["crates/*"]
-default-members = ["crates/*"]
-
-[workspace.package]
+[package]
+name = "polysim"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.97"
-license = "MIT OR Apache-2.0"
-publish = false
+authors = ["Shaun McDonogh"]
+license = "MIT"
 
-[workspace.dependencies]
-# Internal crates
-polytrade-core = { path = "crates/core" }
+[[bin]]
+name = "strat-micro-recorder-te-binance-spot-btcusdt"
+path = "strategies/strat-micro-recorder/te-binance-spot-btcusdt/main.rs"
 
-[workspace.lints.rust]
-unsafe_code = "forbid"
+[[bin]]
+name = "strat-micro-recorder-te-polymarket-btc-updown-5m"
+path = "strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/main.rs"
 
-[workspace.lints.clippy]
-all = { level = "warn", priority = -1 }
+[[bin]]
+name = "polysim-ui"
+path = "src/bin/polysim-ui.rs"
 
-[profile.release]
-lto = "thin"
+[[bin]]
+name = "polysim-mcp"
+path = "src/bin/polysim-mcp.rs"
+required-features = ["mcp"]
+
+[[bin]]
+name = "polysim-web"
+path = "src/bin/polysim-web.rs"
+required-features = ["web"]
+
+[[bin]]
+name = "dom-fixture"
+path = "tools/dom-fixture/main.rs"
+
+[[example]]
+name = "poly-probe"
+path = "tools/poly-probe/main.rs"
+
+[features]
+mcp = ["dep:hyper", "dep:hyper-util", "dep:rmcp", "dep:rustix"]
+web = ["dep:hyper", "dep:hyper-util", "dep:http-body-util"]
+
+[dependencies]
+anyhow = { version = "1.0.104", default-features = false, features = ["std"] }
+core_affinity = { version = "0.8.3", default-features = false }
+http-body-util = { version = "0.1.5", default-features = false, optional = true }
+hyper = { version = "1.12.0", default-features = false, features = ["server", "http1"], optional = true }
+hyper-util = { version = "0.1.21", default-features = false, features = ["tokio", "service"], optional = true }
+rmcp = { version = "3.5.1", default-features = false, features = ["server", "macros", "transport-io", "transport-streamable-http-server"], optional = true }
+rtrb = { version = "0.3.4", default-features = false }
+rustix = { version = "1.1.5", default-features = false, features = ["process"], optional = true }
+serde = { version = "1.0.228", default-features = false, features = ["std", "derive"] }
+serde-saphyr = { version = "0.0.29", default-features = false, features = ["deserialize"] }
+serde_json = { version = "1.0.150", default-features = false, features = ["std"] }
+thiserror = { version = "2.0.18", default-features = false, features = ["std"] }
+tokio = { version = "1.53.0", default-features = false, features = ["rt"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+arrow-array = { version = "59.1.0", default-features = false }
+arrow-schema = { version = "59.1.0", default-features = false }
+futures-util = { version = "0.3.33", default-features = false, features = ["sink", "std"] }
+k256 = { version = "0.14.0", default-features = false, features = ["ecdsa"] }
+parquet = { version = "59.1.0", default-features = false, features = ["arrow", "zstd"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls"] }
+ring = { version = "0.17.14", default-features = false }
+tiny-keccak = { version = "2.0.2", default-features = false, features = ["keccak"] }
+tokio = { version = "1.53.0", default-features = false, features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+eframe = { version = "=0.35.0", default-features = false, features = ["glow", "default_fonts"] }
+js-sys = { version = "0.3.106", default-features = false }
+wasm-bindgen-futures = { version = "0.4.79", default-features = false }
+web-sys = { version = "0.3.106", default-features = false, features = ["AddEventListenerOptions", "BinaryType", "Document", "HtmlCanvasElement", "Location", "MessageEvent", "Url", "WebSocket", "Window", "console"] }
+web-time = { version = "1.1.0", default-features = false }
+
+[dev-dependencies]
+proptest = { version = "1.11.0", default-features = false, features = ["std"] }
+rmcp = { version = "3.5.1", default-features = false, features = ["client", "transport-streamable-http-client-reqwest"] }
+
+[[test]]
+name = "fitness"
+path = "tests/fitness/main.rs"
+
+[[test]]
+name = "integration"
+path = "tests/integration/main.rs"
+
+[profile.deploy]
+inherits = "release"
+lto = "fat"
 codegen-units = 1
-strip = true

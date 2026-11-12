@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>polysim wiki</title>
+<link rel="stylesheet" href="wiki.css">
+</head>
+<body>
+<header class="masthead">
+  <div class="wrap">
+    <p class="eyebrow">polysim</p>
+    <h1>Quant reference wiki</h1>
+    <p class="subtitle">The models behind the engine's feature columns: what each one computes, the
+    equations as the papers state them, and how the implementation in <code>src/hot/quant</code>
+    departs from them.</p>
+  </div>
+</header>
+<nav class="pagenav" aria-label="Pages"><div class="wrap"><a href="avellaneda_stoikov.html">Avellaneda–Stoikov</a><a href="gueant.html">Guéant</a><a href="hawkes.html">Hawkes</a><a href="kyles_lambda.html">Kyle's lambda</a><a href="markouts.html">Markouts</a><a href="vpin.html">VPIN</a></div></nav>
+<main class="wrap">
+<article>
+<div class="cards">
+<a class="card" href="avellaneda_stoikov.html">
+  <h2>Avellaneda–Stoikov</h2>
+  <p>The classic finite-horizon market-making model: reservation price, optimal bid and ask depths, and what changes when quotes must land on a tick grid.</p>
+  <p class="meta">61 displayed equations</p>
+</a>
+<a class="card" href="gueant.html">
+  <h2>Guéant</h2>
+  <p>Closed-form optimal quote depths under exponential fill intensity, for both the CARA objective and the running-inventory-penalty objective, worked through to tick space.</p>
+  <p class="meta">52 displayed equations</p>
+</a>
+<a class="card" href="hawkes.html">
+  <h2>Hawkes</h2>
+  <p>Self-exciting point processes for order arrivals, where each event raises the chance of the next. Covers nonlinear and multivariate forms and how the parameters are estimated.</p>
+  <p class="meta">31 displayed equations</p>
+</a>
+<a class="card" href="kyles_lambda.html">
+  <h2>Kyle's lambda</h2>
+  <p>How strongly price responds to signed order flow, from the original auction equilibrium to the impact regressions actually estimated on live data.</p>
+  <p class="meta">62 displayed equations</p>
+</a>
+<a class="card" href="markouts.html">
+  <h2>Markouts</h2>
+  <p>Measuring adverse selection when the engine quotes but never fills: public prints that reach a quoted level stand in for the execution, then price is marked forward.</p>
+  <p class="meta">4 displayed equations</p>
+</a>
+<a class="card" href="vpin.html">
+  <h2>VPIN</h2>
+  <p>Volume-synchronised order-flow imbalance as a toxicity proxy — a risk overlay on spread, size and quote symmetry rather than a pricing model in its own right.</p>
+  <p class="meta">26 displayed equations</p>
+</a>
+</div>
+</article>
+</main>
+</body>
+</html>
