@@ -8,6 +8,7 @@ mod error;
 mod execution;
 mod identity;
 mod link;
+mod logging;
 mod simulated;
 mod sources;
 mod tables;
@@ -24,6 +25,7 @@ pub use error::ConfigError;
 pub use execution::{ExecutionConfig, ExecutionMode, MAX_QUOTE_LEVELS};
 pub use identity::{RunIdentity, StrategyId, TradingEngineId};
 pub use link::{ControllerLoss, LinkConfig, PeerSubscription};
+pub use logging::LoggingConfig;
 pub use simulated::SimConfig;
 pub use sources::{
     BinanceEnv, BinanceMarket, KlineInterval, PolySeries, PolySubscriptions, SourceSpec,
@@ -253,13 +255,6 @@ pub struct PersistenceConfig {
     pub retention_hours: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LoggingConfig {
-    #[serde(default = "default_logs_dir")]
-    pub dir: PathBuf,
-}
-
 /// Separate from `persistence:` and always in force, because position outlives any single run.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -362,10 +357,6 @@ fn default_data_dir() -> PathBuf {
 
 fn default_retention_hours() -> u64 {
     6
-}
-
-fn default_logs_dir() -> PathBuf {
-    PathBuf::from("./logs")
 }
 
 fn default_exposure_dir() -> PathBuf {
