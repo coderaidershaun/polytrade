@@ -192,6 +192,11 @@ impl Actor {
     fn submit(&self, job: RestJob) -> bool {
         rest::submit(&self.rest_jobs, job)
     }
+
+    async fn drain_lane(&mut self, writer: &mut Writer) -> Option<SessionOutcome> {
+        let outgoing = self.session.core.drain_commands(&mut self.commands);
+        self.dispatch(outgoing, Some(writer)).await
+    }
 }
 
 impl EdgeDriver for Actor {
@@ -249,10 +254,7 @@ impl EdgeDriver for Actor {
         loop {
             let ended = tokio::select! {
                 frame = reader.next() => self.on_frame(frame, &mut writer).await,
-                _ = command_ticker.tick() => {
-                    let outgoing = self.session.core.drain_commands(&mut self.commands);
-                    self.dispatch(outgoing, Some(&mut writer)).await
-                }
+                _ = command_ticker.tick() => self.drain_lane(&mut writer).await,
                 _ = housekeeping.tick() => self.on_housekeeping(&mut writer).await,
                 _ = reconcile.tick() => self.on_reconcile_tick(),
                 outcome = self.rest_outcomes.recv(), if !self.is_rest_gone => {
