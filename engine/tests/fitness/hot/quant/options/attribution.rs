@@ -1,5 +1,5 @@
-//! Attribution pins. A step that the greeks cannot explain hides a wrong greek, and the balance of
-//! gamma against theta is what the pay of a hedged option rests on.
+//! A step that the greeks cannot explain hides a wrong greek, and the balance of gamma against
+//! theta is what the pay of a hedged option rests on.
 
 use engine::hot::quant::options::{
     Black76, Bumps, ExplainGreeks, GreekExplain, HedgedStep, OptionRight, Shift, greek_explain,

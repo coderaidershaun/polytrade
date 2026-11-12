@@ -1,5 +1,5 @@
-//! Black-76 pins. A price or greek that drifts from its identities or its reference numbers still
-//! looks like a plausible number, so every risk check and hedge would act on it without complaint.
+//! A price or greek that drifts from its identities or its reference numbers still looks like a
+//! plausible number, so every risk check and hedge would act on it without complaint.
 
 use engine::hot::quant::options::{Black76, CoinParity, OptionRight};
 use proptest::prelude::*;
@@ -61,7 +61,7 @@ fn market() -> impl Strategy<Value = (Black76, f64)> {
 }
 
 /// Forward, strike, years, volatility, discount, right, price.
-// The digits stay as the references print them, so that each row can be matched to its source by eye.
+// The digits stay as the references print them, so each row can be matched to its source by eye.
 #[allow(clippy::excessive_precision)]
 const SIXTY_DIGIT_PRICES: [(f64, f64, f64, f64, f64, OptionRight, f64); 9] = [
     (100000.0, 100000.0, 0.25, 0.5, 1.0, Call, 9947.6449660225786),
@@ -100,7 +100,7 @@ const SIXTY_DIGIT_PRICES: [(f64, f64, f64, f64, f64, OptionRight, f64); 9] = [
 ];
 
 /// Forward, strike, years, volatility, discount, coin delta of the call.
-// The digits stay as the references print them, so that each row can be matched to its source by eye.
+// The digits stay as the references print them, so each row can be matched to its source by eye.
 #[allow(clippy::excessive_precision)]
 const SIXTY_DIGIT_COIN_DELTAS: [(f64, f64, f64, f64, f64, f64); 3] = [
     (100000.0, 150000.0, 0.25, 0.5, 1.0, 0.060496163064018300),

@@ -1,17 +1,16 @@
-//! Exponential, natural logarithm and cube root from plain arithmetic, so that each target
-//! computes the same bits. The methods of the standard library may round differently from one
-//! platform to the next.
+//! Exponential, logarithm and cube root from plain arithmetic, so that each target computes the
+//! same bits. The methods of the standard library may round differently on each platform.
 
 use std::f64::consts::{LN_2, SQRT_2};
 
-/// The smallest degree with which the reference prices pass, plus a quarter.
+/// The smallest degree that passes the reference prices, with a quarter of it added as margin.
 const EXP_SERIES_DEGREE: u32 = 13;
 
-/// The smallest count with which the reference prices pass, plus a quarter.
+/// The smallest count that passes the reference prices, with a quarter of it added as margin.
 const LN_SERIES_TERMS: u32 = 9;
 
 /// The smallest count with which the cube of each root matches its argument to 1e-14, for each
-/// mantissa from 1 to 8, plus a quarter.
+/// mantissa from 1 to 8, with a quarter of it added as margin.
 const CBRT_NEWTON_STEPS: u32 = 5;
 
 /// Above this argument the exponential is larger than the largest finite number.

@@ -1,5 +1,5 @@
-//! Allocation pin of the options maths. Its functions run on the hot thread, where an allocation in
-//! steady state breaks the promise of a fixed cost for each message.
+//! The options maths runs on the hot thread, where an allocation in steady state breaks the
+//! promise of a fixed cost for each message.
 
 use std::hint::black_box;
 

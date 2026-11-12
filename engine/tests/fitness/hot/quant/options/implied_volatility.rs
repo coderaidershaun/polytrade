@@ -1,5 +1,5 @@
-//! Implied volatility pins. A volatility that misses its price gives each mark, greek and hedge
-//! built on it a quiet error, and a price with no root must say so with the bounds it missed.
+//! A volatility that misses its price gives each mark, greek and hedge built on it a quiet error,
+//! and a price with no root must say so with the bounds it missed.
 
 use engine::hot::quant::options::{Black76, OptionRight, OptionsError};
 use proptest::prelude::*;

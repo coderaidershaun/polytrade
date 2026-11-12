@@ -1,5 +1,5 @@
-//! No-trade band pins. A band that is too wide leaves a book unhedged, and one that is too narrow
-//! pays the cost of a trade on each small move.
+//! A no-trade band that is too wide leaves a book unhedged, and one that is too narrow pays the
+//! cost of a trade on each small move.
 
 use engine::hot::quant::options::NoTradeBand;
 use proptest::prelude::*;

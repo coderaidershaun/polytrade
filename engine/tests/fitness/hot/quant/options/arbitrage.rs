@@ -1,5 +1,5 @@
-//! Pins of the checks of a set of marks. A check that passes an arbitrage lets quotes and hedges
-//! rest on marks that pay out for free, and one that refuses sound marks stops all quoting.
+//! A check that passes an arbitrage lets quotes and hedges rest on marks that pay out for free,
+//! and one that refuses sound marks stops all quoting.
 
 use engine::hot::quant::options::{
     Black76, OptionRight, OptionsError, Pillar, forward_volatility, largest_rise, lowest_butterfly,

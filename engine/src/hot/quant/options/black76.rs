@@ -17,10 +17,10 @@ const INVERSE_SQRT_TWO_PI: f64 = FRAC_1_SQRT_2 * FRAC_2_SQRT_PI * 0.5;
 /// in 1 − erf, and the fraction to its fixed depth.
 const ERFC_SPLIT: f64 = 1.5;
 
-/// The smallest count with which the reference prices pass, plus a quarter.
+/// The smallest count that passes the reference prices, with a quarter of it added as margin.
 const ERF_SERIES_TERMS: u32 = 24;
 
-/// The smallest depth with which the reference prices pass, plus a quarter.
+/// The smallest depth that passes the reference prices, with a quarter of it added as margin.
 const ERFC_FRACTION_DEPTH: u32 = 67;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

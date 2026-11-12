@@ -1,5 +1,5 @@
-//! Border pins of the options maths. A NaN or an infinity that enters or leaves it reaches a risk
-//! check, a hedge or a tape row as a number that each comparison lets through without a word.
+//! A NaN or an infinity that enters or leaves the options maths reaches a risk check, a hedge or a
+//! tape row as a number that each comparison lets through without a word.
 
 use std::cell::Cell;
 use std::fmt::Debug;
@@ -61,7 +61,6 @@ fn with_market_field(field: &str, value: f64) -> Black76 {
     option
 }
 
-/// `value` when `field` is `name`, else `base`.
 fn pick(field: &str, name: &str, value: f64, base: f64) -> f64 {
     if field == name { value } else { base }
 }

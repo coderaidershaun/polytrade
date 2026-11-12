@@ -1,5 +1,5 @@
-//! Greeks by bump pins. A bump rule that drifts from the closed forms, or that mixes the up side of
-//! a move with the down side, hedges a book against the wrong move, and nothing complains.
+//! A bump rule that drifts from the closed forms, or that mixes the up side of a move with the down
+//! side, hedges a book against the wrong move, and nothing complains.
 
 use std::f64::consts::PI;
 
