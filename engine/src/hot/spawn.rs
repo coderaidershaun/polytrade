@@ -8,11 +8,12 @@ use std::thread::{self, JoinHandle};
 use rtrb::Producer;
 
 use super::ingress::{IngressQueues, QueueSample};
+use crate::log::{hot_error, hot_warn};
 use crate::msg::ids::{QueueId, SourceId};
 use crate::msg::inbound::{InboundMessage, MarketTapItem, TappedMessage, VenueMeta};
 use crate::msg::time::TsUs;
+use crate::runtime::pin::pin_current_thread;
 use crate::runtime::shutdown::{DrainSignal, FatalSignal};
-use crate::{error, warn};
 
 /// Keeps market taps open until the simulator finishes its final sweep.
 #[derive(Debug, Default)]
@@ -161,11 +162,21 @@ impl QueueProducer {
                 ("market tap ring for input queue", capacity, "simulator")
             }
         };
-        let queue = self.queue_id.0;
-        error!(
-            "{ring_name} {queue} (source {}) full at capacity {capacity} — {stalled} cannot keep up",
-            self.source_id.0
-        );
+        let (queue, source) = (self.queue_id.0, self.source_id.0);
+        match ring {
+            FullRing::Input => hot_error!(
+                "input queue {} (source {}) full at capacity {} — engine cannot keep up",
+                queue,
+                source,
+                capacity
+            ),
+            FullRing::MarketTap => hot_error!(
+                "market tap ring for input queue {} (source {}) full at capacity {} — simulator cannot keep up",
+                queue,
+                source,
+                capacity
+            ),
+        }
         self.fatal.trip(format!(
             "{ring_name} {queue} full at capacity {capacity} — {stalled} cannot keep up"
         ));
@@ -212,7 +223,7 @@ impl LinkQueueProducer {
     fn count_drop(&mut self) {
         self.dropped += 1;
         if self.dropped.is_power_of_two() {
-            warn!(
+            hot_warn!(
                 "link input queue {} full at capacity {} — dropped {} frames from remote peers",
                 self.queue_id.0,
                 self.producer.buffer().capacity(),
@@ -239,6 +250,7 @@ pub fn spawn_hot_thread(
         .name("polysim-hot".to_owned())
         .spawn(move || {
             crate::log::register_thread(config.tag);
+            crate::log::register_hot_lane(config.tag);
             if let Some(core_id) = config.core_id {
                 pin_current_thread(core_id, &fatal);
             }
@@ -266,22 +278,4 @@ pub fn spawn_hot_thread(
             }
         })
         .expect("failed to spawn hot thread")
-}
-
-/// Linux: pinning mandatory (failure trips fatal). Other OS: best-effort, single WARN.
-fn pin_current_thread(core_id: usize, fatal: &FatalSignal) {
-    let pinned = core_affinity::set_for_current(core_affinity::CoreId { id: core_id });
-    if !cfg!(target_os = "linux") {
-        warn!(
-            "cpu pinning is best-effort on {} — hot thread may float",
-            std::env::consts::OS
-        );
-        return;
-    }
-    if !pinned {
-        error!("hot thread failed to pin to core {core_id} — pinning is mandatory on linux");
-        fatal.trip(format!(
-            "hot thread failed to pin to core {core_id} — pinning is mandatory on linux"
-        ));
-    }
 }

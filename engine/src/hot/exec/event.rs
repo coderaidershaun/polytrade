@@ -1,9 +1,9 @@
 //! Folding a venue event: the slot transition, the money it moves, the reservation it releases and
 //! the audit rows it earns, for this run's orders and for those an earlier run left resting.
 
-use crate::error;
 use crate::hot::ledger::{LedgerFill, PositionLedger};
 use crate::hot::strategy::Actions;
+use crate::log::hot_error;
 use crate::msg::exec::{ExecEvent, ExecKind, RejectClass};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Side};
 use crate::msg::persist::OrderLifecycle;
@@ -135,15 +135,16 @@ impl ExecEngine {
 
     #[cold]
     fn prior_run_overflow_error(&self, event: &ExecEvent) {
-        error!(
-            "prior-run order {:x} has nowhere to fold — all {PRIOR_RUN_SLOTS} entries are still working, so its fills cannot reach the ledger",
-            event.client_id.0
+        hot_error!(
+            "prior-run order {:x} has nowhere to fold — all {} entries are still working, so its fills cannot reach the ledger",
+            event.client_id.0,
+            PRIOR_RUN_SLOTS
         );
     }
 
     #[cold]
     fn resurrection_error(&self, event: &ExecEvent) {
-        error!(
+        hot_error!(
             "order {:x} was believed closed and the venue still holds it — resurrected; an order believed dead is unbounded risk",
             event.client_id.0
         );
@@ -252,9 +253,10 @@ impl ExecEngine {
     /// Class determines branch. Same fatal class for different causes -> error message carries the code.
     #[cold]
     fn fatal_reject_error(&self, event: &ExecEvent) {
-        error!(
+        hot_error!(
             "venue refused order {:x} fatally with code {} — halting rather than retrying",
-            event.client_id.0, event.reject_code
+            event.client_id.0,
+            event.reject_code
         );
     }
 }

@@ -16,6 +16,7 @@ mod engine_support;
 mod exec_support;
 mod hot;
 mod link;
+mod log;
 /// The shipped strategy, included from its folder so the fitness suite drives the real thing. One
 /// include point only — a second would mint a distinct `MicroRecorder` type.
 #[path = "../../../strategies/strat-micro-recorder/te-binance-spot-btcusdt/strategy.rs"]

@@ -8,7 +8,7 @@ use engine::hot::dispatch::HotEngine;
 use engine::hot::quant::micro;
 use engine::hot::series::FastQueue;
 use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
-use engine::log::LogRecord;
+use engine::log::HotRecord;
 use engine::msg::ids::{InstrumentId, Price, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::persist::{FeatureId, PersistRecord};
@@ -303,7 +303,7 @@ const TICK: i64 = ONE / 1000;
 struct SpinDriver {
     engine: HotEngine,
     persist: Consumer<PersistRecord>,
-    logs: Consumer<LogRecord>,
+    logs: Consumer<HotRecord>,
     realised_vol_st: FeatureId,
     spin_interval: DurationUs,
     seq: u64,

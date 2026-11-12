@@ -12,10 +12,10 @@ use crate::hot::book::Book;
 use crate::hot::quant::intensity::IntensityCounts;
 use crate::hot::quant::micro;
 use crate::hot::series::FastQueue;
+use crate::log::hot_warn;
 use crate::msg::ids::{Price, Side};
 use crate::msg::inbound::{KlineEvent, TradeEvent};
 use crate::runtime::config::{KlineInterval, SpinField, TrackerSpec};
-use crate::warn;
 
 pub use candles::{Candle, CandleSeries};
 pub use volume::VolumeBarSeries;
@@ -269,9 +269,9 @@ impl MicroTracker {
     #[cold]
     fn drop_unconfigured_kline(&mut self, event: &KlineEvent) {
         if self.unconfigured_klines == 0 {
-            warn!(
+            hot_warn!(
                 "kline for unconfigured interval {} on instrument {} dropped",
-                event.interval.as_str(),
+                event.interval,
                 event.instrument.0
             );
         }

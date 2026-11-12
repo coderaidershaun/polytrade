@@ -143,7 +143,7 @@ impl BinanceVol {
         if let Some(estimate) = self.estimate
             && !estimate.converged
         {
-            engine::strategy_warn!(
+            engine::alert!(
                 ctx,
                 "egarch fit did not converge for instrument {} after {} iterations",
                 instrument.0,

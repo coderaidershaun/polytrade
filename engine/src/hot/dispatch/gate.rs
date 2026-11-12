@@ -3,8 +3,8 @@
 //! than at the link actor, so a frame dropped on a full ring never reaches the tape.
 
 use crate::hot::sink::LinkSink;
-use crate::info;
 use crate::link::{InboundLink, TopicId};
+use crate::log::hot_info;
 use crate::msg::inbound::RunControl;
 use crate::msg::persist::{LinkFrameRow, LinkRowKind, PersistRecord};
 use crate::msg::run_state::RunAssertion;
@@ -60,7 +60,7 @@ impl HotEngine {
     /// Log warmup completion (once per run, operator's recording marker).
     #[cold]
     pub(super) fn log_warmup_complete(&self) {
-        info!(
+        hot_info!(
             "warmup complete after {:.0}s of message time — strategy callbacks now live",
             self.warmup.span.to_secs()
         );
@@ -154,7 +154,7 @@ impl HotEngine {
     /// Park: seal Parquet files (disk = complete). Drain bank first, seal after last emission.
     #[cold]
     fn park(&mut self) {
-        info!(
+        hot_info!(
             "run state IDLE (epoch {}) — sealing parquet",
             self.run.epoch
         );
@@ -167,7 +167,7 @@ impl HotEngine {
     /// Resume: wipe derived state (trackers, EwmaVol, estimators); poison from pre-pause gap. Ledger NOT wiped (money≠estimator, session PnL spans all parks).
     #[cold]
     fn resume(&mut self, received_ts: TsUs) {
-        info!(
+        hot_info!(
             "run state RUNNING (epoch {}) — derived state reset, warmup re-armed",
             self.run.epoch
         );

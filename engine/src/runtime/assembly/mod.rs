@@ -33,7 +33,7 @@ use crate::hot::sink::{LinkSink, MetricsSink, StrategyLogSink};
 use crate::hot::spawn::{HotThreadConfig, SimTapGate, spawn_hot_thread};
 use crate::hot::strategy::Strategy;
 use crate::link::{LinkActor, LinkActorSetup, OutboundLink};
-use crate::log::{self, LogConfig, LogHandle, LogRecord};
+use crate::log::{self, HotRecord, LogConfig, LogHandle};
 use crate::msg::persist::RotationRow;
 use crate::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter};
 use crate::msg::ui::UiCatalog;
@@ -223,7 +223,7 @@ impl Engine {
 
         // A dedicated ring isolates a telemetry flood from engine WARN/ERROR records.
         let (strategy_log_producer, strategy_log_consumer) =
-            RingBuffer::<LogRecord>::new(STRATEGY_LOG_RING_CAPACITY);
+            RingBuffer::<HotRecord>::new(STRATEGY_LOG_RING_CAPACITY);
         let strategy_log_sink = StrategyLogSink::new(strategy_log_producer);
         // Leaked exactly once, since the id is only known now; log::init panics on a
         // second call, so this never repeats.

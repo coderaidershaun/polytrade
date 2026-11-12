@@ -9,9 +9,9 @@
 //! position, and partial fills produce a smaller order next spin. Nothing remembers what was sent.
 //! The engine-side pass is at file bottom, colocated with the planner, so their decisions stay aligned.
 
+use crate::log::hot_warn;
 use crate::msg::exec::OrderStyle;
 use crate::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use crate::warn;
 
 use super::desired::QuoteLevel;
 use super::engine::ExecEngine;
@@ -277,8 +277,10 @@ impl ExecEngine {
 
 #[cold]
 fn report_unflattened(instrument: InstrumentId, position: Qty, reason: RejectReason) {
-    warn!(
-        "instrument {} still holds {} base and cannot be flattened: {reason:?}",
-        instrument.0, position.0
+    hot_warn!(
+        "instrument {} still holds {} base and cannot be flattened: {:?}",
+        instrument.0,
+        position.0,
+        reason
     );
 }

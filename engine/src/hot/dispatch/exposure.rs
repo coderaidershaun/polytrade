@@ -1,10 +1,10 @@
 //! Exposure persistence write half: banked ledger snapshot to disk on change.
 
 use crate::hot::sink::ExposureSink;
+use crate::log::hot_warn;
 use crate::msg::inbound::InboundMessage;
 use crate::msg::time::TsUs;
 use crate::runtime::exposure::{ExposureSnapshot, InstrumentExposure, MAX_EXPOSURE_INSTRUMENTS};
-use crate::warn;
 
 use super::HotState;
 
@@ -47,8 +47,11 @@ fn snapshot_of(rows: impl Iterator<Item = InstrumentExposure>) -> ExposureSnapsh
 /// Warn if instruments exceed snapshot capacity (fixed-size POD, said once at startup).
 #[cold]
 pub(super) fn warn_uncovered_instruments(instrument_count: usize) {
-    warn!(
-        "exposure: {instrument_count} instruments exceed the {MAX_EXPOSURE_INSTRUMENTS} one snapshot carries — only the first {MAX_EXPOSURE_INSTRUMENTS} holding a position survive a restart"
+    hot_warn!(
+        "exposure: {} instruments exceed the {} one snapshot carries — only the first {} holding a position survive a restart",
+        instrument_count,
+        MAX_EXPOSURE_INSTRUMENTS,
+        MAX_EXPOSURE_INSTRUMENTS
     );
 }
 

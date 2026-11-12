@@ -2,11 +2,11 @@
 
 use crate::hot::book::{BookState, SnapshotOutcome};
 use crate::hot::strategy::WindowInfo;
+use crate::log::hot_warn;
 use crate::msg::ids::{InstrumentId, Price};
 use crate::msg::inbound::{
     BookChunk, BookChunkKind, BookReset, KlineEvent, MarketRotation, TradeEvent,
 };
-use crate::warn;
 
 use super::HotEngine;
 
@@ -50,8 +50,9 @@ impl HotEngine {
     #[cold]
     fn record_unretained_volume_bars(&mut self, count: usize) {
         if self.unretained_volume_bars == 0 {
-            warn!(
-                "volume bars closing faster than tracker.volume_bars.keep retains — {count} bar(s) never reached the strategy; raise keep or the threshold"
+            hot_warn!(
+                "volume bars closing faster than tracker.volume_bars.keep retains — {} bar(s) never reached the strategy; raise keep or the threshold",
+                count
             );
         }
         self.unretained_volume_bars += count as u64;
