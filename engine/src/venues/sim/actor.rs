@@ -274,7 +274,7 @@ impl SimActor {
 
 // Polling and buffering for simulator input lanes.
 impl SimActor {
-    pub(super) fn poll_lanes(&mut self) {
+    fn poll_lanes(&mut self) {
         self.intake_commands();
         self.intake_market();
     }
@@ -323,7 +323,7 @@ impl SimActor {
     }
 
     #[cold]
-    pub(super) fn suspend(&mut self, reason: ResetReason) {
+    fn suspend(&mut self, reason: ResetReason) {
         if !self.driver.venue().market().is_matching_live() {
             return;
         }
