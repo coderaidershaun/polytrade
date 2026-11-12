@@ -34,6 +34,9 @@ use std::path::Path;
 pub const CLOCK_SPELLINGS: [&str; 5] =
     ["Instant", "SystemTime", "EngineClock", "now()", "elapsed()"];
 
+// SMELL: the clock scan covers only these four folders, so a clock read anywhere else that hot
+// state depends on passes unseen. The places that may read a clock need to be listed, and every
+// other file needs to be scanned.
 /// Each directory carries the fewest rust files it can honestly hold, so a rename that leaves the
 /// old path present but empty fails here instead of passing a scan of nothing.
 const SCANNED: [(&str, usize); 4] = [

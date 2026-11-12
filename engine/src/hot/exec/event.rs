@@ -95,6 +95,9 @@ impl ExecEngine {
         ledger: &mut PositionLedger,
         bank: &mut Actions,
     ) {
+        // SMELL: when every prior-run slot is taken, this event is logged and dropped, so a fill of
+        // an order from the earlier run never reaches the ledger and the position stays wrong. A
+        // full table should halt the engine instead.
         let Some(index) = self.prior_orders.find_or_seat(event) else {
             self.prior_run_overflow_error(event);
             return;

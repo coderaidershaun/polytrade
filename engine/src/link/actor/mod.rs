@@ -314,6 +314,8 @@ impl Actor {
         }
     }
 
+    // SMELL: a silent peer only gets a warning line and a count, and the strategy is never told, so
+    // it keeps acting on the last frame of that peer. Reconnects of a venue edge also have no cap.
     fn check_peer_silence(&mut self, now: TsUs) {
         for peer in &mut self.peers {
             let is_silent = peer

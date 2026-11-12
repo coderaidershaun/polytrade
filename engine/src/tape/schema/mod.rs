@@ -33,6 +33,9 @@ pub(super) trait TableRow: Sized + 'static {
     }
 }
 
+// SMELL: the footer names the features, instruments and assets, but not the link fields or the
+// boot, so a reader cannot decode the link frames of a run or join a run that spans two boots. The
+// reader also trusts only the newest footer it finds.
 /// Footer metadata: fixed-point scale + id-to-name dicts for mantissa/index interpretation.
 pub(super) fn footer_metadata(meta: &RunMeta) -> Vec<(String, String)> {
     vec![

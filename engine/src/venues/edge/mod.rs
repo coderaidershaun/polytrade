@@ -170,6 +170,9 @@ impl EdgeControl {
                 "{venue} execution gave up waiting for its {:?} sweep — {mirrored} orders are still mirrored as resting",
                 exit.reason
             );
+            // SMELL: past the deadline this reports `Swept` although orders are still mirrored as
+            // resting, so a caller cannot tell a clean sweep from one that gave up. This case needs
+            // its own outcome.
             return Some(SessionOutcome::Swept);
         }
         None

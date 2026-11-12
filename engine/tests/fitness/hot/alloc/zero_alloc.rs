@@ -53,6 +53,9 @@ use crate::raw_recorder::RecorderStrategy;
 /// Returns `Some(is_closed)` on a kline so the caller can confirm both open and closed flowed.
 fn step(engine: &mut HotEngine, consumer: &mut Consumer<PersistRecord>, i: i64) -> Option<bool> {
     let (message, kline_closed) = step_message(i);
+    // SMELL: this calls `dispatch` with a made-up pop, so the loop that pops the input rings is
+    // never measured, and no execution or account message reaches it. An allocation on either
+    // path passes this test.
     engine.dispatch(pop(0, 0), &message);
     while let Ok(record) = consumer.pop() {
         std::hint::black_box(record);

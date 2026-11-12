@@ -226,6 +226,10 @@ impl OrderSlot {
         FillDelta {
             base: Qty(delta_base),
             quote: delta_quote,
+            // SMELL: the quantity above comes from the venue's running totals, but the fee comes
+            // from this one report. A report that carries the fee of only one of its trades, or a
+            // fee paid in another asset, which counts as zero, leaves the fee total wrong. The fee
+            // needs to be folded once for each trade id.
             commission: event.commission,
         }
     }

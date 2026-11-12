@@ -133,6 +133,8 @@ struct WriterState {
 }
 
 impl WriterState {
+    // SMELL: the first write error ends this thread, and nothing tells the hot thread, so the
+    // engine trades on while no order or fill reaches disk. A writer fault needs to stop quoting.
     fn run(mut self, drain: &AtomicBool) -> Result<(), PersistError> {
         crate::log::register_thread("persist");
         self.retention.announce();

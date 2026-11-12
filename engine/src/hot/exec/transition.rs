@@ -65,6 +65,9 @@ pub fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent) -> Applied {
             },
             Some(RejectClass::Refused) => close_or_keep(previous_state, CloseReason::Rejected),
             Some(RejectClass::Gone) => close_or_keep(previous_state, CloseReason::ReconciledGone),
+            // SMELL: this catch-all arm takes `Ambiguous`, `Fatal`, a missing class, and any class
+            // added later, so a new reject class compiles and lands here with no decision. Each
+            // class needs its own arm.
             _ => match previous_state {
                 OrderState::Closed(reason) => OrderState::Closed(reason),
                 _ => OrderState::Unknown,

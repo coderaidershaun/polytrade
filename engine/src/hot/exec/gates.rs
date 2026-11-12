@@ -381,6 +381,10 @@ impl ExecEngine {
             ) {
                 LossVerdict::Within => {}
                 LossVerdict::MarkToMarket { reducing } => {
+                    // SMELL: each instrument is judged against the whole session loss budget
+                    // on its own, and the losses are never added up, so two instruments can
+                    // each lose most of the budget and both pass. The one permission set here
+                    // also covers every instrument. The budget needs one sum over them all.
                     permission = QuotePermission::ReducingOnly { reducing };
                 }
                 LossVerdict::Realised => return QuotePermission::Neither,

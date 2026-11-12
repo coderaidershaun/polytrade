@@ -40,6 +40,9 @@ pub(super) fn persist_bring_up<P>(setup: PersistBringUpSetup<'_, P>) -> PersistB
             handle: None,
         };
     };
+    // SMELL: research rows and audit rows, such as orders and fills, share this one ring, so a
+    // flood of research rows fills it and a fill row is dropped. Audit rows need a ring of their
+    // own that never drops.
     let (producer, consumer) =
         RingBuffer::<PersistRecord>::new(setup.config.queues.persistence_capacity);
     let tables = RecordedTables::new(&setup.config.strategy.tables);

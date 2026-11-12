@@ -139,6 +139,9 @@ impl WriterState {
                 return self.write_if_changed();
             }
             // Failures retry on next change (full disk can't stop trading, position in memory).
+            // SMELL: a failed write is only counted and logged, and the hot thread never learns of
+            // it, so the engine trades on without end while the file on disk goes stale. A failure
+            // that lasts past a limit should stop quoting.
             if let Err(error) = self.write_if_changed() {
                 self.failed_writes += 1;
                 error!(

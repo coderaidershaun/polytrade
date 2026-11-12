@@ -145,6 +145,9 @@ impl<R: TableRow> TableWriter<R> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(PersistError::io_at(parent))?;
         }
+        // SMELL: the file gets its final name here, before it has a footer, and nothing syncs it to
+        // disk, so a crash leaves a file under its final name that no reader can open. Write under
+        // a temporary name, sync, and rename once the footer is written.
         let file = File::create(&path).map_err(PersistError::io_at(&path))?;
         let writer =
             ArrowWriter::try_new(file, self.schema.clone(), Some(self.writer_properties()))

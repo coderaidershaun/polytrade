@@ -127,6 +127,8 @@ pub struct EngineView {
 
 /// Config-to-strategy construction (off Strategy trait for dyn-compat).
 pub trait StrategyConfig: Sized {
+    // SMELL: unknown fields in a params block pass unless each strategy author remembers
+    // `deny_unknown_fields`, and params that fail to parse panic instead of refusing the start.
     /// strategy.params mapping (define w/ deny_unknown_fields; derive Default). Clone+Debug required.
     type Params: serde::de::DeserializeOwned + Default + Clone + std::fmt::Debug;
 

@@ -1,6 +1,8 @@
 //! Pure simulated-venue state transitions.
 
 pub(crate) mod latency;
+// SMELL: no test pins the fill model in `market` or the horizon of the latency lanes, so a change
+// to how the simulator fills an order passes every gate.
 pub(crate) mod market;
 pub(crate) mod ordering;
 /// Public by decision: an order is what the wire contract describes, so anyone holding that

@@ -1,5 +1,7 @@
 //! Committed Binance fixture templates used by the simulator.
 
+// SMELL: these execution templates were written from the venue's documents, not recorded from the
+// venue, so a field that the live venue sends in another form passes every test that reads them.
 pub(super) const PLACE_ACK: &str =
     include_str!("../../../../fixtures/binance/exec/ack_order_place.json");
 pub(super) const CANCEL_ACK: &str =

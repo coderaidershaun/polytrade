@@ -70,6 +70,10 @@ fn advance_nonce(path: &Path) -> Result<u32, EngineError> {
         .ok_or_else(|| EngineError::ExecutionIdentityExhausted {
             path: path.to_path_buf(),
         })?;
+    // SMELL: this empties the nonce file and then writes the new value into the same file, so a
+    // crash between the two steps leaves it empty, and an empty file reads back as nonce 0. The
+    // next run then starts the count again. Write a new file and rename it over the old one, and
+    // refuse to start on an empty file.
     state_file
         .seek(SeekFrom::Start(0))
         .and_then(|_| state_file.set_len(0))

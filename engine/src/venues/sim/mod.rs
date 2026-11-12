@@ -22,6 +22,8 @@ pub use error::SimVenueError;
 use crate::hot::exec::OrderBudget;
 use crate::venues::exec::{LeaseNamespace, VenueCapabilities};
 
+// SMELL: the simulator is Binance Spot in 13 places, this one among them, so it cannot stand in for
+// any other venue. Each venue fact that it needs should come from the venue that it simulates.
 /// Stated by delegation rather than by copy: this venue synthesises Binance Spot, and a run whose
 /// physics drifted from the venue it stands in for would be simulating something else.
 ///

@@ -135,6 +135,8 @@ pub fn plan_flatten(input: FlattenInput) -> FlattenOutcome {
     FlattenOutcome::Place(PlaceIntent {
         price,
         qty,
+        // SMELL: the simulator refuses every `Immediate` order, so a flatten placed here never
+        // fills in a simulated run. The prints that the simulator drops are not counted either.
         style: OrderStyle::Immediate,
     })
 }

@@ -164,6 +164,9 @@ impl Strategy for MicroRecorder {
     }
 
     fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
+        // SMELL: the recorder quotes only when the `features` table is recorded, because its
+        // features exist only then, so turning a research table off also stops the trading. The run
+        // markers of the engine likewise need the `link_frames` table.
         let Some(features) = self.features else {
             return;
         };

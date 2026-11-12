@@ -240,6 +240,9 @@ impl<T: SeriesElem> FastQueue<T> {
         if n == 0 {
             return None;
         }
+        // SMELL: this divides the running float sum even for an integer series, which also keeps an
+        // exact integer sum, so the rounding of each push and pop drifts into the mean. An integer
+        // series should divide its exact sum.
         Some(self.sum_running / n as f64)
     }
 
@@ -265,6 +268,8 @@ impl<T: SeriesElem> FastQueue<T> {
         }
 
         let scratch = &mut scratch.values;
+        // SMELL: this guard is a `debug_assert!`, so a release build with a short scratch buffer
+        // allocates on the hot path instead of failing. It needs to be an `assert!`.
         debug_assert!(
             scratch.capacity() >= self.window,
             "median scratch holds {} of the {} this window can reach, so the call would allocate",

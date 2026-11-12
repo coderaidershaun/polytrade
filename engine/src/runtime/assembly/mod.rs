@@ -240,6 +240,10 @@ impl Engine {
         let clock = EngineClock::start();
         let drain_deadline = Duration::from_millis(config.engine.drain_deadline_ms);
         let spin_interval = config.engine.spin_interval();
+        // SMELL: this start refusal, the execution lease among them, comes after the log, Parquet,
+        // exposure and metrics threads have started, so a refused start has already started
+        // threads. The simulator tap also repeats a config check as a panic. Each refusal belongs
+        // before the first thread starts.
         let ExecBringUp {
             wiring: exec_wiring,
             spawn: exec_spawn,
