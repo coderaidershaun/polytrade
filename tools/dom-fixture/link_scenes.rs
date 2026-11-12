@@ -7,9 +7,9 @@ use eframe::egui;
 
 use engine::link::{RunPhase, RunState};
 use engine::msg::time::DurationUs;
-use engine::workstation::browser::link_bar::{self, LinkAction, LinkBarFrame};
-use engine::workstation::link_model::{ConnectionState, ControlVerdict, LinkStatus};
-use engine::workstation::link_view::RunConfirm;
+use engine::operator::workstation::browser::link_bar::{self, LinkAction, LinkBarFrame};
+use engine::operator::workstation::link_model::{ConnectionState, ControlVerdict, LinkStatus};
+use engine::operator::workstation::link_view::RunConfirm;
 
 const LOCAL_ENGINE: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 9310);
 const LOST_EPOCH: u64 = 1_761_508_800_123_457;

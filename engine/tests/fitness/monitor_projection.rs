@@ -18,13 +18,13 @@ use engine::msg::ui::{
     DomQuote, UI_ORDER_SNAPSHOT_CAPACITY, UiBookSnapshot, UiBookState, UiCatalog, UiEvent,
     UiInstrument, UiWorkingOrder,
 };
-use engine::runtime::config::ExecutionMode;
-use engine::workstation::format::{MISSING, write_bps_delta, write_opt_bps_delta};
-use engine::workstation::model::UiModel;
-use engine::workstation::monitor::model::{FeatureCell, OrderEvent, SystemEvent};
-use engine::workstation::monitor::view::{
+use engine::operator::workstation::format::{MISSING, write_bps_delta, write_opt_bps_delta};
+use engine::operator::workstation::model::UiModel;
+use engine::operator::workstation::monitor::model::{FeatureCell, OrderEvent, SystemEvent};
+use engine::operator::workstation::monitor::view::{
     Channel, FeatureRowView, MonitorUiState, account, feature_rows, quote_summary,
 };
+use engine::runtime::config::ExecutionMode;
 
 use crate::workstation_support::{BookFixture, NamedCase, book_snapshot};
 
@@ -785,14 +785,14 @@ fn an_event_gap_demotes_pre_gap_orders_before_counting_a_replacement() {
             .iter()
             .find(|order| order.client_id == ClientOrderId(11))
             .map(|order| order.status),
-        Some(engine::workstation::exec_model::OrderStatus::Lost)
+        Some(engine::operator::workstation::exec_model::OrderStatus::Lost)
     );
     assert_eq!(
         orders
             .iter()
             .find(|order| order.client_id == ClientOrderId(12))
             .map(|order| order.status),
-        Some(engine::workstation::exec_model::OrderStatus::Confirmed)
+        Some(engine::operator::workstation::exec_model::OrderStatus::Confirmed)
     );
 }
 
@@ -881,7 +881,7 @@ fn snapshot_healing_cases() {
         );
         assert_eq!(
             retained[0].status,
-            engine::workstation::exec_model::OrderStatus::Lost,
+            engine::operator::workstation::exec_model::OrderStatus::Lost,
             "{name}: invalid authoritative input preserves possible exposure but cannot leave it \
              confirmed"
         );

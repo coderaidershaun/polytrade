@@ -9,10 +9,10 @@ use engine::msg::exec::Liquidity;
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{UiBookSnapshot, UiBookState, UiEvent};
-use engine::workstation::chart::model::{
+use engine::operator::workstation::chart::model::{
     BookContinuity, ChartBucket, ChartFill, ChartModel, bucket_open_ts,
 };
-use engine::workstation::chart::view::{
+use engine::operator::workstation::chart::view::{
     Candle, CandleGrouping, ChartBounds, ChartDomain, bounds, domain, segment_points,
     visible_fills, x_fraction, y_fraction,
 };

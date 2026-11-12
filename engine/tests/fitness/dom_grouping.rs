@@ -16,14 +16,14 @@ use std::collections::HashMap;
 use engine::msg::ids::{FIXED_SCALE, Price, Qty};
 use engine::msg::time::DurationUs;
 use engine::msg::ui::{DomQuote, UiBookSnapshot, UiBookState};
-use engine::workstation::dom_view::{
+use engine::operator::workstation::dom_view::{
     DomGrouping, DomOverlay, DomUnit, DomView, DomViewInput, FeedStatus, MAX_ROWS_PER_SIDE,
     QuotePlacement, ask_anchor, bid_anchor, bucket_low_edge, build_dom_view,
 };
-use engine::workstation::format::{
+use engine::operator::workstation::format::{
     MISSING, price_decimals, write_opt_venue_mid, write_venue_mid, write_venue_price,
 };
-use engine::workstation::model::UiModel;
+use engine::operator::workstation::model::UiModel;
 use proptest::prelude::*;
 
 use crate::workstation_support::{BookFixture, book_snapshot, overlay};

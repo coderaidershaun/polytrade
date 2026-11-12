@@ -20,28 +20,24 @@
 // vocabulary
 pub mod msg;
 
+pub mod log;
+
 // hot path
 pub mod hot;
 
 // async edge
-pub mod link;
-pub mod log;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod tape;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod venues;
+
+pub mod link;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod tape;
 
 // assembly
 pub mod runtime;
 
-/// The painters and the socket exist only in the browser build, so a native build never links
-/// eframe.
-// Only the painters read some of the display text and model methods, so a native build sees them,
-// and their re-exports, as unused. Each target lints the half it runs, which makes the browser
-// build the one that finds dead workstation code.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, unused_imports))]
-#[cfg_attr(target_arch = "wasm32", warn(dead_code))]
-pub mod workstation;
+pub mod operator;
 
 /// Feature-gated, so a headless engine never builds the agent protocol stack.
 #[cfg(feature = "mcp")]

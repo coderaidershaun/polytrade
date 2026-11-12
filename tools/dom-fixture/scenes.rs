@@ -5,9 +5,9 @@ use engine::msg::inbound::Level;
 use engine::msg::time::DurationUs;
 use engine::msg::time::TsUs;
 use engine::msg::ui::{DomQuote, UiBookSnapshot, UiBookState};
-use engine::workstation::dom_view::{DomGrouping, FeedStatus};
-use engine::workstation::exec_model::{OrderCell, OrderStatus};
-use engine::workstation::format::price_decimals;
+use engine::operator::workstation::dom_view::{DomGrouping, FeedStatus};
+use engine::operator::workstation::exec_model::{OrderCell, OrderStatus};
+use engine::operator::workstation::format::price_decimals;
 
 use crate::fixture::{book, levels, px, qm};
 

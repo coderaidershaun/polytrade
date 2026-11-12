@@ -3,7 +3,7 @@
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
-    engine::workstation::browser::start();
+    engine::operator::workstation::browser::start();
 }
 
 #[cfg(not(target_arch = "wasm32"))]

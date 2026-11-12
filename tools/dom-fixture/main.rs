@@ -48,7 +48,7 @@ fn main() {
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
-    engine::workstation::browser::start_in_canvas(
+    engine::operator::workstation::browser::start_in_canvas(
         "fixture",
         Box::new(|_creation| Ok(Box::new(app::DomFixture::new()))),
     );

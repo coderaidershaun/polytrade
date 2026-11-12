@@ -3,12 +3,14 @@
 
 use eframe::egui;
 
-use engine::workstation::browser::chart::mid::{self, Plot};
-use engine::workstation::browser::monitor::{band_sizes, column_widths, pane_height};
-use engine::workstation::chart::pane::{LatencyBand, StackBands};
-use engine::workstation::chart::view::{CandleGrouping, ChartBounds, ChartMode, value_ticks};
-use engine::workstation::monitor::fit::{self, BandHeights, ColumnPlan, TimeColumn};
-use engine::workstation::monitor::view::Channel;
+use engine::operator::workstation::browser::chart::mid::{self, Plot};
+use engine::operator::workstation::browser::monitor::{band_sizes, column_widths, pane_height};
+use engine::operator::workstation::chart::pane::{LatencyBand, StackBands};
+use engine::operator::workstation::chart::view::{
+    CandleGrouping, ChartBounds, ChartMode, value_ticks,
+};
+use engine::operator::workstation::monitor::fit::{self, BandHeights, ColumnPlan, TimeColumn};
+use engine::operator::workstation::monitor::view::Channel;
 
 /// What the latency band `band` paints, and how tall that is.
 pub fn latency(band: egui::Rect) -> String {

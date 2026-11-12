@@ -8,10 +8,10 @@
 use engine::msg::ids::{FIXED_SCALE, InstrumentId};
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::UiEvent;
-use engine::workstation::chart::model::ChartModel;
-use engine::workstation::chart::position_model::{PositionBucket, PositionModel};
-use engine::workstation::chart::position_view::{RiskSeries, bounds, visible_buckets};
-use engine::workstation::chart::view::{ChartDomain, domain, x_fraction};
+use engine::operator::workstation::chart::model::ChartModel;
+use engine::operator::workstation::chart::position_model::{PositionBucket, PositionModel};
+use engine::operator::workstation::chart::position_view::{RiskSeries, bounds, visible_buckets};
+use engine::operator::workstation::chart::view::{ChartDomain, domain, x_fraction};
 use proptest::prelude::*;
 
 use crate::workstation_support::{

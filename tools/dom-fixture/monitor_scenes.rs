@@ -7,9 +7,9 @@ use engine::msg::exec::RejectClass;
 use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::time::TsUs;
 use engine::msg::ui::{UiBookState, UiCatalog, UiInstrument};
+use engine::operator::workstation::monitor::model::SystemNote;
+use engine::operator::workstation::monitor::view::{Channel, MonitorDetail, MonitorUiState};
 use engine::runtime::config::ExecutionMode;
-use engine::workstation::monitor::model::SystemNote;
-use engine::workstation::monitor::view::{Channel, MonitorDetail, MonitorUiState};
 
 use crate::fixture::BASE_TS;
 use crate::monitor_feed::{Feed, MonitorScene, QUOTE_QTY_MILLI, SPIN};

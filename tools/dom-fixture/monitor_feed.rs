@@ -9,9 +9,9 @@ use engine::msg::persist::FeatureId;
 use engine::msg::time::DurationUs;
 use engine::msg::time::TsUs;
 use engine::msg::ui::{DomQuote, UiBookState, UiCatalog, UiEvent};
-use engine::workstation::model::UiModel;
-use engine::workstation::monitor::model::SystemNote;
-use engine::workstation::monitor::view::MonitorUiState;
+use engine::operator::workstation::model::UiModel;
+use engine::operator::workstation::monitor::model::SystemNote;
+use engine::operator::workstation::monitor::view::MonitorUiState;
 
 use crate::fixture::{BASE_TS, book, qm};
 

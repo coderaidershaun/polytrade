@@ -5,8 +5,8 @@ use engine::msg::ids::{InstrumentId, Price, Qty};
 use engine::msg::inbound::Level;
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{DomQuote, UI_BOOK_LEVELS, UiBookSnapshot, UiBookState, UiEvent};
-use engine::workstation::chart::model::{BookContinuity, ChartModel};
-use engine::workstation::dom_view::DomOverlay;
+use engine::operator::workstation::chart::model::{BookContinuity, ChartModel};
+use engine::operator::workstation::dom_view::DomOverlay;
 
 pub type NamedCase = (&'static str, fn(&str));
 

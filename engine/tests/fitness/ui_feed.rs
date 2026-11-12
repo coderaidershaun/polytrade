@@ -21,8 +21,8 @@ use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::persist::FeatureId;
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{UiBookSnapshot, UiBookState, UiEvent, UiLatencySummary};
+use engine::operator::workstation::model::UiModel;
 use engine::runtime::config::{RecordedTables, TableKind};
-use engine::workstation::model::UiModel;
 use rtrb::Consumer;
 
 use crate::engine_support::{

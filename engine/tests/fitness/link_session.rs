@@ -20,10 +20,12 @@ use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::persist::FeatureId;
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{UiBookSnapshot, UiBookState, UiCatalog, UiEvent};
+use engine::operator::workstation::link_model::{ConnectionState, ControlVerdict};
+use engine::operator::workstation::link_session::{
+    Delivery, LinkSession, LinkSessionError, LinkTarget,
+};
+use engine::operator::workstation::model::UiModel;
 use engine::runtime::config::{ExecutionMode, StrategyId};
-use engine::workstation::link_model::{ConnectionState, ControlVerdict};
-use engine::workstation::link_session::{Delivery, LinkSession, LinkSessionError, LinkTarget};
-use engine::workstation::model::UiModel;
 use proptest::prelude::*;
 
 use crate::workstation_support::BookFixture;

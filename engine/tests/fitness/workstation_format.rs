@@ -9,7 +9,7 @@ use std::path::Path;
 
 use crate::exec_no_clock::rust_sources;
 
-use engine::workstation::format::{
+use engine::operator::workstation::format::{
     MISSING, write_latency_micros, write_opt_latency_micros, write_opt_slots, write_slots,
 };
 use proptest::prelude::*;
@@ -215,7 +215,7 @@ proptest! {
 #[test]
 fn no_workstation_string_literal_carries_a_glyph_the_default_fonts_cannot_paint() {
     let mut offenders: Vec<String> = Vec::new();
-    for path in rust_sources(Path::new("src/workstation")) {
+    for path in rust_sources(Path::new("src/operator/workstation")) {
         let source = std::fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("{} is readable: {error}", path.display()));
         for (line, text) in non_ascii_string_literals(&source) {

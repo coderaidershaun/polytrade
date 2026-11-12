@@ -5,11 +5,11 @@
 
 use proptest::prelude::*;
 
-use engine::workstation::monitor::fit::{
+use engine::operator::workstation::monitor::fit::{
     BandHeights, BandSizes, ColumnPlan, ColumnWidths, TimeColumn, content_width, fit_bands,
     fit_columns,
 };
-use engine::workstation::monitor::view::Channel;
+use engine::operator::workstation::monitor::view::Channel;
 
 use crate::workstation_support::NamedCase;
 

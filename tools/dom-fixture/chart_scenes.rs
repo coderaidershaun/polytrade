@@ -5,7 +5,7 @@ use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::Level;
 use engine::msg::time::DurationUs;
 use engine::msg::ui::{UiBookState, UiLatencyCell, UiLatencyRow, UiLatencySummary};
-use engine::workstation::chart::model::{BookContinuity, ChartModel};
+use engine::operator::workstation::chart::model::{BookContinuity, ChartModel};
 
 use crate::fixture::{self, BASE_TS, INSTRUMENT, book, px, unit};
 

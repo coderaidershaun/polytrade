@@ -5,8 +5,8 @@ use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::time::DurationUs;
 use engine::msg::time::TsUs;
 use engine::msg::ui::{UiBookState, UiEvent};
-use engine::workstation::chart::model::{BookContinuity, ChartModel};
-use engine::workstation::chart::position_model::PositionModel;
+use engine::operator::workstation::chart::model::{BookContinuity, ChartModel};
+use engine::operator::workstation::chart::position_model::PositionModel;
 
 use crate::fixture::{self, BASE_TS, INSTRUMENT, book, px, unit};
 

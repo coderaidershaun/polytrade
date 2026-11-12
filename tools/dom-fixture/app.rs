@@ -3,17 +3,17 @@
 
 use eframe::egui;
 
-use engine::workstation::browser::chart::mid::{self, ChartFrame};
-use engine::workstation::browser::chart::stack::{self, ChartStackFrame};
-use engine::workstation::browser::dom::{DomFrame, ladder};
-use engine::workstation::browser::latency::{self, LatencyFrame};
-use engine::workstation::browser::monitor::bands;
-use engine::workstation::browser::{announce_touch_screen, chrome};
-use engine::workstation::chart::position_view::RiskSeries;
-use engine::workstation::chart::view::ChartMode;
-use engine::workstation::dom_view::{DEFAULT_ROWS_PER_SIDE, DomOverlay};
-use engine::workstation::monitor::view::{Channel, MonitorFrame};
-use engine::workstation::shell::{Arrangement, View};
+use engine::operator::workstation::browser::chart::mid::{self, ChartFrame};
+use engine::operator::workstation::browser::chart::stack::{self, ChartStackFrame};
+use engine::operator::workstation::browser::dom::{DomFrame, ladder};
+use engine::operator::workstation::browser::latency::{self, LatencyFrame};
+use engine::operator::workstation::browser::monitor::bands;
+use engine::operator::workstation::browser::{announce_touch_screen, chrome};
+use engine::operator::workstation::chart::position_view::RiskSeries;
+use engine::operator::workstation::chart::view::ChartMode;
+use engine::operator::workstation::dom_view::{DEFAULT_ROWS_PER_SIDE, DomOverlay};
+use engine::operator::workstation::monitor::view::{Channel, MonitorFrame};
+use engine::operator::workstation::shell::{Arrangement, View};
 
 use crate::chart_scenes::{ChartScene, chart_scenes, latency_summary};
 use crate::fit_readout;

@@ -5,7 +5,7 @@
 
 use engine::msg::ids::Side;
 use engine::msg::persist::FeatureId;
-use engine::workstation::monitor::view::{Channel, MonitorDetail, MonitorUiState};
+use engine::operator::workstation::monitor::view::{Channel, MonitorDetail, MonitorUiState};
 
 use crate::workstation_support::NamedCase;
 

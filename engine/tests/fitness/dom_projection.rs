@@ -10,14 +10,14 @@
 use engine::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty};
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{DomQuote, UiBookSnapshot, UiBookState, UiEvent};
-use engine::workstation::dom_view::{
+use engine::operator::workstation::dom_view::{
     DEFAULT_ROWS_PER_SIDE, DomGrouping, DomOverlay, DomRow, DomStatus, DomViewInput, FeedStatus,
     MAX_ROWS_PER_SIDE, MIN_ROWS_PER_SIDE, QuotePlacement, ask_anchor, bid_anchor, build_dom_view,
     fit_rows, mid_half_ticks, price_for_row, tick_index,
 };
-use engine::workstation::exec_model::{OrderCell, OrderStatus};
-use engine::workstation::format::{MISSING, write_mid, write_opt_qty, write_qty};
-use engine::workstation::model::UiModel;
+use engine::operator::workstation::exec_model::{OrderCell, OrderStatus};
+use engine::operator::workstation::format::{MISSING, write_mid, write_opt_qty, write_qty};
+use engine::operator::workstation::model::UiModel;
 use proptest::prelude::*;
 
 use crate::workstation_support::{BookFixture, NamedCase, book_snapshot, overlay};

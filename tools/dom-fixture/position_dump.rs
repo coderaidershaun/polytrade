@@ -2,7 +2,7 @@
 //! on a locked machine.
 
 use engine::msg::ids::FIXED_SCALE;
-use engine::workstation::chart::position_model::PositionBucket;
+use engine::operator::workstation::chart::position_model::PositionBucket;
 
 use crate::position_scenes::position_scenes;
 
