@@ -17,7 +17,6 @@ use std::sync::{Arc, Mutex};
 
 use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{ClientIdLayout, ExecSettings, MAX_ORDER_SLOTS, side_base};
-use engine::hot::metrics::MetricsSnapshot;
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{
@@ -31,8 +30,7 @@ use engine::runtime::registry::InstrumentRow;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
-    ONE, detached_setup, drain_orders_and_fills, exec_event, instrument_row, metrics_ring,
-    persist_ring_for, pop, spin,
+    ONE, detached_setup, drain_orders_and_fills, exec_event, instrument_row, persist_ring_for, spin,
 };
 use crate::exec_support::drain_commands;
 
@@ -75,7 +73,6 @@ struct Fixture {
     engine: HotEngine,
     records: Consumer<PersistRecord>,
     commands: Consumer<ExecLaneItem>,
-    metrics: Consumer<MetricsSnapshot>,
     latest: Readings,
 }
 
@@ -90,14 +87,12 @@ fn fixture_with_lane(lane_capacity: usize) -> Fixture {
         1_024,
         RecordedTables::new(&[TableKind::Orders, TableKind::Fills]),
     );
-    let (metrics_sink, metrics) = metrics_ring(64);
     let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(lane_capacity);
     let strategy = Box::new(LedgerProbe {
         latest: Arc::clone(&latest),
     });
     let engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),
-        metrics_sink,
         exec: Some(ExecWiring {
             sink: ExecSink::new(commands_producer),
             settings: ExecSettings::disabled(),
@@ -109,7 +104,6 @@ fn fixture_with_lane(lane_capacity: usize) -> Fixture {
         engine,
         records,
         commands,
-        metrics,
         latest,
     }
 }
@@ -155,7 +149,7 @@ fn unanswered_order(when: i64) -> InboundMessage {
 fn read(fixture: &mut Fixture, seq: u64, when: i64) -> Reading {
     fixture
         .engine
-        .dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(seq, when)));
+        .dispatch(&InboundMessage::SpinTick(spin(seq, when)));
     fixture
         .latest
         .lock()
@@ -174,10 +168,9 @@ fn read(fixture: &mut Fixture, seq: u64, when: i64) -> Reading {
 fn a_prior_run_fill_moves_the_money_once_banks_its_rows_and_still_cancels() {
     let mut fixture = fixture();
 
-    fixture.engine.dispatch(
-        pop(0, 0),
-        &prior_run_trade(1, Side::Buy, 100 * ONE, ONE, ONE, 10),
-    );
+    fixture
+        .engine
+        .dispatch(&prior_run_trade(1, Side::Buy, 100 * ONE, ONE, ONE, 10));
     let first = read(&mut fixture, 0, 20);
     assert_eq!(
         first.position_base,
@@ -224,10 +217,9 @@ fn a_prior_run_fill_moves_the_money_once_banks_its_rows_and_still_cancels() {
 
     // The same report twice more, then a genuine second execution carrying a LARGER cumulative.
     for _ in 0..2 {
-        fixture.engine.dispatch(
-            pop(0, 0),
-            &prior_run_trade(1, Side::Buy, 100 * ONE, ONE, ONE, 30),
-        );
+        fixture
+            .engine
+            .dispatch(&prior_run_trade(1, Side::Buy, 100 * ONE, ONE, ONE, 30));
     }
     let redelivered = read(&mut fixture, 1, 40);
     assert_eq!(
@@ -245,10 +237,9 @@ fn a_prior_run_fill_moves_the_money_once_banks_its_rows_and_still_cancels() {
         after_redelivery.fills.len()
     );
 
-    fixture.engine.dispatch(
-        pop(0, 0),
-        &prior_run_trade(1, Side::Buy, 100 * ONE, ONE, 2 * ONE, 50),
-    );
+    fixture
+        .engine
+        .dispatch(&prior_run_trade(1, Side::Buy, 100 * ONE, ONE, 2 * ONE, 50));
     let second = read(&mut fixture, 2, 60);
     assert_eq!(
         second.position_base,
@@ -270,17 +261,14 @@ fn a_prior_run_fill_moves_the_money_once_banks_its_rows_and_still_cancels() {
 fn a_prior_run_order_takes_no_slot_this_run_quotes_from() {
     let mut fixture = fixture();
 
-    fixture.engine.dispatch(
-        pop(0, 0),
-        &prior_run_trade(
-            engine::hot::exec::side_base(INSTRUMENT, Side::Buy),
-            Side::Buy,
-            100 * ONE,
-            ONE,
-            ONE,
-            10,
-        ),
-    );
+    fixture.engine.dispatch(&prior_run_trade(
+        engine::hot::exec::side_base(INSTRUMENT, Side::Buy),
+        Side::Buy,
+        100 * ONE,
+        ONE,
+        ONE,
+        10,
+    ));
 
     let reading = read(&mut fixture, 0, 20);
     assert_eq!(
@@ -303,14 +291,9 @@ const JAMMED_LANE: usize = 64;
 /// to that table can hold.
 const JAM_SPINS: usize = MAX_ORDER_SLOTS;
 
-/// Commands the engine has managed to bank so far, from the newest snapshot on the metrics lane.
-/// Drained every spin so the lane never fills and the reading is never a stale one.
-fn banked_so_far(metrics: &mut Consumer<MetricsSnapshot>, previous: u64) -> u64 {
-    let mut latest = previous;
-    while let Ok(snapshot) = metrics.pop() {
-        latest = snapshot.counters.orders_submitted;
-    }
-    latest
+/// Commands the engine has managed to bank so far: the count each counter sample of a spin carries.
+fn banked_so_far(engine: &HotEngine) -> u64 {
+    engine.counters().orders_submitted
 }
 
 /// FITNESS: a prior-run cancel the command bank could not take is still sent once there is room.
@@ -323,46 +306,45 @@ fn banked_so_far(metrics: &mut Consumer<MetricsSnapshot>, previous: u64) -> u64 
 #[test]
 fn a_prior_run_cancel_the_full_bank_refused_is_sent_once_there_is_room() {
     let mut fixture = fixture_with_lane(JAMMED_LANE);
-    fixture.engine.dispatch(pop(0, 0), &unanswered_order(1_000));
+    fixture.engine.dispatch(&unanswered_order(1_000));
 
     let mut banked = 0;
     for step in 0..JAM_SPINS {
-        fixture.engine.dispatch(
-            pop(0, 0),
-            &InboundMessage::SpinTick(spin(step as u64, 1_010 + 10 * step as i64)),
-        );
-        banked = banked_so_far(&mut fixture.metrics, banked);
+        fixture.engine.dispatch(&InboundMessage::SpinTick(spin(
+            step as u64,
+            1_010 + 10 * step as i64,
+        )));
+        banked = banked_so_far(&fixture.engine);
     }
 
     // A precondition, not decoration: with room left in the bank the cancel below would go straight
     // out and this test would pass without ever reaching the case it exists for.
     let jammed = banked;
     for step in JAM_SPINS..JAM_SPINS + 4 {
-        fixture.engine.dispatch(
-            pop(0, 0),
-            &InboundMessage::SpinTick(spin(step as u64, 1_010 + 10 * step as i64)),
-        );
-        banked = banked_so_far(&mut fixture.metrics, banked);
+        fixture.engine.dispatch(&InboundMessage::SpinTick(spin(
+            step as u64,
+            1_010 + 10 * step as i64,
+        )));
+        banked = banked_so_far(&fixture.engine);
     }
     assert_eq!(
         banked, jammed,
         "the bank still had room after {JAM_SPINS} undrained spins, so this test proves nothing"
     );
 
-    fixture.engine.dispatch(
-        pop(0, 0),
-        &prior_run_trade(1, Side::Buy, 100 * ONE, ONE, ONE, 100_000),
-    );
+    fixture
+        .engine
+        .dispatch(&prior_run_trade(1, Side::Buy, 100 * ONE, ONE, ONE, 100_000));
 
     // The edge catches up. Emptying a whole lane each spin drains the bank behind it.
     let mut sent = Vec::new();
     for step in 0..JAM_SPINS {
         sent.extend(drain_commands(&mut fixture.commands));
-        fixture.engine.dispatch(
-            pop(0, 0),
-            &InboundMessage::SpinTick(spin(step as u64, 200_000 + 10 * step as i64)),
-        );
-        banked = banked_so_far(&mut fixture.metrics, banked);
+        fixture.engine.dispatch(&InboundMessage::SpinTick(spin(
+            step as u64,
+            200_000 + 10 * step as i64,
+        )));
+        banked = banked_so_far(&fixture.engine);
     }
     assert!(
         banked > jammed,
@@ -370,13 +352,17 @@ fn a_prior_run_cancel_the_full_bank_refused_is_sent_once_there_is_room() {
     );
 
     // The venue names the inherited order again, exactly as its next reconciliation snapshot would.
-    fixture.engine.dispatch(
-        pop(0, 0),
-        &prior_run_trade(1, Side::Buy, 100 * ONE, ONE, 2 * ONE, 400_000),
-    );
+    fixture.engine.dispatch(&prior_run_trade(
+        1,
+        Side::Buy,
+        100 * ONE,
+        ONE,
+        2 * ONE,
+        400_000,
+    ));
     fixture
         .engine
-        .dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(0, 400_010)));
+        .dispatch(&InboundMessage::SpinTick(spin(0, 400_010)));
     sent.extend(drain_commands(&mut fixture.commands));
 
     assert!(

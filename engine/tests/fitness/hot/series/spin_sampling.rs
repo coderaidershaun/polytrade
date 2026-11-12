@@ -18,9 +18,9 @@ use rtrb::Consumer;
 
 use crate::engine_support::{
     ONE, book_reset, delta_chunk, engine_view, engine_without_warmup, instrument_row,
-    last_snapshot_chunk, level, metrics_ring, partial_delta_chunk, partial_snapshot_chunk,
-    persist_ring, pop, recorder_feature_id, recorder_spec, snapshot_pair, spin, strategy_log_ring,
-    tracker_spec_all, trade,
+    last_snapshot_chunk, level, partial_delta_chunk, partial_snapshot_chunk, persist_ring,
+    recorder_feature_id, recorder_spec, snapshot_pair, spin, strategy_log_ring, tracker_spec_all,
+    trade,
 };
 use crate::micro_strategy::MicroRecorder;
 
@@ -58,7 +58,7 @@ fn spin_state(
     consumer: &mut Consumer<PersistRecord>,
     tick: SpinTick,
 ) -> (usize, Option<f64>) {
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(tick));
+    engine.dispatch(&InboundMessage::SpinTick(tick));
     let mut len = 0;
     let mut last = None;
     while let Ok(record) = consumer.pop() {
@@ -74,7 +74,7 @@ fn spin_state(
 }
 
 fn apply(engine: &mut HotEngine, consumer: &mut Consumer<PersistRecord>, message: InboundMessage) {
-    engine.dispatch(pop(0, 0), &message);
+    engine.dispatch(&message);
     while consumer.pop().is_ok() {}
 }
 
@@ -132,7 +132,7 @@ fn sided_state(
     consumer: &mut Consumer<PersistRecord>,
     tick: SpinTick,
 ) -> [Option<f64>; 4] {
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(tick));
+    engine.dispatch(&InboundMessage::SpinTick(tick));
     let mut sampled = [None; 4];
     while let Ok(record) = consumer.pop() {
         if let PersistRecord::Feature(row) = record {
@@ -150,7 +150,6 @@ fn mid_and_sided_trade_counts_sample_per_tick() {
     let instruments = [instrument_row(0, tracker_spec_all(1), 64)];
     let (sink, mut consumer) = persist_ring(256);
     let (log_sink, _log_consumer) = strategy_log_ring(64);
-    let (metrics_producer, _metrics_consumer) = metrics_ring(64);
     let mut engine = engine_without_warmup(
         &instruments,
         Box::new(SidedProbe {
@@ -161,7 +160,6 @@ fn mid_and_sided_trade_counts_sample_per_tick() {
         }),
         sink,
         log_sink,
-        metrics_producer,
     );
 
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, 2 * ONE)], &[(101 * ONE, ONE)], 1);
@@ -217,14 +215,8 @@ fn spin_samples_committed_state_only() {
     let instruments = [instrument_row(0, tracker_spec_all(1), 64)];
     let (sink, mut consumer) = persist_ring(256);
     let (log_sink, _log_consumer) = strategy_log_ring(64);
-    let (metrics_producer, _metrics_consumer) = metrics_ring(64);
-    let mut engine = engine_without_warmup(
-        &instruments,
-        Box::new(SpinProbe::default()),
-        sink,
-        log_sink,
-        metrics_producer,
-    );
+    let mut engine =
+        engine_without_warmup(&instruments, Box::new(SpinProbe::default()), sink, log_sink);
 
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, 2 * ONE)], &[(101 * ONE, ONE)], 1);
     apply(&mut engine, &mut consumer, InboundMessage::Book(bids));
@@ -315,13 +307,12 @@ impl SpinDriver {
         let instruments = [instrument_row(0, tracker_spec_all(1), 64)];
         let (sink, persist) = persist_ring(64);
         let (log_sink, logs) = strategy_log_ring(64);
-        let (metrics_producer, _metrics_consumer) = metrics_ring(64);
         let strategy = Box::new(MicroRecorder::from_spec(
             &recorder_spec(vec![TableKind::Features]),
             engine_view(spin_interval),
         ));
         Self {
-            engine: engine_without_warmup(&instruments, strategy, sink, log_sink, metrics_producer),
+            engine: engine_without_warmup(&instruments, strategy, sink, log_sink),
             persist,
             logs,
             realised_vol_st: recorder_feature_id("realised_vol_st"),
@@ -339,16 +330,14 @@ impl SpinDriver {
             &[(price + ONE / 2, ONE)],
             self.now,
         );
-        self.engine.dispatch(pop(0, 0), &InboundMessage::Book(bids));
-        self.engine.dispatch(pop(0, 0), &InboundMessage::Book(asks));
+        self.engine.dispatch(&InboundMessage::Book(bids));
+        self.engine.dispatch(&InboundMessage::Book(asks));
         while self.persist.pop().is_ok() {}
 
         self.now += self.spin_interval.micros();
         self.seq += 1;
-        self.engine.dispatch(
-            pop(0, 0),
-            &InboundMessage::SpinTick(spin(self.seq, self.now)),
-        );
+        self.engine
+            .dispatch(&InboundMessage::SpinTick(spin(self.seq, self.now)));
         let mut realised = None;
         while let Ok(record) = self.persist.pop() {
             if let PersistRecord::Feature(row) = record

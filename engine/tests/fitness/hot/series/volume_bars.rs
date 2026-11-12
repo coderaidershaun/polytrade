@@ -17,8 +17,8 @@ use proptest::prelude::*;
 use rtrb::Consumer;
 
 use crate::engine_support::{
-    ONE, engine_without_warmup, instrument_row, metrics_ring, persist_ring, pop, strategy_log_ring,
-    tracker_spec_all, trade, ts,
+    ONE, engine_without_warmup, instrument_row, persist_ring, strategy_log_ring, tracker_spec_all,
+    trade, ts,
 };
 
 /// Closed-bar retention above the worst case every generator below can produce, so nothing is
@@ -333,7 +333,6 @@ fn on_volume_fires_once_per_closed_bar_oldest_first() {
     let instruments = [instrument_row(0, tracker_spec_all(100), 128)];
     let (sink, mut consumer) = persist_ring(4096);
     let (log_sink, _log_consumer) = strategy_log_ring(64);
-    let (metrics_producer, _metrics_consumer) = metrics_ring(64);
     let mut engine = engine_without_warmup(
         &instruments,
         Box::new(BarProbe {
@@ -341,13 +340,12 @@ fn on_volume_fires_once_per_closed_bar_oldest_first() {
         }),
         sink,
         log_sink,
-        metrics_producer,
     );
 
     // Half of the 1 USD target: opens a bar, closes none.
     let mut half = trade(0, ONE, ONE / 2, Side::Buy, 1_000);
     half.received_ts_us = ts(1_500);
-    engine.dispatch(pop(0, 0), &InboundMessage::Trade(half));
+    engine.dispatch(&InboundMessage::Trade(half));
     assert_eq!(
         delivered_bars(&mut consumer),
         Vec::new(),
@@ -357,7 +355,7 @@ fn on_volume_fires_once_per_closed_bar_oldest_first() {
     // 4.5 targets on top of the half already banked: fills the open bar and cuts four more.
     let mut sweep = trade(0, ONE, 9 * ONE / 2, Side::Buy, 2_000);
     sweep.received_ts_us = ts(2_500);
-    engine.dispatch(pop(0, 0), &InboundMessage::Trade(sweep));
+    engine.dispatch(&InboundMessage::Trade(sweep));
 
     let delivered = delivered_bars(&mut consumer);
     assert_eq!(

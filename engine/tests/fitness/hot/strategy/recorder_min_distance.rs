@@ -4,7 +4,7 @@
 
 use engine::msg::ids::Side;
 
-use crate::engine_support::{ONE, pop};
+use crate::engine_support::ONE;
 use crate::hot::strategy::recorder_fixture::{
     STEP_US, STEPS, TICK, column_value, drain_places, make_ready, recorded_row, recorder_engine,
     seed_book, spin_columns, step_messages,
@@ -26,7 +26,7 @@ fn a_quote_is_never_tighter_than_the_minimum_distance() {
     for index in 0..STEPS {
         let when = index * STEP_US;
         for message in step_messages(BASE, index, when) {
-            engine.dispatch(pop(0, 0), &message);
+            engine.dispatch(&message);
         }
         let columns = spin_columns(&mut persist);
         let issued = drain_places(&mut commands);

@@ -29,8 +29,7 @@ use tokio::sync::mpsc;
 
 use crate::hot::dispatch::{ExposureWiring, HotEngine, HotEngineSetup, LinkWiring};
 use crate::hot::metrics::DriverSamples;
-use crate::hot::metrics::MetricsSnapshot;
-use crate::hot::sink::{LinkSink, MetricsSink, StrategyLogSink};
+use crate::hot::sink::{LinkSink, StrategyLogSink};
 use crate::hot::spawn::{HotThreadConfig, SimTapGate, spawn_hot_thread};
 use crate::hot::strategy::Strategy;
 use crate::link::{LinkActor, LinkActorSetup, OutboundLink};
@@ -67,7 +66,6 @@ pub use exec_identity::ExecutionLease;
 pub use prepare::check_symbol_order_capacity;
 pub use run::run_trading_engine;
 
-const METRICS_RING_CAPACITY: usize = 64;
 const ROTATIONS_CHANNEL_CAPACITY: usize = 256;
 
 /// One rotation binding every five minutes, drained on every edge select pass; the depth exists so
@@ -119,8 +117,7 @@ impl Engine {
         config: Config<P>,
         strategy: Box<dyn Strategy>,
     ) -> Result<Engine, EngineError> {
-        // The one clock of the process: every producer of message stamps reads it. The hot engine
-        // still keeps a clock of its own, for its latency figures only.
+        // The one clock of the process: every producer of message stamps reads it.
         let clock = EngineClock::start();
         let latency_clock = ClockSource::check(InvariantCounter::detect());
         // The one counter of the process: every latency stamp reads it. Building it calibrates it.
@@ -224,9 +221,6 @@ impl Engine {
             &restored_exposure,
         );
 
-        // SMELL: the hot thread still rolls up its own snapshots, which nothing reads now.
-        let (metrics_producer, _unread_snapshots) =
-            RingBuffer::<MetricsSnapshot>::new(METRICS_RING_CAPACITY);
         let MetricsBringUp {
             thread: metrics,
             samples,
@@ -317,14 +311,12 @@ impl Engine {
             }
         };
 
-        let metrics_sink = MetricsSink::new(metrics_producer);
         let hot_engine = HotEngine::new(HotEngineSetup {
             exec: exec_wiring,
             instruments: registry.instruments(),
             strategy,
             persistence: persist_wiring,
             strategy_log_sink,
-            metrics_sink,
             ui_book_sink,
             ui_event_sink,
             link: link_wiring,

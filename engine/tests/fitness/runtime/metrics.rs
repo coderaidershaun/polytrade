@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use engine::hot::dispatch::HotEngine;
+use engine::hot::dispatch::{HotEngine, HotEngineSetup};
 use engine::hot::ingress::IngressQueues;
 use engine::hot::metrics::DriverSamples;
 use engine::hot::spawn::{HotDriver, Step};
@@ -32,7 +32,8 @@ use proptest::prelude::*;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
-    ONE, delta_chunk, detached_setup, exec_event, instrument_row, kline, trade,
+    Idle, ONE, delta_chunk, detached_setup, exec_event, instrument_row, kline, spin, trade,
+    ui_event_ring,
 };
 
 const INTERVAL_US: i64 = 60_000_000;
@@ -159,6 +160,15 @@ impl Harness {
 
     fn with_source(window_intervals: u64, clock_source: ClockSource) -> Harness {
         Harness::built(config(window_intervals), clock_source)
+    }
+
+    /// A ring of `capacity` stage samples, smaller than any that config allows.
+    pub(crate) fn with_stage_ring(capacity: u64) -> Harness {
+        let latency = LatencyConfig {
+            sample_ring: capacity,
+            ..config(10)
+        };
+        Harness::built(latency, ClockSource::Tsc)
     }
 
     fn built(latency: LatencyConfig, clock_source: ClockSource) -> Harness {
@@ -682,6 +692,26 @@ fn latency_report_reaches_the_workstation_feed() {
         model.latency_report(),
         Some(&report),
         "the panel reads what the thread built"
+    );
+
+    // The report is the one way that timing reaches the workstation: a spin of the fold puts none
+    // of its own on the event lane, only the desired quote of each instrument.
+    let instruments = [instrument_row(0, TrackerSpec::default(), 64)];
+    let (ui_event_sink, mut events) = ui_event_ring(64);
+    let mut engine = HotEngine::new(HotEngineSetup {
+        ui_event_sink,
+        ..detached_setup(&instruments, Box::new(Idle))
+    });
+    for seq in 0..3 {
+        engine.dispatch(&InboundMessage::SpinTick(spin(seq, 700 + seq as i64)));
+    }
+    let teed: Vec<UiEvent> = std::iter::from_fn(|| events.pop().ok()).collect();
+    assert!(
+        teed.len() == 3
+            && teed
+                .iter()
+                .all(|event| matches!(event, UiEvent::Quote { .. })),
+        "each spin tees its desired quote and nothing else: {teed:?}"
     );
 }
 

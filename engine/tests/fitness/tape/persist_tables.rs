@@ -18,8 +18,8 @@ use engine::msg::persist::{BookEventKind, BookEventRow, FeatureId, KlineRow, Tra
 use engine::runtime::config::{KlineInterval, RecordedTables, TableKind, TrackerSpec};
 
 use crate::engine_support::{
-    ALL_TABLES, ONE, engine_without_warmup, instrument_row, metrics_ring, persist_ring_for, pop,
-    strategy_log_ring, trade,
+    ALL_TABLES, ONE, engine_without_warmup, instrument_row, persist_ring_for, strategy_log_ring,
+    trade,
 };
 use crate::parquet_readback::BASE_TS_US;
 
@@ -93,19 +93,20 @@ fn only_the_tables_the_config_names_receive_rows() {
         let instruments = [instrument_row(0, TrackerSpec::default(), 32)];
         let (persistence, mut consumer) = persist_ring_for(64, RecordedTables::new(configured));
         let (log_sink, _logs) = strategy_log_ring(64);
-        let (metrics, _metrics) = metrics_ring(64);
         let mut engine = engine_without_warmup(
             &instruments,
             Box::new(EmitsEveryTable { feature: None }),
             persistence,
             log_sink,
-            metrics,
         );
 
-        engine.dispatch(
-            pop(0, 0),
-            &InboundMessage::Trade(trade(0, 100 * ONE, ONE, Side::Buy, BASE_TS_US)),
-        );
+        engine.dispatch(&InboundMessage::Trade(trade(
+            0,
+            100 * ONE,
+            ONE,
+            Side::Buy,
+            BASE_TS_US,
+        )));
 
         let mut landed: Vec<&str> = Vec::new();
         while let Ok(record) = consumer.pop() {

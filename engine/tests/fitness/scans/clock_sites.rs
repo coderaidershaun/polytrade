@@ -10,14 +10,10 @@ use crate::scans::rust_sources;
 const CLOCK_START: &str = "EngineClock::start(";
 
 /// Each file of the library that starts an engine clock one time, and why.
-const CLOCK_STARTS: [(&str, &str); 5] = [
+const CLOCK_STARTS: [(&str, &str); 4] = [
     (
         "src/runtime/assembly/mod.rs",
         "the one clock of the process, which every producer of message stamps reads",
-    ),
-    (
-        "src/hot/dispatch/mod.rs",
-        "the fold's own clock, which times only its latency figures, until the fold reads no clock",
     ),
     (
         "src/venues/binance/rest/signed.rs",

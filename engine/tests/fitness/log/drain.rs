@@ -20,8 +20,8 @@ use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::time::{EngineClock, TsUs};
 
 use crate::engine_support::{
-    ONE, delta_chunk, engine_without_persistence, instrument_row, metrics_ring, pop, spin,
-    strategy_log_ring, tracker_spec_all,
+    ONE, delta_chunk, engine_without_persistence, instrument_row, spin, strategy_log_ring,
+    tracker_spec_all,
 };
 
 /// A log writer in memory that counts flushes and syncs, so a test sees what reached the output
@@ -123,9 +123,7 @@ fn engine_on_this_thread() -> (HotEngine, LaneReader<HotRecord>) {
     let instruments = [instrument_row(0, tracker_spec_all(1), 64)];
     let (log_sink, strategy_records) = strategy_log_ring(64);
     let strategy_lane = LaneReader::new(strategy_records, log_sink.drops_handle());
-    let (metrics_sink, _metrics) = metrics_ring(64);
-    let engine =
-        engine_without_persistence(&instruments, Box::new(NoteEachSpin), log_sink, metrics_sink);
+    let engine = engine_without_persistence(&instruments, Box::new(NoteEachSpin), log_sink);
     (engine, strategy_lane)
 }
 
@@ -133,14 +131,14 @@ fn engine_on_this_thread() -> (HotEngine, LaneReader<HotRecord>) {
 fn write_hot_warnings(engine: &mut HotEngine, count: i64) {
     for when in 1..=count {
         let delta = delta_chunk(0, Side::Buy, &[(100 * ONE, ONE)], when);
-        engine.dispatch(pop(0, 0), &InboundMessage::Book(delta));
+        engine.dispatch(&InboundMessage::Book(delta));
     }
 }
 
 fn write_strategy_notes(engine: &mut HotEngine, count: i64) {
     for seq in 1..=count {
         let message = InboundMessage::SpinTick(spin(seq as u64, 1_000 + seq));
-        engine.dispatch(pop(0, 0), &message);
+        engine.dispatch(&message);
     }
 }
 

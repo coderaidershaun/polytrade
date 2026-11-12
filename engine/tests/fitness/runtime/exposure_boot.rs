@@ -37,7 +37,7 @@ use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
     FillPen, ONE, book_reset, detached_setup, exec_event, exposure_ring, instrument_row,
-    persist_ring, pop, snapshot_pair,
+    persist_ring, snapshot_pair,
 };
 use crate::exec_support::{drain_commands, exec_settings, make_ready, spin_at};
 use crate::parquet_readback::TempDir;
@@ -125,7 +125,7 @@ fn engine_with_exposure(
 }
 
 fn dispatch(engine: &mut HotEngine, message: &InboundMessage) {
-    engine.dispatch(pop(0, 0), message);
+    engine.dispatch(message);
 }
 
 /// Restate the whole book so the mark moves with no transient crossed top to reason about.

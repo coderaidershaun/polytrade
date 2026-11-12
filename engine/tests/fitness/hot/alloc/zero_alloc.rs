@@ -33,8 +33,8 @@ use rtrb::Consumer;
 use crate::engine_support::{
     FillPen, NOMINAL_SPIN, ONE, delta_chunk, detached_setup, engine_view, engine_with_ui,
     engine_with_ui_and_exec, engine_without_persistence, engine_without_warmup, instrument_row,
-    kline, metrics_ring, persist_ring, persist_ring_for, pop, recorder_feature_id, recorder_spec,
-    rotation, snapshot_pair, spin, strategy_log_ring, tracker_spec_all, trade, ui_event_ring,
+    kline, persist_ring, persist_ring_for, recorder_feature_id, recorder_spec, rotation,
+    snapshot_pair, spin, strategy_log_ring, tracker_spec_all, trade, ui_event_ring,
 };
 
 /// Drains both UI feed consumers so the emission path exercises the ring's success push, not just
@@ -56,7 +56,7 @@ fn step(engine: &mut HotEngine, consumer: &mut Consumer<PersistRecord>, i: i64) 
     // SMELL: this calls `dispatch` with a made-up pop, so the loop that pops the input rings is
     // never measured, and no execution or account message reaches it. An allocation on either
     // path passes this test.
-    engine.dispatch(pop(0, 0), &message);
+    engine.dispatch(&message);
     while let Ok(record) = consumer.pop() {
         std::hint::black_box(record);
     }
@@ -114,8 +114,8 @@ fn seed_two_instruments(engine: &mut HotEngine) {
             &[(base + ONE, ONE), (base + 2 * ONE, 2 * ONE)],
             0,
         );
-        engine.dispatch(pop(0, 0), &InboundMessage::Book(bids));
-        engine.dispatch(pop(0, 0), &InboundMessage::Book(asks));
+        engine.dispatch(&InboundMessage::Book(bids));
+        engine.dispatch(&InboundMessage::Book(asks));
     }
 }
 
@@ -141,16 +141,9 @@ fn steady_state_dispatch_does_not_allocate() {
     ];
     let (sink, mut consumer) = persist_ring(4096);
     let (log_sink, _log_consumer) = strategy_log_ring(64);
-    let (metrics_producer, mut metrics_consumer) = metrics_ring(64);
     let strategy = recorder_all_tables();
-    let (mut engine, mut ui_books, mut ui_events) = engine_with_ui(
-        &instruments,
-        strategy,
-        sink,
-        log_sink,
-        metrics_producer,
-        DurationUs::ZERO,
-    );
+    let (mut engine, mut ui_books, mut ui_events) =
+        engine_with_ui(&instruments, strategy, sink, log_sink, DurationUs::ZERO);
 
     seed_two_instruments(&mut engine);
     while consumer.pop().is_ok() {}
@@ -160,9 +153,6 @@ fn steady_state_dispatch_does_not_allocate() {
         step(&mut engine, &mut consumer, i);
         drain_ui(&mut ui_books, &mut ui_events);
     }
-    // Empty the metrics ring the warmup filled, so the measured window exercises ~64 real
-    // snapshot pushes and THEN the ring-full drop path — not the drop path alone.
-    while metrics_consumer.pop().is_ok() {}
 
     let mut open_klines = 0u64;
     let mut closed_klines = 0u64;
@@ -181,10 +171,6 @@ fn steady_state_dispatch_does_not_allocate() {
     assert!(
         open_klines > 0 && closed_klines > 0,
         "both open and closed klines must flow: open={open_klines} closed={closed_klines}"
-    );
-    assert!(
-        engine.dropped_metrics_snapshots() > 0,
-        "measured window must overflow the 64-slot metrics ring so the drop path is proven"
     );
 
     // A standalone tracker with the same spec samples on every bar close, so the trades in the
@@ -212,21 +198,19 @@ fn steady_state_dispatch_without_persistence_does_not_allocate() {
         instrument_row(1, tracker_spec_all(100), 128),
     ];
     let (log_sink, _log_consumer) = strategy_log_ring(64);
-    let (metrics_producer, mut metrics_consumer) = metrics_ring(64);
     let strategy = recorder_all_tables();
-    let mut engine = engine_without_persistence(&instruments, strategy, log_sink, metrics_producer);
+    let mut engine = engine_without_persistence(&instruments, strategy, log_sink);
 
     seed_two_instruments(&mut engine);
     for i in 0..2_000i64 {
         let (message, _) = step_message(i);
-        engine.dispatch(pop(0, 0), &message);
+        engine.dispatch(&message);
     }
-    while metrics_consumer.pop().is_ok() {}
 
     let before = crate::alloc_count();
     for i in 2_000..22_000i64 {
         let (message, _) = step_message(i);
-        engine.dispatch(pop(0, 0), &message);
+        engine.dispatch(&message);
     }
     let after = crate::alloc_count();
 
@@ -495,7 +479,7 @@ fn micro_step(
         }
         _ => InboundMessage::SpinTick(spin(i as u64, when)),
     };
-    engine.dispatch(pop(0, 0), &message);
+    engine.dispatch(&message);
     while let Ok(record) = consumer.pop() {
         if let PersistRecord::Feature(row) = record {
             if row.feature == columns.egarch {
@@ -613,17 +597,10 @@ fn micro_recorder_dispatch_does_not_allocate() {
     let instruments = [binance];
     let (sink, mut consumer) = persist_ring(4096);
     let (log_sink, _log_consumer) = strategy_log_ring(64);
-    let (metrics_producer, mut metrics_consumer) = metrics_ring(64);
     let spec = recorder_spec::<MicroRecorderParams>(vec![TableKind::Features]);
     let strategy = Box::new(MicroRecorder::from_spec(&spec, engine_view(MICRO_SPIN)));
-    let (mut engine, mut ui_books, mut ui_events) = engine_with_ui(
-        &instruments,
-        strategy,
-        sink,
-        log_sink,
-        metrics_producer,
-        DurationUs::ZERO,
-    );
+    let (mut engine, mut ui_books, mut ui_events) =
+        engine_with_ui(&instruments, strategy, sink, log_sink, DurationUs::ZERO);
 
     let (bids, asks) = snapshot_pair(
         0,
@@ -631,8 +608,8 @@ fn micro_recorder_dispatch_does_not_allocate() {
         &[(101 * ONE, ONE), (102 * ONE, 2 * ONE)],
         0,
     );
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(bids));
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(asks));
+    engine.dispatch(&InboundMessage::Book(bids));
+    engine.dispatch(&InboundMessage::Book(asks));
     while consumer.pop().is_ok() {}
     drain_ui(&mut ui_books, &mut ui_events);
 
@@ -642,7 +619,6 @@ fn micro_recorder_dispatch_does_not_allocate() {
         micro_step(&mut engine, &mut consumer, &columns, &mut emissions, i);
         drain_ui(&mut ui_books, &mut ui_events);
     }
-    while metrics_consumer.pop().is_ok() {}
 
     emissions = FeatureEmissions::default();
     let mut measured_closed_klines = 0u64;
@@ -777,25 +753,16 @@ fn declaration_and_log_lanes_do_not_allocate() {
     let (sink, mut consumer) = persist_ring(4096);
     let (log_sink, mut log_consumer) = strategy_log_ring(4096);
     let log_drops = log_sink.drops_handle();
-    let (metrics_producer, mut metrics_consumer) = metrics_ring(64);
-    let mut engine = engine_without_warmup(
-        &instruments,
-        Box::new(LaneProbe),
-        sink,
-        log_sink,
-        metrics_producer,
-    );
+    let mut engine = engine_without_warmup(&instruments, Box::new(LaneProbe), sink, log_sink);
 
     for i in 0..10_000i64 {
-        engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(i as u64, i)));
+        engine.dispatch(&InboundMessage::SpinTick(spin(i as u64, i)));
         drain_lanes(&mut consumer, &mut log_consumer);
     }
-    // Empty the metrics ring the warmup filled so the measured window overflows it from empty.
-    while metrics_consumer.pop().is_ok() {}
 
     let before = crate::alloc_count();
     for i in 10_000..110_000i64 {
-        engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(i as u64, i)));
+        engine.dispatch(&InboundMessage::SpinTick(spin(i as u64, i)));
         drain_lanes(&mut consumer, &mut log_consumer);
     }
     let after = crate::alloc_count();
@@ -813,10 +780,7 @@ fn declaration_and_log_lanes_do_not_allocate() {
     // `orders_submitted` counts EXECUTION commands the engine banked, not intents a strategy
     // expressed, so a run with execution off reports zero and must — a non-zero count here would
     // mean the engine banked a command nobody asked it to send.
-    let max_orders = std::iter::from_fn(|| metrics_consumer.pop().ok())
-        .map(|snapshot| snapshot.counters.orders_submitted)
-        .max()
-        .expect("a metrics snapshot reached the ring");
+    let max_orders = engine.counters().orders_submitted;
     assert_eq!(
         max_orders, 0,
         "execution is off in this run, so no command may have been banked"
@@ -891,8 +855,7 @@ fn drain_ui_kinds(events: &mut Consumer<UiEvent>, kinds: &mut TeeKinds) {
             UiEvent::OrderUpdate { .. }
             | UiEvent::OrderSnapshot { .. }
             | UiEvent::Reject { .. }
-            | UiEvent::Balance { .. }
-            | UiEvent::Latency { .. } => {}
+            | UiEvent::Balance { .. } => {}
         }
     }
 }
@@ -902,7 +865,6 @@ fn ui_event_tees_do_not_allocate() {
     let instruments = [instrument_row(0, tracker_spec_all(100), 128)];
     let (sink, mut consumer) = persist_ring(4096);
     let (log_sink, _log_consumer) = strategy_log_ring(64);
-    let (metrics_producer, _metrics_consumer) = metrics_ring(64);
     // Exec-wired on purpose: the gate reports itself only where an order could actually be sent, so
     // an engine without a command ring tees no `Execution` frame at all and the assertion below
     // would be measuring a silence rather than the tee.
@@ -911,13 +873,12 @@ fn ui_event_tees_do_not_allocate() {
         Box::new(UiTeeProbe { feature: None }),
         sink,
         log_sink,
-        metrics_producer,
         0x5150_0002,
     );
 
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, 2 * ONE)], &[(101 * ONE, ONE)], 0);
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(bids));
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(asks));
+    engine.dispatch(&InboundMessage::Book(bids));
+    engine.dispatch(&InboundMessage::Book(asks));
 
     // The buy side is seated once, here, so the measured window below only ever reports EXECUTIONS
     // against it — [`FillPen::fill`] returns a `Vec` and would allocate on every iteration.
@@ -925,7 +886,7 @@ fn ui_event_tees_do_not_allocate() {
     let adoption = pen
         .adopt(Side::Buy, 100 * ONE, 0)
         .expect("a fresh pen has seated nothing");
-    engine.dispatch(pop(0, 0), &adoption);
+    engine.dispatch(&adoption);
 
     // A trade tees Trade and a venue fill tees Fill, a spin tees Feature + Quote + Execution +
     // Position + Latency, a rotation tees Rotation (it clears derived state in place — Vec::clear, no realloc
@@ -940,7 +901,7 @@ fn ui_event_tees_do_not_allocate() {
             3 => InboundMessage::MarketRotation(rotation(0, 300 * ONE + i, 600 * ONE + i, i)),
             _ => InboundMessage::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 2 * ONE)], i)),
         };
-        engine.dispatch(pop(0, 0), &message);
+        engine.dispatch(&message);
     };
 
     for i in 0..10_000i64 {
@@ -1089,11 +1050,8 @@ fn link_dispatch_does_not_allocate() {
 
     // Warm every lane before measuring, so the window covers steady state and not first-touch.
     for i in 0..1_000i64 {
-        engine.dispatch(pop(0, 0), &link_message(i as u64 + 1, i * 10));
-        engine.dispatch(
-            pop(0, 0),
-            &InboundMessage::SpinTick(spin(i as u64, i * 10 + 5)),
-        );
+        engine.dispatch(&link_message(i as u64 + 1, i * 10));
+        engine.dispatch(&InboundMessage::SpinTick(spin(i as u64, i * 10 + 5)));
         while persist_consumer.pop().is_ok() {}
         while link_consumer.pop().is_ok() {}
     }
@@ -1102,22 +1060,16 @@ fn link_dispatch_does_not_allocate() {
     let mut frames = 0u64;
     let before = crate::alloc_count();
     for i in 1_000..101_000i64 {
-        engine.dispatch(pop(0, 0), &link_message(i as u64 + 1, i * 10));
-        engine.dispatch(
-            pop(0, 0),
-            &InboundMessage::SpinTick(spin(i as u64, i * 10 + 5)),
-        );
+        engine.dispatch(&link_message(i as u64 + 1, i * 10));
+        engine.dispatch(&InboundMessage::SpinTick(spin(i as u64, i * 10 + 5)));
         if i % 25_000 == 0 {
             let epoch = i as u64 / 25_000;
             let state = if epoch.is_multiple_of(2) { RunState::Running } else { RunState::Idle };
-            engine.dispatch(
-                pop(0, 0),
-                &InboundMessage::RunControl(RunControl {
-                    desired: RunAssertion { state, epoch },
-                    received_ts_us: TsUs::from_micros(i * 10 + 7),
-                    queued_ts_us: TsUs::from_micros(i * 10 + 7),
-                }),
-            );
+            engine.dispatch(&InboundMessage::RunControl(RunControl {
+                desired: RunAssertion { state, epoch },
+                received_ts_us: TsUs::from_micros(i * 10 + 7),
+                queued_ts_us: TsUs::from_micros(i * 10 + 7),
+            }));
         }
         while persist_consumer.pop().is_ok() {
             rows += 1;

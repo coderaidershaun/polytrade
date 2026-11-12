@@ -3,9 +3,7 @@
 
 use crate::msg::ids::{FIXED_SCALE, InstrumentId, Price, Side};
 use crate::msg::time::{DurationUs, TsUs};
-use crate::msg::ui::{
-    DomQuote, LatencyReport, UiBookSnapshot, UiCatalog, UiEvent, UiInstrument, UiLatencySummary,
-};
+use crate::msg::ui::{DomQuote, LatencyReport, UiBookSnapshot, UiCatalog, UiEvent, UiInstrument};
 
 use super::chart::model::{BookContinuity, ChartModel};
 use super::chart::position_model::PositionModel;
@@ -48,7 +46,6 @@ pub struct UiModel {
     catalog: Option<UiCatalog>,
     latest_book: Vec<Option<UiBookSnapshot>>,
     latest_quote: Vec<Option<(DomQuote, TsUs)>>,
-    latest_latency: Option<UiLatencySummary>,
     latest_latency_report: Option<LatencyReport>,
     book_last_seq: Vec<Option<u64>>,
     selected: InstrumentId,
@@ -91,7 +88,6 @@ impl UiModel {
             catalog: None,
             latest_book: vec![None; instrument_count],
             latest_quote: vec![None; instrument_count],
-            latest_latency: None,
             latest_latency_report: None,
             book_last_seq: vec![None; instrument_count],
             selected: InstrumentId(0),
@@ -179,9 +175,6 @@ impl UiModel {
         self.chart.apply_event(&event);
         self.positions.apply_event(&event);
         self.exec.apply_event(&event);
-        if let UiEvent::Latency { summary, .. } = event {
-            self.latest_latency = Some(summary);
-        }
         let UiEvent::Quote {
             instrument,
             event_ts_us,
@@ -202,11 +195,6 @@ impl UiModel {
 
     pub fn quote(&self, instrument: InstrumentId) -> Option<(DomQuote, TsUs)> {
         *self.latest_quote.get(instrument.0 as usize)?
-    }
-
-    /// `None` until the first spin after this workstation attached.
-    pub fn latency(&self) -> Option<UiLatencySummary> {
-        self.latest_latency
     }
 
     pub fn apply_latency_report(&mut self, report: LatencyReport) {

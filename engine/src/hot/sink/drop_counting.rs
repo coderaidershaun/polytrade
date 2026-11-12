@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use rtrb::Producer;
 
-use crate::hot::metrics::MetricsSnapshot;
 use crate::link::OutboundLink;
 use crate::log::HotRecord;
 use crate::msg::ui::{UiBookSnapshot, UiEvent};
@@ -47,8 +46,6 @@ pub type UiBookSink = DropCountingSink<UiBookSnapshot>;
 pub type UiEventSink = DropCountingSink<UiEvent>;
 
 pub type LinkSink = DropCountingSink<OutboundLink>;
-
-pub type MetricsSink = DropCountingSink<MetricsSnapshot>;
 
 impl DropCountingSink<UiEvent> {
     /// The sequence advances even when the ring is full, so a dropped event leaves a visible gap

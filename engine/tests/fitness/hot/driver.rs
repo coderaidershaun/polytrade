@@ -3,6 +3,8 @@
 //! plausible rows and orders: only a comparison of every output lane shows the difference.
 
 use std::fmt::Write as _;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{
@@ -18,7 +20,7 @@ use engine::msg::exec::{ExecEvent, ExecKind, ExecLaneItem, Provenance, VenueOrde
 use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty, QueueId, Side};
 use engine::msg::inbound::{InboundMessage, TradeEvent};
 use engine::msg::persist::PersistRecord;
-use engine::msg::time::DurationUs;
+use engine::msg::time::{DurationUs, Stamper};
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
 use engine::runtime::config::{
     BinanceMarket, Instruments, IntensitySpec, PolySeries, RecordedTables, StrategySpec,
@@ -38,16 +40,16 @@ use engine::venues::polymarket::parse::{PolyFrame, is_frameless, parse_market_fr
 use engine::venues::polymarket::rotation::{OutcomeLeg, TokenId, WindowAssignment};
 use rtrb::{Consumer, RingBuffer};
 
-use engine::runtime::metrics::SampleProducers;
+use engine::runtime::metrics::{SampleProducers, SinkKind};
 
 use crate::engine_support::{
     Idle, ONE, account_chunk, detached_setup, engine_view, exec_event, exposure_ring,
-    instrument_row, level, persist_ring_for, pop, spin, strategy_log_ring, stream_ready,
+    instrument_row, level, persist_ring_for, spin, strategy_log_ring, stream_ready,
     tracker_spec_all, ts, ui_book_ring, ui_event_ring,
 };
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
 use crate::poly_strategy::{PolyUpParams, PolyUpPublisher};
-use crate::runtime::metrics::Harness;
+use crate::runtime::metrics::{Harness, Rows};
 
 const BINANCE_TRADES: &str = include_str!("../../../fixtures/binance/spot_aggTrade.jsonl");
 const BINANCE_DEPTH: &str = include_str!("../../../fixtures/binance/spot_depth.jsonl");
@@ -78,15 +80,13 @@ enum Shipped {
 }
 
 /// Each output lane of one run, as text that holds every byte of each record.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 struct Outputs {
     tape_rows: Vec<String>,
     /// The bank stamp of each command, never the latency tick it carries.
     commands: Vec<String>,
     ui_books: Vec<String>,
-    /// Numbered from zero again, with the latency event of each spin left out: that event carries a
-    /// clock reading.
-    ui_events: Vec<String>,
+    ui_events: Vec<UiEvent>,
     exposure: Vec<String>,
     hot_log: Vec<String>,
     /// Hot calls that ran where no hot lane was, rendered at once; their engine time is a clock
@@ -109,12 +109,74 @@ impl Outputs {
             digest("tape rows", &self.tape_rows),
             digest("commands", &self.commands),
             digest("ui books", &self.ui_books),
-            digest("ui events", &self.ui_events),
+            digest("ui events", &self.numbered_events()),
             digest("exposure", &self.exposure),
             digest("hot log", &self.hot_log),
             digest("text log", &self.text_log),
             digest("strategy log", &self.strategy_log),
         ]
+    }
+
+    /// Numbered from zero again. The fold of the recording also put a latency event on each spin, a
+    /// clock reading that the recording left out and that the fold no longer makes.
+    fn numbered_events(&self) -> Vec<String> {
+        self.ui_events
+            .iter()
+            .enumerate()
+            .map(|(seq, event)| {
+                let mut event = *event;
+                event.set_seq(seq as u64);
+                format!("{event:?}")
+            })
+            .collect()
+    }
+
+    /// The first record in which two runs part, for the message of a failure.
+    fn first_difference(&self, other: &Outputs) -> String {
+        let events = |outputs: &Outputs| -> Vec<String> {
+            outputs
+                .ui_events
+                .iter()
+                .map(|event| format!("{event:?}"))
+                .collect()
+        };
+        let lanes = [
+            ("tape rows", self.tape_rows.clone(), other.tape_rows.clone()),
+            ("commands", self.commands.clone(), other.commands.clone()),
+            ("ui books", self.ui_books.clone(), other.ui_books.clone()),
+            ("ui events", events(self), events(other)),
+            ("exposure", self.exposure.clone(), other.exposure.clone()),
+            ("hot log", self.hot_log.clone(), other.hot_log.clone()),
+            ("text log", self.text_log.clone(), other.text_log.clone()),
+            (
+                "strategy log",
+                self.strategy_log.clone(),
+                other.strategy_log.clone(),
+            ),
+        ];
+        for (lane, ours, theirs) in lanes {
+            let parted = ours.iter().zip(&theirs).position(|(a, b)| a != b);
+            match parted {
+                Some(index) => {
+                    return format!("{lane} #{index}: {} against {}", ours[index], theirs[index]);
+                }
+                None if ours.len() != theirs.len() => {
+                    return format!("{lane}: {} records against {}", ours.len(), theirs.len());
+                }
+                None => {}
+            }
+        }
+        "no record differs".to_owned()
+    }
+
+    /// The lanes of the fold that no observation ring feeds.
+    fn without_logs(&self) -> Outputs {
+        Outputs {
+            hot_log: Vec::new(),
+            text_log: Vec::new(),
+            strategy_log: Vec::new(),
+            ..self.clone()
+        }
     }
 }
 
@@ -141,10 +203,11 @@ struct Lanes {
     ui_events: Consumer<UiEvent>,
     exposure: Consumer<ExposureSnapshot>,
     strategy_log: Consumer<HotRecord>,
+    strategy_log_drops: Arc<AtomicU64>,
 }
 
 impl Lanes {
-    fn drain_into(&mut self, outputs: &mut Outputs) {
+    fn drain_fold_into(&mut self, outputs: &mut Outputs) {
         while let Ok(record) = self.persist.pop() {
             outputs.tape_rows.push(format!("{record:?}"));
         }
@@ -159,16 +222,15 @@ impl Lanes {
         while let Ok(snapshot) = self.ui_books.pop() {
             outputs.ui_books.push(format!("{snapshot:?}"));
         }
-        while let Ok(mut event) = self.ui_events.pop() {
-            if matches!(event, UiEvent::Latency { .. }) {
-                continue;
-            }
-            event.set_seq(outputs.ui_events.len() as u64);
-            outputs.ui_events.push(format!("{event:?}"));
+        while let Ok(event) = self.ui_events.pop() {
+            outputs.ui_events.push(event);
         }
         while let Ok(snapshot) = self.exposure.pop() {
             outputs.exposure.push(format!("{snapshot:?}"));
         }
+    }
+
+    fn drain_strategy_log_into(&mut self, outputs: &mut Outputs) {
         while let Ok(record) = self.strategy_log.pop() {
             outputs.strategy_log.push(rendered(&record));
         }
@@ -540,9 +602,10 @@ fn tape(shipped: Shipped) -> Vec<InboundMessage> {
 }
 
 /// The engine of `shipped`, armed with a command lane, and the readers of every lane it writes.
-fn armed_engine(shipped: Shipped, rows: &[InstrumentRow]) -> (HotEngine, Lanes) {
+fn armed_engine(shipped: Shipped, rows: &[InstrumentRow], log_lane: usize) -> (HotEngine, Lanes) {
     let (persistence, persist) = persist_ring_for(OUTPUT_RING, all_tables());
-    let (strategy_log_sink, strategy_log) = strategy_log_ring(OUTPUT_RING);
+    let (strategy_log_sink, strategy_log) = strategy_log_ring(log_lane);
+    let strategy_log_drops = strategy_log_sink.drops_handle();
     let (ui_book_sink, ui_books) = ui_book_ring(OUTPUT_RING);
     let (ui_event_sink, ui_events) = ui_event_ring(OUTPUT_RING);
     let (exposure_sink, exposure) = exposure_ring(OUTPUT_RING);
@@ -570,37 +633,99 @@ fn armed_engine(shipped: Shipped, rows: &[InstrumentRow]) -> (HotEngine, Lanes) 
         ui_events,
         exposure,
         strategy_log,
+        strategy_log_drops,
     };
     (engine, lanes)
 }
 
-/// One run on a thread of its own, so the hot and text lanes it opens are its own.
-fn fold_tape(shipped: Shipped) -> Outputs {
+/// How a run measures, and how large and how often read its observation rings are.
+#[derive(Debug, Clone, Copy)]
+struct Observation {
+    /// The slots of the stage sample ring. `None` reads no counter and pushes no sample.
+    stage_ring: Option<u64>,
+    /// The slots of each log lane.
+    log_lane: usize,
+    are_logs_read: bool,
+    are_samples_read: bool,
+}
+
+/// What a run lost on its observation rings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Dropped {
+    stage_samples: u64,
+    counter_samples: u64,
+    hot_log: u64,
+    strategy_log: u64,
+}
+
+/// One run through the hot loop's own driver, over a real input ring, on a thread of its own.
+fn drive_tape(shipped: Shipped, observation: Observation) -> (Outputs, Dropped) {
     std::thread::Builder::new()
         .stack_size(16 << 20)
-        .spawn(move || fold_on_this_thread(shipped))
+        .spawn(move || drive_on_this_thread(shipped, observation))
         .expect("the test can spawn a thread")
         .join()
         .expect("the fold does not panic")
 }
 
-fn fold_on_this_thread(shipped: Shipped) -> Outputs {
-    let mut hot_log = open_hot_lane(OUTPUT_RING);
-    let mut text_log = open_text_lane(OUTPUT_RING);
+fn drive_on_this_thread(shipped: Shipped, observation: Observation) -> (Outputs, Dropped) {
+    const INTERVAL_US: i64 = 60_000_000;
+    let mut hot_log = open_hot_lane(observation.log_lane);
+    let mut text_log = open_text_lane(observation.log_lane);
     let rows = rows(shipped);
-    let (mut engine, mut lanes) = armed_engine(shipped, &rows);
-    let mut outputs = Outputs::default();
-    for message in tape(shipped) {
-        engine.dispatch(pop(0, 0), &message);
-        lanes.drain_into(&mut outputs);
-        while let Some(record) = hot_log.pop() {
-            outputs.hot_log.push(rendered(&record));
+    let (engine, mut lanes) = armed_engine(shipped, &rows, observation.log_lane);
+    let (samples, mut metrics) = match observation.stage_ring {
+        Some(capacity) => {
+            let Harness {
+                metrics, samples, ..
+            } = Harness::with_stage_ring(capacity);
+            let SampleProducers {
+                stages, counters, ..
+            } = samples;
+            let samples = DriverSamples {
+                stamper: Stamper::Counter(quanta::Clock::new()),
+                stages,
+                counters,
+            };
+            (Some(samples), Some((metrics, Rows::default())))
         }
-        while let Some(record) = text_log.pop() {
-            outputs.text_log.push(text_line(&record));
+        None => (None, None),
+    };
+    let tape = tape(shipped);
+    let (mut input, queue) = RingBuffer::new(tape.len());
+    for message in tape {
+        input
+            .push(message)
+            .expect("the input ring holds the whole tape");
+    }
+    let mut driver = HotDriver::new(IngressQueues::new(vec![queue]), engine, samples);
+    let mut outputs = Outputs::default();
+    while driver.step() == Step::Folded {
+        lanes.drain_fold_into(&mut outputs);
+        if observation.are_logs_read {
+            lanes.drain_strategy_log_into(&mut outputs);
+            while let Some(record) = hot_log.pop() {
+                outputs.hot_log.push(rendered(&record));
+            }
+            while let Some(record) = text_log.pop() {
+                outputs.text_log.push(text_line(&record));
+            }
+        }
+        if let (true, Some((metrics, rows))) = (observation.are_samples_read, metrics.as_mut()) {
+            metrics.pass(ts(0), rows);
         }
     }
-    outputs
+    let mut dropped = Dropped {
+        hot_log: hot_log.dropped(),
+        strategy_log: lanes.strategy_log_drops.load(Ordering::Relaxed),
+        ..Dropped::default()
+    };
+    if let Some((mut metrics, mut rows)) = metrics {
+        metrics.finish(ts(INTERVAL_US), &mut rows);
+        dropped.stage_samples = rows.dropped_total(SinkKind::StageSamples).unwrap_or(0);
+        dropped.counter_samples = rows.dropped_total(SinkKind::CounterSamples).unwrap_or(0);
+    }
+    (outputs, dropped)
 }
 
 /// The outputs of each tape, recorded once. A change to the fold that moves one byte of one lane
@@ -639,8 +764,14 @@ const fn recorded(lane: &'static str, count: usize, hash: u64) -> Digest {
 #[test]
 fn fold_outputs_equal_the_recorded_outputs_of_the_entry_state() {
     let mut report = String::new();
+    let replay = Observation {
+        stage_ring: None,
+        log_lane: OUTPUT_RING,
+        are_logs_read: true,
+        are_samples_read: false,
+    };
     for (shipped, expected) in RECORDED {
-        let digests = fold_tape(shipped).digests();
+        let digests = drive_tape(shipped, replay).0.digests();
         for digest in digests {
             writeln!(report, "{shipped:?} {digest:?}").expect("a string takes every write");
         }
@@ -689,4 +820,71 @@ fn backlog_counts_each_queue_and_not_the_popped_message() {
         "the spin's own queue counts only what waits behind it, and the other queue counts all of \
          its messages"
     );
+}
+
+/// FITNESS: measurement on and off fold the same messages into the same outputs. The first run
+/// reads a real counter into a stage ring too small for its samples, the second reads none.
+#[test]
+fn measurement_on_and_off_give_same_state_and_orders() {
+    let measured = Observation {
+        stage_ring: Some(1),
+        log_lane: OUTPUT_RING,
+        are_logs_read: true,
+        are_samples_read: false,
+    };
+    let unmeasured = Observation {
+        stage_ring: None,
+        ..measured
+    };
+    for shipped in [Shipped::Recorder, Shipped::Publisher] {
+        let (on, dropped) = drive_tape(shipped, measured);
+        let (off, _) = drive_tape(shipped, unmeasured);
+        assert!(
+            dropped.stage_samples > 0,
+            "the {shipped:?} run with measurement on filled its stage ring: {dropped:?}"
+        );
+        assert!(
+            on == off,
+            "measurement changed the {shipped:?} fold at {}",
+            on.first_difference(&off)
+        );
+    }
+}
+
+/// FITNESS: observation rings that are full, and never read, change no output of the fold. A fold
+/// that waited for a log lane or a sample ring, or branched on a push, would trade differently
+/// whenever a reader fell behind.
+#[test]
+fn full_observation_rings_change_nothing() {
+    let full = Observation {
+        stage_ring: Some(1),
+        log_lane: 1,
+        are_logs_read: false,
+        are_samples_read: false,
+    };
+    let roomy = Observation {
+        stage_ring: Some(32_768),
+        log_lane: OUTPUT_RING,
+        are_logs_read: true,
+        are_samples_read: true,
+    };
+    for shipped in [Shipped::Recorder, Shipped::Publisher] {
+        let (choked, dropped) = drive_tape(shipped, full);
+        let (free, free_dropped) = drive_tape(shipped, roomy);
+        assert!(
+            dropped.stage_samples > 0 && dropped.counter_samples > 0 && dropped.hot_log > 0,
+            "the {shipped:?} run filled each of its observation rings: {dropped:?}"
+        );
+        assert_eq!(
+            free_dropped,
+            Dropped::default(),
+            "the roomy {shipped:?} run lost nothing"
+        );
+        let (choked, free) = (choked.without_logs(), free.without_logs());
+        assert!(
+            choked == free,
+            "full observation rings changed the {shipped:?} fold at {}",
+            choked.first_difference(&free)
+        );
+    }
 }

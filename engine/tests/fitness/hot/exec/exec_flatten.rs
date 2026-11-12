@@ -21,7 +21,7 @@ use engine::runtime::registry::InstrumentRow;
 use rtrb::Consumer;
 
 use crate::engine_support::{
-    ALL_TABLES, FillPen, account_chunk, exec_event, instrument_row, pop, rich, snapshot_pair,
+    ALL_TABLES, FillPen, account_chunk, exec_event, instrument_row, rich, snapshot_pair,
     stream_ready, top,
 };
 use crate::exec_support::{
@@ -379,17 +379,14 @@ fn flattening_engine(strategy: Box<dyn Strategy>) -> (HotEngine, Consumer<ExecLa
 /// An account holding exactly the position is starved for its second flatten until the edge
 /// restates balances. That gate is `exec_order`'s to pin; here it would silently stop re-fire.
 fn make_ready_with_inventory(engine: &mut HotEngine, when: i64) {
-    engine.dispatch(pop(0, 0), &stream_ready(INSTRUMENT, when));
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Account(account_chunk(
-            &[
-                (AssetId(0), 10_000 * FIXED_SCALE),
-                (AssetId(1), 10_000 * FIXED_SCALE),
-            ],
-            when,
-        )),
-    );
+    engine.dispatch(&stream_ready(INSTRUMENT, when));
+    engine.dispatch(&InboundMessage::Account(account_chunk(
+        &[
+            (AssetId(0), 10_000 * FIXED_SCALE),
+            (AssetId(1), 10_000 * FIXED_SCALE),
+        ],
+        when,
+    )));
     open_orders_snapshot(engine, when);
 }
 
@@ -402,8 +399,8 @@ fn seat_book(engine: &mut HotEngine, when: i64) {
         &[(ASK, 100 * FIXED_SCALE)],
         when,
     );
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(bids));
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(asks));
+    engine.dispatch(&InboundMessage::Book(bids));
+    engine.dispatch(&InboundMessage::Book(asks));
 }
 
 /// An engine long ten shares bought at 0.41 through the real inbound path, with its commands drained.
@@ -413,7 +410,7 @@ fn long_ten_shares(strategy: Box<dyn Strategy>) -> (HotEngine, Consumer<ExecLane
     seat_book(&mut engine, 10);
     let mut pen = FillPen::new(0);
     for message in pen.fill(Side::Buy, 41 * TICK, 10 * FIXED_SCALE, 20) {
-        engine.dispatch(pop(0, 0), &message);
+        engine.dispatch(&message);
     }
     drain_commands(&mut commands);
     (engine, commands)
@@ -491,30 +488,24 @@ fn a_partial_fill_re_fires_next_spin_sized_by_what_is_left() {
     // Four of the ten shares trade and the remainder is killed, which is what a fill-and-kill does.
     let price = Price(BID - SLACK_TICKS as i64 * TICK);
     let filled = Qty(4 * FIXED_SCALE);
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Exec(engine::msg::exec::ExecEvent {
-            kind: ExecKind::ReportTrade,
-            status: Some(VenueOrderStatus::PartiallyFilled),
-            qty: Qty(10 * FIXED_SCALE),
-            last_price: price,
-            last_qty: filled,
-            cumulative_qty: filled,
-            cumulative_quote: price.notional(filled),
-            ..exec_event(INSTRUMENT, client_id, Side::Sell, price.0, 40)
-        }),
-    );
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Exec(engine::msg::exec::ExecEvent {
-            kind: ExecKind::ReportExpired,
-            status: Some(VenueOrderStatus::Expired),
-            qty: Qty(10 * FIXED_SCALE),
-            cumulative_qty: filled,
-            cumulative_quote: price.notional(filled),
-            ..exec_event(INSTRUMENT, client_id, Side::Sell, price.0, 41)
-        }),
-    );
+    engine.dispatch(&InboundMessage::Exec(engine::msg::exec::ExecEvent {
+        kind: ExecKind::ReportTrade,
+        status: Some(VenueOrderStatus::PartiallyFilled),
+        qty: Qty(10 * FIXED_SCALE),
+        last_price: price,
+        last_qty: filled,
+        cumulative_qty: filled,
+        cumulative_quote: price.notional(filled),
+        ..exec_event(INSTRUMENT, client_id, Side::Sell, price.0, 40)
+    }));
+    engine.dispatch(&InboundMessage::Exec(engine::msg::exec::ExecEvent {
+        kind: ExecKind::ReportExpired,
+        status: Some(VenueOrderStatus::Expired),
+        qty: Qty(10 * FIXED_SCALE),
+        cumulative_qty: filled,
+        cumulative_quote: price.notional(filled),
+        ..exec_event(INSTRUMENT, client_id, Side::Sell, price.0, 41)
+    }));
     drain_commands(&mut commands);
 
     spin_at(&mut engine, 2, 50);
@@ -556,12 +547,9 @@ fn a_market_order_declared_as_a_quote_is_still_refused_by_name() {
 
 /// Ends an unfilled marketable order, which is what a venue does with a take that found no match.
 fn kill_unfilled(engine: &mut HotEngine, client_id: ClientOrderId, when: i64) {
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Exec(engine::msg::exec::ExecEvent {
-            kind: ExecKind::ReportExpired,
-            status: Some(VenueOrderStatus::Expired),
-            ..exec_event(INSTRUMENT, client_id, Side::Sell, BID, when)
-        }),
-    );
+    engine.dispatch(&InboundMessage::Exec(engine::msg::exec::ExecEvent {
+        kind: ExecKind::ReportExpired,
+        status: Some(VenueOrderStatus::Expired),
+        ..exec_event(INSTRUMENT, client_id, Side::Sell, BID, when)
+    }));
 }

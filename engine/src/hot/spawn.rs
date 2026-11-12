@@ -9,7 +9,7 @@ use std::thread::{self, JoinHandle};
 use rtrb::Producer;
 
 use super::dispatch::HotEngine;
-use super::ingress::{IngressQueues, QueueSample};
+use super::ingress::IngressQueues;
 use super::metrics::{DriverSamples, Folded};
 use crate::log::{hot_error, hot_warn};
 use crate::msg::ids::{QueueId, SourceId};
@@ -281,19 +281,12 @@ impl HotDriver {
         let Some((queue, message)) = self.queues.pop_next() else {
             return Step::Idle;
         };
-        let spin_backlog =
-            matches!(message, InboundMessage::SpinTick(_)).then(|| self.queues.backlog());
-        let pop = QueueSample {
-            queue_id: queue,
-            depth: self.queues.occupancy(queue),
-            spin_backlog,
-        };
         let Some(samples) = self.samples.as_mut() else {
-            self.engine.dispatch(pop, &message);
+            self.engine.dispatch(&message);
             return Step::Folded;
         };
         let pop_tick = samples.stamp();
-        self.engine.dispatch(pop, &message);
+        self.engine.dispatch(&message);
         let done_tick = samples.stamp();
         samples.record_stage(&Folded {
             message: &message,

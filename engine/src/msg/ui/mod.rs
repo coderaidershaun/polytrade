@@ -15,7 +15,6 @@ use crate::runtime::registry::Registry;
 
 pub use latency::{
     LATENCY_REPORT_CELLS, LatencyCell, LatencyFlow, LatencyReading, LatencyReport, Percentile,
-    UiLatencyCell, UiLatencyRow, UiLatencySummary,
 };
 
 /// Book levels per side. The ladder shows 12 rows a side, but a grouped row sums several ticks, so
@@ -297,13 +296,6 @@ pub enum UiEvent {
         exposure_quote: f64,
         pnl_quote: f64,
     },
-    /// The engine's timing of itself, sent every spin. The figures are absolute, so a dropped frame
-    /// heals on the next spin.
-    Latency {
-        seq: u64,
-        event_ts_us: TsUs,
-        summary: UiLatencySummary,
-    },
 }
 
 /// Named once so the three accessors below cannot drift apart on which kinds they cover.
@@ -320,7 +312,6 @@ macro_rules! every_ui_event {
             | UiEvent::Execution { $field, .. }
             | UiEvent::Rotation { $field, .. }
             | UiEvent::Position { $field, .. }
-            | UiEvent::Latency { $field, .. }
     };
 }
 

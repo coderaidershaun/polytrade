@@ -17,8 +17,8 @@ use rtrb::Consumer;
 
 use crate::engine_support::{
     NOMINAL_SPIN, ONE, book_reset, call_codes, delta_chunk, engine_view, engine_with_ui,
-    engine_without_warmup, instrument_row, kline, metrics_ring, persist_ring, pop, rotation,
-    snapshot_pair, spin, strategy_log_ring, tracker_spec_all, trade,
+    engine_without_warmup, instrument_row, kline, persist_ring, rotation, snapshot_pair, spin,
+    strategy_log_ring, tracker_spec_all, trade,
 };
 use crate::raw_recorder::RecorderStrategy;
 
@@ -122,7 +122,7 @@ fn dispatch_capture(
     consumer: &mut Consumer<PersistRecord>,
     message: InboundMessage,
 ) -> (Option<f64>, Option<f64>) {
-    engine.dispatch(pop(0, 0), &message);
+    engine.dispatch(&message);
     let mut ewma = None;
     let mut microprice_present = None;
     while let Ok(record) = consumer.pop() {
@@ -178,17 +178,15 @@ fn run_sequence(sequence: &[InboundMessage], warmup: DurationUs) -> Replayed {
     let instruments = [instrument_row(0, tracker_spec_all(1), 64)];
     let (persist_sink, mut consumer) = persist_ring(256);
     let (strategy_log_sink, mut log_consumer) = strategy_log_ring(256);
-    let (metrics_sink, _metrics_consumer) = metrics_ring(64);
     let (mut engine, _ui_books, _ui_events) = engine_with_ui(
         &instruments,
         Box::new(Probe::default()),
         persist_sink,
         strategy_log_sink,
-        metrics_sink,
         warmup,
     );
     for message in sequence {
-        engine.dispatch(pop(0, 0), message);
+        engine.dispatch(message);
     }
     let mut persist = Vec::new();
     while let Ok(record) = consumer.pop() {
@@ -396,7 +394,6 @@ fn recorder_records_only_configured_instruments() {
     };
     let (sink, mut consumer) = persist_ring(256);
     let (log_sink, _log_consumer) = strategy_log_ring(64);
-    let (metrics_producer, _metrics_consumer) = metrics_ring(64);
     let mut engine = engine_without_warmup(
         &instruments,
         Box::new(RecorderStrategy::from_spec(
@@ -405,17 +402,22 @@ fn recorder_records_only_configured_instruments() {
         )),
         sink,
         log_sink,
-        metrics_producer,
     );
 
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 1)),
-    );
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Trade(trade(1, 100 * ONE, ONE, Side::Buy, 2)),
-    );
+    engine.dispatch(&InboundMessage::Trade(trade(
+        0,
+        100 * ONE,
+        ONE,
+        Side::Buy,
+        1,
+    )));
+    engine.dispatch(&InboundMessage::Trade(trade(
+        1,
+        100 * ONE,
+        ONE,
+        Side::Buy,
+        2,
+    )));
 
     let mut instruments_recorded = Vec::new();
     while let Ok(PersistRecord::Trade(row)) = consumer.pop() {
@@ -435,14 +437,8 @@ fn one_sided_book_does_not_perturb_ewma() {
     let instruments = [instrument_row(0, tracker_spec_all(4), 64)];
     let (sink, mut consumer) = persist_ring(256);
     let (log_sink, _log_consumer) = strategy_log_ring(64);
-    let (metrics_producer, _metrics_consumer) = metrics_ring(64);
-    let mut engine = engine_without_warmup(
-        &instruments,
-        Box::new(EwmaProbe::default()),
-        sink,
-        log_sink,
-        metrics_producer,
-    );
+    let mut engine =
+        engine_without_warmup(&instruments, Box::new(EwmaProbe::default()), sink, log_sink);
 
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, 2 * ONE)], &[(101 * ONE, ONE)], 1);
     dispatch_capture(&mut engine, &mut consumer, InboundMessage::Book(bids));
@@ -459,7 +455,7 @@ fn one_sided_book_does_not_perturb_ewma() {
     );
     let vol_before = built.expect("ewma has a value after two moving two-sided updates");
 
-    engine.dispatch(pop(0, 0), &InboundMessage::BookReset(book_reset(0, 4)));
+    engine.dispatch(&InboundMessage::BookReset(book_reset(0, 4)));
     while consumer.pop().is_ok() {}
 
     // Partial snapshot: bids only (book stays awaiting). No microprice, so ewma must not move.

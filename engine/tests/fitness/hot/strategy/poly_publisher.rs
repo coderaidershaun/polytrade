@@ -44,7 +44,7 @@ use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
     FillPen, LinkedSetup, account_chunk, detached_setup, engine_view, engine_with_link, exec_event,
-    instrument_row, persist_ring, pop, recorder_spec, rotation, snapshot_pair, spin, stream_ready,
+    instrument_row, persist_ring, recorder_spec, rotation, snapshot_pair, spin, stream_ready,
     tracker_spec_all, trade, ts, ui_event_ring,
 };
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
@@ -226,7 +226,7 @@ fn snapshot_chunks(slot: u16, bid: i64, ask: i64, when: i64) -> (BookChunk, Book
 }
 
 fn dispatch(linked: &mut crate::engine_support::LinkedEngine, message: InboundMessage) {
-    linked.engine.dispatch(pop(0, 0), &message);
+    linked.engine.dispatch(&message);
 }
 
 /// The one frame the publisher banked on this spin.
@@ -938,7 +938,7 @@ impl Maker {
     }
 
     fn dispatch(&mut self, message: InboundMessage) {
-        self.engine.dispatch(pop(0, 0), &message);
+        self.engine.dispatch(&message);
     }
 
     /// One spin at `now`, reporting only what that spin produced. The sequence number advances every

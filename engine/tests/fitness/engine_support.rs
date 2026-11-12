@@ -7,11 +7,8 @@ use engine::hot::dispatch::{
 use engine::hot::exec::{
     BookTop, ClientIdLayout, ExecSettings, FundsView, RejectOrigin, RejectReason, side_base,
 };
-use engine::hot::ingress::QueueSample;
-use engine::hot::metrics::MetricsSnapshot;
 use engine::hot::sink::{
-    ExecSink, ExposureSink, LinkSink, MetricsSink, PersistSink, StrategyLogSink, UiBookSink,
-    UiEventSink,
+    ExecSink, ExposureSink, LinkSink, PersistSink, StrategyLogSink, UiBookSink, UiEventSink,
 };
 use engine::hot::strategy::{EngineView, Strategy, StrategyConfig};
 use engine::link::OutboundLink;
@@ -20,9 +17,7 @@ use engine::msg::exec::{
     ACCOUNT_CHUNK_ASSETS, AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind,
     ExecLaneItem, Liquidity, Provenance, VenueOrderStatus,
 };
-use engine::msg::ids::{
-    AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, QueueId, Side,
-};
+use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{
     BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, BookReset, InboundMessage, KlineEvent, Level,
     MarketRotation, RunControl, SpinTick, TradeEvent,
@@ -223,24 +218,6 @@ pub fn spin(seq: u64, when: i64) -> SpinTick {
     }
 }
 
-/// What the hot loop hands dispatch for a non-spin message: no total-backlog reading, because only
-/// a spin tick carries one.
-pub fn pop(queue: u8, depth: usize) -> QueueSample {
-    QueueSample {
-        queue_id: QueueId(queue),
-        depth,
-        spin_backlog: None,
-    }
-}
-
-/// The spin-tick form, which is the only one that folds the backlog EWMA.
-pub fn spin_pop(queue: u8, backlog: usize) -> QueueSample {
-    QueueSample {
-        spin_backlog: Some(backlog),
-        ..pop(queue, 0)
-    }
-}
-
 fn all_spin_fields() -> Vec<SpinField> {
     vec![
         SpinField::Microprice,
@@ -368,14 +345,12 @@ pub fn engine_without_warmup(
     strategy: Box<dyn Strategy>,
     persistence: PersistWiring,
     strategy_log_sink: StrategyLogSink,
-    metrics_sink: MetricsSink,
 ) -> HotEngine {
     ui_engine(
         instruments,
         strategy,
         Some(persistence),
         strategy_log_sink,
-        metrics_sink,
         DurationUs::ZERO,
         None,
     )
@@ -388,14 +363,12 @@ pub fn engine_without_persistence(
     instruments: &[InstrumentRow],
     strategy: Box<dyn Strategy>,
     strategy_log_sink: StrategyLogSink,
-    metrics_sink: MetricsSink,
 ) -> HotEngine {
     ui_engine(
         instruments,
         strategy,
         None,
         strategy_log_sink,
-        metrics_sink,
         DurationUs::ZERO,
         None,
     )
@@ -410,7 +383,6 @@ pub fn engine_with_ui(
     strategy: Box<dyn Strategy>,
     persistence: PersistWiring,
     strategy_log_sink: StrategyLogSink,
-    metrics_sink: MetricsSink,
     warmup: DurationUs,
 ) -> (HotEngine, Consumer<UiBookSnapshot>, Consumer<UiEvent>) {
     ui_engine(
@@ -418,7 +390,6 @@ pub fn engine_with_ui(
         strategy,
         Some(persistence),
         strategy_log_sink,
-        metrics_sink,
         warmup,
         None,
     )
@@ -432,7 +403,6 @@ pub fn engine_with_ui_and_exec(
     strategy: Box<dyn Strategy>,
     persistence: PersistWiring,
     strategy_log_sink: StrategyLogSink,
-    metrics_sink: MetricsSink,
     run_nonce: u32,
 ) -> (
     HotEngine,
@@ -451,7 +421,6 @@ pub fn engine_with_ui_and_exec(
         strategy,
         Some(persistence),
         strategy_log_sink,
-        metrics_sink,
         DurationUs::ZERO,
         Some(exec),
     );
@@ -463,7 +432,6 @@ fn ui_engine(
     strategy: Box<dyn Strategy>,
     persistence: Option<PersistWiring>,
     strategy_log_sink: StrategyLogSink,
-    metrics_sink: MetricsSink,
     warmup: DurationUs,
     exec: Option<ExecWiring>,
 ) -> (HotEngine, Consumer<UiBookSnapshot>, Consumer<UiEvent>) {
@@ -473,7 +441,6 @@ fn ui_engine(
         exec,
         persistence,
         strategy_log_sink,
-        metrics_sink,
         ui_book_sink,
         ui_event_sink,
         warmup,
@@ -585,14 +552,8 @@ pub fn strategy_log_ring(capacity: usize) -> (StrategyLogSink, Consumer<HotRecor
     (StrategyLogSink::new(producer), consumer)
 }
 
-/// Keep the returned consumer alive or every snapshot push fails. Mirrors [`persist_ring`].
-pub fn metrics_ring(capacity: usize) -> (MetricsSink, Consumer<MetricsSnapshot>) {
-    let (producer, consumer) = RingBuffer::<MetricsSnapshot>::new(capacity);
-    (MetricsSink::new(producer), consumer)
-}
-
 /// The UI book-snapshot ring. Keep the consumer to read the emitted snapshots; drop it and the ring
-/// fills then drops-and-counts (never fatal). Mirrors [`metrics_ring`].
+/// fills then drops-and-counts (never fatal). Mirrors [`persist_ring`].
 pub fn ui_book_ring(capacity: usize) -> (UiBookSink, Consumer<UiBookSnapshot>) {
     let (producer, consumer) = RingBuffer::<UiBookSnapshot>::new(capacity);
     (UiBookSink::new(producer), consumer)
@@ -604,7 +565,7 @@ pub fn ui_event_ring(capacity: usize) -> (UiEventSink, Consumer<UiEvent>) {
     (UiEventSink::new(producer), consumer)
 }
 
-/// The exposure ring, mirroring [`metrics_ring`]. Keep the consumer to read the cost basis the
+/// The exposure ring, mirroring [`persist_ring`]. Keep the consumer to read the cost basis the
 /// engine publishes; [`detached_setup`] is the shape for a test that does not.
 pub fn exposure_ring(capacity: usize) -> (ExposureSink, Consumer<ExposureSnapshot>) {
     let (producer, consumer) = RingBuffer::<ExposureSnapshot>::new(capacity);
@@ -626,7 +587,6 @@ pub fn detached_setup(
         strategy,
         persistence: None,
         strategy_log_sink: strategy_log_ring(64).0,
-        metrics_sink: metrics_ring(64).0,
         ui_book_sink: ui_book_ring(64).0,
         ui_event_sink: ui_event_ring(256).0,
         link: None,

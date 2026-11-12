@@ -15,8 +15,8 @@ use engine::msg::time::{EngineClock, TsUs};
 use engine::runtime::config::KlineInterval;
 
 use crate::engine_support::{
-    ONE, engine_without_persistence, instrument_row, last_snapshot_chunk, metrics_ring,
-    partial_snapshot_chunk, strategy_log_ring, tracker_spec_all, ts,
+    ONE, engine_without_persistence, instrument_row, last_snapshot_chunk, partial_snapshot_chunk,
+    strategy_log_ring, tracker_spec_all, ts,
 };
 
 /// A log writer in memory that also counts flushes, so a test sees what reached the output and
@@ -86,14 +86,12 @@ fn hot_warning_is_formatted_on_the_drain() {
     let hot_lane = open_hot_lane(16);
     let instruments = [instrument_row(0, tracker_spec_all(1), BOOK_CAPACITY)];
     let (log_sink, _strategy_records) = strategy_log_ring(16);
-    let (metrics_sink, _metrics) = metrics_ring(64);
-    let mut engine =
-        engine_without_persistence(&instruments, Box::new(Quiet), log_sink, metrics_sink);
+    let mut engine = engine_without_persistence(&instruments, Box::new(Quiet), log_sink);
     let messages = overfull_bid_snapshot();
 
     let before = crate::alloc_count();
     for message in &messages {
-        engine.dispatch(crate::engine_support::pop(0, 0), message);
+        engine.dispatch(message);
     }
     let allocations = crate::alloc_count() - before;
     assert_eq!(allocations, 0, "the hot thread touched the allocator");

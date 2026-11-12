@@ -15,7 +15,7 @@ mod latched;
 mod replacing;
 
 pub use drop_counting::{
-    DropCountingSink, LinkSink, MetricsSink, SampleSink, StrategyLogSink, UiBookSink, UiEventSink,
+    DropCountingSink, LinkSink, SampleSink, StrategyLogSink, UiBookSink, UiEventSink,
 };
 pub use exec::{ExecLaneBudget, ExecSink, exec_lane_capacity};
 pub use latched::PersistSink;

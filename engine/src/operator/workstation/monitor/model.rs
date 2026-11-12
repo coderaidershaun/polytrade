@@ -231,7 +231,7 @@ impl MonitorModel {
                     event: OrderEvent::Refused { origin },
                 });
             }
-            UiEvent::Balance { .. } | UiEvent::Execution { .. } | UiEvent::Latency { .. } => {}
+            UiEvent::Balance { .. } | UiEvent::Execution { .. } => {}
             UiEvent::Feature {
                 instrument,
                 event_ts_us,

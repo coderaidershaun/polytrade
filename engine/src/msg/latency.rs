@@ -172,7 +172,6 @@ pub struct EngineCounters {
     pub klines_unconfigured: u64,
     pub intensity_inside_spread: u64,
     pub intensity_without_book: u64,
-    pub snapshots_dropped: u64,
     pub orders_submitted: u64,
     pub bank_drops: LaneDrops,
     pub ui_books_dropped: u64,

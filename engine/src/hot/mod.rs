@@ -1,11 +1,12 @@
 //! The synchronous hot path: one pinned thread owns all market state, fed only by SPSC rings. No
 //! async, no locks, no allocation in steady state.
 //!
-//! Everything below hangs off one loop. [`spawn`] builds the thread and the ring producers — the
-//! only seam the async edge may touch. [`ingress`] pops the oldest message across the input rings,
-//! and [`dispatch`] is the body every message runs through: apply to state, call the strategy back,
-//! drain the action bank, stamp metrics. State is therefore a pure function of the ordered message
-//! sequence, which is what makes a replay reproduce it exactly.
+//! Everything below hangs off one loop. [`spawn`] builds the thread, its driver and the ring
+//! producers — the only seam the async edge may touch. [`ingress`] pops the oldest message across
+//! the input rings, and [`dispatch`] is the body every message runs through: apply to state, call
+//! the strategy back, drain the action bank, run the execution pass. The driver times each fold
+//! from outside it, so state is a pure function of the ordered message sequence, which is what
+//! makes a replay reproduce it exactly.
 //!
 //! Single-writer is enforced by ownership, one owner per file: [`book`] holds the per-instrument
 //! order book, [`tracker`] the derived series over it, [`ledger`] position and cost basis, [`exec`]
@@ -30,7 +31,7 @@ pub mod series;
 pub mod dispatch;
 pub mod strategy;
 
-// output lanes
+// the driver's measurement of each fold
 pub mod metrics;
 
 // ring producers
