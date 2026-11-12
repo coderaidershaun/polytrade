@@ -225,8 +225,8 @@ pub fn open_text_lane(capacity: usize) -> LaneReader<TextRecord> {
 }
 
 /// The one function that builds the hot lane of a hot thread and hands it to the drain. Call it on
-/// that thread after the pin, so each slot is touched on the core that writes it. No-op if init()
-/// not run.
+/// that thread after the pin, so each slot is touched on the core that writes it. It does nothing
+/// if `init` has not run.
 pub(crate) fn register_hot_lane(tag: &'static str) {
     if GLOBALS.get().is_none() {
         return;
@@ -235,8 +235,8 @@ pub(crate) fn register_hot_lane(tag: &'static str) {
     register_external_ring(tag, reader);
 }
 
-/// A lane of hot records that another owner writes, such as the strategy lane. No-op if init()
-/// not run.
+/// A lane of hot records that another owner writes, such as the strategy lane. It does nothing if
+/// `init` has not run.
 pub(crate) fn register_external_ring(tag: &'static str, reader: LaneReader<HotRecord>) {
     let Some(globals) = GLOBALS.get() else {
         return;
@@ -245,7 +245,7 @@ pub(crate) fn register_external_ring(tag: &'static str, reader: LaneReader<HotRe
         tag,
         reader: AnyLane::Hot(reader),
     };
-    // Post-shutdown: drain gone -> ring fills, counts drops.
+    // After shutdown the drain is gone, so the ring fills and counts its drops.
     globals.registrations.send(registration).ok();
 }
 
@@ -351,6 +351,6 @@ fn send_backtrace(message: BacktraceMessage) {
     let Some(globals) = GLOBALS.get() else {
         return;
     };
-    // Post-shutdown: nowhere to report lost backtrace.
+    // After shutdown no drain is left to write a backtrace, so it is lost.
     globals.backtraces.send(message).ok();
 }

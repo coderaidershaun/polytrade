@@ -185,7 +185,8 @@ pub struct EngineCounters {
     pub exposure_superseded: u64,
 }
 
-/// Dropped records per lane: lane full on push (output drop+count, never fatal).
+/// Records that each lane of the strategy bank dropped because it was full. A full output lane
+/// drops and counts, and is never fatal.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct LaneDrops {
     pub features: u64,

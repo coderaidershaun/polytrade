@@ -1,5 +1,5 @@
-//! Hot loop body: message -> state apply -> callback -> drain -> execution pass. State = pure
-//! sequence function: the fold reads no clock and keeps no measurement of itself.
+//! The body of the hot loop: each message updates state, calls the strategy back, drains the
+//! actions and runs the execution pass. It reads no clock, so state depends on messages alone.
 
 mod exposure;
 mod gate;

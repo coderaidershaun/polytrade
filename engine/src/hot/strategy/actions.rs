@@ -21,7 +21,7 @@ pub(crate) const FEATURE_LANE_CAPACITY: usize = 4096;
 /// Raw rows (trades, book events, klines); book chunk widest callback. Deep headroom legacy. ~384 KB.
 pub(crate) const PERSIST_LANE_CAPACITY: usize = 4096;
 
-/// Lines-per-tick, 4 KB.
+/// Log records that one callback can bank before the drain: 64 of 64 bytes, 4 KB.
 pub(crate) const LOG_LANE_CAPACITY: usize = 64;
 
 /// Few topics/callback; backlog pointless (far side sees only newest STATE). ~9 KB.

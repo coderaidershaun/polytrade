@@ -552,8 +552,8 @@ pub fn strategy_log_ring(capacity: usize) -> (StrategyLogSink, Consumer<HotRecor
     (StrategyLogSink::new(producer), consumer)
 }
 
-/// The UI book-snapshot ring. Keep the consumer to read the emitted snapshots; drop it and the ring
-/// fills then drops-and-counts (never fatal). Mirrors [`persist_ring`].
+/// The UI book-snapshot ring. Keep the consumer to read the emitted snapshots. Drop it, and the
+/// ring fills, then drops and counts each new snapshot, never fatal. It mirrors [`persist_ring`].
 pub fn ui_book_ring(capacity: usize) -> (UiBookSink, Consumer<UiBookSnapshot>) {
     let (producer, consumer) = RingBuffer::<UiBookSnapshot>::new(capacity);
     (UiBookSink::new(producer), consumer)

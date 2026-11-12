@@ -2,7 +2,7 @@
 //! async, no locks, no allocation in steady state.
 //!
 //! Everything below hangs off one loop. [`spawn`] builds the thread, its driver and the ring
-//! producers — the only seam the async edge may touch. [`ingress`] pops the oldest message across
+//! producers — the one part the async edges touch. [`ingress`] pops the oldest message across
 //! the input rings, and [`dispatch`] is the body every message runs through: apply to state, call
 //! the strategy back, drain the action bank, run the execution pass. The driver times each fold
 //! from outside it, so state is a pure function of the ordered message sequence, which is what

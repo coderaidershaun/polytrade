@@ -13,7 +13,8 @@ pub struct PinRefused {
     pub core_id: usize,
 }
 
-/// Linux: pinning mandatory (failure trips fatal). Other OS: best-effort, single WARN.
+/// On Linux the pin is required, and a failed pin trips the fatal latch. Elsewhere the pin is best
+/// effort, and the thread warns one time.
 pub(crate) fn pin_current_thread(core_id: usize, fatal: &FatalSignal) {
     let pinned = pin_to_core(core_id).is_ok();
     if !cfg!(target_os = "linux") {

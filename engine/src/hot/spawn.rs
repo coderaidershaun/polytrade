@@ -1,6 +1,5 @@
-//! The hot thread, the driver that runs its loop one message at a time, and the producers of its
-//! input queues. Full queue = fatal (engine stalled). [`LinkQueueProducer`] exception: drop+count
-//! (untrusted remote, not engine-fed).
+//! The hot thread, the driver that runs its loop, and the producers of its input queues. A full
+//! queue is fatal, except the link queue: an untrusted peer fills it, so it drops and counts.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};

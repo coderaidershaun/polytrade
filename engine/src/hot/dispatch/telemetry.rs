@@ -1,5 +1,5 @@
-//! What the fold counts about itself: the drops of each sink and the events it refused. Machine
-//! reads only, never market, and no clock: the hot loop's driver times each fold from outside.
+//! What the fold counts about itself: the drops of each sink and the events it refused. These
+//! counts describe the engine, never the market, and the driver times each fold from outside.
 
 use crate::hot::book::Book;
 use crate::hot::quant::intensity::IntensityCounts;
