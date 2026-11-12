@@ -17,7 +17,7 @@
 //! is ordinary inbound traffic — reading a clock to decide what to emit would relocate the
 //! nondeterminism into the venue rather than remove it, and a replayed tape would fill differently.
 //!
-//! Actor directories are deliberately out of scope, and so is `src/adapters/edge.rs`. An actor
+//! Actor directories are deliberately out of scope, and so is `src/venues/edge/mod.rs`. An actor
 //! legitimately reads the engine clock to stamp when it queued a message, and the session chassis in
 //! that file owns a clock rather than taking one as a parameter, because pacing a reconnect and
 //! measuring how long an edge has been blind are wall-clock questions no message can answer. A

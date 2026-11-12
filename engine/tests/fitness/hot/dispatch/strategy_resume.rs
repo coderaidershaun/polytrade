@@ -14,7 +14,7 @@
 //! difference is the policy working, not a leak, and it cannot be rebased away either, because the
 //! carried position is marked to a mid that moves. So `inventory_quote` is split out of the row
 //! comparison, its emission COUNT is still held to the cold engine's, and its value policy is pinned
-//! directly by `tests/fitness/position_ledger.rs`. Nothing else is exempt: the position also gates
+//! directly by the `position_ledger` tests. Nothing else is exempt: the position also gates
 //! the strategy's quoting through the risk budget, so a carry big enough to withdraw a side would
 //! still surface here as a difference in the quote columns.
 //!

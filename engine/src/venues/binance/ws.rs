@@ -1,5 +1,5 @@
 //! Binance WS addressing: which host, which stream names, and the pong spot demands. Dialling is
-//! shared (`adapters::socket`); reading and reconnect live in the actor.
+//! shared (`venues::edge::socket`); reading and reconnect live in the actor.
 
 use futures_util::SinkExt;
 use tokio_tungstenite::tungstenite::{Bytes, Error as ProtocolError, Message};

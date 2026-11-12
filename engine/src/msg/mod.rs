@@ -1,7 +1,5 @@
-//! The plain data that crosses from one domain into another, one file per crossing: `inbound` is
-//! everything entering the hot thread, `exec` the order lifecycle out to a venue and back,
-//! `persist` the records leaving for disk, `ui` the feed a workstation renders, and `relay` the
-//! hello a browser tab reads from the web server.
+//! The plain data that one domain hands another, with one file for each crossing, and the ids,
+//! times and run state that every crossing is written in.
 
 // macros that declare types, with no runtime code of their own
 pub(crate) mod labelled_enum;

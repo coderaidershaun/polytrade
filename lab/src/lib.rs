@@ -1,3 +1,3 @@
-//! Scores strategies on recorded history and gates research. Stage 1 holds this root file only.
+//! Scores strategies on recorded history and gates research.
 
 #![forbid(unsafe_code)]

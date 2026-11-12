@@ -1,5 +1,5 @@
-//! One process from start to stop: the data that each box reads at start, and the assembly that
-//! wires the boxes and tears them down.
+//! One process from start to stop: the data and latches that each part of the engine shares, and
+//! the assembly that wires those parts at start and tears them down.
 
 pub mod config;
 pub mod exposure;

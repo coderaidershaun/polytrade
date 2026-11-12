@@ -1,8 +1,8 @@
 //! Polymarket CLOB market-channel addressing: one unauthenticated connection carries every live
 //! slot token. Where to dial, and the wire messages the actor sends — the subscribe/unsubscribe ops
 //! that let the 5-min rotation add the next window's tokens without a reconnect. Dialling is shared
-//! (`adapters::socket`); reading, the client-driven `PING` keepalive, sequencing and parse all live
-//! downstream in the actor.
+//! (`venues::edge::socket`); reading, the client-driven `PING` keepalive, sequencing and parse all
+//! live downstream in the actor.
 
 use std::time::Duration;
 

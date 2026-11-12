@@ -4,7 +4,7 @@
 //! stayed green, taking the zero-allocation counting allocator and the suite's own named anchors
 //! with them.
 //!
-//! So the declaration list is checked against the directory instead. Deleting a suite now means
+//! So each declaration list is checked against its folder instead. Deleting a suite now means
 //! deleting its file, which a diff shows.
 
 use std::path::Path;
