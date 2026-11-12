@@ -18,13 +18,18 @@ fn every_fitness_module_on_disk_is_declared_and_therefore_runs() {
     );
     assert_undeclared_is_empty("tests/fitness/hot", "tests/fitness/hot/mod.rs", &["mod.rs"]);
     assert_undeclared_is_empty(
+        "tests/fitness/hot/alloc",
+        "tests/fitness/hot/alloc/mod.rs",
+        &["mod.rs"],
+    );
+    assert_undeclared_is_empty(
         "tests/fitness/hot/exec",
         "tests/fitness/hot/exec/mod.rs",
         &["mod.rs"],
     );
     assert_undeclared_is_empty(
-        "tests/fitness/quant",
-        "tests/fitness/quant/mod.rs",
+        "tests/fitness/hot/quant",
+        "tests/fitness/hot/quant/mod.rs",
         &["mod.rs"],
     );
     assert_undeclared_is_empty(

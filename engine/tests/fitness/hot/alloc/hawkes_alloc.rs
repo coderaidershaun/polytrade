@@ -7,7 +7,7 @@
 //! producing estimates would satisfy "allocated nothing" perfectly, so it must be shown to have
 //! issued estimates AND to have converged at least once inside the measured window.
 
-use crate::quant::ExpSimulation;
+use crate::hot::quant::ExpSimulation;
 use engine::hot::quant::hawkes::{HawkesEvents, HawkesMle, HawkesParams};
 use engine::msg::time::{DurationUs, TsUs};
 

@@ -41,10 +41,8 @@ mod exposure_state;
 mod fake_venue;
 mod fastqueue;
 mod feature_contract;
-mod hawkes_alloc;
 mod hot;
 mod ingress_order;
-mod kyles_lambda_alloc;
 mod latency_metrics;
 mod link_bar;
 mod link_control;
@@ -96,10 +94,6 @@ mod polymarket_gamma;
 mod polymarket_parse;
 mod position_ledger;
 mod position_projection;
-/// The quant calculator pins. They live here rather than beside the calculators because `src/`
-/// carries production code only. One module per calculator, named for the concept rather than the
-/// source path.
-mod quant;
 mod raw_recorder;
 mod reconnect_backoff;
 mod recorder_fixture;
@@ -122,7 +116,6 @@ mod web_http;
 mod workstation_format;
 mod workstation_shell;
 mod workstation_support;
-mod zero_alloc;
 
 thread_local! {
     static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };

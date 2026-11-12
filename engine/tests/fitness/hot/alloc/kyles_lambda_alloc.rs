@@ -6,7 +6,7 @@
 //! A liveness counter rides alongside the allocation assertion: an estimator that quietly gated
 //! every call to `None` would satisfy "allocated nothing" perfectly.
 
-use crate::quant::Lcg;
+use crate::hot::quant::Lcg;
 use engine::hot::quant::liquidity::{KylesLambda, KylesLambdaSpec};
 use engine::msg::ids::Price;
 
