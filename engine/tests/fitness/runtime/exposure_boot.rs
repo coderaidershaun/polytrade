@@ -40,10 +40,10 @@ use crate::engine_support::{
     persist_ring, pop, snapshot_pair,
 };
 use crate::exec_support::{drain_commands, exec_settings, make_ready, spin_at};
-use crate::exposure_state::{
+use crate::parquet_readback::TempDir;
+use crate::runtime::exposure_state::{
     BINANCE_SOURCE, drain_writer, load_live, registry_for, spawn_live_writer,
 };
-use crate::parquet_readback::TempDir;
 
 const INSTRUMENT: InstrumentId = InstrumentId(0);
 

@@ -83,6 +83,11 @@ fn every_fitness_module_on_disk_is_declared_and_therefore_runs() {
         &["mod.rs"],
     );
     assert_undeclared_is_empty(
+        "tests/fitness/runtime",
+        "tests/fitness/runtime/mod.rs",
+        &["mod.rs"],
+    );
+    assert_undeclared_is_empty(
         "tests/fitness/scans",
         "tests/fitness/scans/mod.rs",
         &["mod.rs"],
