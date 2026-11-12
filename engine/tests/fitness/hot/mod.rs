@@ -4,6 +4,7 @@
 mod alloc;
 mod book_reconstruction;
 mod dispatch;
+mod driver;
 mod exec;
 mod ingress_order;
 mod latency_metrics;
