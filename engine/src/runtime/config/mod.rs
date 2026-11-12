@@ -25,7 +25,7 @@ pub use engine::{EngineConfig, IdleMode};
 pub use error::ConfigError;
 pub use execution::{ExecutionConfig, ExecutionMode, MAX_QUOTE_LEVELS};
 pub use identity::{RunIdentity, StrategyId, TradingEngineId};
-pub use latency::LatencyConfig;
+pub use latency::{LatencyBudgets, LatencyConfig, StageBudget};
 pub use link::{ControllerLoss, LinkConfig, PeerSubscription};
 pub use logging::LoggingConfig;
 pub use simulated::SimConfig;

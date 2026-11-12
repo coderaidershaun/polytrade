@@ -28,8 +28,8 @@ use engine::msg::persist::PersistRecord;
 use engine::msg::time::{DurationUs, Stamper};
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
 use engine::runtime::config::{
-    BinanceMarket, Instruments, IntensitySpec, PolySeries, RecordedTables, StrategySpec,
-    Subscriptions, TableKind, TrackerSpec, VenueMarket,
+    BinanceMarket, Instruments, IntensitySpec, LatencyBudgets, PolySeries, RecordedTables,
+    StageBudget, StrategySpec, Subscriptions, TableKind, TrackerSpec, VenueMarket,
 };
 use engine::runtime::exposure::ExposureSnapshot;
 use engine::runtime::metrics::{SampleProducers, SinkKind};
@@ -878,6 +878,159 @@ fn full_observation_rings_change_nothing() {
             choked == free,
             "full observation rings changed the {shipped:?} fold at {}",
             choked.first_difference(&free)
+        );
+    }
+}
+
+/// The metrics thread's intervals that a budgeted run spreads its tape over.
+const BUDGET_INTERVALS: usize = 3;
+
+/// One run of a tape whose every sample the metrics thread reads under `budget`, with the tape
+/// spread over [`BUDGET_INTERVALS`] intervals of the metrics thread's time.
+fn drive_with_budget(shipped: Shipped, budget: LatencyBudgets) -> (Outputs, Rows) {
+    std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(move || drive_with_budget_on_this_thread(shipped, budget))
+        .expect("the test can spawn a thread")
+        .join()
+        .expect("neither the fold nor the metrics thread panics")
+}
+
+fn drive_with_budget_on_this_thread(shipped: Shipped, budget: LatencyBudgets) -> (Outputs, Rows) {
+    const INTERVAL_US: i64 = 60_000_000;
+    let mut hot_log = open_hot_lane(OUTPUT_RING);
+    let mut text_log = open_text_lane(OUTPUT_RING);
+    let rows = rows(shipped);
+    let (engine, mut lanes) = armed_engine(shipped, &rows, OUTPUT_RING);
+    let Harness {
+        mut metrics,
+        samples,
+        ..
+    } = Harness::with_budget(budget);
+    let SampleProducers {
+        stages, counters, ..
+    } = samples;
+    let samples = DriverSamples {
+        stamper: Stamper::Counter(quanta::Clock::new()),
+        stages,
+        counters,
+    };
+    let tape = tape(shipped);
+    let tape_len = tape.len();
+    let (mut input, queue) = RingBuffer::new(tape_len);
+    for message in tape {
+        input
+            .push(message)
+            .expect("the input ring holds the whole tape");
+    }
+    let mut driver = HotDriver::new(IngressQueues::new(vec![queue]), engine, Some(samples));
+    let mut outputs = Outputs::default();
+    let mut metric_rows = Rows::default();
+    let mut folded = 0;
+    while driver.step() == Step::Folded {
+        folded += 1;
+        lanes.drain_fold_into(&mut outputs);
+        lanes.drain_strategy_log_into(&mut outputs);
+        while let Some(record) = hot_log.pop() {
+            outputs.hot_log.push(rendered(&record));
+        }
+        while let Some(record) = text_log.pop() {
+            outputs.text_log.push(text_line(&record));
+        }
+        let interval = (folded * BUDGET_INTERVALS / tape_len) as i64;
+        metrics.pass(ts(interval * INTERVAL_US), &mut metric_rows);
+    }
+    metrics.finish(ts(BUDGET_INTERVALS as i64 * INTERVAL_US), &mut metric_rows);
+    while let Some(record) = text_log.pop() {
+        outputs.text_log.push(text_line(&record));
+    }
+    (outputs, metric_rows)
+}
+
+/// FITNESS: a stage over its budget gives a warning, a flag on its rows and a count, and nothing
+/// else. A breach that reached the fold would let a number of this host's clock decide what the
+/// engine trades.
+#[test]
+fn budget_breach_changes_no_state() {
+    const ONE_US: StageBudget = StageBudget {
+        p99_us: Some(1),
+        p999_us: Some(1),
+    };
+    let budget = LatencyBudgets {
+        venue_to_engine: Some(ONE_US),
+        wire_to_message: Some(ONE_US),
+        message_to_decision: Some(ONE_US),
+        decision_to_wire: Some(ONE_US),
+    };
+    for shipped in [Shipped::Recorder, Shipped::Publisher] {
+        let (breached, breached_rows) = drive_with_budget(shipped, budget);
+        let (plain, plain_rows) = drive_with_budget(shipped, LatencyBudgets::default());
+        let fold_of = |outputs: &Outputs| Outputs {
+            text_log: Vec::new(),
+            ..outputs.clone()
+        };
+        assert!(
+            fold_of(&breached) == fold_of(&plain),
+            "a budget changed the {shipped:?} fold at {}",
+            fold_of(&breached).first_difference(&fold_of(&plain))
+        );
+        assert!(
+            plain_rows.latency().iter().all(|row| !row.is_over_budget),
+            "a run with no budget flags no row"
+        );
+        assert!(
+            !plain.text_log.iter().any(|line| line.contains("budget")),
+            "a run with no budget writes no budget warning"
+        );
+
+        let venue: Vec<_> = breached_rows
+            .latency()
+            .into_iter()
+            .filter(|row| row.stage == Stage::VenueToEngine && row.count > 0)
+            .collect();
+        let trades: Vec<_> = venue
+            .iter()
+            .filter(|row| row.category == Category::Trade)
+            .collect();
+        if shipped == Shipped::Recorder {
+            let intervals: std::collections::BTreeSet<_> =
+                trades.iter().map(|row| row.interval_start_ts_us).collect();
+            assert_eq!(
+                intervals.len(),
+                BUDGET_INTERVALS,
+                "the {shipped:?} tape times the venue of a trade in each interval"
+            );
+        }
+        for row in &trades {
+            assert!(
+                row.is_over_budget && row.budget_p99_ns == Some(1_000),
+                "a trade that reaches the engine milliseconds after its venue sent it breaks a \
+                 budget of one microsecond: {row:?}"
+            );
+        }
+        let broken_intervals: std::collections::BTreeSet<_> = venue
+            .iter()
+            .filter(|row| row.is_over_budget)
+            .map(|row| row.interval_start_ts_us)
+            .collect();
+        let venue_warnings = breached
+            .text_log
+            .iter()
+            .filter(|line| line.starts_with("Warn") && line.contains("budget"))
+            .filter(|line| line.contains(Stage::VenueToEngine.label()))
+            .count();
+        assert_eq!(
+            venue_warnings,
+            broken_intervals.len(),
+            "one warning for each interval in which the stage broke its budget"
+        );
+        assert!(
+            breached_rows
+                .latency()
+                .iter()
+                .filter(|row| row.stage == Stage::Processing)
+                .all(|row| !row.is_over_budget && row.budget_p99_ns.is_none()),
+            "a part of a stage carries no budget of its own"
         );
     }
 }

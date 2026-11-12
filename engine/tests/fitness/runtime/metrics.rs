@@ -23,7 +23,9 @@ use engine::msg::time::{ClockSource, DurationUs, Stamper, Tick, TickAnchor, Tick
 use engine::msg::ui::{LatencyFlow, LatencyReading, LatencyReport, Percentile, UiEvent};
 use engine::operator::workstation::link::session::{Delivery, LinkSession, LinkTarget};
 use engine::operator::workstation::model::UiModel;
-use engine::runtime::config::{KlineInterval, LatencyConfig, StrategyId, TrackerSpec};
+use engine::runtime::config::{
+    KlineInterval, LatencyBudgets, LatencyConfig, StrategyId, TrackerSpec,
+};
 use engine::runtime::metrics::{
     LatencyRow, Metrics, MetricsError, MetricsParts, MetricsSetup, RollupRow, RollupSink,
     SampleProducers, SinkKind,
@@ -141,6 +143,7 @@ fn config(window_intervals: u64) -> LatencyConfig {
         window_intervals,
         display_ms: DISPLAY.micros() as u64 / 1_000,
         sample_ring: SMALLEST_RING,
+        budget: LatencyBudgets::default(),
     }
 }
 
@@ -166,6 +169,16 @@ impl Harness {
     pub(crate) fn with_stage_ring(capacity: u64) -> Harness {
         let latency = LatencyConfig {
             sample_ring: capacity,
+            ..config(10)
+        };
+        Harness::built(latency, ClockSource::Tsc)
+    }
+
+    /// A ring of 32,768 stage samples, and `budget` for the stages.
+    pub(crate) fn with_budget(budget: LatencyBudgets) -> Harness {
+        let latency = LatencyConfig {
+            sample_ring: 32_768,
+            budget,
             ..config(10)
         };
         Harness::built(latency, ClockSource::Tsc)

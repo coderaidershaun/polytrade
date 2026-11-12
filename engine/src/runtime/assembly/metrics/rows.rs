@@ -59,6 +59,12 @@ pub struct LatencyRow {
     pub p99_ns: u64,
     pub p999_ns: u64,
     pub max_ns: u64,
+    /// `None` when the stage has no budget for that percentile.
+    pub budget_p99_ns: Option<u64>,
+    pub budget_p999_ns: Option<u64>,
+    /// Whether the 99th or the 99.9th percentile of the window that ends with this interval read
+    /// above the budget. It only reports: nothing that trades reads it.
+    pub is_over_budget: bool,
     pub clock_source: ClockSource,
 }
 
