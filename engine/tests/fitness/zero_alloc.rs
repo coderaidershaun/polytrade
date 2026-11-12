@@ -20,13 +20,14 @@ use engine::msg::exec::OrderStyle;
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, RunControl, SpinTick};
 use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::msg::run_state::RunAssertion;
 use engine::msg::run_state::RunState;
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
 use engine::runtime::config::{
     IntensitySpec, KlineInterval, RecordedTables, SpinField, TableKind, TrackerSpec,
 };
-use engine::runtime::shutdown::{RunAssertion, RunControlGate};
+use engine::runtime::shutdown::RunControlGate;
 use rtrb::Consumer;
 
 use crate::engine_support::{

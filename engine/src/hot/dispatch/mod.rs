@@ -23,11 +23,12 @@ use crate::hot::tracker::MicroTracker;
 use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
 use crate::msg::inbound::{InboundMessage, SpinTick};
+use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{EngineClock, TsUs};
 use crate::msg::ui::{DomQuote, UI_QUOTE_LEVELS};
 use crate::runtime::config::RecordedTables;
 use crate::runtime::exposure::{ExposureSnapshot, MAX_EXPOSURE_INSTRUMENTS};
-use crate::runtime::shutdown::{RunAssertion, RunStateCell};
+use crate::runtime::shutdown::RunStateCell;
 
 pub use exposure::ExposureWiring;
 pub use gate::LinkWiring;

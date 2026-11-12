@@ -28,6 +28,7 @@ use engine::msg::inbound::{
     MarketRotation, RunControl, SpinTick, TradeEvent,
 };
 use engine::msg::persist::{FeatureId, FillRow, OrderRow, PersistRecord};
+use engine::msg::run_state::RunAssertion;
 use engine::msg::run_state::RunState;
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{UI_BOOK_RING_CAPACITY, UI_EVENT_RING_CAPACITY, UiBookSnapshot, UiEvent};
@@ -39,7 +40,7 @@ use engine::runtime::config::{
 };
 use engine::runtime::exposure::ExposureSnapshot;
 use engine::runtime::registry::InstrumentRow;
-use engine::runtime::shutdown::{RunAssertion, RunControlGate};
+use engine::runtime::shutdown::RunControlGate;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::micro_strategy::MicroRecorder;

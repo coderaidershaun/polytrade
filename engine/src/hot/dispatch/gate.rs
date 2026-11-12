@@ -7,9 +7,10 @@ use crate::info;
 use crate::link::{InboundLink, TopicId};
 use crate::msg::inbound::RunControl;
 use crate::msg::persist::{LinkFrameRow, LinkRowKind, PersistRecord};
+use crate::msg::run_state::RunAssertion;
 use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, TsUs};
-use crate::runtime::shutdown::{RunAssertion, RunStateCell};
+use crate::runtime::shutdown::RunStateCell;
 
 use super::HotEngine;
 

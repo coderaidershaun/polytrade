@@ -7,7 +7,7 @@ use std::any::Any;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use crate::msg::run_state::RunState;
+use crate::msg::run_state::{RunAssertion, RunState};
 use crate::warn;
 
 /// A one-way latch: the engine drains and exits immediately. Cheap to clone and to check, and the
@@ -67,22 +67,6 @@ impl DrainSignal {
     pub fn is_requested(&self) -> bool {
         self.requested.load(Ordering::Acquire)
     }
-}
-
-/// The run state paired with a controller epoch. The highest epoch wins, so a stale or duplicate
-/// controller cannot make the state oscillate. Epoch 0 means no controller yet; controller epochs
-/// start at 1 and rise on each restart, stamped from the boot time in microseconds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RunAssertion {
-    pub state: RunState,
-    pub epoch: u64,
-}
-
-impl RunAssertion {
-    pub const INITIAL: RunAssertion = RunAssertion {
-        state: RunState::Running,
-        epoch: 0,
-    };
 }
 
 /// The state and epoch live in ONE atomic word, so a reader never sees a mismatched pair. There

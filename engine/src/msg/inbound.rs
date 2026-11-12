@@ -4,9 +4,9 @@
 use crate::link::InboundLink;
 use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{AggregateTradeId, InstrumentId, Price, Qty, RawTradeId, Side, StreamEpoch};
+use crate::msg::run_state::RunAssertion;
 use crate::msg::time::TsUs;
 use crate::runtime::config::KlineInterval;
-use crate::runtime::shutdown::RunAssertion;
 
 pub const BOOK_CHUNK_LEVELS: usize = 20;
 
