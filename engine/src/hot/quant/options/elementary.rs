@@ -1,5 +1,6 @@
-//! Exponential and natural logarithm from plain arithmetic, so that each target computes the same
-//! bits. The methods of the standard library may round differently from one platform to the next.
+//! Exponential, natural logarithm and cube root from plain arithmetic, so that each target
+//! computes the same bits. The methods of the standard library may round differently from one
+//! platform to the next.
 
 use std::f64::consts::{LN_2, SQRT_2};
 
@@ -8,6 +9,10 @@ const EXP_SERIES_DEGREE: u32 = 13;
 
 /// The smallest count with which the reference prices pass, plus a quarter.
 const LN_SERIES_TERMS: u32 = 9;
+
+/// The smallest count with which the cube of each root matches its argument to 1e-14, for each
+/// mantissa from 1 to 8, plus a quarter.
+const CBRT_NEWTON_STEPS: u32 = 5;
 
 /// Above this argument the exponential is larger than the largest finite number.
 const OVERFLOW_ARGUMENT: f64 = f64::MAX_EXP as f64 * LN_2;
@@ -70,6 +75,26 @@ pub(crate) fn ln(x: f64) -> f64 {
         series = 1.0 / f64::from(2 * k + 1) + s_squared * series;
     }
     f64::from(exponent) * LN_2 + 2.0 * s * series
+}
+
+/// cbrt x = 2^q × cbrt a, with x = a × 2^(3q) and a from 1 to 8. The Newton steps for cbrt a
+/// start on the line through cbrt 1 = 1 and cbrt 8 = 2.
+pub(crate) fn cbrt(x: f64) -> f64 {
+    if x <= 0.0 {
+        return if x < 0.0 { f64::NAN } else { 0.0 };
+    }
+    if x >= f64::INFINITY {
+        return f64::INFINITY;
+    }
+    let (mantissa, exponent) = split_mantissa(x);
+    let (mantissa, exponent) =
+        if mantissa < 1.0 { (mantissa * 2.0, exponent - 1) } else { (mantissa, exponent) };
+    let a = mantissa * power_of_two(exponent.rem_euclid(3));
+    let mut root = (6.0 + a) / 7.0;
+    for _ in 0..CBRT_NEWTON_STEPS {
+        root -= (root * root * root - a) / (3.0 * root * root);
+    }
+    root * power_of_two(exponent.div_euclid(3))
 }
 
 /// 2^exponent for an exponent below 1024 in size.

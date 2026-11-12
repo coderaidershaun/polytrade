@@ -8,7 +8,7 @@ use super::{OptionsError, exp, ln};
 /// One point of volatility is 0.01.
 pub(super) const POINTS_PER_UNIT: f64 = 100.0;
 
-const DAYS_PER_YEAR: f64 = 365.0;
+pub(super) const DAYS_PER_YEAR: f64 = 365.0;
 
 const INVERSE_SQRT_TWO_PI: f64 = FRAC_1_SQRT_2 * FRAC_2_SQRT_PI * 0.5;
 
