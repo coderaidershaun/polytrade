@@ -78,10 +78,14 @@ const ISSUE_TICK: &str = "issue_tick";
 /// Each file of the production code that names the issue tick, and what it does with it. The tick
 /// is a latency stamp: a reader of it outside a sender could order or time a command by a counter
 /// reading, and replay would then send other orders than the live run sent.
-const ISSUE_TICK_SITES: [(&str, &str); 4] = [
+const ISSUE_TICK_SITES: [(&str, &str); 5] = [
     (
         "engine/src/msg/exec.rs",
         "declares the tick on the lane item that carries a command to its edge",
+    ),
+    (
+        "engine/src/venues/edge/sender.rs",
+        "copies the tick of each command it sends into that command's wire sample",
     ),
     (
         "engine/src/hot/sink/exec.rs",

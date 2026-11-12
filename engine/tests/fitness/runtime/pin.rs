@@ -1,9 +1,10 @@
-//! A housekeeping thread that cannot pin itself to its core refuses the start on Linux, before any
-//! thread that trades exists. Elsewhere no pin holds for sure, so the thread runs where it is put.
+//! A thread that cannot pin itself to its core refuses the start on Linux, before any thread that
+//! trades exists and before any edge connects. Elsewhere no pin holds for sure, so the thread runs
+//! where it is put.
 
 use engine::msg::time::EngineClock;
-use engine::runtime::EngineError;
 use engine::runtime::metrics::{MetricsThread, MetricsThreadSetup};
+use engine::runtime::{EngineError, PinnedSenders};
 
 use crate::runtime::metrics::Harness;
 
@@ -33,5 +34,25 @@ fn housekeeping_pin_failure_refuses_start() {
     } else {
         let thread = spawned.expect("elsewhere a pin is best effort and the thread runs");
         thread.stop();
+    }
+}
+
+#[test]
+fn sender_pin_failure_refuses_start() {
+    let spawned = PinnedSenders::spawn(Some(UNUSABLE_CORE));
+    if cfg!(target_os = "linux") {
+        let refusal = spawned.err();
+        assert!(
+            matches!(
+                refusal,
+                Some(EngineError::SenderPin {
+                    core_id: UNUSABLE_CORE
+                })
+            ),
+            "linux refuses the start with the core of the sender thread, and runs no task: \
+             {refusal:?}"
+        );
+    } else {
+        drop(spawned.expect("elsewhere a pin is best effort and the sender thread runs"));
     }
 }

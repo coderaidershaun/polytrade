@@ -17,19 +17,21 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::msg::exec::{CancelReason, ExecLaneItem};
+use crate::msg::exec::{CancelReason, ExecCommand};
 use crate::msg::ids::{ClientOrderId, InstrumentId, TradeId, VenueOrderId};
 use crate::msg::time::{DurationUs, TsUs};
 use crate::runtime::registry::AssetDictionary;
 use crate::venues::binance::rest::BinanceEnv;
 use crate::venues::binance::ws;
+use crate::venues::edge::sender::{CommandTransport, Handover};
 use crate::venues::edge::socket::{Reader, Writer};
 use crate::venues::edge::{
-    COMMAND_POLL, EdgeControl, EdgeDriver, EventFunnel, HOUSEKEEPING, OfflineStep, RECENT_TRADES,
+    EdgeControl, EdgeDriver, EdgeSender, EventFunnel, HOUSEKEEPING, OfflineStep, RECENT_TRADES,
     RECONCILE_INTERVAL,
 };
 use crate::venues::exec::{
-    EngineIdentity, ExecCore, ExecSession, ExecStop, SessionOutcome, SessionSetup,
+    EngineIdentity, ExecCore, ExecEffect, ExecSession, ExecStop, Outgoing, SessionOutcome,
+    SessionSetup,
 };
 use crate::{info, warn};
 
@@ -82,7 +84,6 @@ struct Actor {
     recv_window: RecvWindow,
     // Clock skew beyond the receive window makes the venue refuse every signed request.
     loud_clock_skew: DurationUs,
-    commands: rtrb::Consumer<ExecLaneItem>,
     signer: RequestSigner,
     // Travels as a WebSocket parameter, so it must never be logged or included in debug output.
     api_key: String,
@@ -107,7 +108,6 @@ impl Actor {
             assets,
             credentials,
             rest,
-            commands,
             producer,
             env,
             identity,
@@ -154,7 +154,6 @@ impl Actor {
             control: EdgeControl::new(&edge, stop),
             recv_window,
             loud_clock_skew,
-            commands,
             signer,
             api_key,
             clock_offset,
@@ -191,6 +190,51 @@ impl Actor {
     #[must_use]
     fn submit(&self, job: RestJob) -> bool {
         rest::submit(&self.rest_jobs, job)
+    }
+
+    async fn drain_lane(
+        &mut self,
+        sender: &mut EdgeSender,
+        writer: &mut Writer,
+    ) -> Option<SessionOutcome> {
+        let mut transport = SocketTransport {
+            actor: self,
+            writer,
+            batch: Vec::new(),
+        };
+        sender.drain(&mut transport).await
+    }
+}
+
+/// How the shared sender reaches this venue. The core decides each command as it is handed over,
+/// and the requests of one wake are fed to the socket and flushed once, because the venue has no
+/// batch endpoint. A request that then fails to encode was counted as fed: the venue answers it as
+/// not sent and logs an error, and its wire sample is wrong.
+struct SocketTransport<'a> {
+    actor: &'a mut Actor,
+    writer: &'a mut Writer,
+    batch: Vec<Outgoing>,
+}
+
+impl CommandTransport for SocketTransport<'_> {
+    async fn hand_over(&mut self, command: ExecCommand) -> Result<Handover, SessionOutcome> {
+        let decided = self.batch.len();
+        self.actor.session.core.on_command(
+            command,
+            &mut Outgoing::sink(&mut self.batch, command.recon_seq()),
+        );
+        let is_sent = self.batch[decided..]
+            .iter()
+            .any(|outgoing| matches!(outgoing.effect, ExecEffect::Send { .. }));
+        Ok(if is_sent { Handover::Fed } else { Handover::NotSent })
+    }
+
+    async fn flush(&mut self) -> Result<(), SessionOutcome> {
+        let batch = std::mem::take(&mut self.batch);
+        match self.actor.dispatch(batch, Some(&mut *self.writer)).await {
+            Some(ended) => Err(ended),
+            None => Ok(()),
+        }
     }
 }
 
@@ -233,8 +277,12 @@ impl EdgeDriver for Actor {
         }
     }
 
-    async fn serve(&mut self, mut writer: Writer, mut reader: Reader) -> SessionOutcome {
-        let mut command_ticker = tokio::time::interval(COMMAND_POLL);
+    async fn serve(
+        &mut self,
+        mut writer: Writer,
+        mut reader: Reader,
+        sender: &mut EdgeSender,
+    ) -> SessionOutcome {
         let mut housekeeping = tokio::time::interval(HOUSEKEEPING);
         let mut reconcile = tokio::time::interval(RECONCILE_INTERVAL);
         // The deadline is absolute so it cannot drift.
@@ -247,25 +295,25 @@ impl EdgeDriver for Actor {
         }
 
         loop {
-            let ended = tokio::select! {
-                frame = reader.next() => self.on_frame(frame, &mut writer).await,
-                _ = command_ticker.tick() => {
-                    let outgoing = self.session.core.drain_commands(&mut self.commands);
-                    self.dispatch(outgoing, Some(&mut writer)).await
-                }
-                _ = housekeeping.tick() => self.on_housekeeping(&mut writer).await,
-                _ = reconcile.tick() => self.on_reconcile_tick(),
-                outcome = self.rest_outcomes.recv(), if !self.is_rest_gone => {
-                    self.on_rest_answer(outcome, &mut writer).await
-                }
-                _ = tokio::time::sleep_until(expiry) => {
-                    info!(
-                        "binance execution reconnecting at {}h — the venue drops this connection at 24",
-                        CONNECTION_LIFETIME.as_secs() / 3600
-                    );
-                    Some(SessionOutcome::Reconnect)
-                }
-            };
+            let mut ended = self.drain_lane(sender, &mut writer).await;
+            if ended.is_none() {
+                ended = tokio::select! {
+                    frame = reader.next() => self.on_frame(frame, &mut writer).await,
+                    () = sender.wait() => None,
+                    _ = housekeeping.tick() => self.on_housekeeping(&mut writer).await,
+                    _ = reconcile.tick() => self.on_reconcile_tick(),
+                    outcome = self.rest_outcomes.recv(), if !self.is_rest_gone => {
+                        self.on_rest_answer(outcome, &mut writer).await
+                    }
+                    _ = tokio::time::sleep_until(expiry) => {
+                        info!(
+                            "binance execution reconnecting at {}h — the venue drops this connection at 24",
+                            CONNECTION_LIFETIME.as_secs() / 3600
+                        );
+                        Some(SessionOutcome::Reconnect)
+                    }
+                };
+            }
             if let Some(ended) = ended {
                 self.session.lose_connection(self.control.clock.now());
                 return ended;

@@ -15,6 +15,6 @@ mod assembly;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use assembly::{
-    EngineError, ExecutionLease, ExitReport, check_symbol_order_capacity, decide_exit, metrics,
-    run_trading_engine,
+    EngineError, ExecutionLease, ExitReport, PinnedSenders, check_symbol_order_capacity,
+    decide_exit, metrics, run_trading_engine,
 };

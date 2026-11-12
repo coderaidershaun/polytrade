@@ -11,6 +11,7 @@ mod identity;
 mod latency;
 mod link;
 mod logging;
+mod senders;
 mod simulated;
 mod sources;
 mod tables;
@@ -28,6 +29,7 @@ pub use identity::{RunIdentity, StrategyId, TradingEngineId};
 pub use latency::{LatencyBudgets, LatencyConfig, StageBudget};
 pub use link::{ControllerLoss, LinkConfig, PeerSubscription};
 pub use logging::LoggingConfig;
+pub use senders::{SenderPlacement, SendersConfig};
 pub use simulated::SimConfig;
 pub use sources::{
     BinanceEnv, BinanceMarket, KlineInterval, PolySeries, PolySubscriptions, SourceSpec,
@@ -66,6 +68,8 @@ pub struct Config<P = NoParams> {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub latency: LatencyConfig,
+    #[serde(default)]
+    pub senders: SendersConfig,
 }
 
 impl<P: serde::de::DeserializeOwned + Default> Config<P> {
@@ -147,6 +151,7 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
         self.logging.validate(self.engine.drain_deadline_ms)?;
         self.source.validate()?;
         self.latency.validate()?;
+        self.senders.validate()?;
         if let Some(link) = &self.link {
             link.validate()?;
         }

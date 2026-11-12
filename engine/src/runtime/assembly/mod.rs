@@ -2,8 +2,8 @@
 //! under a watchdog deadline.
 //!
 //! Every submodule is either a PHASE of one run — `prepare`, `run`, `drain`, in that order — or the
-//! bring-up of ONE subsystem, named for it: `exec`, `link`, `persist`, `metrics`, `timer`,
-//! `queues`. The rest are leaves those two lean on: `error`, `exec_identity`. Which venue a run
+//! bring-up of ONE subsystem, named for it: `exec`, `link`, `persist`, `metrics`, `senders`,
+//! `timer`, `queues`. The rest are leaves those two lean on: `error`, `exec_identity`. Which venue a run
 //! talks to is decided by the adapters, never here.
 
 mod drain;
@@ -16,6 +16,7 @@ mod persist;
 mod prepare;
 mod queues;
 mod run;
+mod senders;
 mod timer;
 
 use std::sync::Arc;
@@ -38,7 +39,7 @@ use crate::msg::persist::RotationRow;
 use crate::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, Stamper};
 use crate::msg::ui::UiCatalog;
 use crate::msg::ui::channel::{UiLifecycle, UiWiring, ui_channel};
-use crate::runtime::config::{Config, ExecutionMode, IdleMode, RunIdentity};
+use crate::runtime::config::{Config, ExecutionMode, IdleMode, RunIdentity, SenderPlacement};
 use crate::runtime::exposure::{ExposureHandle, ExposureWriter, ExposureWriterConfig};
 use crate::runtime::shutdown::{DrainSignal, FatalSignal, RunControlGate, TaskHandle};
 use crate::tape::PersistHandle;
@@ -65,6 +66,7 @@ pub use error::EngineError;
 pub use exec_identity::ExecutionLease;
 pub use prepare::check_symbol_order_capacity;
 pub use run::run_trading_engine;
+pub use senders::PinnedSenders;
 
 const ROTATIONS_CHANNEL_CAPACITY: usize = 256;
 
@@ -99,6 +101,8 @@ struct Engine {
     exec: Option<EdgeHandle>,
     /// Simulated venues only: the taps the venue matches against, held open across its sweep.
     exec_tap_gate: Option<Arc<SimTapGate>>,
+    /// `None` unless `senders.placement` is pinned. Stopped after the edges and the link it runs.
+    senders: Option<PinnedSenders>,
     metrics: MetricsThread,
     fatal: FatalSignal,
     drain: DrainSignal,
@@ -108,10 +112,11 @@ struct Engine {
 
 impl Engine {
     /// Brings everything up in dependency order: logging, registry, runtime, persistence,
-    /// metrics, hot thread, timer, adapters.
+    /// metrics, the pinned senders' thread, hot thread, timer, adapters.
     ///
     /// # Errors
-    /// Invalid config, unavailable hot_core_id, runtime build failure, or failed preflights.
+    /// Invalid config, unavailable hot_core_id, runtime build failure, failed preflights, or a
+    /// pinned senders' thread that cannot pin.
     fn start<P>(
         identity: RunIdentity,
         config: Config<P>,
@@ -245,12 +250,10 @@ impl Engine {
                 return Err(error);
             }
         };
-        // SMELL: the metrics thread reads a ring of wire samples that nothing writes, so the
-        // decision-to-wire stage stays empty until a sender stamps each command it sends.
         let SampleProducers {
             stages,
             counters,
-            wires: _unwritten_wires,
+            wires,
         } = samples;
 
         // A dedicated ring isolates a telemetry flood from engine WARN/ERROR records.
@@ -296,6 +299,8 @@ impl Engine {
             window_assignments: assignments_rx,
             clock: &clock,
             stamper: &stamper,
+            wires,
+            senders: &config.senders,
             fatal: &fatal,
             desired_run_state: control.desired().clone(),
             drain_deadline,
@@ -310,6 +315,23 @@ impl Engine {
                 return Err(error);
             }
         };
+
+        // Before the first edge spawns, so a sender that cannot pin refuses the start while no edge
+        // has connected.
+        let senders = match config.senders.placement {
+            SenderPlacement::Shared => None,
+            SenderPlacement::Pinned => match PinnedSenders::spawn(config.senders.core_id) {
+                Ok(senders) => Some(senders),
+                Err(error) => {
+                    error!("startup failed before the hot thread spawned: {error}");
+                    log_handle.drain();
+                    return Err(error);
+                }
+            },
+        };
+        let edge_runtime = senders
+            .as_ref()
+            .map_or_else(|| tokio_handle.clone(), |senders| senders.handle().clone());
 
         let (link_wiring, link_feed) = match &bound_link {
             None => (None, None),
@@ -363,7 +385,7 @@ impl Engine {
         let timer = spawn_timer(spin_interval, timer_producer, &clock, &tokio_handle);
         // This runs after the hot thread, so input-queue producers start only after their
         // consumer exists.
-        let exec = exec_spawn.map(|spawn| spawn(&tokio_handle));
+        let exec = exec_spawn.map(|spawn| spawn(&edge_runtime));
 
         let adapters = spawn_market_data(MarketDataWiring {
             registry: &registry,
@@ -413,8 +435,10 @@ impl Engine {
                     spin_interval,
                     topic_count: bound.topic_count,
                     feature_count: bound.feature_count,
+                    placement: config.senders.placement,
+                    flush_period: config.senders.link_flush(),
                 },
-                &tokio_handle,
+                &edge_runtime,
             )
         });
 
@@ -430,6 +454,7 @@ impl Engine {
             exposure,
             exec,
             exec_tap_gate,
+            senders,
             metrics,
             fatal,
             drain,
