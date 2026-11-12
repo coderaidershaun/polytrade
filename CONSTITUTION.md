@@ -5,16 +5,20 @@ comply. IF one cannot comply, THEN surface conflict explicitly. Amendments: §15
 
 ## Words
 
-| Word                | Meaning                                                         |
-| ------------------- | --------------------------------------------------------------- |
-| hot thread          | ONE synchronous hot-path thread that owns all market state (§2) |
-| edge actor          | tokio async actor at I/O edge (§2)                              |
-| lib                 | the one lib crate, `polysim` (§8)                               |
-| bin                 | binary                                                          |
-| TE                  | trading engine (§8)                                             |
-| fitness             | fitness suite in `tests/fitness/` (§12)                         |
-| Amended `<date>`    | amendment of that date, with its WHY (§15)                      |
-| Replaced, WITHDRAWN | record of earlier law, not in force                             |
+| Word                | Meaning                                                                      |
+| ------------------- | ---------------------------------------------------------------------------- |
+| hot thread          | ONE synchronous hot-path thread that owns all market state (§2)              |
+| edge actor          | tokio async actor at I/O edge (§2)                                           |
+| lib                 | a lib crate of the workspace: `engine` or `lab` (§8). "The lib" = `engine`   |
+| bin                 | binary                                                                       |
+| TE                  | trading engine (§8)                                                          |
+| fitness             | test target `fitness` of a lib crate: `engine/tests/fitness/` (§12)          |
+| gate G              | the five gate steps of §14                                                   |
+| live policy         | rules of the owner for keys and live runs. Git does not track them (§12)     |
+| `live-runner`       | the one role of a job that starts a live run, by the live policy (§12)       |
+| polysim             | the repo that this workspace came from. In a clause: the code of this repo   |
+| Amended `<date>`    | amendment of that date, with its WHY (§15)                                   |
+| Replaced, WITHDRAWN | record of earlier law, not in force                                          |
 
 ## 1. Prime Directives
 
@@ -23,8 +27,9 @@ comply. IF one cannot comply, THEN surface conflict explicitly. Amendments: §15
 - [ ] Abstraction must pay rent at call sites. Deletion test: remove module. IF complexity
   vanishes, THEN module = pass-through. Delete it.
 - [ ] One design language. Same problem = same solution everywhere.
-- [ ] Keep comments to a minimum. Prefer ergonomics over comments. Use /rex-utils-caveman skill for
-  commenting.
+- [ ] Keep comments to a minimum. Prefer ergonomics over comments. `rex-code-commenting` binds each
+  comment (§10, 2026-11-12 section).
+  - Replaced 2026-11-12: "Use /rex-utils-caveman skill for commenting."
 - [ ] Aim high, ship lean. 80% value from 20% code.
 - [ ] No early factoring. Cut points emerge first. Then trap complexity behind narrow interface.
 - [ ] No source file > 500 lines.
@@ -33,9 +38,10 @@ comply. IF one cannot comply, THEN surface conflict explicitly. Amendments: §15
   - Amended 2026-07-22: cap counts production lines only. `#[cfg(test)]` blocks excluded. WHY: cap
     buys navigable production logic. Inline pins appended at bottom obstruct no reader, and §12
     invites them on quant calculators. To count them taxes testing.
-  - Amended 2026-07-26: cap counts production lines under src/ and in binaries. Files under tests/
-    = exempt. WHY: a file under tests/ is ENTIRELY test code. It sits in no `#[cfg(test)]` block,
-    because a test target needs none. The 2026-07-22 carve-out's own logic reaches it.
+  - Amended 2026-07-26: cap counts production lines under `<package>/src/` and in binaries. Files
+    under `<package>/tests/` = exempt. WHY: a file under `<package>/tests/` is ENTIRELY test code.
+    It sits in no `#[cfg(test)]` block, because a test target needs none. The 2026-07-22
+    carve-out's own logic reaches it.
 
 ## 2. Execution Model
 
@@ -300,10 +306,34 @@ still have to work in code that the engine and the tab share.
 
 ## 8. Code Organisation
 
-- [ ] One lib crate (`polysim`) holds all substance. Binaries only compose: load config, wire,
-  start, orchestrate shutdown.
-- [ ] Module = concept (`hot/`, `adapters/`), not type-per-file.
+- [ ] Two lib crates hold all substance: `engine` and `lab` (2026-11-12 section below). Binaries
+  only compose: load config, wire, start, orchestrate shutdown.
+  - Replaced 2026-11-12: one lib crate (`polysim`) held all substance.
+- [ ] Module = concept (`hot/`, `venues/`), not type-per-file.
 - [ ] Every module opens with 1–2 line `//!` WHY header.
+  - Amended 2026-11-12: priority block. The root file of each lib crate (`engine/src/lib.rs`,
+    `lab/src/lib.rs`) holds the priority block after the first sentence of its header: one line
+    `Priorities, in order:` and its `Never:` lines, max 8 lines (`rex-code-priorities`). WHY: an
+    agent breaks a tie by one ranking. It reads that ranking in code, in the one file that it
+    opens first, and nowhere else.
+  - [ ] The ranking of the owner, word for word:
+
+    ```
+    engine:    Priorities, in order: determinism, self-evident architecture, adaptation (venues, market kinds, engines, regions), low latency.
+               Never: give a different state or different orders for the same messages in the same order.
+               Never: send a request again after a timeout.
+               Never: touch an order that this engine did not place.
+    lab:       Priorities, in order: determinism, self-evident architecture, adaptation (tiers, signals, sessions), throughput (sweeps).
+               Never: show the research agent a test fold or the holdout slice.
+               Never: reach a live engine.
+               Never: let a replay cross a tape gap.
+    ```
+
+  - [ ] Each root file holds its lines without the label `engine:` or `lab:`. IF a root file does
+    not hold its block yet, THEN the lines above are the ranking in force.
+  - [ ] CAUTION: Do not change a priority block without an instruction from the owner. A changed
+    ranking changes each later design decision, and no test reports it. IF the owner changes a
+    block, THEN amend this clause on the same day.
 - [ ] `hot/`: no async code, no exchange-specific wire formats. Adapters normalize at edge.
   Generalized internal messages = only currency inward. Review-enforced. Workspace split only if
   seam demonstrably needs compiler help.
@@ -344,10 +374,16 @@ source. Thus identity is two-part and the folder nests.
 - [ ] Pass both ids as literals to the lib seam's runner, now
   `run_trading_engine::<S>(strategy_id, te_id)`.
 - [ ] `env!("CARGO_BIN_NAME")` no longer derives identity.
-- [ ] Enforcement is structural: a fitness config-guard parses `Cargo.toml` and asserts that
-  name/path pair on every `[[bin]]`. Thus global bin-name uniqueness is a test failure, not a hope.
+- [ ] Enforcement is structural: a fitness config-guard parses `engine/Cargo.toml` and each
+  `strategies/<strategy-id>/Cargo.toml`, and asserts that name/path pair on every `[[bin]]`. Thus
+  global bin-name uniqueness is a test failure, not a hope.
 - [ ] Cross-TE sharing has exactly ONE authorized shape: a `#[path]` sibling at strategy level
-  (`strategies/<strategy-id>/common.rs`), included from each te strategy.rs.
+  (`strategies/<strategy-id>/link_schema.rs`), included from each te strategy.rs.
+  - Amended 2026-11-12: `link_schema.rs`. The file and its module have the name `link_schema`, in
+    each strategy and in the two `#[path]` modules of the fitness target. WHY: the file holds only
+    the link schema that the engines of one strategy must agree on. The name `common` says nothing
+    about content, so each shared thing would land in it.
+  - Replaced 2026-11-12: the file was `common.rs`, module `common`.
 - [ ] Otherwise per-TE duplication is accepted (customer code, §9).
 - [ ] Breaking data-format change = new te folder/id.
 
@@ -355,7 +391,7 @@ source. Thus identity is two-part and the folder nests.
 
 WHY: three venues implement the execution seam by convention. A fourth needs law, not archaeology.
 
-- [ ] A venue execution adapter is a COMPOSITION over `adapters/exec`. It:
+- [ ] A venue execution adapter is a COMPOSITION over `venues/exec`. It:
   - drives `ExecCore` through its own codec and transport
   - funnels every exec and account event through its ONE assigned input queue, stamped
     monotonically
@@ -364,7 +400,7 @@ WHY: three venues implement the execution seam by convention. A fourth needs law
   - implements the `EdgeDriver` session chassis, not its own lifecycle loop
 - [ ] Never re-implement shared exec machinery per venue: core, mirror, in-flight table, resync
   pass, exit lifecycle, synthesized-event constructors.
-- [ ] Obligations that no signature can carry live in `src/adapters/exec/README.md` and their
+- [ ] Obligations that no signature can carry live in `engine/src/venues/exec/README.md` and their
   fitness pins:
   - cumulative totals
   - reconcile-never-resend
@@ -379,15 +415,16 @@ WHY: three venues implement the execution seam by convention. A fourth needs law
 WHY: an agent operates the engines through an MCP server, and that server must not become a second
 place where engine state lives.
 
-- [ ] The MCP server (`src/mcp/`, bin `polysim-mcp`) is an OPERATOR process, not an edge actor.
+- [ ] The MCP server (`engine/src/operator/fleet/`, bin `polysim-mcp`) is an OPERATOR process, not
+  an edge actor.
 - [ ] It holds no market state and links no strategy. It reaches an engine only through the OS:
   spawn, signal, exit status, files.
 - [ ] Every tool is a thin shell: params -> one `Fleet` call -> reply or refusal. The substance
   stays in the supervisor. Thus a CLI or UI can reuse it.
 - [ ] `Fleet` is `pub` on its own merit, as the reusable operator supervisor. Its fitness pins
   follow from that ruling and are not the reason for it.
-- [ ] All tools live in one file. A second tool family becomes `src/mcp/tools/<family>.rs`, with
-  routers merged by `+`.
+- [ ] All tools live in one file. A second tool family becomes
+  `engine/src/operator/fleet/tools/<family>.rs`, with routers merged by `+`.
 - [ ] The server makes no edit it cannot read back. `set_execution_mode` writes only when the new
   file parses as the requested mode.
 - [ ] Server exit stops every engine it started: SIGTERM first, SIGKILL only past one shared
@@ -417,8 +454,8 @@ Not in force. Record only.
 WHY: Jet hosts an app only by HTTP, so the workstation runs in a browser tab and needs a loopback
 server. That server must not become a second place where link or market state lives.
 
-- [ ] `polysim-web` (`src/web/`, bin `polysim-web`, `required-features = ["web"]`) only composes:
-  parse arguments, call `serve`. The substance stays in the lib.
+- [ ] `polysim-web` (`engine/src/operator/relay/`, bin `polysim-web`, `required-features = ["web"]`)
+  only composes: parse arguments, call `serve`. The substance stays in the lib.
 - [ ] It listens on 127.0.0.1 only. No flag binds another address. `--port 0` lets the OS pick.
 - [ ] It relays link datagrams BYTE FOR BYTE: one binary WebSocket message = one datagram, both
   ways. It decodes nothing, holds no market state, and no hot-path type derives serde for it. Thus
@@ -445,10 +482,10 @@ test: another target, another bin, or another program.
   Deliveries, status and subscribe bytes come out. The session owns no socket, clock, thread or
   randomness, so the browser shell and any native caller drive it the same way. `CatalogAssembly`
   and `Controller` stay `pub(crate)`.
-- [ ] `workstation::browser::{start, start_in_canvas}` are `pub`: the ONE boot path, with two
-  callers in two compile roots. `polysim-ui` calls `start`, which calls `start_in_canvas`.
+- [ ] `operator::workstation::browser::{start, start_in_canvas}` are `pub`: the ONE boot path, with
+  two callers in two compile roots. `polysim-ui` calls `start`, which calls `start_in_canvas`.
   `dom-fixture` calls `start_in_canvas` itself.
-- [ ] `web::{WebConfig, ArgumentError, serve, WebError}` are `pub`: the surface that the
+- [ ] `operator::relay::{WebConfig, ArgumentError, serve, WebError}` are `pub`: the surface that the
   `polysim-web` bin composes. `ArgumentError` is `pub` because `WebConfig::parse` returns it.
 - [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
 
@@ -463,6 +500,87 @@ WHY: Trunk builds only `[[bin]]` targets, so the fixture page could not stay an 
 - [ ] It declares no required-features. The fitness config-guard pins that, and pins `polysim-ui`
   the same way: Trunk builds both with no flags.
 - [ ] On wasm32 it paints. On native it prints the risk-scene text dump.
+
+### Amended 2026-11-12: two lib crates
+
+WHY: a live engine build must compile no research code, and research must reach the engine only
+through its public API. Two crates let the compiler hold that seam, so the split meets the
+workspace clause at the top of §8.
+
+- [ ] The repo is one Cargo workspace. Root `Cargo.toml` = workspace manifest. Members: `engine`,
+  `lab`, `strategies/strat-micro-recorder`.
+- [ ] `engine`: each part that a live engine links. Features `mcp` and `web`. Binaries
+  `polysim-mcp`, `polysim-ui`, `polysim-web`, `dom-fixture`.
+- [ ] `lab`: scoring and research over recorded history. It depends on `engine`. It holds only its
+  root file until research code arrives.
+- [ ] `engine` never depends on `lab`. A crate that only `lab` needs never enters
+  `engine/Cargo.toml`.
+- [ ] Each strategy is one package, `strategies/<strategy-id>/Cargo.toml`, with one `[[bin]]` for
+  each TE. It depends on `engine`.
+- [ ] A binary that a fitness test starts stays in package `engine`. WHY: Cargo gives a test the
+  path of a binary of its own package only.
+- [ ] Profile tables (`[profile.deploy]`) live only in the root manifest. WHY: Cargo reads profile
+  tables only there.
+- [ ] The root of each lib crate holds `#![forbid(unsafe_code)]` (§14). The workspace lint table
+  denies `unsafe_code` in each other target. The fitness root holds the one
+  `#![allow(unsafe_code)]`, with its WHY: its counting allocator implements `GlobalAlloc`.
+- [ ] A third lib crate needs its own amendment, by the workspace clause at the top of §8. A new
+  strategy package needs none.
+
+### Amended 2026-11-12: new path names
+
+WHY: the workspace puts the code of polysim into package `engine`, and each top folder of
+`engine/src/` names its job. A path in this law that names the old place sends a reader to a file
+that is gone.
+
+- [ ] The lib, its tests, and its fixtures sit below `engine/`: `engine/src/`,
+  `engine/tests/fitness/`, `engine/tests/integration/`, `engine/fixtures/<venue>/`. Each fixture
+  keeps its polysim path below `engine/`.
+- [ ] `engine/src/` holds `bin/` and eight top modules, one job each. Column "Was" = folder or file
+  below the source root of polysim:
+
+| Folder      | Job                                                                                          | Was                                                                  |
+| ----------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `msg/`      | messages that cross domains, with `ids`, `time`, `labelled_enum`, `run_state`                | `msg/`, `ids.rs`, `time.rs`, `labelled_enum.rs`                      |
+| `log/`      | bespoke log (§7)                                                                             | `log/`                                                               |
+| `hot/`      | hot thread, with `sink/`                                                                     | `hot/`, `sink/`                                                      |
+| `venues/`   | one folder for each venue, `edge/` (session chassis + toolbox), `exec/`, `sim/` (simulator)  | `adapters/`, `adapters/exchange_sim/`                                |
+| `link/`     | state frames between engines                                                                 | `link/`                                                              |
+| `tape/`     | Parquet tables, off the hot path                                                             | `persist/`                                                           |
+| `runtime/`  | `config/`, `registry/`, `exposure/`, `secrets.rs`, `shutdown.rs`, `assembly/` (start + stop) | `config/`, `registry/`, `exposure/`, `secrets.rs`, `shutdown.rs`, `runtime/` |
+| `operator/` | `workstation/`, `relay/` (web relay), `fleet/` (MCP server)                                  | `workstation/`, `web/`, `mcp/`                                       |
+
+- [ ] Two files have new names: `operator/fleet/supervisor.rs` (was `mcp/fleet.rs`) and
+  `operator/relay/tab.rs` (was `web/relay.rs`). WHY: a module with the name of its folder fails
+  the lint `clippy::module_inception`.
+- [ ] Public paths: `polysim::…` = `engine::…`. An exported macro sits at the crate root
+  (`engine::info!`). Each other path follows its folder: `engine::venues::sim::…`,
+  `engine::tape::…`, `engine::runtime::config::…`.
+- [ ] `engine::runtime::{EngineError, ExecutionLease, ExitReport, check_symbol_order_capacity,
+  decide_exit, run_trading_engine}` keep their path: the root file of `runtime` exports them from
+  `assembly`.
+- [ ] `engine/tests/fitness/` groups its modules by the top module that they test: `hot/`,
+  `venues/`, `link/`, `tape/`, `runtime/`, `operator/`. Folder `scans/` holds the tests that read
+  the repo as data.
+- [ ] `strategies/`, `tools/`, `browser/`, `wiki/`, `static/` stay at the root. `engine/Cargo.toml`
+  names its targets below `tools/` by `../tools/`.
+- [ ] Names that stay, because a test or a data file reads them: each binary name, each runtime
+  string that holds `polysim` (thread names, lock folder, log stem), each nonce file name, each
+  data and log path, and version `0.1.0` of package `engine` (the Parquet footer holds it).
+- [ ] This amendment rewrote each path of this file to its new form. An earlier amendment keeps its
+  date and its WHY. A record marked Replaced or WITHDRAWN keeps its old text.
+
+### Amended 2026-11-12: depth of venue folders
+
+WHY: each venue has one layout. A reader who knows one venue finds each part of the next venue at
+the same path. A flatter tree gives each venue its own shape.
+
+- [ ] Each venue folder `engine/src/venues/<venue>/` uses the same layout. Its execution parts sit
+  in `venues/<venue>/exec/<part>/`, for example `actor/` and `codec/`: four folder levels below
+  `engine/src/`.
+- [ ] The simulator core has the same depth: `venues/sim/core/schedule/`.
+- [ ] Four levels is the limit, and it holds only below `engine/src/venues/`. Here this clause wins
+  over the folder rule of `rex-code-folder-management` (max three levels below `<package>/src/`).
 
 ## 9. Naming & API Ergonomics
 
@@ -526,9 +644,25 @@ the artifact moves.
 WHY: agents write comments at volume, and a writer cannot proof its own tone.
 
 - [ ] IF agents of a multi-agent run wrote or rewrote comments, THEN the run ends with a dedicated
-  comment-cleanup subagent pass (the rex-cleaner-comments charter). The run is not complete before
-  that pass.
+  comment-cleanup subagent pass. The pass obeys `rex-code-commenting` (2026-11-12 section below).
+  The run is not complete before that pass.
+  - Replaced 2026-11-12: the pass obeyed "the rex-cleaner-comments charter".
 - [ ] The pass enforces this whole section, including the no-document-references rule above.
+
+### Amended 2026-11-12: comment clauses name `rex-code-commenting`
+
+WHY: §1 named a caveman skill for comments, and the cleanup pass named a charter. Neither is in the
+skill set of this repo. `rex-code-commenting`, which this section already binds, forbids caveman
+style in a comment, so the two clauses could not both hold.
+
+- [ ] `rex-code-commenting` binds each comment: short plain English, WHY only. One exception: a
+  comment cites no document by number, not even a ticket or a vendor-doc section that the skill
+  permits (2026-08-07 above).
+- [ ] The cleanup pass never deletes a warning, a `SMELL:` flag, a hazard note, or a `SAFETY:`
+  comment. Each one stays until the commit that removes its problem.
+- [ ] An old comment in a style that the skill forbids stays until a task changes its file for its
+  own work. That task brings it up to the skill. A move task restyles no comment. A sweep of old
+  comments is its own task.
 
 ## 11. Dependencies
 
@@ -663,7 +797,7 @@ Each note = justification + limits of that crate's row. Same force as the row.
   - Hex encoding and query-string building are hand-rolled. `hex`/`form_urlencoded` are not
     pulled.
   - `default-features = false` and NO features. `ring::hmac` carries no `alloc` gate. Only
-    `ring::rsa` does. Verified against ring 0.17.14 `src/lib.rs:142`.
+    `ring::rsa` does. Verified against `ring-0.17.14/src/lib.rs:142`, a file of that crate.
 - `k256`
   - Polymarket execution plan.
   - secp256k1 recoverable ECDSA for the EIP-712 `ClobAuth` and order signatures. The venue's
@@ -770,7 +904,7 @@ Each note = justification + limits of that crate's row. Same force as the row.
 - `web-time`
   - 1.1.0 = latest stable at adoption. `default-features = false`, NO features.
   - For: `Instant`, `SystemTime` and `UNIX_EPOCH` on wasm32, where std's clock panics. The lib's
-    `time` module switches the import by target, so no caller notices.
+    `msg::time` module switches the import by target, so no caller notices.
   - wasm32 table only. Already in the lock via eframe.
 
 ### Amended 2026-10-26: the egui-free half of the workstation compiles in every build
@@ -778,14 +912,15 @@ Each note = justification + limits of that crate's row. Same force as the row.
 WHY: the model, view, text and link-session files name no egui type. Gating them behind the
 renderer would make a native build, and the fitness suite with it, stop checking them.
 
-- [ ] Only files that name an egui/eframe/web-sys type live in `workstation/browser/`. That folder
-  compiles only for wasm32: the painters, the app, the relay socket and the boot path.
-- [ ] Everything else under `workstation/` compiles for every target and is fitness-tested
-  natively: the link session, attachment, models, views and `text/`.
-- [ ] The words and colour roles the page shows live in the toolkit-free `workstation/text/`, and
-  the painters read them there. Thus a native test can pin what the page says.
+- [ ] Only files that name an egui/eframe/web-sys type live in `operator/workstation/browser/`. That
+  folder compiles only for wasm32: the painters, the app, the relay socket and the boot path.
+- [ ] Everything else under `operator/workstation/` compiles for every target and is
+  fitness-tested natively: the link session, attachment, models, views and `text/`.
+- [ ] The words and colour roles the page shows live in the toolkit-free
+  `operator/workstation/text/`, and the painters read them there. Thus a native test can pin what
+  the page says.
 - [ ] Each target lints the half it runs. The wasm32 clippy command (§14) is what lints
-  `browser/`, and it is the target that warns on dead workstation code.
+  `operator/workstation/browser/`, and it is the target that warns on dead workstation code.
 - [ ] Rule intact: a native build links no eframe, wgpu or winit.
 - Replaced 2026-10-26: Amended 2026-10-14, the same rule for `desktop/` with feature `ui`. WHY then:
   the workstation bridge rendered the same model headless, so the egui-free files could not wait
@@ -806,11 +941,12 @@ serializer with its own escaping bugs, for a crate already in the tree.
 
 ## 12. Testing
 
-- [ ] Two tiers only: fitness suite + live-network tests.
+- [ ] Two tiers only: fitness suite + live-network tests. Lanes and real funds: last section of
+  §12.
   - Amended 2026-07-18: unit tier removed. WHY: test mass concentrates in fitness + human-run
     integration.
-- [ ] Fitness suite: small, immortal. `tests/fitness/`, proptest + recorded fixtures. The only CI
-  tests. Content:
+- [ ] Fitness suite: small, immortal. `engine/tests/fitness/`, proptest + recorded fixtures. The
+  only CI tests. Content:
   - FastQueue never loses/reorders data
   - order-book snapshot+deltas ≡ reconstructed state
   - ingress ordering rules
@@ -819,11 +955,12 @@ serializer with its own escaping bugs, for a crate already in the tree.
   - link wire format (amended 2026-07-25)
   - quant leaf-math pins (amended 2026-07-28)
   - web server guard + relay (amended 2026-10-26)
-- [ ] Live-network tests: `tests/integration/`, gated `#[ignore]`. Never CI. Only the `live-runner`
-  role of a job runs a signed test or the probe, by a runbook and the live policy. An agent runs a
-  public read only where a plan names it, by its exact name and with an empty environment.
-  - Amended 2026-11-12. WHY: a signed test or the probe uses the live keys of a real account. Each
-    agent reads this law and the ignore reason of each test in each test run.
+- [ ] Live-network tests: `engine/tests/integration/`, gated `#[ignore]`. Never CI. Only the
+  `live-runner` role of a job runs a signed test or the probe, by a runbook and the live policy. An
+  agent runs a public read only where a plan names it, by its exact name and with an empty
+  environment.
+  - Date, WHY, and the rest of this rule: the 2026-11-12 section on lanes and real funds, last
+    section of §12.
   - Replaced 2026-11-12: the agent ran each live-network test deliberately.
     - Amended 2026-07-18. WHY: user directive. Agent runs ALL tests, live-network included. Network
       reach to venue endpoints is verified. Human is not required.
@@ -853,18 +990,18 @@ is an architectural invariant. Socket behavior is not, and the charter stays arc
 - [ ] Socket-level behavior stays OUT: subscription TTL expiry, subscribe refresh, the
   peer-restart gate over a real socket. It is contract-seam/integration territory.
 
-### Amended 2026-07-28: tests live only under `tests/`
+### Amended 2026-07-28: tests live only under `<package>/tests/`
 
-WHY: user directive. `src/` carries production code only, and a reader who looks for a test looks
-in ONE place.
+WHY: user directive. `<package>/src/` carries production code only, and a reader who looks for a
+test looks in ONE place.
 
 - [ ] The 2026-07-20 carve-out is WITHDRAWN.
-- [ ] No `#[cfg(test)]` block lives anywhere outside `tests/`: not in `src/`, not in `strategies/`,
-  not in `tools/`.
-- [ ] Quant leaf-math pins live in the fitness target under `tests/fitness/quant/`. One module per
-  calculator, named for the concept, not the source path.
-- [ ] The cost is deliberate and binding: a test under `tests/` sees only the crate's PUBLIC API.
-  Thus re-express a pin on a private item against a public seam, or drop it.
+- [ ] No `#[cfg(test)]` block lives anywhere outside `<package>/tests/`: not in `<package>/src/`,
+  not in `strategies/`, not in `tools/`.
+- [ ] Quant leaf-math pins live in the fitness target under `engine/tests/fitness/hot/quant/`. One
+  module per calculator, named for the concept, not the source path.
+- [ ] The cost is deliberate and binding: a test under `<package>/tests/` sees only the crate's
+  PUBLIC API. Thus re-express a pin on a private item against a public seam, or drop it.
 - [ ] Forbidden: `pub(crate) -> pub` to make a test compile. WHY (§8): `pub` is a promise, and a
   test is not a caller worth promising to.
 - [ ] An item can still be promoted on its OWN merits by explicit ruling.
@@ -897,8 +1034,8 @@ WHY: the guard is the only thing between a web page and unauthenticated run cont
 a refactor could loosen with every gate green is a remote-start primitive for any site the
 operator visits.
 
-- [ ] `tests/fitness/web_http.rs` is in fitness. It spawns `polysim-web` as its own process, with a
-  temporary bundle and a fake engine on a loopback UDP socket, and pins:
+- [ ] `engine/tests/fitness/operator/web_http.rs` is in fitness. It spawns `polysim-web` as its own
+  process, with a temporary bundle and a fake engine on a loopback UDP socket, and pins:
   - the descriptor bytes and content type, with and without `--mcp`
   - the bundle served from memory, with each file's own type, and nothing outside it
   - a missing bundle stops the process with the Trunk hint
@@ -908,10 +1045,38 @@ operator visits.
     the datagram limit closes the socket and reaches no engine, and a down engine does not end
     the relay
 - [ ] This OVERRIDES the 2026-07-25 text that keeps socket-level behaviour out of fitness, as the
-  MCP server's `tests/fitness/mcp_http.rs` already does in practice. The charter stays
-  architectural: the pinned thing is an exposure boundary, not socket plumbing.
+  MCP server's `engine/tests/fitness/operator/fleet/mcp_http.rs` already does in practice. The
+  charter stays architectural: the pinned thing is an exposure boundary, not socket plumbing.
 - [ ] The test drives real sockets with hand-written requests. A client library would tidy away
   the very headers under test.
+
+### Amended 2026-11-12: lanes and real funds
+
+WHY: a signed test or the probe uses the live keys of a real account. Each agent reads this law
+and the ignore reason of each test in each test run. A validation plan names three lanes, and this
+law names two tiers, so each lane needs one place.
+
+- [ ] Lane `fitness` and lane `contract` live in test target `fitness` of a lib crate:
+  `engine/tests/fitness/`. A seam test is a module of that target. No folder
+  `<package>/tests/contract/`.
+- [ ] Each lib crate has at most one fitness target, `<package>/tests/fitness/`. WHY: the counting
+  allocator and the suite-integrity test need one test binary.
+- [ ] Lane `integration` lives in `engine/tests/integration/`. Each test there is `#[ignore]`d. No
+  step of gate G runs it (§14).
+- [ ] No unit tier at merge. IF a task writes an inline test scaffold, THEN the same task deletes
+  it, or moves it into the fitness target, before its evidence.
+- [ ] Who runs a live-network test: the live-network clause at the top of §12. A live run = a
+  process that sends a signed request to a venue. Only `live-runner` starts one.
+- [ ] A test that signs keeps the code form of `rex-code-tests-integration-testing`, file
+  `real-funds.md`: `#[ignore]`, a check of `REX_REAL_FUNDS` first in its body, a dry-run form, a
+  kill switch, a rollback, and a runbook section. The runbook section is the procedure of
+  `live-runner`. The protocol of that file with a person does not apply: the live policy
+  replaces it.
+- [ ] IF a test that signs lacks a part of that code form, THEN `live-runner` does not run it.
+- [ ] CAUTION: The kill switch of a test cancels only the orders of that test. It never cancels
+  each order of the account, because an engine never touches an order that it did not place.
+- [ ] An ignore reason, a comment, or a README never names a command that runs an ignored test or
+  the probe.
 
 ## 13. Performance
 
@@ -938,17 +1103,30 @@ operator visits.
 
 ## 14. Toolchain & Gates
 
-- [ ] Toolchain: pinned stable via `rust-toolchain.toml`. Edition 2024. Upgrades deliberate.
-- [ ] Gate every change with six commands. All green or no merge:
-  - `cargo fmt --check`
-  - `cargo clippy --all-targets -- -D warnings`
-  - `cargo clippy --all-targets --all-features -- -D warnings`
-  - `cargo clippy --target wasm32-unknown-unknown --lib --bin polysim-ui --bin dom-fixture -- -D warnings`
-  - `cargo test`
-  - `cargo test --all-features`
+- [ ] Toolchain: `1.92.0`, pinned in `rust-toolchain.toml` with `rustfmt`, `clippy`, and target
+  `wasm32-unknown-unknown`. Edition 2024. Upgrades deliberate: a new toolchain = an amendment of
+  this clause.
+- [ ] Gate G: gate every change with five steps, run at the workspace root. All green or no merge:
+  1. `cargo fmt --all -- --check`
+  2. `cargo clippy --workspace --all-targets -- -D warnings`, then
+     `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+  3. `cargo clippy --target wasm32-unknown-unknown -p engine --lib --bin polysim-ui --bin dom-fixture -- -D warnings`
+  4. `cargo test --workspace`, then `cargo test --workspace --all-features`
+  5. `(cd browser && trunk build --release) && (cd tools/dom-fixture && trunk build --release)`,
+     then
+     `docker buildx build --platform linux/arm64 --build-arg BIN=strat-micro-recorder-te-binance-spot-btcusdt --output type=local,dest=dist .`
+  - Amended 2026-11-12. WHY: the workspace holds three packages, so each command names the
+    workspace or package `engine`. Step 5 holds the two Trunk builds and the deploy build of one
+    engine binary: only they prove the two pages, `Dockerfile`, and the `deploy` profile of the
+    root manifest. The toolchain stays `1.92.0`: a new compiler in the same change as the
+    workspace split gives one red gate two causes.
+  - [ ] Step 4 runs no ignored test. No agent adds a flag that runs one (§12).
+  - [ ] Step 5 passes at exit 0, with the file `dist/strat-micro-recorder-te-binance-spot-btcusdt`.
   - Amended 2026-10-26. WHY: the browser workstation compiles only for wasm32, so a gate that
     lints only the native target never reads it. `--all-features` (`mcp` + `web`) covers the
     gated native paths. A single-config gate rots the path it never compiles.
+  - Replaced 2026-11-12: the gate was six commands of steps 1 to 4 in single-crate form, with no
+    `--workspace`, no `--all`, and no `-p engine`, and the two Trunk builds sat outside the gate.
   - Replaced 2026-10-26: the gate was `cargo fmt --check` + clippy + `cargo test`, with clippy and
     test run in BOTH configurations: no features, and `--all-features` (`ui` + `mcp`).
     - Amended 2026-07-25. WHY: `eframe` is optional behind feature `ui` (§11), and a
@@ -957,8 +1135,9 @@ operator visits.
       run compiles both gated paths.
     - Replaced 2026-10-14: the second configuration was `--features ui`.
 - [ ] `#[allow]` requires inline WHY.
-- [ ] `#![forbid(unsafe_code)]` at crate root. An amendment requires a benchmark that proves safe
-  implementation cannot meet measured requirement.
+- [ ] `#![forbid(unsafe_code)]` at the root of each lib crate (§8, 2026-11-12 section on two lib
+  crates). An amendment requires a benchmark that proves safe implementation cannot meet measured
+  requirement.
 
 ## 15. Amendments
 
