@@ -15,19 +15,19 @@
 
 use std::sync::{Arc, Mutex};
 
-use polysim::config::{RecordedTables, TableKind, TrackerSpec};
-use polysim::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
-use polysim::hot::exec::{ClientIdLayout, ExecSettings, MAX_ORDER_SLOTS, side_base};
-use polysim::hot::metrics::MetricsSnapshot;
-use polysim::hot::strategy::{Strategy, StrategyCtx};
-use polysim::ids::{InstrumentId, Price, Qty, Side};
-use polysim::msg::exec::{
+use engine::config::{RecordedTables, TableKind, TrackerSpec};
+use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
+use engine::hot::exec::{ClientIdLayout, ExecSettings, MAX_ORDER_SLOTS, side_base};
+use engine::hot::metrics::MetricsSnapshot;
+use engine::hot::strategy::{Strategy, StrategyCtx};
+use engine::ids::{InstrumentId, Price, Qty, Side};
+use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, Provenance, VenueOrderStatus,
 };
-use polysim::msg::inbound::{InboundMessage, SpinTick};
-use polysim::msg::persist::PersistRecord;
-use polysim::registry::InstrumentRow;
-use polysim::sink::ExecSink;
+use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::persist::PersistRecord;
+use engine::registry::InstrumentRow;
+use engine::sink::ExecSink;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
@@ -65,7 +65,7 @@ impl Strategy for LedgerProbe {
             position_base: ctx.position_base(INSTRUMENT),
             pnl_quote: ctx.pnl_quote(INSTRUMENT),
             resting_buy: ctx
-                .resting(INSTRUMENT, Side::Buy, polysim::hot::exec::QuoteLevel::ZERO)
+                .resting(INSTRUMENT, Side::Buy, engine::hot::exec::QuoteLevel::ZERO)
                 .is_some(),
         });
     }
@@ -273,7 +273,7 @@ fn a_prior_run_order_takes_no_slot_this_run_quotes_from() {
     fixture.engine.dispatch(
         pop(0, 0),
         &prior_run_trade(
-            polysim::hot::exec::side_base(INSTRUMENT, Side::Buy),
+            engine::hot::exec::side_base(INSTRUMENT, Side::Buy),
             Side::Buy,
             100 * ONE,
             ONE,

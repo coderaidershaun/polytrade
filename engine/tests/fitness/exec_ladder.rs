@@ -3,23 +3,23 @@
 //! same boundary, in both directions, on a venue that locks an order's funds and on one that
 //! does not.
 
-use polysim::config::TrackerSpec;
+use engine::config::TrackerSpec;
 use std::sync::{Arc, Mutex};
 
-use polysim::adapters::polymarket::exec::codec::{
+use engine::adapters::polymarket::exec::codec::{
     AccountStamps, SettlementWatermark, account_snapshot,
 };
-use polysim::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
-use polysim::hot::exec::{ClientIdLayout, DesiredQuote, ExecSettings, QuoteLevel, level_of_slot};
-use polysim::hot::strategy::{Strategy, StrategyCtx};
-use polysim::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
-use polysim::msg::exec::{
+use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
+use engine::hot::exec::{ClientIdLayout, DesiredQuote, ExecSettings, QuoteLevel, level_of_slot};
+use engine::hot::strategy::{Strategy, StrategyCtx};
+use engine::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
+use engine::msg::exec::{
     AccountChunk, AccountChunkKind, AssetBalance, ExecCommand, ExecEvent, ExecKind, ExecLaneItem,
     OrderStyle, VenueOrderStatus,
 };
-use polysim::msg::inbound::{InboundMessage, SpinTick};
-use polysim::sink::ExecSink;
-use polysim::time::TsUs;
+use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::sink::ExecSink;
+use engine::time::TsUs;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{ONE, account_chunk, detached_setup, exec_event, instrument_row, pop};

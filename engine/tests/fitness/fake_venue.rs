@@ -1,20 +1,20 @@
 //! Deterministic Binance Spot scenarios over the production simulator.
 
-use polysim::adapters::binance::exec::{
+use engine::adapters::binance::exec::{
     DecodeContext, EncodeContext, ResponseContext, SymbolTable, encode_request,
 };
-use polysim::adapters::exchange_sim::core::orders::{CORPUS_VENUE_ORDER_ID, SimOrder};
-use polysim::adapters::exchange_sim::core::wallet::FillSettlement;
-use polysim::adapters::exchange_sim::wire::{
+use engine::adapters::exchange_sim::core::orders::{CORPUS_VENUE_ORDER_ID, SimOrder};
+use engine::adapters::exchange_sim::core::wallet::FillSettlement;
+use engine::adapters::exchange_sim::wire::{
     SimFill, VenueWire, response_messages, stream_messages,
 };
-use polysim::adapters::exec::{EngineIdentity, ExecRequest, TeTag};
-use polysim::config::RunIdentity;
-use polysim::ids::{AssetId, ClientOrderId, Price, Qty, Side, TradeId, VenueOrderId};
-use polysim::msg::exec::{ExecEvent, OrderStyle, VenueOrderStatus};
-use polysim::msg::inbound::InboundMessage;
-use polysim::registry::{AssetDictionary, Registry};
-use polysim::time::TsUs;
+use engine::adapters::exec::{EngineIdentity, ExecRequest, TeTag};
+use engine::config::RunIdentity;
+use engine::ids::{AssetId, ClientOrderId, Price, Qty, Side, TradeId, VenueOrderId};
+use engine::msg::exec::{ExecEvent, OrderStyle, VenueOrderStatus};
+use engine::msg::inbound::InboundMessage;
+use engine::registry::{AssetDictionary, Registry};
+use engine::time::TsUs;
 
 pub const STRATEGY_ID: &str = "strat-micro-recorder";
 pub const TE_ID: &str = "te-binance-spot-btcusdt";
@@ -136,8 +136,8 @@ impl FakeVenue {
             identity,
             wire: VenueWire::new(identity),
             orders: ScenarioOrders::new(),
-            best_bid: Price(117_999 * polysim::ids::FIXED_SCALE),
-            best_ask: Price(118_001 * polysim::ids::FIXED_SCALE),
+            best_bid: Price(117_999 * engine::ids::FIXED_SCALE),
+            best_ask: Price(118_001 * engine::ids::FIXED_SCALE),
             delivery: Delivery::AckFirst,
             next_trade_id: FIRST_TRADE_ID,
         }
@@ -435,7 +435,7 @@ persistence:
 logging:
   dir: ./logs
 ";
-    let config: polysim::config::Config =
-        polysim::config::Config::from_yaml(YAML).expect("the fake venue's config parses");
+    let config: engine::config::Config =
+        engine::config::Config::from_yaml(YAML).expect("the fake venue's config parses");
     Registry::build(&config).expect("the fake venue's registry builds")
 }

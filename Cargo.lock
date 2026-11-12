@@ -907,6 +907,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "arrow-array",
+ "arrow-schema",
+ "core_affinity",
+ "eframe",
+ "futures-util",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "js-sys",
+ "k256",
+ "parquet",
+ "proptest",
+ "reqwest 0.12.28",
+ "ring",
+ "rmcp",
+ "rtrb",
+ "rustix 1.1.5",
+ "serde",
+ "serde-saphyr",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tiny-keccak",
+ "tokio",
+ "tokio-tungstenite",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
+]
+
+[[package]]
 name = "epaint"
 version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2494,40 +2528,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "polysim"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "arrow-array",
- "arrow-schema",
- "core_affinity",
- "eframe",
- "futures-util",
- "http-body-util",
- "hyper",
- "hyper-util",
- "js-sys",
- "k256",
- "parquet",
- "proptest",
- "reqwest 0.12.28",
- "ring",
- "rmcp",
- "rtrb",
- "rustix 1.1.5",
- "serde",
- "serde-saphyr",
- "serde_json",
- "thiserror 2.0.18",
- "tiny-keccak",
- "tokio",
- "tokio-tungstenite",
- "wasm-bindgen-futures",
- "web-sys",
- "web-time",
-]
-
-[[package]]
 name = "potential_utf"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3424,7 +3424,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 name = "strat-micro-recorder"
 version = "0.1.0"
 dependencies = [
- "polysim",
+ "engine",
  "serde",
 ]
 

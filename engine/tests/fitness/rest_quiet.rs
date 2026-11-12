@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use polysim::adapters::rest_quiet::{RestQuiet, SharedRestQuiet};
+use engine::adapters::rest_quiet::{RestQuiet, SharedRestQuiet};
 use proptest::prelude::*;
 
 const FLOOR: Duration = Duration::from_secs(2);

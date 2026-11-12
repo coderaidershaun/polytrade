@@ -1,12 +1,12 @@
 //! Fixtures shared by the workstation projection fitness files: the book-snapshot builder, the DOM
 //! overlay, the named-case table alias and the chart-model fixtures.
 
-use polysim::ids::{InstrumentId, Price, Qty};
-use polysim::msg::inbound::Level;
-use polysim::msg::ui::{DomQuote, UI_BOOK_LEVELS, UiBookSnapshot, UiBookState, UiEvent};
-use polysim::time::{DurationUs, TsUs};
-use polysim::workstation::chart::model::{BookContinuity, ChartModel};
-use polysim::workstation::dom_view::DomOverlay;
+use engine::ids::{InstrumentId, Price, Qty};
+use engine::msg::inbound::Level;
+use engine::msg::ui::{DomQuote, UI_BOOK_LEVELS, UiBookSnapshot, UiBookState, UiEvent};
+use engine::time::{DurationUs, TsUs};
+use engine::workstation::chart::model::{BookContinuity, ChartModel};
+use engine::workstation::dom_view::DomOverlay;
 
 pub type NamedCase = (&'static str, fn(&str));
 

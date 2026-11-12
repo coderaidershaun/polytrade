@@ -1,8 +1,8 @@
 //! The risk scenes as text, so they can be checked without a screen: a painted page proves nothing
 //! on a locked machine.
 
-use polysim::ids::FIXED_SCALE;
-use polysim::workstation::chart::position_model::PositionBucket;
+use engine::ids::FIXED_SCALE;
+use engine::workstation::chart::position_model::PositionBucket;
 
 use crate::position_scenes::position_scenes;
 

@@ -1,19 +1,19 @@
 //! Records microstructure columns + quotes Guéant levels each spin. Per-instrument state in models/features/params siblings.
 
-use polysim::config::{Instruments, StrategySpec, TableKind};
-use polysim::hot::quant::hawkes::HawkesChoice;
-use polysim::hot::quant::liquidity::KylesLambdaSpec;
-use polysim::hot::quant::micro::{PriceBand, ResilienceSample, banded_imbalance};
-use polysim::hot::quant::pricing::{GueantParams, Objective};
-use polysim::hot::quant::toxicity::{MarkoutSide, vpin};
-use polysim::hot::quant::volatility::Returns;
-use polysim::hot::strategy::{
+use engine::config::{Instruments, StrategySpec, TableKind};
+use engine::hot::quant::hawkes::HawkesChoice;
+use engine::hot::quant::liquidity::KylesLambdaSpec;
+use engine::hot::quant::micro::{PriceBand, ResilienceSample, banded_imbalance};
+use engine::hot::quant::pricing::{GueantParams, Objective};
+use engine::hot::quant::toxicity::{MarkoutSide, vpin};
+use engine::hot::quant::volatility::Returns;
+use engine::hot::strategy::{
     BookState, DesiredQuote, EngineView, FeatureId, LinkFrame, OrderStyle, QuoteLevel,
     Registration, Strategy, StrategyConfig, StrategyCtx, VolumeBar, resolve_filter,
 };
-use polysim::ids::{FIXED_SCALE, InstrumentId, Price, Side};
-use polysim::msg::inbound::{BookChunk, KlineEvent, SpinTick, TradeEvent};
-use polysim::time::{DurationUs, TsUs};
+use engine::ids::{FIXED_SCALE, InstrumentId, Price, Side};
+use engine::msg::inbound::{BookChunk, KlineEvent, SpinTick, TradeEvent};
+use engine::time::{DurationUs, TsUs};
 
 #[path = "../common.rs"]
 mod common;
@@ -463,7 +463,7 @@ fn record_spin(
     };
     let bid_quote = bid_model.filter(|_| !budget.would_breach(exposure_quote, Side::Buy));
     let ask_quote = ask_model.filter(|_| !budget.would_breach(exposure_quote, Side::Sell));
-    polysim::strategy_info!(
+    engine::strategy_info!(
         ctx,
         "gueant i{} in: mid={mid:?} spread={spread:?} log_vol={log_vol:?} sigma_bps={:?} \
          a_bid={:?} k_bid={:?} a_ask={:?} k_ask={:?}",
@@ -474,7 +474,7 @@ fn record_spin(
         ask_fit.map(|fit| fit.a_per_sec),
         ask_fit.map(|fit| fit.k_per_tick),
     );
-    polysim::strategy_info!(
+    engine::strategy_info!(
         ctx,
         "gueant i{} out: q={} order={} budget={} model_bid={:?} model_ask={:?} \
          quoted_bid={:?} quoted_ask={:?}",
@@ -488,7 +488,7 @@ fn record_spin(
         ask_quote.map(Price::to_f64),
     );
     let (markouts_bid, markouts_ask) = (model.markouts.bid(), model.markouts.ask());
-    polysim::strategy_info!(
+    engine::strategy_info!(
         ctx,
         "drops i{} markout gaps={}/{} stale={}/{} overflow={}/{} hawkes_out_of_order={}/{}",
         instrument.0,

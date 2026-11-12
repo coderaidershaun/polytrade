@@ -8,8 +8,8 @@
 //! issued estimates AND to have converged at least once inside the measured window.
 
 use crate::quant::ExpSimulation;
-use polysim::hot::quant::hawkes::{HawkesEvents, HawkesMle, HawkesParams};
-use polysim::time::{DurationUs, TsUs};
+use engine::hot::quant::hawkes::{HawkesEvents, HawkesMle, HawkesParams};
+use engine::time::{DurationUs, TsUs};
 
 const START: TsUs = TsUs::from_micros(0);
 

@@ -1,21 +1,21 @@
 //! Shared fixture for the engine-driven execution tests: a quoting engine on a two-sided book, the
 //! three readiness legs, and the helpers that read its command stream.
 
-use polysim::adapters::exec::open_orders_snapshot_end;
-use polysim::config::{RecordedTables, TrackerSpec};
-use polysim::exposure::InstrumentExposure;
-use polysim::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup};
-use polysim::hot::exec::{
+use engine::adapters::exec::open_orders_snapshot_end;
+use engine::config::{RecordedTables, TrackerSpec};
+use engine::exposure::InstrumentExposure;
+use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup};
+use engine::hot::exec::{
     DesiredQuote, ExecLimits, ExecSettings, FeeModel, OrderBudget, QuoteLevel,
 };
-use polysim::hot::strategy::{Strategy, StrategyCtx};
-use polysim::ids::{AssetId, InstrumentId, Qty, Side};
-use polysim::msg::exec::{CancelReason, ExecCommand, ExecLaneItem, OrderStyle};
-use polysim::msg::inbound::{InboundMessage, SpinTick};
-use polysim::msg::ui::UiEvent;
-use polysim::registry::InstrumentRow;
-use polysim::sink::ExecSink;
-use polysim::time::DurationUs;
+use engine::hot::strategy::{Strategy, StrategyCtx};
+use engine::ids::{AssetId, InstrumentId, Qty, Side};
+use engine::msg::exec::{CancelReason, ExecCommand, ExecLaneItem, OrderStyle};
+use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::ui::UiEvent;
+use engine::registry::InstrumentRow;
+use engine::sink::ExecSink;
+use engine::time::DurationUs;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{

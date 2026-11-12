@@ -9,8 +9,8 @@
 //! So the expectations here are hand-copied literals, never derived from the source of truth. That
 //! duplication is the entire mechanism; a "cleanup" that reads the constant back proves nothing.
 
-use polysim::hot::strategy::FeatureId;
-use polysim::link::{LinkHash, schema_hash_of_fields};
+use engine::hot::strategy::FeatureId;
+use engine::link::{LinkHash, schema_hash_of_fields};
 
 use crate::engine_support::recorder_feature_id;
 use crate::micro_strategy::features::{FEATURE_NAMES, Features, QuoteSide};

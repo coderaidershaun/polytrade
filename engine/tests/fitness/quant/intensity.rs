@@ -10,12 +10,12 @@
 //! geometric MLE cross-check of the fit are not checked from outside the crate.
 
 use super::Lcg;
-use polysim::config::{IntensitySpec, TrackerSpec};
-use polysim::hot::book::{Book, SnapshotOutcome};
-use polysim::hot::quant::intensity::{IntensityFit, PacedIntensity};
-use polysim::hot::tracker::MicroTracker;
-use polysim::ids::{InstrumentId, Price, Qty, Side};
-use polysim::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, Level, TradeEvent};
+use engine::config::{IntensitySpec, TrackerSpec};
+use engine::hot::book::{Book, SnapshotOutcome};
+use engine::hot::quant::intensity::{IntensityFit, PacedIntensity};
+use engine::hot::tracker::MicroTracker;
+use engine::ids::{InstrumentId, Price, Qty, Side};
+use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, Level, TradeEvent};
 
 use crate::engine_support::ts;
 

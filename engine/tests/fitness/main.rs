@@ -64,7 +64,7 @@ mod link_session;
 mod link_wire;
 mod log_lane_ownership;
 mod loss_gate;
-/// These drive `polysim::mcp` and its binary, which exist only under feature `mcp`.
+/// These drive `engine::mcp` and its binary, which exist only under feature `mcp`.
 #[cfg(feature = "mcp")]
 mod mcp_fleet;
 #[cfg(feature = "mcp")]
@@ -129,7 +129,7 @@ mod suite_integrity;
 mod tracker;
 mod ui_feed;
 mod volume_bars;
-/// These drive `polysim::web` and its binary, which exist only under feature `web`.
+/// These drive `engine::web` and its binary, which exist only under feature `web`.
 #[cfg(feature = "web")]
 mod web_http;
 mod workstation_format;

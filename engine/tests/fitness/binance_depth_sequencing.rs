@@ -1,14 +1,14 @@
 //! Binance depth sequencing goldens: the depth state machines over recorded prod fixtures plus
 //! the synthetic spot/perp equal-boundary asymmetry a fixture can't force.
 
-use polysim::adapters::binance::depth::{ChainRule, DepthSequencer, DiffOutcome, SnapshotOutcome};
-use polysim::adapters::binance::parse::{
+use engine::adapters::binance::depth::{ChainRule, DepthSequencer, DiffOutcome, SnapshotOutcome};
+use engine::adapters::binance::parse::{
     DepthDiff, DepthSnapshot, ParseContext, parse_combined_frame, parse_perp_depth_diff,
     parse_spot_depth_diff,
 };
-use polysim::ids::{InstrumentId, Side};
-use polysim::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunkKind, InboundMessage};
-use polysim::time::TsUs;
+use engine::ids::{InstrumentId, Side};
+use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunkKind, InboundMessage};
+use engine::time::TsUs;
 
 use crate::engine_support::level;
 
@@ -115,7 +115,7 @@ fn synthetic_diff(
 
 mod depth_golden {
     use super::*;
-    use polysim::msg::inbound::VenueMeta;
+    use engine::msg::inbound::VenueMeta;
 
     const PERP_DEPTH: &str = include_str!("../../fixtures/binance/perp_depth.jsonl");
     const SPOT_DEPTH: &str = include_str!("../../fixtures/binance/spot_depth.jsonl");
@@ -307,7 +307,7 @@ mod depth_synthetic {
 /// a sim run. The pairing is pinned here, where a fixture can prove it, rather than at that panic.
 mod venue_metadata {
     use super::*;
-    use polysim::msg::inbound::VenueMeta;
+    use engine::msg::inbound::VenueMeta;
 
     const RESET_EXCHANGE_TS: TsUs = TsUs::from_micros(1_784_410_631_500_000);
 

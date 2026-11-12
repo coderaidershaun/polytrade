@@ -3,17 +3,17 @@
 
 use eframe::egui;
 
-use polysim::workstation::browser::chart::mid::{self, ChartFrame};
-use polysim::workstation::browser::chart::stack::{self, ChartStackFrame};
-use polysim::workstation::browser::dom::{DomFrame, ladder};
-use polysim::workstation::browser::latency::{self, LatencyFrame};
-use polysim::workstation::browser::monitor::bands;
-use polysim::workstation::browser::{announce_touch_screen, chrome};
-use polysim::workstation::chart::position_view::RiskSeries;
-use polysim::workstation::chart::view::ChartMode;
-use polysim::workstation::dom_view::{DEFAULT_ROWS_PER_SIDE, DomOverlay};
-use polysim::workstation::monitor::view::{Channel, MonitorFrame};
-use polysim::workstation::shell::{Arrangement, View};
+use engine::workstation::browser::chart::mid::{self, ChartFrame};
+use engine::workstation::browser::chart::stack::{self, ChartStackFrame};
+use engine::workstation::browser::dom::{DomFrame, ladder};
+use engine::workstation::browser::latency::{self, LatencyFrame};
+use engine::workstation::browser::monitor::bands;
+use engine::workstation::browser::{announce_touch_screen, chrome};
+use engine::workstation::chart::position_view::RiskSeries;
+use engine::workstation::chart::view::ChartMode;
+use engine::workstation::dom_view::{DEFAULT_ROWS_PER_SIDE, DomOverlay};
+use engine::workstation::monitor::view::{Channel, MonitorFrame};
+use engine::workstation::shell::{Arrangement, View};
 
 use crate::chart_scenes::{ChartScene, chart_scenes, latency_summary};
 use crate::fit_readout;

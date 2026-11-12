@@ -6,11 +6,11 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use polysim::config::{ExecutionMode, RecordedTables, TableKind};
-use polysim::ids::InstrumentId;
-use polysim::msg::persist::{FeatureId, FeatureRow, PersistRecord};
-use polysim::persist::PersistConfig;
-use polysim::time::TsUs;
+use engine::config::{ExecutionMode, RecordedTables, TableKind};
+use engine::ids::InstrumentId;
+use engine::msg::persist::{FeatureId, FeatureRow, PersistRecord};
+use engine::persist::PersistConfig;
+use engine::time::TsUs;
 
 use crate::parquet_readback::{
     BASE_TS_US, TempDir, drain_blocking, parquet_files, run_dir, spawn_writer_with,

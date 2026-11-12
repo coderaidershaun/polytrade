@@ -15,16 +15,16 @@
 //! that the next decision is taken against, so the property spans the fold and the decision and
 //! belongs to neither alone.
 
-use polysim::hot::exec::{
+use engine::hot::exec::{
     BookTop, CloseReason, DesiredQuote, ExecLimits, OrderSlot, OrderState, PlaceIntent,
     ReconcileInput, ReconcileOutcome, RejectReason, RestingOrder, TickGrid, apply_exec_event,
     reconcile_side,
 };
-use polysim::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, VenueOrderId};
-use polysim::msg::exec::{
+use engine::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, VenueOrderId};
+use engine::msg::exec::{
     ExecEvent, ExecKind, OrderStyle, Provenance, RejectClass, VenueOrderStatus,
 };
-use polysim::time::{DurationUs, TsUs};
+use engine::time::{DurationUs, TsUs};
 use proptest::prelude::*;
 
 use crate::engine_support::{rich, top};

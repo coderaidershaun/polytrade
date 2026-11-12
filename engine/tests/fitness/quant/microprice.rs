@@ -3,7 +3,7 @@
 //! `microprice` and as the longhand size-weighted formula.
 
 use crate::engine_support::level;
-use polysim::hot::quant::micro::{microprice, mid, orderbook_equilibrium, spread};
+use engine::hot::quant::micro::{microprice, mid, orderbook_equilibrium, spread};
 
 #[test]
 fn equilibrium_is_the_microprice() {

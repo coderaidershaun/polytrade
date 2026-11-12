@@ -10,17 +10,17 @@
 //! Every number here comes from message stamps: the meter advances on the spin tick and counts the
 //! placements the spin minted, so a replayed tape refuses at exactly the same point.
 
-use polysim::config::RecordedTables;
-use polysim::exposure::InstrumentExposure;
-use polysim::hot::dispatch::HotEngine;
-use polysim::hot::exec::{
+use engine::config::RecordedTables;
+use engine::exposure::InstrumentExposure;
+use engine::hot::dispatch::HotEngine;
+use engine::hot::exec::{
     DesiredQuote, ExecSettings, OrderBudget, OrderBudgetWindow, QuoteLevel, RejectReason,
 };
-use polysim::hot::strategy::{Strategy, StrategyCtx};
-use polysim::ids::{Price, Qty, Side};
-use polysim::msg::exec::{ExecCommand, ExecEvent, ExecKind, OrderStyle, VenueOrderStatus};
-use polysim::msg::inbound::{InboundMessage, SpinTick};
-use polysim::time::DurationUs;
+use engine::hot::strategy::{Strategy, StrategyCtx};
+use engine::ids::{Price, Qty, Side};
+use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, OrderStyle, VenueOrderStatus};
+use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::time::DurationUs;
 
 use crate::engine_support::{ALL_TABLES, ONE, exec_event, local_refusals, pop};
 use crate::exec_support::{

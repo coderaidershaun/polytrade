@@ -3,9 +3,9 @@
 //! with a record they cannot dismiss. The pin is private, so these rules are observable only
 //! through the state's equality.
 
-use polysim::ids::Side;
-use polysim::msg::persist::FeatureId;
-use polysim::workstation::monitor::view::{Channel, MonitorDetail, MonitorUiState};
+use engine::ids::Side;
+use engine::msg::persist::FeatureId;
+use engine::workstation::monitor::view::{Channel, MonitorDetail, MonitorUiState};
 
 use crate::workstation_support::NamedCase;
 

@@ -1,8 +1,8 @@
 //! Feature column registry. One ident list drives names, resolved struct, id assignment. Append-only on-disk.
 
-use polysim::hot::strategy::FeatureId;
+use engine::hot::strategy::FeatureId;
 
-polysim::features! {
+engine::features! {
     pub(crate) struct Features {
         mid,
         microprice,

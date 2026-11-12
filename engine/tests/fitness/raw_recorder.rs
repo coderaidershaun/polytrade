@@ -1,13 +1,13 @@
 //! Probe strategy that persists every event it sees into the configured raw tables, so the replay
 //! and zero-alloc tests exercise every persist emit lane.
 
-use polysim::config::{Instruments, NoParams, StrategySpec, TableKind};
-use polysim::hot::strategy::{
+use engine::config::{Instruments, NoParams, StrategySpec, TableKind};
+use engine::hot::strategy::{
     EngineView, InstrumentMask, Registration, Strategy, StrategyConfig, StrategyCtx, resolve_filter,
 };
-use polysim::ids::{InstrumentId, Price, Qty};
-use polysim::msg::inbound::{BookChunk, KlineEvent, TradeEvent};
-use polysim::msg::persist::{BookEventKind, BookEventRow, FeatureId, KlineRow, TradeRow};
+use engine::ids::{InstrumentId, Price, Qty};
+use engine::msg::inbound::{BookChunk, KlineEvent, TradeEvent};
+use engine::msg::persist::{BookEventKind, BookEventRow, FeatureId, KlineRow, TradeRow};
 
 /// Persists raw market data per the configured table set, plus `ewma_vol` as a feature when the
 /// features table is on.

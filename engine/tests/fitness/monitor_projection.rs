@@ -10,19 +10,19 @@
 
 use proptest::prelude::*;
 
-use polysim::config::ExecutionMode;
-use polysim::hot::exec::{CloseReason, ExecHalt, HaltReason, OrderState, RejectOrigin};
-use polysim::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
-use polysim::msg::exec::RejectClass;
-use polysim::msg::ui::{
+use engine::config::ExecutionMode;
+use engine::hot::exec::{CloseReason, ExecHalt, HaltReason, OrderState, RejectOrigin};
+use engine::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
+use engine::msg::exec::RejectClass;
+use engine::msg::ui::{
     DomQuote, UI_ORDER_SNAPSHOT_CAPACITY, UiBookSnapshot, UiBookState, UiCatalog, UiEvent,
     UiInstrument, UiWorkingOrder,
 };
-use polysim::time::{DurationUs, TsUs};
-use polysim::workstation::format::{MISSING, write_bps_delta, write_opt_bps_delta};
-use polysim::workstation::model::UiModel;
-use polysim::workstation::monitor::model::{FeatureCell, OrderEvent, SystemEvent};
-use polysim::workstation::monitor::view::{
+use engine::time::{DurationUs, TsUs};
+use engine::workstation::format::{MISSING, write_bps_delta, write_opt_bps_delta};
+use engine::workstation::model::UiModel;
+use engine::workstation::monitor::model::{FeatureCell, OrderEvent, SystemEvent};
+use engine::workstation::monitor::view::{
     Channel, FeatureRowView, MonitorUiState, account, feature_rows, quote_summary,
 };
 
@@ -71,7 +71,7 @@ fn feature_event(instrument: u16, seq: u64, event_ts: i64, feature: u16, value: 
         instrument: InstrumentId(instrument),
         seq,
         event_ts_us: TsUs::from_micros(event_ts),
-        feature: polysim::msg::persist::FeatureId(feature),
+        feature: engine::msg::persist::FeatureId(feature),
         value,
     }
 }
@@ -90,7 +90,7 @@ fn trade_event(instrument: u16, seq: u64, event_ts: i64, qty: i64) -> UiEvent {
 fn feature(model: &UiModel, instrument: u16, feature: u16) -> Option<FeatureCell> {
     model.monitor().feature(
         InstrumentId(instrument),
-        polysim::msg::persist::FeatureId(feature),
+        engine::msg::persist::FeatureId(feature),
     )
 }
 
@@ -785,14 +785,14 @@ fn an_event_gap_demotes_pre_gap_orders_before_counting_a_replacement() {
             .iter()
             .find(|order| order.client_id == ClientOrderId(11))
             .map(|order| order.status),
-        Some(polysim::workstation::exec_model::OrderStatus::Lost)
+        Some(engine::workstation::exec_model::OrderStatus::Lost)
     );
     assert_eq!(
         orders
             .iter()
             .find(|order| order.client_id == ClientOrderId(12))
             .map(|order| order.status),
-        Some(polysim::workstation::exec_model::OrderStatus::Confirmed)
+        Some(engine::workstation::exec_model::OrderStatus::Confirmed)
     );
 }
 
@@ -881,7 +881,7 @@ fn snapshot_healing_cases() {
         );
         assert_eq!(
             retained[0].status,
-            polysim::workstation::exec_model::OrderStatus::Lost,
+            engine::workstation::exec_model::OrderStatus::Lost,
             "{name}: invalid authoritative input preserves possible exposure but cannot leave it \
              confirmed"
         );

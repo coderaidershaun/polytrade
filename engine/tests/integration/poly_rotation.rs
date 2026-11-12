@@ -18,22 +18,22 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use rtrb::{Consumer, RingBuffer};
 use tokio::sync::mpsc;
 
-use polysim::adapters::backoff::BackoffCaps;
-use polysim::adapters::polymarket::actor::{PolymarketAdapter, PolymarketAdapterContext};
-use polysim::adapters::polymarket::rest::PolyRest;
-use polysim::config::PolySeries;
-use polysim::config::{
+use engine::adapters::backoff::BackoffCaps;
+use engine::adapters::polymarket::actor::{PolymarketAdapter, PolymarketAdapterContext};
+use engine::adapters::polymarket::rest::PolyRest;
+use engine::config::PolySeries;
+use engine::config::{
     Config, ExecutionMode, RecordedTables, StrategyId, TradingEngineId, VenueMarket,
 };
-use polysim::hot::spawn::QueueProducer;
-use polysim::ids::FIXED_SCALE;
-use polysim::log::{self, LogConfig};
-use polysim::msg::inbound::InboundMessage;
-use polysim::msg::persist::{PersistRecord, RotationRow};
-use polysim::persist::{PersistConfig, PersistWriter, RunMeta};
-use polysim::registry::Registry;
-use polysim::shutdown::{FatalSignal, RunStateCell};
-use polysim::time::EngineClock;
+use engine::hot::spawn::QueueProducer;
+use engine::ids::FIXED_SCALE;
+use engine::log::{self, LogConfig};
+use engine::msg::inbound::InboundMessage;
+use engine::msg::persist::{PersistRecord, RotationRow};
+use engine::persist::{PersistConfig, PersistWriter, RunMeta};
+use engine::registry::Registry;
+use engine::shutdown::{FatalSignal, RunStateCell};
+use engine::time::EngineClock;
 
 use crate::observer::RotationObserver;
 use crate::rotations_parquet::rotation_instruments;

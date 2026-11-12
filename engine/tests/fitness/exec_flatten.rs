@@ -6,18 +6,18 @@
 //! but crossed the spread has made a mistake. Both halves are pinned together to prevent
 //! convergence on the easiest path.
 
-use polysim::config::{RecordedTables, TrackerSpec};
-use polysim::hot::dispatch::HotEngine;
-use polysim::hot::exec::{
+use engine::config::{RecordedTables, TrackerSpec};
+use engine::hot::dispatch::HotEngine;
+use engine::hot::exec::{
     BookTop, DesiredQuote, ExecLimits, ExecSettings, FeeModel, FlattenInput, FlattenOutcome,
     FundsView, QuoteLevel, RejectReason, TickGrid, plan_flatten,
 };
-use polysim::hot::strategy::{Strategy, StrategyCtx};
-use polysim::ids::{AssetId, ClientOrderId, FIXED_SCALE, Price, Qty, Side};
-use polysim::msg::exec::{ExecCommand, ExecKind, ExecLaneItem, OrderStyle, VenueOrderStatus};
-use polysim::msg::inbound::{InboundMessage, SpinTick};
-use polysim::registry::InstrumentRow;
-use polysim::time::DurationUs;
+use engine::hot::strategy::{Strategy, StrategyCtx};
+use engine::ids::{AssetId, ClientOrderId, FIXED_SCALE, Price, Qty, Side};
+use engine::msg::exec::{ExecCommand, ExecKind, ExecLaneItem, OrderStyle, VenueOrderStatus};
+use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::registry::InstrumentRow;
+use engine::time::DurationUs;
 use rtrb::Consumer;
 
 use crate::engine_support::{
@@ -88,7 +88,7 @@ fn holding(position_base: i64) -> FlattenInput {
     }
 }
 
-fn placed(outcome: FlattenOutcome) -> polysim::hot::exec::PlaceIntent {
+fn placed(outcome: FlattenOutcome) -> engine::hot::exec::PlaceIntent {
     match outcome {
         FlattenOutcome::Place(intent) => intent,
         other => panic!("expected a placement, got {other:?}"),
@@ -493,7 +493,7 @@ fn a_partial_fill_re_fires_next_spin_sized_by_what_is_left() {
     let filled = Qty(4 * FIXED_SCALE);
     engine.dispatch(
         pop(0, 0),
-        &InboundMessage::Exec(polysim::msg::exec::ExecEvent {
+        &InboundMessage::Exec(engine::msg::exec::ExecEvent {
             kind: ExecKind::ReportTrade,
             status: Some(VenueOrderStatus::PartiallyFilled),
             qty: Qty(10 * FIXED_SCALE),
@@ -506,7 +506,7 @@ fn a_partial_fill_re_fires_next_spin_sized_by_what_is_left() {
     );
     engine.dispatch(
         pop(0, 0),
-        &InboundMessage::Exec(polysim::msg::exec::ExecEvent {
+        &InboundMessage::Exec(engine::msg::exec::ExecEvent {
             kind: ExecKind::ReportExpired,
             status: Some(VenueOrderStatus::Expired),
             qty: Qty(10 * FIXED_SCALE),
@@ -558,7 +558,7 @@ fn a_market_order_declared_as_a_quote_is_still_refused_by_name() {
 fn kill_unfilled(engine: &mut HotEngine, client_id: ClientOrderId, when: i64) {
     engine.dispatch(
         pop(0, 0),
-        &InboundMessage::Exec(polysim::msg::exec::ExecEvent {
+        &InboundMessage::Exec(engine::msg::exec::ExecEvent {
             kind: ExecKind::ReportExpired,
             status: Some(VenueOrderStatus::Expired),
             ..exec_event(INSTRUMENT, client_id, Side::Sell, BID, when)

@@ -1,42 +1,42 @@
 //! Shared builders for the dispatch fitness tests (zero-alloc + replay): synthetic messages,
 //! a fully-configured instrument row, and a persistence ring wired to a `PersistSink`.
 
-use polysim::config::{BinanceMarket, Subscriptions, VenueMarket};
-use polysim::config::{
+use engine::config::{BinanceMarket, Subscriptions, VenueMarket};
+use engine::config::{
     CandlesSpec, EwmaVolSpec, ImbalanceSpec, Instruments, KlineInterval, RecordedTables, SpinField,
     SpinSampledSpec, StrategySpec, TableKind, TrackerSpec, VolumeBarsSpec, VolumeThreshold,
     WindowsSpec,
 };
-use polysim::exposure::ExposureSnapshot;
-use polysim::hot::dispatch::{
+use engine::exposure::ExposureSnapshot;
+use engine::hot::dispatch::{
     ExecWiring, ExposureWiring, HotEngine, HotEngineSetup, LinkWiring, PersistWiring,
 };
-use polysim::hot::exec::{
+use engine::hot::exec::{
     BookTop, ClientIdLayout, ExecSettings, FundsView, RejectOrigin, RejectReason, side_base,
 };
-use polysim::hot::ingress::QueueSample;
-use polysim::hot::metrics::MetricsSnapshot;
-use polysim::hot::strategy::{EngineView, Strategy, StrategyConfig};
-use polysim::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, QueueId, Side};
-use polysim::link::{OutboundLink, RunState};
-use polysim::log::LogRecord;
-use polysim::msg::exec::{
+use engine::hot::ingress::QueueSample;
+use engine::hot::metrics::MetricsSnapshot;
+use engine::hot::strategy::{EngineView, Strategy, StrategyConfig};
+use engine::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, QueueId, Side};
+use engine::link::{OutboundLink, RunState};
+use engine::log::LogRecord;
+use engine::msg::exec::{
     ACCOUNT_CHUNK_ASSETS, AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind,
     ExecLaneItem, Liquidity, Provenance, VenueOrderStatus,
 };
-use polysim::msg::inbound::{
+use engine::msg::inbound::{
     BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, BookReset, InboundMessage, KlineEvent, Level,
     MarketRotation, RunControl, SpinTick, TradeEvent,
 };
-use polysim::msg::persist::{FeatureId, FillRow, OrderRow, PersistRecord};
-use polysim::msg::ui::{UI_BOOK_RING_CAPACITY, UI_EVENT_RING_CAPACITY, UiBookSnapshot, UiEvent};
-use polysim::registry::InstrumentRow;
-use polysim::shutdown::{RunAssertion, RunControlGate};
-use polysim::sink::{
+use engine::msg::persist::{FeatureId, FillRow, OrderRow, PersistRecord};
+use engine::msg::ui::{UI_BOOK_RING_CAPACITY, UI_EVENT_RING_CAPACITY, UiBookSnapshot, UiEvent};
+use engine::registry::InstrumentRow;
+use engine::shutdown::{RunAssertion, RunControlGate};
+use engine::sink::{
     ExecSink, ExposureSink, LinkSink, MetricsSink, PersistSink, StrategyLogSink, UiBookSink,
     UiEventSink,
 };
-use polysim::time::{DurationUs, TsUs};
+use engine::time::{DurationUs, TsUs};
 use rtrb::{Consumer, RingBuffer};
 
 use crate::micro_strategy::MicroRecorder;

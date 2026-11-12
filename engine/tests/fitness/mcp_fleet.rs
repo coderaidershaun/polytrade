@@ -4,8 +4,8 @@
 use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
-use polysim::config::ExecutionMode;
-use polysim::mcp::{FleetError, FleetTiming};
+use engine::config::ExecutionMode;
+use engine::mcp::{FleetError, FleetTiming};
 
 use crate::mcp_support::{
     EXITS_THREE, EngineTree, FAST, FRESH_SCRIPT_DEADLINE, IGNORE_TERM, LINK_BIND, MARKERS,
@@ -138,10 +138,9 @@ fn set_mode_rewrites_only_the_mode_value_and_preserves_every_other_byte() {
         "exactly the mode value changes; its indent and trailing comment survive"
     );
     assert_eq!(shipped.lines().count(), rewritten.lines().count());
-    let loaded = polysim::config::Config::<crate::micro_strategy::MicroRecorderParams>::from_yaml(
-        &rewritten,
-    )
-    .expect("the sim block is inert under live, so the edited config still loads");
+    let loaded =
+        engine::config::Config::<crate::micro_strategy::MicroRecorderParams>::from_yaml(&rewritten)
+            .expect("the sim block is inert under live, so the edited config still loads");
     assert_eq!(
         loaded.execution.map(|block| block.mode),
         Some(ExecutionMode::Live)

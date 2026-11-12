@@ -3,12 +3,12 @@
 
 use std::collections::HashSet;
 
-use polysim::hot::ingress::IngressQueues;
-use polysim::hot::spawn::QueueProducer;
-use polysim::ids::{QueueId, SourceId};
-use polysim::msg::inbound::{InboundMessage, SpinTick};
-use polysim::shutdown::FatalSignal;
-use polysim::time::TsUs;
+use engine::hot::ingress::IngressQueues;
+use engine::hot::spawn::QueueProducer;
+use engine::ids::{QueueId, SourceId};
+use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::shutdown::FatalSignal;
+use engine::time::TsUs;
 use proptest::prelude::*;
 use rtrb::RingBuffer;
 

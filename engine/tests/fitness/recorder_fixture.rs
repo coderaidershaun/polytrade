@@ -1,16 +1,16 @@
 //! The engine, tape and readers the shipped recorder's seam tests share. Each test file owns its
 //! price level and lot step, because those are what its claim is about.
 
-use polysim::config::{IntensitySpec, KlineInterval, TableKind};
-use polysim::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
-use polysim::hot::strategy::StrategyConfig;
-use polysim::ids::{AssetId, InstrumentId, Price, Qty, Side};
-use polysim::msg::exec::{ExecCommand, ExecLaneItem};
-use polysim::msg::inbound::InboundMessage;
-use polysim::msg::persist::PersistRecord;
-use polysim::registry::InstrumentRow;
-use polysim::sink::ExecSink;
-use polysim::time::DurationUs;
+use engine::config::{IntensitySpec, KlineInterval, TableKind};
+use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
+use engine::hot::strategy::StrategyConfig;
+use engine::ids::{AssetId, InstrumentId, Price, Qty, Side};
+use engine::msg::exec::{ExecCommand, ExecLaneItem};
+use engine::msg::inbound::InboundMessage;
+use engine::msg::persist::PersistRecord;
+use engine::registry::InstrumentRow;
+use engine::sink::ExecSink;
+use engine::time::DurationUs;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{

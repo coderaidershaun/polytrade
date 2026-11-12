@@ -4,16 +4,16 @@
 //! The last case carries the other half of the contract — a strategy derives its windows from the
 //! configured spin, so they must track a change to it.
 
-use polysim::config::{SpinField, TableKind};
-use polysim::hot::dispatch::HotEngine;
-use polysim::hot::quant::micro;
-use polysim::hot::series::FastQueue;
-use polysim::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
-use polysim::ids::{InstrumentId, Price, Side};
-use polysim::log::LogRecord;
-use polysim::msg::inbound::{InboundMessage, SpinTick};
-use polysim::msg::persist::{FeatureId, PersistRecord};
-use polysim::time::DurationUs;
+use engine::config::{SpinField, TableKind};
+use engine::hot::dispatch::HotEngine;
+use engine::hot::quant::micro;
+use engine::hot::series::FastQueue;
+use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
+use engine::ids::{InstrumentId, Price, Side};
+use engine::log::LogRecord;
+use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::time::DurationUs;
 use rtrb::Consumer;
 
 use crate::engine_support::{

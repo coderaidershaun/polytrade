@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 
-use polysim::hot::series::{FastQueue, MedianScratch};
+use engine::hot::series::{FastQueue, MedianScratch};
 use proptest::prelude::*;
 
 fn model_push<T: Copy>(model: &mut VecDeque<T>, window: usize, item: T) {

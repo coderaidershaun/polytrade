@@ -19,15 +19,15 @@
 
 use std::path::Path;
 
-use polysim::config::{Config, ExecutionMode, NoParams, RunIdentity};
-use polysim::exposure::{
+use engine::config::{Config, ExecutionMode, NoParams, RunIdentity};
+use engine::exposure::{
     ExposureError, ExposureHandle, ExposureSnapshot, ExposureState, ExposureWriter,
     ExposureWriterConfig, InstrumentExposure, file_path, load,
 };
-use polysim::ids::{FIXED_SCALE, InstrumentId, Qty};
-use polysim::registry::Registry;
-use polysim::sink::ExposureSink;
-use polysim::time::TsUs;
+use engine::ids::{FIXED_SCALE, InstrumentId, Qty};
+use engine::registry::Registry;
+use engine::sink::ExposureSink;
+use engine::time::TsUs;
 
 use crate::parquet_readback::TempDir;
 

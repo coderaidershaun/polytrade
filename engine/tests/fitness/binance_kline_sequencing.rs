@@ -1,14 +1,14 @@
 //! Binance kline sequencing goldens: the kline sequencer replayed over a recorded prod fixture
 //! (live WS closes) and REST backfill, plus the gap-repair receipt-stamp monotonicity edge.
 
-use polysim::adapters::binance::kline::{KlineOutcome, KlineSequencer};
-use polysim::adapters::binance::parse::{
+use engine::adapters::binance::kline::{KlineOutcome, KlineSequencer};
+use engine::adapters::binance::parse::{
     RestKlineTail, parse_combined_frame, parse_kline, parse_rest_klines,
 };
-use polysim::config::KlineInterval;
-use polysim::ids::{Price, Qty};
-use polysim::msg::inbound::{InboundMessage, KlineEvent};
-use polysim::time::TsUs;
+use engine::config::KlineInterval;
+use engine::ids::{Price, Qty};
+use engine::msg::inbound::{InboundMessage, KlineEvent};
+use engine::time::TsUs;
 
 use crate::binance_depth_sequencing::{INSTRUMENT, ctx};
 

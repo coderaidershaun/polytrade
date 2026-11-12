@@ -2,7 +2,7 @@
 //! clamp must be what puts it there: a tape that solves a depth above the floor would pass without
 //! ever exercising the clamp.
 
-use polysim::ids::Side;
+use engine::ids::Side;
 
 use crate::engine_support::{ONE, pop};
 use crate::micro_strategy::models::MIN_QUOTE_DISTANCE_BPS;

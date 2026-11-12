@@ -14,20 +14,20 @@
 //! The gate is driven entirely by message stamps: the window comes from a `MarketRotation` and the
 //! instant from the spin tick, so a replay refuses and sweeps at exactly the same points.
 
-use polysim::config::RecordedTables;
-use polysim::hot::dispatch::HotEngine;
-use polysim::hot::exec::{
+use engine::config::RecordedTables;
+use engine::hot::dispatch::HotEngine;
+use engine::hot::exec::{
     DesiredQuote, ExecHalt, ExecSettings, HaltReason, MAX_ORDER_SLOTS, OrderSlot, OrderState,
     QuoteLevel, RejectReason,
 };
-use polysim::hot::strategy::{Strategy, StrategyCtx, WindowInfo};
-use polysim::ids::{Price, Side};
-use polysim::msg::exec::{
+use engine::hot::strategy::{Strategy, StrategyCtx, WindowInfo};
+use engine::ids::{Price, Side};
+use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, VenueOrderStatus,
 };
-use polysim::msg::inbound::{InboundMessage, SpinTick};
-use polysim::msg::ui::UiEvent;
-use polysim::time::{DurationUs, TsUs};
+use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::ui::UiEvent;
+use engine::time::{DurationUs, TsUs};
 use rtrb::Consumer;
 
 use crate::engine_support::{ALL_TABLES, ONE, exec_event, local_refusals, pop, rotation};

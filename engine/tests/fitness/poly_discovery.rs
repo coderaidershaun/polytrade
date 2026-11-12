@@ -2,7 +2,7 @@
 //! rotation machine rests on — a misplaced window boundary or a wrong slot silently mints the wrong
 //! market or double-books a slot — plus the T-60s handover the zero-gap rotation subscribes on.
 
-use polysim::adapters::polymarket::discovery::{PolySchedule, Slot};
+use engine::adapters::polymarket::discovery::{PolySchedule, Slot};
 use proptest::prelude::*;
 
 use crate::engine_support::ts_secs;

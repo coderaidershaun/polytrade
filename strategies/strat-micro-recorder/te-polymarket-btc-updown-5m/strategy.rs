@@ -7,15 +7,15 @@
 //! quotes lapse by not being redeclared — the seam is level-triggered — and that is what frees the
 //! side's single order budget for the flatten that follows.
 
-use polysim::config::StrategySpec;
-use polysim::hot::quant::intensity::{PacedIntensity, SideEstimate};
-use polysim::hot::strategy::{
+use engine::config::StrategySpec;
+use engine::hot::quant::intensity::{PacedIntensity, SideEstimate};
+use engine::hot::strategy::{
     BookState, DesiredQuote, EngineView, InstrumentRow, OrderStyle, QuoteLevel, Registration,
     Strategy, StrategyConfig, StrategyCtx, TickGrid, TopicId, WindowInfo,
 };
-use polysim::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use polysim::msg::inbound::{MarketRotation, SpinTick, TradeEvent};
-use polysim::time::{DurationUs, TsUs};
+use engine::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::inbound::{MarketRotation, SpinTick, TradeEvent};
+use engine::time::{DurationUs, TsUs};
 use serde::Deserialize;
 
 #[path = "../common.rs"]

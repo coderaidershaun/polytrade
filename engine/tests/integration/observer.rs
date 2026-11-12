@@ -4,9 +4,9 @@
 //! final `BookReset` relative to its nominal close). The adapter surfaces neither on the ring; both
 //! are inferred from the message sequence here, off any production path.
 
-use polysim::hot::book::{Book, BookState};
-use polysim::msg::inbound::{BookChunkKind, InboundMessage, Level};
-use polysim::registry::Registry;
+use engine::hot::book::{Book, BookState};
+use engine::msg::inbound::{BookChunkKind, InboundMessage, Level};
+use engine::registry::Registry;
 
 use crate::US;
 

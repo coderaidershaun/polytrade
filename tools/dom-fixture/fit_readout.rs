@@ -3,12 +3,12 @@
 
 use eframe::egui;
 
-use polysim::workstation::browser::chart::mid::{self, Plot};
-use polysim::workstation::browser::monitor::{band_sizes, column_widths, pane_height};
-use polysim::workstation::chart::pane::{LatencyBand, StackBands};
-use polysim::workstation::chart::view::{CandleGrouping, ChartBounds, ChartMode, value_ticks};
-use polysim::workstation::monitor::fit::{self, BandHeights, ColumnPlan, TimeColumn};
-use polysim::workstation::monitor::view::Channel;
+use engine::workstation::browser::chart::mid::{self, Plot};
+use engine::workstation::browser::monitor::{band_sizes, column_widths, pane_height};
+use engine::workstation::chart::pane::{LatencyBand, StackBands};
+use engine::workstation::chart::view::{CandleGrouping, ChartBounds, ChartMode, value_ticks};
+use engine::workstation::monitor::fit::{self, BandHeights, ColumnPlan, TimeColumn};
+use engine::workstation::monitor::view::Channel;
 
 /// What the latency band `band` paints, and how tall that is.
 pub fn latency(band: egui::Rect) -> String {

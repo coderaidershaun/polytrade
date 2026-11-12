@@ -4,9 +4,9 @@
 //! opened, so the arrangement is pinned as pure geometry. The navigation half pins what the URL and
 //! the keys can say.
 
-use polysim::hot::exec::{ExecHalt, HaltReason};
-use polysim::time::TsUs;
-use polysim::workstation::shell::{
+use engine::hot::exec::{ExecHalt, HaltReason};
+use engine::time::TsUs;
+use engine::workstation::shell::{
     Area, Arrangement, Navigation, Pane, Selection, SizeClass, View, zoom_to_fit,
 };
 use proptest::prelude::*;

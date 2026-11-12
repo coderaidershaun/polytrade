@@ -2,12 +2,12 @@
 //! window bounds taken from the slug's grid timestamp (never `startDate`/`end_date_iso`), and the
 //! no-chrono `end_date_min` ISO formatter pinned against a real capture value.
 
-use polysim::adapters::polymarket::rest::{
+use engine::adapters::polymarket::rest::{
     GammaError, GammaMarket, fallback_url, parse_events, parse_fallback,
 };
-use polysim::config::PolySeries;
-use polysim::ids::{Price, Qty};
-use polysim::time::TsUs;
+use engine::config::PolySeries;
+use engine::ids::{Price, Qty};
+use engine::time::TsUs;
 
 use crate::engine_support::ts_secs;
 

@@ -5,23 +5,23 @@
 //! `(x, X)` → `(ExecKind, VenueOrderStatus)` table, the error-code → [`RejectClass`] table, and the
 //! client-id → [`Provenance`] test that decides whether the engine may touch an order.
 
-use polysim::adapters::binance::exec::{
+use engine::adapters::binance::exec::{
     CLIENT_ORDER_ID_LEN, ClockOffset, DecodedResponse, IgnoredReason, RecvWindow, RejectSubject,
     RequestSigner, ResponseContext, StreamEvent, WireError, classify_client_order_id,
     classify_error, decode_order_record, decode_response, decode_stream_event, encode_request,
     format_client_order_id, parse_client_order_id,
 };
-use polysim::adapters::binance::rest::OrderRecord;
-use polysim::adapters::decode::DecimalFault;
-use polysim::adapters::exec::{EngineIdentity, ExecRequest, TeTag, TimeoutFallout};
-use polysim::config::RunIdentity;
-use polysim::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use polysim::msg::exec::{
+use engine::adapters::binance::rest::OrderRecord;
+use engine::adapters::decode::DecimalFault;
+use engine::adapters::exec::{EngineIdentity, ExecRequest, TeTag, TimeoutFallout};
+use engine::config::RunIdentity;
+use engine::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::exec::{
     AccountChunkKind, ExecEvent, ExecKind, Liquidity, OrderStyle, Provenance, RejectClass,
     VenueOrderStatus,
 };
-use polysim::secrets::Secret;
-use polysim::time::TsUs;
+use engine::secrets::Secret;
+use engine::time::TsUs;
 use proptest::prelude::*;
 
 use crate::fake_venue::{Delivery, FakeVenue, exec_events};

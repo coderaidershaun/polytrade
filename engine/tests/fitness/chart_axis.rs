@@ -4,10 +4,10 @@
 //! is a tick drawn outside the plotted range or a label that quietly rounds — a lie painted over live
 //! data rather than a crash, which is exactly what a fitness pin exists to catch.
 
-use polysim::workstation::chart::view::{
+use engine::workstation::chart::view::{
     ChartBounds, ChartDomain, bucket_at_fraction, value_ticks, x_fraction, y_fraction,
 };
-use polysim::workstation::format::{
+use engine::workstation::format::{
     axis_ticks, legible_tick_ceiling, quote_axis_decimals, write_quote_amount,
 };
 use proptest::prelude::*;

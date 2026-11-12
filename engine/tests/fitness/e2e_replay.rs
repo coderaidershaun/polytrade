@@ -9,16 +9,16 @@ use std::time::Duration;
 use rtrb::RingBuffer;
 use tokio::sync::mpsc;
 
-use polysim::config::{ExecutionMode, RecordedTables, StrategyId, TableKind, TradingEngineId};
-use polysim::hot::ingress::IngressQueues;
-use polysim::hot::metrics::{Category, MetricsSnapshot};
-use polysim::hot::spawn::{HotThreadConfig, QueueProducer, spawn_hot_thread};
-use polysim::hot::strategy::StrategyConfig;
-use polysim::ids::{FIXED_SCALE, QueueId, SourceId};
-use polysim::msg::inbound::InboundMessage;
-use polysim::msg::persist::RotationRow;
-use polysim::persist::{PersistConfig, PersistWriter, RunMeta};
-use polysim::shutdown::{DrainSignal, FatalSignal};
+use engine::config::{ExecutionMode, RecordedTables, StrategyId, TableKind, TradingEngineId};
+use engine::hot::ingress::IngressQueues;
+use engine::hot::metrics::{Category, MetricsSnapshot};
+use engine::hot::spawn::{HotThreadConfig, QueueProducer, spawn_hot_thread};
+use engine::hot::strategy::StrategyConfig;
+use engine::ids::{FIXED_SCALE, QueueId, SourceId};
+use engine::msg::inbound::InboundMessage;
+use engine::msg::persist::RotationRow;
+use engine::persist::{PersistConfig, PersistWriter, RunMeta};
+use engine::shutdown::{DrainSignal, FatalSignal};
 
 use crate::e2e_scenario::{HOUR_US, ROTATIONS, message_sequence};
 use crate::engine_support::{

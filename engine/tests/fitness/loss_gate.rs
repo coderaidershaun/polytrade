@@ -12,11 +12,11 @@
 //! residue — the ordinary state after any partial fill — would turn the kill switch into a
 //! permanent side restriction, and losses would keep growing on the side that was still admitted.
 
-use polysim::config::{RecordedTables, TableKind, TrackerSpec};
-use polysim::exposure::InstrumentExposure;
-use polysim::hot::exec::{ExecSettings, LossVerdict, SessionPnl, assess_loss};
-use polysim::ids::{InstrumentId, Qty, Side};
-use polysim::msg::inbound::InboundMessage;
+use engine::config::{RecordedTables, TableKind, TrackerSpec};
+use engine::exposure::InstrumentExposure;
+use engine::hot::exec::{ExecSettings, LossVerdict, SessionPnl, assess_loss};
+use engine::ids::{InstrumentId, Qty, Side};
+use engine::msg::inbound::InboundMessage;
 
 use crate::engine_support::{FillPen, Idle, ONE, instrument_row, pop, rotation};
 use crate::exec_support::{

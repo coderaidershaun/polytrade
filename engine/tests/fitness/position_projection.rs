@@ -5,13 +5,13 @@
 //! both series bucket one event time identically, the window is never derived here, and a wire value
 //! becomes the exact quote mantissa the engine's ledger held.
 
-use polysim::ids::{FIXED_SCALE, InstrumentId};
-use polysim::msg::ui::UiEvent;
-use polysim::time::{DurationUs, TsUs};
-use polysim::workstation::chart::model::ChartModel;
-use polysim::workstation::chart::position_model::{PositionBucket, PositionModel};
-use polysim::workstation::chart::position_view::{RiskSeries, bounds, visible_buckets};
-use polysim::workstation::chart::view::{ChartDomain, domain, x_fraction};
+use engine::ids::{FIXED_SCALE, InstrumentId};
+use engine::msg::ui::UiEvent;
+use engine::time::{DurationUs, TsUs};
+use engine::workstation::chart::model::ChartModel;
+use engine::workstation::chart::position_model::{PositionBucket, PositionModel};
+use engine::workstation::chart::position_view::{RiskSeries, bounds, visible_buckets};
+use engine::workstation::chart::view::{ChartDomain, domain, x_fraction};
 use proptest::prelude::*;
 
 use crate::workstation_support::{

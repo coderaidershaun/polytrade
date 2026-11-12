@@ -12,16 +12,16 @@
 //! so these drive the real constructor, and the last of them pins the diagnostic that turns the
 //! failure into a one-minute read.
 
-use polysim::adapters::exec::{
+use engine::adapters::exec::{
     MAX_RESYNC_ATTEMPTS, ResyncPass, ResyncStep, open_orders_snapshot_end,
 };
-use polysim::hot::exec::{
+use engine::hot::exec::{
     OrderClaim, OrderTable, QuoteLevel, ReadinessGap, ReconcilePass, RejectReason,
 };
-use polysim::ids::{Price, Qty, Side};
-use polysim::msg::exec::{ExecKind, OrderStyle};
-use polysim::msg::ui::UiEvent;
-use polysim::time::TsUs;
+use engine::ids::{Price, Qty, Side};
+use engine::msg::exec::{ExecKind, OrderStyle};
+use engine::msg::ui::UiEvent;
+use engine::time::TsUs;
 
 use proptest::prelude::*;
 

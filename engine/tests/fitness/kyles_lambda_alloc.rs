@@ -7,8 +7,8 @@
 //! every call to `None` would satisfy "allocated nothing" perfectly.
 
 use crate::quant::Lcg;
-use polysim::hot::quant::liquidity::{KylesLambda, KylesLambdaSpec};
-use polysim::ids::Price;
+use engine::hot::quant::liquidity::{KylesLambda, KylesLambdaSpec};
+use engine::ids::Price;
 
 const TICK: Price = Price(1_000_000); // $0.01 at the 1e-8 fixed-point scale.
 

@@ -9,7 +9,7 @@
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
-use polysim::web::{WebConfig, serve};
+use engine::web::{WebConfig, serve};
 
 const USAGE: &str = "usage: polysim-web --strategy <strategy-id> --link <addr> [--link <addr>]... \
                      [--token <token>] [--port <port>] [--bundle <dir>] [--mcp <url>]

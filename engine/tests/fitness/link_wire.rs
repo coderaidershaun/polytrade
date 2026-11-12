@@ -7,28 +7,28 @@
 
 use std::net::SocketAddr;
 
-use polysim::config::ExecutionMode;
-use polysim::hot::exec::{
+use engine::config::ExecutionMode;
+use engine::hot::exec::{
     CloseReason, ExecHalt, HaltReason, OrderState, QuoteLevel, ReadinessGap, RejectOrigin,
     RejectReason,
 };
-use polysim::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
-use polysim::link::{
+use engine::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
+use engine::link::{
     CatalogFeature, CatalogInstrument, Envelope, FrameGuard, GateVerdict, LINK_MAGIC,
     LINK_MAX_DATAGRAM, LINK_MAX_FIELDS, LINK_MAX_GATE_KEYS, LINK_MAX_SUBSCRIBERS, LINK_MAX_TOPICS,
     LINK_SUBSCRIPTION_TTL, LINK_VERSION, Lifecycle, LinkBody, LinkDatagram, LinkDecodeError,
     LinkHash, LinkIdentity, LinkPayload, RefreshOutcome, RunPhase, RunState, SequenceGate,
     Subscribe, SubscriberTable, TopicId, TopicSet, WireName,
 };
-use polysim::msg::exec::{Liquidity, RejectClass};
-use polysim::msg::inbound::Level;
-use polysim::msg::persist::FeatureId;
-use polysim::msg::ui::{
+use engine::msg::exec::{Liquidity, RejectClass};
+use engine::msg::inbound::Level;
+use engine::msg::persist::FeatureId;
+use engine::msg::ui::{
     DomQuote, UI_BOOK_LEVELS, UI_ORDER_SNAPSHOT_CAPACITY, UI_ORDER_SNAPSHOT_MAX_TOTAL,
     UiBookSnapshot, UiBookState, UiEvent, UiLatencyCell, UiLatencyRow, UiLatencySummary,
     UiWorkingOrder,
 };
-use polysim::time::{DurationUs, TsUs};
+use engine::time::{DurationUs, TsUs};
 use proptest::prelude::*;
 
 const TOKEN: LinkHash = LinkHash::of_name("fitness-run-token");

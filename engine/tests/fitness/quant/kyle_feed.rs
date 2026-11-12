@@ -2,8 +2,8 @@
 //! begins, and getting that boundary wrong silently halves or inverts the price-impact slope every
 //! downstream sizing model reads.
 
-use polysim::hot::quant::liquidity::{KyleEstimate, KyleFeed, KylesLambdaSpec};
-use polysim::ids::Price;
+use engine::hot::quant::liquidity::{KyleEstimate, KyleFeed, KylesLambdaSpec};
+use engine::ids::Price;
 
 const TICK: Price = Price(1_000_000); // $0.01 at the 1e-8 fixed-point scale.
 

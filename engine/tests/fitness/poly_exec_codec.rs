@@ -15,9 +15,9 @@
 
 use std::collections::BTreeSet;
 
-use polysim::adapters::decode::DecimalFault;
-use polysim::adapters::exec::ExecRequest;
-use polysim::adapters::polymarket::exec::codec::{
+use engine::adapters::decode::DecimalFault;
+use engine::adapters::exec::ExecRequest;
+use engine::adapters::polymarket::exec::codec::{
     AccountStamps, DecodeContext, EncodeContext, HttpAnswer, IgnoredReason, KnownOrder, OrderIndex,
     OrderSigner, OrderSignerSetup, OrdersRead, PROTOCOL_VERSION, PlaceRequestContext,
     PlacementStatus, RejectSubject, RejectVerdict, SettlementWatermark, StreamEvent, TokenBinding,
@@ -27,13 +27,13 @@ use polysim::adapters::polymarket::exec::codec::{
     decode_protocol_version, decode_single_order, decode_stream_frame, decode_trades_page,
     encode_request,
 };
-use polysim::adapters::polymarket::exec::sign::address::Address;
-use polysim::adapters::polymarket::exec::sign::order::SignatureType;
-use polysim::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use polysim::msg::exec::{
+use engine::adapters::polymarket::exec::sign::address::Address;
+use engine::adapters::polymarket::exec::sign::order::SignatureType;
+use engine::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::exec::{
     AccountChunkKind, ExecEvent, ExecKind, Liquidity, OrderStyle, RejectClass, VenueOrderStatus,
 };
-use polysim::time::TsUs;
+use engine::time::TsUs;
 use serde_json::Value;
 
 use crate::poly_sign::{text, wallet_key};
@@ -694,7 +694,7 @@ fn account_snapshot_chunks_arm_readiness_and_stamp_from_settlement() {
     // Only the last chunk of a balance sweep arms readiness.
     {
         let balances: Vec<_> = (0..3)
-            .map(|index| polysim::msg::exec::AssetBalance {
+            .map(|index| engine::msg::exec::AssetBalance {
                 asset: AssetId(index),
                 free: 100,
                 locked: 0,
@@ -712,7 +712,7 @@ fn account_snapshot_chunks_arm_readiness_and_stamp_from_settlement() {
 
     // A balance chunk is stamped by settlement, not by our clock.
     {
-        let balances = [polysim::msg::exec::AssetBalance {
+        let balances = [engine::msg::exec::AssetBalance {
             asset: AssetId(1),
             free: 100,
             locked: 0,

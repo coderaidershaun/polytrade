@@ -3,7 +3,7 @@
 //! engine ever computes, so a drift from the definition is invisible at run time.
 
 use super::ts;
-use polysim::hot::quant::hawkes::{HawkesEvents, HawkesParams, UnivariateHawkes};
+use engine::hot::quant::hawkes::{HawkesEvents, HawkesParams, UnivariateHawkes};
 
 #[test]
 fn recursion_matches_the_direct_kernel_sum_and_relaxes_to_baseline() {

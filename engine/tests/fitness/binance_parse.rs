@@ -5,15 +5,15 @@
 //! No recorder tool exists for `fixtures/`, so these committed goldens are the sole source of
 //! truth: to change them, re-record by hand from the live venue.
 
-use polysim::adapters::binance::parse::{
+use engine::adapters::binance::parse::{
     DepthDiff, ParseContext, RestKlineTail, parse_agg_trade, parse_combined_frame,
     parse_perp_depth_diff, parse_rest_klines,
 };
-use polysim::adapters::venue_clock::MAX_VENUE_SKEW_US;
-use polysim::config::KlineInterval;
-use polysim::ids::{InstrumentId, Price, Side};
-use polysim::msg::inbound::TradeEvent;
-use polysim::time::TsUs;
+use engine::adapters::venue_clock::MAX_VENUE_SKEW_US;
+use engine::config::KlineInterval;
+use engine::ids::{InstrumentId, Price, Side};
+use engine::msg::inbound::TradeEvent;
+use engine::time::TsUs;
 use proptest::prelude::*;
 
 use crate::engine_support::level;

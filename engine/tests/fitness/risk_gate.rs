@@ -6,17 +6,17 @@
 //! the fills can see that. The engine's own ceiling and its consecutive-reject kill switch live here
 //! too, because they are the controls a strategy bug cannot bypass.
 
-use polysim::config::RecordedTables;
-use polysim::exposure::InstrumentExposure;
-use polysim::hot::dispatch::HotEngine;
-use polysim::hot::exec::{
+use engine::config::RecordedTables;
+use engine::exposure::InstrumentExposure;
+use engine::hot::dispatch::HotEngine;
+use engine::hot::exec::{
     ClientIdLayout, ExecHalt, ExposureCheck, HaltReason, QuotePermission, assess_exposure,
     side_base,
 };
-use polysim::ids::{Price, Qty, Side};
-use polysim::msg::exec::{ExecCommand, ExecEvent, ExecKind, RejectClass, VenueOrderStatus};
-use polysim::msg::inbound::InboundMessage;
-use polysim::msg::ui::UiEvent;
+use engine::ids::{Price, Qty, Side};
+use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, RejectClass, VenueOrderStatus};
+use engine::msg::inbound::InboundMessage;
+use engine::msg::ui::UiEvent;
 use proptest::prelude::*;
 use rtrb::Consumer;
 

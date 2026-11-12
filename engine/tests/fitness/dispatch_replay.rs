@@ -2,16 +2,16 @@
 //! deterministic — identical emitted records and callback order across runs, warmup included —
 //! and a one-sided book (no microprice) must never fold a stale value into the persisted EwmaVol.
 
-use polysim::config::{Instruments, KlineInterval, NoParams, StrategySpec, TableKind};
-use polysim::hot::dispatch::HotEngine;
-use polysim::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
-use polysim::ids::{InstrumentId, Side};
-use polysim::log::LogRecord;
-use polysim::msg::inbound::{
+use engine::config::{Instruments, KlineInterval, NoParams, StrategySpec, TableKind};
+use engine::hot::dispatch::HotEngine;
+use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
+use engine::ids::{InstrumentId, Side};
+use engine::log::LogRecord;
+use engine::msg::inbound::{
     BookChunk, InboundMessage, KlineEvent, MarketRotation, SpinTick, TradeEvent,
 };
-use polysim::msg::persist::{FeatureId, PersistRecord};
-use polysim::time::DurationUs;
+use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::time::DurationUs;
 
 use rtrb::Consumer;
 
@@ -33,7 +33,7 @@ struct Probe {
 impl Probe {
     fn log(&self, ctx: &mut StrategyCtx<'_>, instrument: InstrumentId, code: f64) {
         ctx.emit(self.call.expect("features registered"), instrument, code);
-        polysim::strategy_info!(ctx, "probe callback {code} on instrument {}", instrument.0);
+        engine::strategy_info!(ctx, "probe callback {code} on instrument {}", instrument.0);
     }
 }
 

@@ -23,13 +23,13 @@
 //! fill callbacks, so those messages move the ENGINE's ledger and touch nothing the strategy owns —
 //! which is precisely the split this test exists to hold apart.
 
-use polysim::config::{IntensitySpec, KlineInterval, RecordedTables, TableKind};
-use polysim::hot::strategy::StrategyConfig;
-use polysim::ids::{Price, Side};
-use polysim::msg::inbound::InboundMessage;
-use polysim::msg::persist::{FeatureId, FeatureRow, PersistRecord};
-use polysim::registry::InstrumentRow;
-use polysim::time::DurationUs;
+use engine::config::{IntensitySpec, KlineInterval, RecordedTables, TableKind};
+use engine::hot::strategy::StrategyConfig;
+use engine::ids::{Price, Side};
+use engine::msg::inbound::InboundMessage;
+use engine::msg::persist::{FeatureId, FeatureRow, PersistRecord};
+use engine::registry::InstrumentRow;
+use engine::time::DurationUs;
 
 use crate::engine_support::{
     FillPen, LinkedEngine, LinkedSetup, ONE, book_reset, delta_chunk, engine_view,

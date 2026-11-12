@@ -8,19 +8,19 @@
 //! reaches a socket. Nothing here can be checked by reasoning about our own code, so all of it is
 //! pinned against an oracle we did not write.
 
-use polysim::adapters::polymarket::exec::sign::address::Address;
-use polysim::adapters::polymarket::exec::sign::amount::{AmountRequest, order_amounts};
-use polysim::adapters::polymarket::exec::sign::eip712::{word_from_decimal, word_from_uint};
-use polysim::adapters::polymarket::exec::sign::key::SigningKey;
-use polysim::adapters::polymarket::exec::sign::l1::{ClobAuthRequest, clob_auth_headers};
-use polysim::adapters::polymarket::exec::sign::l2::{
+use engine::adapters::polymarket::exec::sign::address::Address;
+use engine::adapters::polymarket::exec::sign::amount::{AmountRequest, order_amounts};
+use engine::adapters::polymarket::exec::sign::eip712::{word_from_decimal, word_from_uint};
+use engine::adapters::polymarket::exec::sign::key::SigningKey;
+use engine::adapters::polymarket::exec::sign::l1::{ClobAuthRequest, clob_auth_headers};
+use engine::adapters::polymarket::exec::sign::l2::{
     ApiCredentials, HttpMethod, RequestSigner, RequestToSign,
 };
-use polysim::adapters::polymarket::exec::sign::order::{
+use engine::adapters::polymarket::exec::sign::order::{
     Exchange, ExchangeDomain, OrderSide, SignatureType, SignedOrderFields, TokenId, sign_order,
 };
-use polysim::ids::{Price, Qty};
-use polysim::secrets::Secret;
+use engine::ids::{Price, Qty};
+use engine::secrets::Secret;
 use proptest::prelude::*;
 use serde_json::Value;
 

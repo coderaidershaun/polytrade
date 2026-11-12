@@ -6,14 +6,14 @@
 
 use std::sync::Arc;
 
-use polysim::adapters::polymarket::actor::{DriverEffect, PolyDriverCore, SlotLegs};
-use polysim::adapters::polymarket::discovery::PolySchedule;
-use polysim::adapters::polymarket::parse::{PolyBook, PolyFrame};
-use polysim::adapters::polymarket::rotation::{
+use engine::adapters::polymarket::actor::{DriverEffect, PolyDriverCore, SlotLegs};
+use engine::adapters::polymarket::discovery::PolySchedule;
+use engine::adapters::polymarket::parse::{PolyBook, PolyFrame};
+use engine::adapters::polymarket::rotation::{
     OutcomeLeg, ProbeOutcome, TokenId, WindowAssignment, WindowTokens,
 };
-use polysim::ids::{InstrumentId, Price, Qty};
-use polysim::msg::inbound::{BookChunkKind, InboundMessage, Level};
+use engine::ids::{InstrumentId, Price, Qty};
+use engine::msg::inbound::{BookChunkKind, InboundMessage, Level};
 
 use crate::engine_support::ts_secs;
 

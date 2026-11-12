@@ -12,13 +12,13 @@
 
 use std::sync::{Arc, Mutex};
 
-use polysim::config::TrackerSpec;
-use polysim::hot::dispatch::HotEngine;
-use polysim::hot::strategy::{Fill, Registration, Strategy, StrategyCtx};
-use polysim::ids::{AssetId, InstrumentId, Qty, Side};
-use polysim::msg::exec::ExecEvent;
-use polysim::msg::inbound::{InboundMessage, SpinTick};
-use polysim::registry::InstrumentRow;
+use engine::config::TrackerSpec;
+use engine::hot::dispatch::HotEngine;
+use engine::hot::strategy::{Fill, Registration, Strategy, StrategyCtx};
+use engine::ids::{AssetId, InstrumentId, Qty, Side};
+use engine::msg::exec::ExecEvent;
+use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::registry::InstrumentRow;
 use proptest::prelude::*;
 use proptest::strategy::Strategy as _;
 

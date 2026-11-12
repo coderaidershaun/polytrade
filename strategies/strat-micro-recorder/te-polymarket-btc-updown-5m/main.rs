@@ -5,7 +5,7 @@ use std::process::ExitCode;
 mod strategy;
 
 fn main() -> ExitCode {
-    polysim::runtime::run_trading_engine::<strategy::PolyUpPublisher>(
+    engine::runtime::run_trading_engine::<strategy::PolyUpPublisher>(
         "strat-micro-recorder",
         "te-polymarket-btc-updown-5m",
     )

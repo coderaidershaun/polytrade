@@ -12,17 +12,17 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use polysim::config::{RecordedTables, TableKind};
-use polysim::hot::dispatch::{HotEngine, HotEngineSetup};
-use polysim::hot::exec::{CloseReason, DesiredQuote, ExecHalt, OrderState, QuoteLevel};
-use polysim::hot::strategy::{DomQuote, Registration, Strategy, StrategyCtx};
-use polysim::ids::{AssetId, InstrumentId, Price, Qty, Side};
-use polysim::msg::exec::{ExecKind, Liquidity, OrderStyle, VenueOrderStatus};
-use polysim::msg::inbound::{InboundMessage, SpinTick};
-use polysim::msg::persist::FeatureId;
-use polysim::msg::ui::{UiBookSnapshot, UiBookState, UiEvent, UiLatencySummary};
-use polysim::time::{DurationUs, TsUs};
-use polysim::workstation::model::UiModel;
+use engine::config::{RecordedTables, TableKind};
+use engine::hot::dispatch::{HotEngine, HotEngineSetup};
+use engine::hot::exec::{CloseReason, DesiredQuote, ExecHalt, OrderState, QuoteLevel};
+use engine::hot::strategy::{DomQuote, Registration, Strategy, StrategyCtx};
+use engine::ids::{AssetId, InstrumentId, Price, Qty, Side};
+use engine::msg::exec::{ExecKind, Liquidity, OrderStyle, VenueOrderStatus};
+use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::persist::FeatureId;
+use engine::msg::ui::{UiBookSnapshot, UiBookState, UiEvent, UiLatencySummary};
+use engine::time::{DurationUs, TsUs};
+use engine::workstation::model::UiModel;
 use rtrb::Consumer;
 
 use crate::engine_support::{
@@ -41,14 +41,14 @@ struct FillCallbackProbe {
 }
 
 impl Strategy for FillCallbackProbe {
-    fn on_fill(&mut self, _ctx: &mut StrategyCtx<'_>, _fill: &polysim::hot::strategy::Fill) {
+    fn on_fill(&mut self, _ctx: &mut StrategyCtx<'_>, _fill: &engine::hot::strategy::Fill) {
         self.fills.fetch_add(1, Ordering::Relaxed);
     }
 
     fn on_order_update(
         &mut self,
         _ctx: &mut StrategyCtx<'_>,
-        _update: &polysim::hot::strategy::OrderUpdate,
+        _update: &engine::hot::strategy::OrderUpdate,
     ) {
         self.updates.fetch_add(1, Ordering::Relaxed);
     }
@@ -849,7 +849,7 @@ fn a_full_fill_retires_the_working_order_in_the_ui_model() {
     engine.dispatch(pop(0, 0), &InboundMessage::Exec(adoption));
 
     let full_qty = Qty(2 * ONE);
-    let full_fill = InboundMessage::Exec(polysim::msg::exec::ExecEvent {
+    let full_fill = InboundMessage::Exec(engine::msg::exec::ExecEvent {
         kind: ExecKind::ReportTrade,
         status: Some(VenueOrderStatus::Filled),
         last_price: Price(100 * ONE),

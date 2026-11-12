@@ -5,11 +5,11 @@
 
 use proptest::prelude::*;
 
-use polysim::workstation::monitor::fit::{
+use engine::workstation::monitor::fit::{
     BandHeights, BandSizes, ColumnPlan, ColumnWidths, TimeColumn, content_width, fit_bands,
     fit_columns,
 };
-use polysim::workstation::monitor::view::Channel;
+use engine::workstation::monitor::view::Channel;
 
 use crate::workstation_support::NamedCase;
 

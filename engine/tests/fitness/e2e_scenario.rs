@@ -3,11 +3,11 @@
 //! definitions read on their own. Determinism makes this one sequence the whole basis of
 //! the read-back assertions.
 
-use polysim::config::KlineInterval;
-use polysim::ids::{InstrumentId, Side};
-use polysim::msg::inbound::InboundMessage;
-use polysim::msg::persist::RotationRow;
-use polysim::time::TsUs;
+use engine::config::KlineInterval;
+use engine::ids::{InstrumentId, Side};
+use engine::msg::inbound::InboundMessage;
+use engine::msg::persist::RotationRow;
+use engine::time::TsUs;
 
 use crate::engine_support::{
     ONE, book_reset, delta_chunk, kline, rotation, snapshot_pair, spin, trade,

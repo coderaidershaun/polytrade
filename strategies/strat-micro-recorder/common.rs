@@ -14,7 +14,7 @@
 //! `_bid`/`_ask` on the intensity fields follow the engine's convention — a sell aggressor hits the
 //! bid, so bid intensity is fitted from sells.
 
-polysim::link_schema! {
+engine::link_schema! {
     /// One up leg's published slots, in the order they ride the wire within their block.
     pub(crate) struct UpRole {
         bid,

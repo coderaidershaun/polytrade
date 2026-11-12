@@ -7,11 +7,11 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use polysim::adapters::binance::exec::{
+use engine::adapters::binance::exec::{
     ClockOffset, RecvWindow, RequestParams, RequestSigner, SignError,
 };
-use polysim::secrets::{CredentialVariables, EnvFile, Secret, SecretError};
-use polysim::time::{DurationUs, TsUs};
+use engine::secrets::{CredentialVariables, EnvFile, Secret, SecretError};
+use engine::time::{DurationUs, TsUs};
 use proptest::prelude::*;
 
 /// Binance's own worked example for `POST /api/v3/order`, secret and all.

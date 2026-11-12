@@ -3,7 +3,7 @@
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
-    polysim::workstation::browser::start();
+    engine::workstation::browser::start();
 }
 
 #[cfg(not(target_arch = "wasm32"))]

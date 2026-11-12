@@ -11,19 +11,19 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
-use polysim::config::{ExecutionMode, StrategyId};
-use polysim::ids::{AssetId, InstrumentId, Price, Qty, Side};
-use polysim::link::{
+use engine::config::{ExecutionMode, StrategyId};
+use engine::ids::{AssetId, InstrumentId, Price, Qty, Side};
+use engine::link::{
     CatalogFeature, CatalogInstrument, Envelope, FrameGuard, GateVerdict, LINK_MAX_DATAGRAM,
     LINK_MAX_GATE_KEYS, Lifecycle, LinkBody, LinkDatagram, LinkHash, LinkIdentity, RunPhase,
     RunState, SequenceGate, Subscribe, TopicId, WireName,
 };
-use polysim::msg::persist::FeatureId;
-use polysim::msg::ui::{UiBookSnapshot, UiBookState, UiCatalog, UiEvent};
-use polysim::time::{DurationUs, TsUs};
-use polysim::workstation::link_model::{ConnectionState, ControlVerdict};
-use polysim::workstation::link_session::{Delivery, LinkSession, LinkSessionError, LinkTarget};
-use polysim::workstation::model::UiModel;
+use engine::msg::persist::FeatureId;
+use engine::msg::ui::{UiBookSnapshot, UiBookState, UiCatalog, UiEvent};
+use engine::time::{DurationUs, TsUs};
+use engine::workstation::link_model::{ConnectionState, ControlVerdict};
+use engine::workstation::link_session::{Delivery, LinkSession, LinkSessionError, LinkTarget};
+use engine::workstation::model::UiModel;
 use proptest::prelude::*;
 
 use crate::workstation_support::BookFixture;

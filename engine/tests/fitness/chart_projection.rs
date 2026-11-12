@@ -5,14 +5,14 @@
 //! half-tick integers until the final `0..=1` fraction. The domain grows from left to right before it
 //! slides; the bounds cover fills as well as mids, so an off-mid marker can never be invisible.
 
-use polysim::ids::{AssetId, InstrumentId, Price, Qty, Side};
-use polysim::msg::exec::Liquidity;
-use polysim::msg::ui::{UiBookSnapshot, UiBookState, UiEvent};
-use polysim::time::{DurationUs, TsUs};
-use polysim::workstation::chart::model::{
+use engine::ids::{AssetId, InstrumentId, Price, Qty, Side};
+use engine::msg::exec::Liquidity;
+use engine::msg::ui::{UiBookSnapshot, UiBookState, UiEvent};
+use engine::time::{DurationUs, TsUs};
+use engine::workstation::chart::model::{
     BookContinuity, ChartBucket, ChartFill, ChartModel, bucket_open_ts,
 };
-use polysim::workstation::chart::view::{
+use engine::workstation::chart::view::{
     Candle, CandleGrouping, ChartBounds, ChartDomain, bounds, domain, segment_points,
     visible_fills, x_fraction, y_fraction,
 };

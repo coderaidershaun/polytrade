@@ -7,21 +7,21 @@
 
 use std::path::Path;
 
-use polysim::config::{
+use engine::config::{
     BinanceMarket, ConfigError, ExecutionMode, NoParams, PolySeries, TableKind, VenueMarket,
     VolumeThreshold,
 };
-use polysim::hot::strategy::{EngineView, StrategyConfig};
-use polysim::ids::FIXED_SCALE;
-use polysim::registry::{ConnectionCategory, Registry};
-use polysim::time::DurationUs;
+use engine::hot::strategy::{EngineView, StrategyConfig};
+use engine::ids::FIXED_SCALE;
+use engine::registry::{ConnectionCategory, Registry};
+use engine::time::DurationUs;
 
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
 use crate::poly_strategy::{PolyUpParams, PolyUpPublisher};
 
 fn build_from(yaml: &str) -> Registry {
-    let config: polysim::config::Config =
-        polysim::config::Config::from_yaml(yaml).expect("document parses and validates");
+    let config: engine::config::Config =
+        engine::config::Config::from_yaml(yaml).expect("document parses and validates");
     Registry::build(&config).expect("registry builds")
 }
 
@@ -199,7 +199,7 @@ fn a_source_fans_out_to_its_rows_connections_and_queues() {
 #[test]
 fn persistence_is_optional_and_naming_tables_without_it_is_rejected() {
     let headless = config_without_persistence(BINANCE_PERP_SOURCE, "  instruments: all\n");
-    let config: polysim::config::Config = polysim::config::Config::from_yaml(&headless)
+    let config: engine::config::Config = engine::config::Config::from_yaml(&headless)
         .expect("an omitted persistence block is legal");
     assert!(
         config.persistence.is_none(),
@@ -212,7 +212,7 @@ fn persistence_is_optional_and_naming_tables_without_it_is_rejected() {
 
     let contradiction =
         config_without_persistence(BINANCE_PERP_SOURCE, "  tables: [features, trades]\n");
-    let error = polysim::config::Config::<NoParams>::from_yaml(&contradiction)
+    let error = engine::config::Config::<NoParams>::from_yaml(&contradiction)
         .expect_err("tables with nowhere to land must reject");
     assert!(
         matches!(&error, ConfigError::TablesWithoutPersistence { tables }
@@ -220,8 +220,8 @@ fn persistence_is_optional_and_naming_tables_without_it_is_rejected() {
         "error names every table that has nowhere to land, got: {error}"
     );
 
-    let with_block: polysim::config::Config =
-        polysim::config::Config::from_yaml(&config_with_source(BINANCE_PERP_SOURCE))
+    let with_block: engine::config::Config =
+        engine::config::Config::from_yaml(&config_with_source(BINANCE_PERP_SOURCE))
             .expect("a persistence block still parses");
     let persistence = with_block
         .persistence
@@ -385,7 +385,7 @@ fn the_hot_core_is_required_on_linux_and_ignored_elsewhere() {
         !unpinned.contains("hot_core_id"),
         "the document under test must name no hot core"
     );
-    let loaded = polysim::config::Config::<NoParams>::from_yaml(&unpinned);
+    let loaded = engine::config::Config::<NoParams>::from_yaml(&unpinned);
     if cfg!(target_os = "linux") {
         assert!(
             matches!(loaded, Err(ConfigError::MissingHotCoreId)),
@@ -456,8 +456,8 @@ fn volume_bar_thresholds_parse_in_both_forms() {
 
 /// Generic over the strategy's `params:` type, so a shipped config is read through the same typed
 /// pass its own binary uses — parsing it as [`NoParams`] would skip its knobs entirely.
-fn load<P: serde::de::DeserializeOwned + Default>(path: &str) -> polysim::config::Config<P> {
-    polysim::config::Config::load(Path::new(path))
+fn load<P: serde::de::DeserializeOwned + Default>(path: &str) -> engine::config::Config<P> {
+    engine::config::Config::load(Path::new(path))
         .unwrap_or_else(|error| panic!("{path} must load: {error}"))
 }
 
@@ -627,12 +627,12 @@ fn strategy_params_parse_typed_and_reject_unknown_keys() {
     }
 
     let with_params = config_with_strategy(BINANCE_PERP_SOURCE, "  params:\n    threshold: 1.5\n");
-    let config = polysim::config::Config::<FakeParams>::from_yaml(&with_params)
+    let config = engine::config::Config::<FakeParams>::from_yaml(&with_params)
         .expect("typed params parse in the single pass");
     assert_eq!(config.strategy.params.threshold, 1.5);
 
     let unknown_key = config_with_strategy(BINANCE_PERP_SOURCE, "  params:\n    threshld: 1.5\n");
-    let error = polysim::config::Config::<FakeParams>::from_yaml(&unknown_key)
+    let error = engine::config::Config::<FakeParams>::from_yaml(&unknown_key)
         .expect_err("an unknown key inside params must reject");
     assert!(
         matches!(&error, ConfigError::Parse { detail } if detail.contains("threshld")),
@@ -640,7 +640,7 @@ fn strategy_params_parse_typed_and_reject_unknown_keys() {
     );
 
     let omitted = config_with_strategy(BINANCE_PERP_SOURCE, "  instruments: all\n");
-    let config = polysim::config::Config::<FakeParams>::from_yaml(&omitted)
+    let config = engine::config::Config::<FakeParams>::from_yaml(&omitted)
         .expect("an omitted params block is legal");
     assert_eq!(
         config.strategy.params.threshold, 0.0,
@@ -665,7 +665,7 @@ fn a_public_link_bind_is_a_startup_error_unless_allowed() {
     ];
     for bind in private {
         let yaml = config_with_link(&link_block(bind, ""));
-        polysim::config::Config::<NoParams>::from_yaml(&yaml)
+        engine::config::Config::<NoParams>::from_yaml(&yaml)
             .unwrap_or_else(|error| panic!("{bind} is a private bind: {error}"));
     }
 
@@ -679,7 +679,7 @@ fn a_public_link_bind_is_a_startup_error_unless_allowed() {
     ];
     for bind in public {
         let yaml = config_with_link(&link_block(bind, ""));
-        let error = polysim::config::Config::<NoParams>::from_yaml(&yaml)
+        let error = engine::config::Config::<NoParams>::from_yaml(&yaml)
             .err()
             .unwrap_or_else(|| panic!("{bind} must be refused"));
         assert!(
@@ -687,7 +687,7 @@ fn a_public_link_bind_is_a_startup_error_unless_allowed() {
             "{bind} refused for the right reason, got {error}"
         );
         let allowed = config_with_link(&link_block(bind, "  allow_public_bind: true\n"));
-        polysim::config::Config::<NoParams>::from_yaml(&allowed)
+        engine::config::Config::<NoParams>::from_yaml(&allowed)
             .unwrap_or_else(|error| panic!("{bind} allowed explicitly: {error}"));
     }
 }
@@ -843,8 +843,8 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
     ];
     for (case, source, spelling, extra, expected, expects_queue, input_queues) in modes {
         let yaml = config_with_execution_on(source, &execution_block_with(spelling, extra));
-        let config: polysim::config::Config =
-            polysim::config::Config::from_yaml(&yaml).expect("the block parses and validates");
+        let config: engine::config::Config =
+            engine::config::Config::from_yaml(&yaml).expect("the block parses and validates");
         assert_eq!(
             config.execution.as_ref().map(|block| block.mode),
             Some(expected),
@@ -874,7 +874,7 @@ fn a_sim_block_is_inert_outside_sim_mode() {
             BINANCE_SPOT_SOURCE,
             &execution_block_with(spelling, SIM_BLOCK),
         );
-        let config = polysim::config::Config::<NoParams>::from_yaml(&yaml)
+        let config = engine::config::Config::<NoParams>::from_yaml(&yaml)
             .unwrap_or_else(|error| panic!("a sim block under {spelling} must load: {error}"));
         assert_eq!(
             config.execution.as_ref().map(|block| block.mode),
@@ -903,7 +903,7 @@ fn a_sim_block_is_inert_outside_sim_mode() {
 fn every_reason_a_simulated_config_is_refused_names_itself() {
     let accepted =
         config_with_execution_on(BINANCE_SPOT_SOURCE, &execution_block_with("sim", SIM_BLOCK));
-    polysim::config::Config::<NoParams>::from_yaml(&accepted)
+    engine::config::Config::<NoParams>::from_yaml(&accepted)
         .expect("binance spot with all three market streams and a sim block is the valid shape");
 
     let with_maker_fee = |bps: &str| {
@@ -911,7 +911,7 @@ fn every_reason_a_simulated_config_is_refused_names_itself() {
         config_with_execution_on(BINANCE_SPOT_SOURCE, &execution_block_with("sim", &block))
     };
     for bps in ["-0.4", "7.5"] {
-        polysim::config::Config::<NoParams>::from_yaml(&with_maker_fee(bps)).unwrap_or_else(
+        engine::config::Config::<NoParams>::from_yaml(&with_maker_fee(bps)).unwrap_or_else(
             |error| panic!("a fractional fee and a rebate are both real schedules, {bps}: {error}"),
         );
     }
@@ -997,7 +997,7 @@ fn a_one_second_spin_has_a_3030ms_budget_and_fits_the_default_timeout() {
     )
     .replace("spin_interval_us: 100000", "spin_interval_us: 1000000");
 
-    polysim::config::Config::<NoParams>::from_yaml(&yaml)
+    engine::config::Config::<NoParams>::from_yaml(&yaml)
         .expect("3030ms is strictly inside the default 5000ms timeout");
 
     let tight = yaml.replace(
@@ -1022,14 +1022,14 @@ fn a_one_second_spin_has_a_3030ms_budget_and_fits_the_default_timeout() {
         "execution:\n  mode: sim\n",
         "execution:\n  mode: sim\n  inflight_timeout_ms: 3031\n",
     );
-    polysim::config::Config::<NoParams>::from_yaml(&just_inside)
+    engine::config::Config::<NoParams>::from_yaml(&just_inside)
         .expect("one millisecond beyond the worst legal answer is sufficient");
 }
 
 /// Some documents are refused by the typed parse and some only once the registry is built from
 /// them; a caller pinning the refusal cares about the field named, not which pass named it.
 fn refusal(yaml: &str) -> ConfigError {
-    match polysim::config::Config::<NoParams>::from_yaml(yaml) {
+    match engine::config::Config::<NoParams>::from_yaml(yaml) {
         Err(error) => error,
         Ok(config) => Registry::build(&config).expect_err("this document must be refused"),
     }
@@ -1048,7 +1048,7 @@ fn the_base_floor_may_be_zero_and_the_quote_floor_may_not() {
         "min_base_balance",
         "0.0",
     ));
-    let config = polysim::config::Config::<NoParams>::from_yaml(&zero_base)
+    let config = engine::config::Config::<NoParams>::from_yaml(&zero_base)
         .expect("zero is the only correct base reserve where the base asset IS the position");
     assert_eq!(
         config.execution.expect("execution block").min_base_balance,
@@ -1061,7 +1061,7 @@ fn the_base_floor_may_be_zero_and_the_quote_floor_may_not() {
         ("min_quote_balance", "-1.0"),
     ] {
         let yaml = config_with_execution(&execution_block_overriding("live", field, value));
-        let error = polysim::config::Config::<NoParams>::from_yaml(&yaml)
+        let error = engine::config::Config::<NoParams>::from_yaml(&yaml)
             .expect_err("a reserve below zero, and a quote reserve of zero, must be refused");
         let text = error.to_string();
         assert!(

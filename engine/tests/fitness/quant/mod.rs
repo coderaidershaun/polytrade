@@ -1,8 +1,8 @@
 //! Quant calculator pins: leaf numeric correctness for the estimators feeding the research tape.
 //! One module per calculator, each named for the concept rather than the source path.
 
-use polysim::hot::quant::hawkes::{HawkesEvents, HawkesParams};
-use polysim::time::{DurationUs, TsUs};
+use engine::hot::quant::hawkes::{HawkesEvents, HawkesParams};
+use engine::time::{DurationUs, TsUs};
 
 mod egarch;
 mod gueant;

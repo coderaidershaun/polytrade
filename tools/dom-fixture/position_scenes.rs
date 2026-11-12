@@ -1,12 +1,12 @@
 //! The risk scenes: a fixed stream of books and fills folded through the real chart and position
 //! models, so no curve is drawn by hand. The risk chart takes the mid chart's window.
 
-use polysim::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use polysim::msg::ui::{UiBookState, UiEvent};
-use polysim::time::DurationUs;
-use polysim::time::TsUs;
-use polysim::workstation::chart::model::{BookContinuity, ChartModel};
-use polysim::workstation::chart::position_model::PositionModel;
+use engine::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::ui::{UiBookState, UiEvent};
+use engine::time::DurationUs;
+use engine::time::TsUs;
+use engine::workstation::chart::model::{BookContinuity, ChartModel};
+use engine::workstation::chart::position_model::PositionModel;
 
 use crate::fixture::{self, BASE_TS, INSTRUMENT, book, px, unit};
 

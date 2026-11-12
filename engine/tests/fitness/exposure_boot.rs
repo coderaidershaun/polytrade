@@ -21,18 +21,18 @@
 //! the run that takes fills WRITES one, so they drive the whole path — engine, snapshot, ring, writer
 //! thread, file — and pin that the final snapshot survives the sink's owner going away.
 
-use polysim::config::TrackerSpec;
-use polysim::exposure::{
+use engine::config::TrackerSpec;
+use engine::exposure::{
     ExposureError, ExposureSnapshot, ExposureState, InstrumentExposure, MAX_EXPOSURE_INSTRUMENTS,
 };
-use polysim::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup};
-use polysim::hot::exec::{DesiredQuote, ExecSettings, QuoteLevel};
-use polysim::hot::strategy::{Strategy, StrategyCtx};
-use polysim::ids::{ClientOrderId, InstrumentId, Qty, Side};
-use polysim::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle};
-use polysim::msg::inbound::{InboundMessage, SpinTick};
-use polysim::registry::InstrumentRow;
-use polysim::sink::{ExecSink, ExposureSink};
+use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup};
+use engine::hot::exec::{DesiredQuote, ExecSettings, QuoteLevel};
+use engine::hot::strategy::{Strategy, StrategyCtx};
+use engine::ids::{ClientOrderId, InstrumentId, Qty, Side};
+use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle};
+use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::registry::InstrumentRow;
+use engine::sink::{ExecSink, ExposureSink};
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{

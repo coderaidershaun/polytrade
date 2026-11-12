@@ -1,8 +1,8 @@
 //! At every pane height from 200 to 1600 pt the bands add up to the pane and each chart keeps room
 //! for its axis. A crushed chart or a crowded axis paints over live data with no error to catch it.
 
-use polysim::workstation::chart::pane::{LatencyBand, StackBands};
-use polysim::workstation::chart::view::{ChartBounds, value_ticks};
+use engine::workstation::chart::pane::{LatencyBand, StackBands};
+use engine::workstation::chart::view::{ChartBounds, value_ticks};
 
 /// Mirrors `METRICS.latency_fraction`, the most of the pane the latency grid may take.
 const SHIPPED_LATENCY_SHARE: f32 = 0.25;

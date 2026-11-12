@@ -1,21 +1,21 @@
 //! Per-instrument state + emission plumbing: volatility, model feeds (EGARCH, intensity, Guéant, markouts, Kyle, Hawkes),
 //! per-side emit helpers. Strategy owns callbacks; this module owns folded state.
 
-use polysim::config::KlineInterval;
-use polysim::hot::quant::hawkes::{HawkesChoice, HawkesSide};
-use polysim::hot::quant::intensity::{PacedIntensity, SideEstimate};
-use polysim::hot::quant::liquidity::{KyleFeed, KylesLambdaSpec};
-use polysim::hot::quant::micro::OrderbookResilience;
-use polysim::hot::quant::pricing::GueantParams;
-use polysim::hot::quant::toxicity::{
+use engine::config::KlineInterval;
+use engine::hot::quant::hawkes::{HawkesChoice, HawkesSide};
+use engine::hot::quant::intensity::{PacedIntensity, SideEstimate};
+use engine::hot::quant::liquidity::{KyleFeed, KylesLambdaSpec};
+use engine::hot::quant::micro::OrderbookResilience;
+use engine::hot::quant::pricing::GueantParams;
+use engine::hot::quant::toxicity::{
     ForwardHorizon, MarkoutSpec, MarkoutTracker, ReverseHorizon, SideMarkouts,
 };
-use polysim::hot::quant::volatility::{Egarch, EgarchEstimate, Returns};
-use polysim::hot::series::{FastQueue, MedianScratch};
-use polysim::hot::strategy::{InstrumentRow, StrategyCtx};
-use polysim::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use polysim::msg::inbound::Level;
-use polysim::time::{DurationUs, TsUs};
+use engine::hot::quant::volatility::{Egarch, EgarchEstimate, Returns};
+use engine::hot::series::{FastQueue, MedianScratch};
+use engine::hot::strategy::{InstrumentRow, StrategyCtx};
+use engine::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::inbound::Level;
+use engine::time::{DurationUs, TsUs};
 
 use super::features::{
     Features, GueantSideColumns, HawkesColumns, IntensityColumns, MarkoutColumns, QuoteSide,
@@ -143,7 +143,7 @@ impl BinanceVol {
         if let Some(estimate) = self.estimate
             && !estimate.converged
         {
-            polysim::strategy_warn!(
+            engine::strategy_warn!(
                 ctx,
                 "egarch fit did not converge for instrument {} after {} iterations",
                 instrument.0,

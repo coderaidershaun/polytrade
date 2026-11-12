@@ -6,17 +6,17 @@
 //! integration tests. What is architectural here is the composition — that the gate sits
 //! upstream of the ring, so the sequence the hot thread consumes IS the record.
 
-use polysim::config::{RecordedTables, TableKind};
-use polysim::hot::strategy::{Registration, Strategy, StrategyCtx};
-use polysim::ids::InstrumentId;
-use polysim::link::{
+use engine::config::{RecordedTables, TableKind};
+use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
+use engine::ids::InstrumentId;
+use engine::link::{
     Envelope, FrameGuard, InboundLink, LINK_MAX_DATAGRAM, LINK_MAX_FIELDS, LinkBody, LinkDatagram,
     LinkFrame, LinkHash, LinkIdentity, LinkOrigin, LinkPayload, SequenceGate, TopicId,
     schema_hash_of_fields,
 };
-use polysim::msg::inbound::{InboundMessage, SpinTick};
-use polysim::msg::persist::{FeatureId, LinkFrameRow, LinkRowKind, PersistRecord};
-use polysim::time::{DurationUs, TsUs};
+use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::persist::{FeatureId, LinkFrameRow, LinkRowKind, PersistRecord};
+use engine::time::{DurationUs, TsUs};
 
 use crate::engine_support::{
     LinkedEngine, LinkedSetup, drain_persist, engine_with_link, idle_at, instrument_row, pop,

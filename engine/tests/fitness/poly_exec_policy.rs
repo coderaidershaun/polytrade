@@ -6,22 +6,22 @@
 //! binding that is only tradeable once three separate reads agree. Socket behaviour stays out;
 //! what is pinned here is what the driver DECIDES.
 
-use polysim::adapters::exec::{ExecCore, ExecEffect, ExecRequest, MirroredOrder, RequestId};
-use polysim::adapters::polymarket::exec::binding::{
+use engine::adapters::exec::{ExecCore, ExecEffect, ExecRequest, MirroredOrder, RequestId};
+use engine::adapters::polymarket::exec::binding::{
     BindingStep, Bindings, ENRICHMENT_RETRY, EnrichmentRead, MAX_ENRICHMENT_ATTEMPTS,
 };
-use polysim::adapters::polymarket::exec::codec::{
+use engine::adapters::polymarket::exec::codec::{
     DecodeContext, HttpAnswer, OrderIndex, OrdersRead, TokenTable, UnmappedOrder, VenueAnswer,
     decode_heartbeat, decode_neg_risk, decode_orders_page,
 };
-use polysim::adapters::polymarket::exec::correlate::{
+use engine::adapters::polymarket::exec::correlate::{
     DELAYED_HOLD, DelayedOrders, PENDING_CAPACITY, PENDING_TTL, PendingFrames, UnmappedVerdict,
     WithheldCancel, classify_unmapped, restates_balances,
 };
-use polysim::adapters::polymarket::rotation::{OutcomeLeg, TokenId, WindowAssignment};
-use polysim::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
-use polysim::msg::exec::{ExecCommand, ExecEvent, ExecKind, Provenance, VenueOrderStatus};
-use polysim::time::DurationUs;
+use engine::adapters::polymarket::rotation::{OutcomeLeg, TokenId, WindowAssignment};
+use engine::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
+use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, Provenance, VenueOrderStatus};
+use engine::time::DurationUs;
 
 use crate::engine_support::{exec_event, ts as at};
 
@@ -49,7 +49,7 @@ fn assignment(open: i64, close: i64) -> WindowAssignment {
 
 fn ready_bindings(
     step: BindingStep,
-) -> Vec<polysim::adapters::polymarket::exec::binding::ReadyBinding> {
+) -> Vec<engine::adapters::polymarket::exec::binding::ReadyBinding> {
     match step {
         BindingStep::Ready(ready) => ready,
         other => panic!("expected a completed binding, got {other:?}"),

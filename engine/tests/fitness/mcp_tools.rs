@@ -9,7 +9,7 @@ use rmcp::{RoleClient, ServiceExt};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
-use polysim::mcp::{Fleet, PolysimMcp};
+use engine::mcp::{Fleet, PolysimMcp};
 
 use crate::mcp_support::{
     EngineTree, FAST, LINK_BIND, MODE_OFF, MODE_SIM, TRAP_TERM, UNPARSEABLE, reply_of, text_of,

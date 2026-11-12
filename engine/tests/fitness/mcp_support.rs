@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use rmcp::model::CallToolResult;
 use serde_json::Value;
 
-use polysim::config::RunIdentity;
-use polysim::mcp::{Fleet, FleetTiming};
+use engine::config::RunIdentity;
+use engine::mcp::{Fleet, FleetTiming};
 
 use crate::parquet_readback::TempDir;
 

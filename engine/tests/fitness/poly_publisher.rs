@@ -15,30 +15,30 @@
 //! and a change to the role rule that this file caught on one side and not the other would be a
 //! strategy publishing one market while trading another.
 
-use polysim::adapters::exec::open_orders_snapshot_end;
-use polysim::config::{
+use engine::adapters::exec::open_orders_snapshot_end;
+use engine::config::{
     Instruments, IntensitySpec, PolySeries, RecordedTables, StrategySpec, Subscriptions, TableKind,
     TrackerSpec, VenueMarket,
 };
-use polysim::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
-use polysim::hot::exec::{
+use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
+use engine::hot::exec::{
     ExecLimits, ExecSettings, FeeModel, OrderBudget, RejectOrigin, RejectReason,
 };
-use polysim::hot::strategy::{Strategy, StrategyConfig};
-use polysim::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use polysim::link::{
+use engine::hot::strategy::{Strategy, StrategyConfig};
+use engine::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::link::{
     Envelope, FrameGuard, InboundLink, LINK_MAX_DATAGRAM, LinkBody, LinkDatagram, LinkFrame,
     LinkHash, LinkIdentity, LinkOrigin, OutboundLink, schema_hash_of_fields,
 };
-use polysim::msg::exec::{
+use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, VenueOrderStatus,
 };
-use polysim::msg::inbound::{BookChunk, InboundMessage};
-use polysim::msg::persist::{FeatureId, PersistRecord};
-use polysim::msg::ui::{DomQuote, UiEvent};
-use polysim::registry::InstrumentRow;
-use polysim::sink::ExecSink;
-use polysim::time::DurationUs;
+use engine::msg::inbound::{BookChunk, InboundMessage};
+use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::msg::ui::{DomQuote, UiEvent};
+use engine::registry::InstrumentRow;
+use engine::sink::ExecSink;
+use engine::time::DurationUs;
 use proptest::prelude::*;
 use rtrb::{Consumer, RingBuffer};
 

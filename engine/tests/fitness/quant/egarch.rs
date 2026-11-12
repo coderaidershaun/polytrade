@@ -4,8 +4,8 @@
 //! research row it feeds.
 
 use super::Lcg;
-use polysim::hot::quant::volatility::Egarch;
-use polysim::time::DurationUs;
+use engine::hot::quant::volatility::Egarch;
+use engine::time::DurationUs;
 
 /// Synthetic price path: log returns follow exact EGARCH(1,1) recursion with real optimum.
 fn synthetic_price_path(count: usize, params: [f64; 4], seed: u64) -> Vec<f64> {

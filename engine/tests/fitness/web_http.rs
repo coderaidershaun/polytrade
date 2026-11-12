@@ -20,7 +20,7 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::protocol::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
-use polysim::link::{LINK_MAX_DATAGRAM, LinkHash};
+use engine::link::{LINK_MAX_DATAGRAM, LinkHash};
 
 use crate::parquet_readback::TempDir;
 

@@ -3,13 +3,13 @@
 //! arms only on a trailing average it can stand behind and never moves under an open bar; and the
 //! dispatch fan-out hands the strategy exactly the bars that closed, oldest first.
 
-use polysim::config::{CandlesSpec, KlineInterval, TrackerSpec, VolumeBarsSpec, VolumeThreshold};
-use polysim::hot::strategy::{Registration, Strategy, StrategyCtx};
-use polysim::hot::tracker::{MicroTracker, VolumeBar, VolumeBarSeries};
-use polysim::ids::{InstrumentId, Price, Qty, Side};
-use polysim::msg::inbound::{InboundMessage, KlineEvent};
-use polysim::msg::persist::{FeatureId, PersistRecord};
-use polysim::time::TsUs;
+use engine::config::{CandlesSpec, KlineInterval, TrackerSpec, VolumeBarsSpec, VolumeThreshold};
+use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
+use engine::hot::tracker::{MicroTracker, VolumeBar, VolumeBarSeries};
+use engine::ids::{InstrumentId, Price, Qty, Side};
+use engine::msg::inbound::{InboundMessage, KlineEvent};
+use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::time::TsUs;
 use proptest::prelude::*;
 use rtrb::Consumer;
 
@@ -145,7 +145,7 @@ fn klines_tracker(count: usize, quote_volume: i64) -> MicroTracker {
 }
 
 /// A trade worth `usd` at unit price, so the notional reads straight off the argument.
-fn worth(usd: i64, when: i64) -> polysim::msg::inbound::TradeEvent {
+fn worth(usd: i64, when: i64) -> engine::msg::inbound::TradeEvent {
     trade(0, ONE, usd * ONE, Side::Buy, when)
 }
 

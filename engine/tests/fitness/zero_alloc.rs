@@ -4,28 +4,28 @@
 
 use std::sync::atomic::Ordering;
 
-use polysim::config::{
+use engine::config::{
     IntensitySpec, KlineInterval, RecordedTables, SpinField, TableKind, TrackerSpec,
 };
-use polysim::hot::book::{Book, SnapshotOutcome};
-use polysim::hot::dispatch::{HotEngine, HotEngineSetup, LinkWiring};
-use polysim::hot::exec::{DesiredQuote, QuoteLevel};
-use polysim::hot::quant::intensity::IntensityFit;
-use polysim::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
-use polysim::hot::tracker::MicroTracker;
-use polysim::ids::{InstrumentId, Price, Qty, Side};
-use polysim::link::{
+use engine::hot::book::{Book, SnapshotOutcome};
+use engine::hot::dispatch::{HotEngine, HotEngineSetup, LinkWiring};
+use engine::hot::exec::{DesiredQuote, QuoteLevel};
+use engine::hot::quant::intensity::IntensityFit;
+use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
+use engine::hot::tracker::MicroTracker;
+use engine::ids::{InstrumentId, Price, Qty, Side};
+use engine::link::{
     InboundLink, LinkFrame, LinkHash, LinkOrigin, LinkPayload, OutboundLink, RunState, TopicId,
     schema_hash_of_fields,
 };
-use polysim::log::LogRecord;
-use polysim::msg::exec::OrderStyle;
-use polysim::msg::inbound::{InboundMessage, RunControl, SpinTick};
-use polysim::msg::persist::{FeatureId, PersistRecord};
-use polysim::msg::ui::{UiBookSnapshot, UiEvent};
-use polysim::shutdown::{RunAssertion, RunControlGate};
-use polysim::sink::LinkSink;
-use polysim::time::{DurationUs, TsUs};
+use engine::log::LogRecord;
+use engine::msg::exec::OrderStyle;
+use engine::msg::inbound::{InboundMessage, RunControl, SpinTick};
+use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::msg::ui::{UiBookSnapshot, UiEvent};
+use engine::shutdown::{RunAssertion, RunControlGate};
+use engine::sink::LinkSink;
+use engine::time::{DurationUs, TsUs};
 use rtrb::Consumer;
 
 use crate::engine_support::{
@@ -749,7 +749,7 @@ struct LaneProbe;
 impl Strategy for LaneProbe {
     fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, tick: &SpinTick) {
         declare_quote(ctx);
-        polysim::strategy_info!(ctx, "spin {}", tick.seq);
+        engine::strategy_info!(ctx, "spin {}", tick.seq);
     }
 }
 

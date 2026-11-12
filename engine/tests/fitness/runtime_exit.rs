@@ -4,7 +4,7 @@
 //! decision `run_until_shutdown` wires through; one case per row of its truth table. It sees a
 //! graceful trigger only as a name, so the last case passes a name that is not a signal's.
 
-use polysim::runtime::decide_exit;
+use engine::runtime::decide_exit;
 
 struct Case {
     signal: Option<&'static str>,

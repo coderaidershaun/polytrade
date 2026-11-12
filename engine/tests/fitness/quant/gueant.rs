@@ -3,8 +3,8 @@
 //! a computed depth and an order that crosses the book. A quote rounded the wrong way is not an
 //! error anywhere — it is a marketable order the venue happily fills.
 
-use polysim::hot::quant::pricing::{GueantParams, Objective, QuoteCoefficients, QuoteInputs};
-use polysim::ids::Price;
+use engine::hot::quant::pricing::{GueantParams, Objective, QuoteCoefficients, QuoteInputs};
+use engine::ids::Price;
 
 const TICK: Price = Price(1_000_000); // $0.01 at the 1e-8 fixed-point scale.
 

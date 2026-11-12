@@ -17,10 +17,10 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use rtrb::RingBuffer;
 use tokio::sync::mpsc;
 
-use polysim::config::{ExecutionMode, RecordedTables, StrategyId, TradingEngineId};
-use polysim::ids::FIXED_SCALE;
-use polysim::msg::persist::PersistRecord;
-use polysim::persist::{PersistConfig, PersistError, PersistHandle, PersistWriter, RunMeta};
+use engine::config::{ExecutionMode, RecordedTables, StrategyId, TradingEngineId};
+use engine::ids::FIXED_SCALE;
+use engine::msg::persist::PersistRecord;
+use engine::persist::{PersistConfig, PersistError, PersistHandle, PersistWriter, RunMeta};
 
 /// `f64` is stored as bits so cells compare exactly — deterministic replay is bit-for-bit equal.
 #[derive(Clone, Debug, PartialEq, Eq)]

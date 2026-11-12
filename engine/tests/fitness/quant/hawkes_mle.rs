@@ -3,8 +3,8 @@
 //! everything in the research columns downstream.
 
 use super::{START, exponential_fixture, window};
-use polysim::hot::quant::hawkes::HawkesMle;
-use polysim::time::DurationUs;
+use engine::hot::quant::hawkes::HawkesMle;
+use engine::time::DurationUs;
 
 #[test]
 fn fit_recovers_exponential_params_and_warm_starts() {

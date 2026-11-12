@@ -9,7 +9,7 @@ use std::path::Path;
 
 use crate::exec_no_clock::rust_sources;
 
-use polysim::workstation::format::{
+use engine::workstation::format::{
     MISSING, write_latency_micros, write_opt_latency_micros, write_opt_slots, write_slots,
 };
 use proptest::prelude::*;

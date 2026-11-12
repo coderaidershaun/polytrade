@@ -8,10 +8,10 @@
 
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 
-use polysim::link::{RunPhase, RunState};
-use polysim::time::DurationUs;
-use polysim::workstation::link_model::{ConnectionState, ControlVerdict, LinkStatus};
-use polysim::workstation::link_view::{ChipKind, LinkBarLayout, PlacedChip, RunConfirm};
+use engine::link::{RunPhase, RunState};
+use engine::time::DurationUs;
+use engine::workstation::link_model::{ConnectionState, ControlVerdict, LinkStatus};
+use engine::workstation::link_view::{ChipKind, LinkBarLayout, PlacedChip, RunConfirm};
 use proptest::prelude::*;
 
 /// The bar's monospace font, Hack at 11 points, advances this far per character, so a page width

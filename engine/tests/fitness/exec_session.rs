@@ -5,18 +5,18 @@
 //! a resent request can leave two live orders where one was meant, and an inherited order taken for
 //! this run's own is never cancelled.
 
-use polysim::adapters::exec::{
+use engine::adapters::exec::{
     ExecCore, ExecEffect, ExecRequest, ExecSession, InFlightRequest, MAX_RESYNC_ATTEMPTS,
     MirroredOrder, Outgoing, Phase, PlaceNotSentReason, REQUEST_TIMEOUT, ResyncPoll, SessionSetup,
     TimeoutFallout,
 };
-use polysim::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
-use polysim::msg::exec::{
+use engine::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
+use engine::msg::exec::{
     CancelReason, ExecCommand, ExecEvent, ExecKind, OrderStyle, Provenance, RejectClass,
     VenueOrderStatus,
 };
-use polysim::shutdown::FatalSignal;
-use polysim::time::{DurationUs, TsUs};
+use engine::shutdown::FatalSignal;
+use engine::time::{DurationUs, TsUs};
 
 type Session = ExecSession<Vec<ExecEvent>>;
 

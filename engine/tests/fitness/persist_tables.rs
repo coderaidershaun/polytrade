@@ -11,11 +11,11 @@
 //! nobody named opening no file at all — is one `RecordedTables` check for every kind alike, pinned
 //! once over the execution tables in `persist_exec`.
 
-use polysim::config::{KlineInterval, RecordedTables, TableKind, TrackerSpec};
-use polysim::hot::strategy::{Registration, Strategy, StrategyCtx};
-use polysim::ids::{Price, Qty, Side};
-use polysim::msg::inbound::{InboundMessage, TradeEvent};
-use polysim::msg::persist::{BookEventKind, BookEventRow, FeatureId, KlineRow, TradeRow};
+use engine::config::{KlineInterval, RecordedTables, TableKind, TrackerSpec};
+use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
+use engine::ids::{Price, Qty, Side};
+use engine::msg::inbound::{InboundMessage, TradeEvent};
+use engine::msg::persist::{BookEventKind, BookEventRow, FeatureId, KlineRow, TradeRow};
 
 use crate::engine_support::{
     ALL_TABLES, ONE, engine_without_warmup, instrument_row, metrics_ring, persist_ring_for, pop,

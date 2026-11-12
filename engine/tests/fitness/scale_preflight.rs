@@ -5,20 +5,20 @@
 //! both venue ticks (0.01 and the 0.001 endgame tick) pass, a drifted tick or absent min size
 //! refuses. `check_symbol_scale` and `check_poly_market` are pure.
 
-use polysim::adapters::binance::preflight::{
+use engine::adapters::binance::preflight::{
     ScaleError, check_order_rate_limits, check_symbol_scale, order_budget,
 };
-use polysim::adapters::binance::rest::{ExchangeInfo, SymbolFilter, SymbolInfo};
-use polysim::adapters::polymarket::preflight::{
+use engine::adapters::binance::rest::{ExchangeInfo, SymbolFilter, SymbolInfo};
+use engine::adapters::polymarket::preflight::{
     ScaleError as PolyScaleError, check_poly_market, stamp_poly_scales,
 };
-use polysim::adapters::polymarket::rest::GammaMarket;
-use polysim::config::{BinanceEnv, BinanceMarket, VenueMarket};
-use polysim::hot::exec::{MAX_ORDER_BUDGET_WINDOWS, OrderBudgetWindow};
-use polysim::ids::{AssetId, Price, Qty};
-use polysim::registry::{InstrumentRow, OrderRateLimit, RateInterval, Registry};
-use polysim::runtime::{EngineError, check_symbol_order_capacity};
-use polysim::time::{DurationUs, TsUs};
+use engine::adapters::polymarket::rest::GammaMarket;
+use engine::config::{BinanceEnv, BinanceMarket, VenueMarket};
+use engine::hot::exec::{MAX_ORDER_BUDGET_WINDOWS, OrderBudgetWindow};
+use engine::ids::{AssetId, Price, Qty};
+use engine::registry::{InstrumentRow, OrderRateLimit, RateInterval, Registry};
+use engine::runtime::{EngineError, check_symbol_order_capacity};
+use engine::time::{DurationUs, TsUs};
 
 use crate::engine_support::{ONE, instrument_row, tracker_spec_all};
 
@@ -376,13 +376,13 @@ persistence:
 logging:
   dir: ./logs
 ";
-    let config: polysim::config::Config =
-        polysim::config::Config::from_yaml(yaml).expect("poly config parses and validates");
+    let config: engine::config::Config =
+        engine::config::Config::from_yaml(yaml).expect("poly config parses and validates");
     Registry::build(&config).expect("registry builds")
 }
 
 /// Both venue ticks pass and a drifted one refuses, then the accepted window's grid is stamped onto
-/// every slot — the same [`polysim::registry::Registry::set_scales`] mechanism binance uses — so
+/// every slot — the same [`engine::registry::Registry::set_scales`] mechanism binance uses — so
 /// downstream code quantises poly prices against a real tick and lot.
 #[test]
 fn poly_preflight_accepts_the_venue_ticks_and_stamps_the_accepted_grid() {
@@ -478,8 +478,8 @@ logging:
   dir: ./logs
 "
     );
-    let config: polysim::config::Config =
-        polysim::config::Config::from_yaml(&yaml).expect("binance config parses and validates");
+    let config: engine::config::Config =
+        engine::config::Config::from_yaml(&yaml).expect("binance config parses and validates");
     Registry::build(&config).expect("registry builds")
 }
 

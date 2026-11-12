@@ -4,11 +4,11 @@
 //! otherwise `egarch_vol_lt` would take hours of live 1m candles to reach its 300 floor. Regression
 //! for that ordering bug.
 
-use polysim::config::{KlineInterval, TableKind};
-use polysim::hot::strategy::StrategyConfig;
-use polysim::msg::inbound::InboundMessage;
-use polysim::msg::persist::{FeatureId, PersistRecord};
-use polysim::time::DurationUs;
+use engine::config::{KlineInterval, TableKind};
+use engine::hot::strategy::StrategyConfig;
+use engine::msg::inbound::InboundMessage;
+use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::time::DurationUs;
 
 use crate::engine_support::{
     NOMINAL_SPIN, ONE, engine_view, engine_with_ui, instrument_row, kline, metrics_ring,

@@ -3,10 +3,10 @@
 
 use eframe::egui;
 
-use polysim::workstation::chart::position_view::RiskSeries;
-use polysim::workstation::chart::view::ChartMode;
-use polysim::workstation::monitor::view::Channel;
-use polysim::workstation::shell::{Selection, SizeClass};
+use engine::workstation::chart::position_view::RiskSeries;
+use engine::workstation::chart::view::ChartMode;
+use engine::workstation::monitor::view::Channel;
+use engine::workstation::shell::{Selection, SizeClass};
 
 use crate::LeftPanel;
 use crate::scenes::Scene;

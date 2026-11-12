@@ -1,11 +1,11 @@
 //! The chart scenes, built from fixed waves rather than random numbers, so every run draws the
 //! same.
 
-use polysim::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use polysim::msg::inbound::Level;
-use polysim::msg::ui::{UiBookState, UiLatencyCell, UiLatencyRow, UiLatencySummary};
-use polysim::time::DurationUs;
-use polysim::workstation::chart::model::{BookContinuity, ChartModel};
+use engine::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::inbound::Level;
+use engine::msg::ui::{UiBookState, UiLatencyCell, UiLatencyRow, UiLatencySummary};
+use engine::time::DurationUs;
+use engine::workstation::chart::model::{BookContinuity, ChartModel};
 
 use crate::fixture::{self, BASE_TS, INSTRUMENT, book, px, unit};
 

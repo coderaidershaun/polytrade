@@ -4,8 +4,8 @@
 
 use std::collections::BTreeSet;
 
-use polysim::adapters::polymarket::rest::{PolyRest, book_url};
-use polysim::time::TsUs;
+use engine::adapters::polymarket::rest::{PolyRest, book_url};
+use engine::time::TsUs;
 use serde::Deserialize;
 
 use crate::observer::RotationObserver;

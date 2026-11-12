@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
-use polysim::mcp::{Fleet, FleetTiming, StdinWatch, StopOutcome, serve_http, serve_stdio};
+use engine::mcp::{Fleet, FleetTiming, StdinWatch, StopOutcome, serve_http, serve_stdio};
 
 const USAGE: &str =
     "usage: polysim-mcp [--root <path>] [--engines <dir>] [--http <port> [--watch-stdin]]

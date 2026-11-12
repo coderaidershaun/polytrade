@@ -4,13 +4,13 @@
 
 use eframe::egui;
 
-use polysim::config::ExecutionMode;
-use polysim::hot::exec::{ExecHalt, HaltReason};
-use polysim::ids::{AssetId, InstrumentId};
-use polysim::msg::ui::{UiCatalog, UiInstrument};
-use polysim::time::TsUs;
-use polysim::workstation::browser::chrome::{ChromeAction, TopBarFrame};
-use polysim::workstation::shell::{self, Arrangement, Navigation, Selection, SizeClass};
+use engine::config::ExecutionMode;
+use engine::hot::exec::{ExecHalt, HaltReason};
+use engine::ids::{AssetId, InstrumentId};
+use engine::msg::ui::{UiCatalog, UiInstrument};
+use engine::time::TsUs;
+use engine::workstation::browser::chrome::{ChromeAction, TopBarFrame};
+use engine::workstation::shell::{self, Arrangement, Navigation, Selection, SizeClass};
 
 use crate::query;
 

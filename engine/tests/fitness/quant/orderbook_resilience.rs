@@ -2,8 +2,8 @@
 //! to keep a NaN or a nonsense negative rate out of the research tape when the book is locked,
 //! crossed, or the deviation is discretisation dust.
 
-use polysim::hot::quant::micro::{OrderbookResilience, ResilienceSample};
-use polysim::time::TsUs;
+use engine::hot::quant::micro::{OrderbookResilience, ResilienceSample};
+use engine::time::TsUs;
 
 fn sample(ts_us: i64, mid: f64, equilibrium: f64, half_spread: f64) -> ResilienceSample {
     ResilienceSample {
