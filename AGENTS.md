@@ -23,4 +23,6 @@ Run this command to find each known problem that was flagged and left in the cod
 
 Read @CONSTITUTION.md
 
+`.mcp.json.off` is off on purpose: its server has tools that set an engine to `live` and start it with no guard. Do not rename it to `.mcp.json` and do not start its server. The file gets its name back when that guard exists.
+
 Working on src/adapters/? Read src/adapters/exec/README.md first — it is the adapter execution contract.

@@ -64,6 +64,8 @@ docker buildx build \
 
 `polysim-mcp` gives an agent four tools: `list_strategies`, `start_strategy`, `stop_strategy` and `set_execution_mode`. It starts each engine as a child process from its prebuilt release binary, and stops every engine it started when it exits. The `.mcp.json` at the repo root registers it for Claude Code.
 
+For now that file is in the repo as `.mcp.json.off`, so no session starts this server: its tools set an engine to `live` and start it with no guard. The file gets its name back when that guard exists.
+
 A stdio server lives only as long as the client that spawned it, and stops every engine it started when that client exits. Use `--http <port>` when engines must outlive one client: the workstation and every `claude -p` reply then share one long-lived server and its engines. Start it once, then register it under the same name the tracked `.mcp.json` uses, so it replaces the stdio entry instead of sitting beside it:
 
 ```shell
@@ -114,11 +116,7 @@ Go ahead and select you jupyter notebook and start analysing data.
 
 ## Live Tests
 
-Live-network tests are `#[ignore]`d and never run in CI:
-
-```shell
-cargo test --test integration -- --ignored --nocapture --skip poly_exec
-```
+Live-network tests are `#[ignore]`d and never run in CI. Only the `live-runner` role of a job runs a signed test or the probe, by a runbook and the live policy. An agent runs a public read only where a plan names it, by its exact name and with an empty environment.
 
 ## Architecture
 

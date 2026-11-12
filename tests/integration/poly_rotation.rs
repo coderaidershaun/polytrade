@@ -8,7 +8,8 @@
 //! This capture runs far longer than a quick live smoke test, because rotation physics set the
 //! span. Confirming a NEW window's book goes Valid while the OLD still streams, then measuring how
 //! long past nominal close the old tears down, needs ≥2 full ~5-minute grid cycles to coexist.
-//! Still one capture, run deliberately by the agent — never CI (`#[ignore]`).
+//! Still one capture, never CI (`#[ignore]`). An agent runs it only where a plan names it, by its
+//! exact name and with an empty environment.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -72,7 +73,7 @@ logging:
 ";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "live network, 12-min capture — agent-run: cargo test --test integration -- --ignored --nocapture"]
+#[ignore = "live network, 12-min capture: an agent runs it only where a plan names it, by its exact name and with an empty environment"]
 async fn poly_rotation_capture_spans_two_rotations_with_zero_gap_handover() {
     let log_handle = log::init(&LogConfig::default());
     log::register_thread("integration");

@@ -3,13 +3,14 @@
 //! symbol is refused with the invalid-symbol code. Both calls are public and read-only, so nothing
 //! is placed or signed.
 //!
-//! Run: `cargo test --test integration -- --ignored binance_scale`
+//! An agent runs these reads only where a plan names them, by their exact names and with an empty
+//! environment.
 
 use polysim::adapters::binance::preflight::check_order_rate_limits;
 use polysim::adapters::binance::rest::{BinanceEnv, RestClient, RestError};
 use polysim::config::BinanceMarket;
 
-#[ignore = "live network, public production call — agent-run: cargo test --test integration -- --ignored binance_scale"]
+#[ignore = "live network, public production call: an agent runs it only where a plan names it, by its exact name and with an empty environment"]
 #[tokio::test]
 async fn a_filtered_exchange_info_returns_only_the_requested_symbol() {
     let mut client = RestClient::new(BinanceMarket::Spot, BinanceEnv::Production)
@@ -30,7 +31,7 @@ async fn a_filtered_exchange_info_returns_only_the_requested_symbol() {
         .expect("a filtered payload still carries the ORDERS rate limits");
 }
 
-#[ignore = "live network, public production call — agent-run: cargo test --test integration -- --ignored binance_scale"]
+#[ignore = "live network, public production call: an agent runs it only where a plan names it, by its exact name and with an empty environment"]
 #[tokio::test]
 async fn an_unlisted_symbol_is_rejected_with_the_invalid_symbol_code() {
     let mut client = RestClient::new(BinanceMarket::Spot, BinanceEnv::Production)

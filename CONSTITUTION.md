@@ -819,10 +819,14 @@ serializer with its own escaping bugs, for a crate already in the tree.
   - link wire format (amended 2026-07-25)
   - quant leaf-math pins (amended 2026-07-28)
   - web server guard + relay (amended 2026-10-26)
-- [ ] Live-network tests: `tests/integration/`, gated `#[ignore]`. Never CI. The agent runs them
-  deliberately.
-  - Amended 2026-07-18. WHY: user directive. Agent runs ALL tests, live-network included. Network
-    reach to venue endpoints is verified. Human is not required.
+- [ ] Live-network tests: `tests/integration/`, gated `#[ignore]`. Never CI. Only the `live-runner`
+  role of a job runs a signed test or the probe, by a runbook and the live policy. An agent runs a
+  public read only where a plan names it, by its exact name and with an empty environment.
+  - Amended 2026-11-12. WHY: a signed test or the probe uses the live keys of a real account. Each
+    agent reads this law and the ignore reason of each test in each test run.
+  - Replaced 2026-11-12: the agent ran each live-network test deliberately.
+    - Amended 2026-07-18. WHY: user directive. Agent runs ALL tests, live-network included. Network
+      reach to venue endpoints is verified. Human is not required.
 - [ ] Contract seam tests only when specific seam proves unstable.
 - [ ] IF bug is found, THEN write failing fitness regression first. Then fix.
 - [ ] No mocks unless forced. Preferred fixture = recorded real exchange payloads.

@@ -8,7 +8,7 @@
 //! view: the order does not come back. The cancel path gets its proof against the deterministic fake
 //! venue instead, where a destroyed order costs nothing.
 //!
-//! Run: `cargo test --test integration -- --ignored --nocapture`
+//! Only the live-runner role of a job runs these signed tests, by their runbook and the live policy.
 
 use polysim::adapters::binance::exec::{ExecutionPreflight, preflight_execution};
 use polysim::adapters::binance::rest::BinanceEnv;
@@ -18,7 +18,7 @@ const SYMBOL: &str = "BTCUSDT";
 
 /// The gate C8 will call at startup, run end to end against production. Asserts what the key must be
 /// able to do; logs, never asserts, what is account-specific (permissions, balances, fee tier).
-#[ignore = "live network, signed production call — agent-run: cargo test --test integration -- --ignored --nocapture"]
+#[ignore = "live network, signed production call: only the live-runner role of a job runs it, by its runbook and the live policy"]
 #[tokio::test]
 async fn the_permission_probe_authenticates_against_production() {
     let ExecutionPreflight {
@@ -56,7 +56,7 @@ async fn the_permission_probe_authenticates_against_production() {
 /// The three read-only private endpoints, over one client, so a signature failure on any of them
 /// surfaces here rather than mid-session. Existence asserts only: the account's contents are the
 /// operator's business and change between runs.
-#[ignore = "live network, signed production call — agent-run: cargo test --test integration -- --ignored --nocapture"]
+#[ignore = "live network, signed production call: only the live-runner role of a job runs it, by its runbook and the live policy"]
 #[tokio::test]
 async fn signed_reads_return_well_formed_payloads() {
     let ExecutionPreflight {
@@ -96,7 +96,7 @@ async fn signed_reads_return_well_formed_payloads() {
 /// A signed request for an order that cannot exist must come back as a clean `Routine` verdict, not
 /// as an authentication failure — this is the distinction the reconciler will lean on to tell "the
 /// order is gone" from "the key stopped working".
-#[ignore = "live network, signed production call — agent-run: cargo test --test integration -- --ignored --nocapture"]
+#[ignore = "live network, signed production call: only the live-runner role of a job runs it, by its runbook and the live policy"]
 #[tokio::test]
 async fn a_missing_order_reads_as_routine_not_as_a_credential_failure() {
     use polysim::adapters::binance::rest::FailureVerdict;

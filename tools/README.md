@@ -1,6 +1,6 @@
 # Tools
 
-Small standalone tools that use the library, built because they were needed while developing it, and kept because they stay useful. `poly-probe` is a Cargo example, so it runs with `cargo run --example poly-probe`. `dom-fixture` is a bin: Trunk builds only bins, and it is a browser page.
+Small standalone tools that use the library, built because they were needed while developing it, and kept because they stay useful. `poly-probe` is a Cargo example. `dom-fixture` is a bin: Trunk builds only bins, and it is a browser page.
 
 ## dom-fixture
 
@@ -30,9 +30,4 @@ A plain `cargo run --bin dom-fixture` has no screen. It prints the risk scenes a
 
 ## poly-probe
 
-A read-only health check for a Polymarket account. It answers, in one report: is this host geoblocked, do the credentials in `.env` actually work, what kind of wallet is this, what does the account hold, and what orders are resting. It never places, changes, or cancels anything — run it as often as you like, and always before trusting any execution setup.
-
-```shell
-cargo run --example poly-probe              # reads .env
-cargo run --example poly-probe path/to/env  # or a specific file
-```
+A read-only health check for a Polymarket account. It answers, in one report: is this host geoblocked, do the credentials in `.env` actually work, what kind of wallet is this, what does the account hold, and what orders are resting. It never places, changes, or cancels an order. But it reads the wallet key from `.env`, signs its requests, and can create an API key on the account. Only the `live-runner` role of a job runs it, by a runbook and the live policy.
