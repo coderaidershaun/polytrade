@@ -6,7 +6,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use eframe::egui;
 
 use engine::link::{RunPhase, RunState};
-use engine::time::DurationUs;
+use engine::msg::time::DurationUs;
 use engine::workstation::browser::link_bar::{self, LinkAction, LinkBarFrame};
 use engine::workstation::link_model::{ConnectionState, ControlVerdict, LinkStatus};
 use engine::workstation::link_view::RunConfirm;

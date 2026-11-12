@@ -1,7 +1,7 @@
 //! Absolute balances only. Guard against double-spend: ack beats update.
 
-use crate::ids::AssetId;
 use crate::msg::exec::{AccountChunk, AccountChunkKind, AssetBalance};
+use crate::msg::ids::AssetId;
 
 const MAX_ASSETS: usize = 16;
 

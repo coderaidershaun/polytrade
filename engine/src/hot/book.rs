@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use crate::ids::{Price, Qty, Side};
+use crate::msg::ids::{Price, Qty, Side};
 use crate::msg::inbound::{BookChunk, Level};
 use crate::warn;
 

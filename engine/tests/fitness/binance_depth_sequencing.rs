@@ -6,9 +6,9 @@ use engine::adapters::binance::parse::{
     DepthDiff, DepthSnapshot, ParseContext, parse_combined_frame, parse_perp_depth_diff,
     parse_spot_depth_diff,
 };
-use engine::ids::{InstrumentId, Side};
+use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunkKind, InboundMessage};
-use engine::time::TsUs;
+use engine::msg::time::TsUs;
 
 use crate::engine_support::level;
 

@@ -11,7 +11,7 @@ mod validate;
 use crate::config::{
     BinanceEnv, Config, ConfigError, KlineInterval, Subscriptions, TrackerSpec, VenueMarket,
 };
-use crate::ids::{AssetId, InstrumentId, Price, Qty, QueueId};
+use crate::msg::ids::{AssetId, InstrumentId, Price, Qty, QueueId};
 
 pub use assets::AssetDictionary;
 pub use grouping::{ConnectionCategory, ProducerGroup};

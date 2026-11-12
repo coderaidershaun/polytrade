@@ -27,9 +27,9 @@ use crate::adapters::rest_quiet::SharedRestQuiet;
 use crate::config::{Config, SourceSpec, VenueMarket};
 use crate::hot::spawn::QueueProducer;
 use crate::msg::persist::RotationRow;
+use crate::msg::time::EngineClock;
 use crate::registry::Registry;
 use crate::shutdown::{FatalSignal, RunStateCell, TaskHandle};
-use crate::time::EngineClock;
 
 pub(crate) use crate::adapters::polymarket::rotation::WindowAssignment;
 

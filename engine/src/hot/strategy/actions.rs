@@ -8,11 +8,11 @@ use crate::config::{RecordedTables, TableKind};
 use crate::link::{LinkHash, LinkPayload, OutboundLink, TopicId};
 use crate::log::LogRecord;
 use crate::msg::persist::{FeatureRow, PersistRecord};
+use crate::msg::time::TsUs;
 use crate::msg::ui::UiEvent;
 use crate::sink::{LinkSink, PersistSink, StrategyLogSink, UiEventSink};
-use crate::time::TsUs;
 
-pub use crate::ids::ClientOrderId;
+pub use crate::msg::ids::ClientOrderId;
 
 /// 64 features × 64 instruments sweep (1/16 persist ring so flush can't swamp). ~96 KB.
 pub(crate) const FEATURE_LANE_CAPACITY: usize = 4096;

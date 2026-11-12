@@ -1,6 +1,6 @@
 //! Order-book resilience: OU rate of mid relaxation toward equilibrium (1/sec).
 
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 /// Deviation below this fraction of half-spread = discretisation noise (5% TOB imbalance minimum).
 const MIN_DEVIATION_FRACTION: f64 = 0.05;

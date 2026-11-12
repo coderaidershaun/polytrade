@@ -7,8 +7,8 @@
 //! process is alive.
 
 use crate::adapters::http::TransportError;
-use crate::ids::AssetId;
 use crate::msg::exec::AccountChunkKind;
+use crate::msg::ids::AssetId;
 use crate::{info, warn};
 
 use super::super::binding::BindingStep;

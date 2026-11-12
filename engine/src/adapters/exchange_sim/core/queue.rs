@@ -1,6 +1,6 @@
 //! Queue-position tracking for public and simulated liquidity.
 
-use crate::ids::{Price, Qty, Side};
+use crate::msg::ids::{Price, Qty, Side};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SimOrderIndex(pub u16);

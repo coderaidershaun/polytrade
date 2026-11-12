@@ -10,8 +10,8 @@ use engine::adapters::polymarket::rotation::{
     ForceTeardownFacts, OutcomeLeg, ProbeOutcome, RotationFacts, SlotAction, SlotInput,
     SlotMachine, SlotState, TokenId, WindowAssignment, WindowTokens,
 };
-use engine::ids::InstrumentId;
-use engine::time::DurationUs;
+use engine::msg::ids::InstrumentId;
+use engine::msg::time::DurationUs;
 
 use crate::engine_support::ts_secs;
 

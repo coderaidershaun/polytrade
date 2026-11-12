@@ -9,8 +9,8 @@
 //! position, and partial fills produce a smaller order next spin. Nothing remembers what was sent.
 //! The engine-side pass is at file bottom, colocated with the planner, so their decisions stay aligned.
 
-use crate::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use crate::msg::exec::OrderStyle;
+use crate::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use crate::warn;
 
 use super::desired::QuoteLevel;

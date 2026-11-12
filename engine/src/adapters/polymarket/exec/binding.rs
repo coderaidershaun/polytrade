@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use super::super::rotation::WindowAssignment;
-use crate::ids::{InstrumentId, Price};
-use crate::time::{DurationUs, TsUs};
+use crate::msg::ids::{InstrumentId, Price};
+use crate::msg::time::{DurationUs, TsUs};
 
 // Bindings pending enrichment reads. Cap prevents venue refusals from growing the list unbounded.
 const PENDING_BINDINGS: usize = 4;

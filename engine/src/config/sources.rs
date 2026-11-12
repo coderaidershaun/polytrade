@@ -7,8 +7,8 @@ use serde::Deserialize;
 use super::ConfigError;
 use super::execution::{ExecutionMode, check_money};
 use super::tracker::TrackerSpec;
-use crate::labelled_enum::labelled_enum;
-use crate::time::DurationUs;
+use crate::msg::labelled_enum::labelled_enum;
+use crate::msg::time::DurationUs;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "exchange", rename_all = "lowercase", deny_unknown_fields)]

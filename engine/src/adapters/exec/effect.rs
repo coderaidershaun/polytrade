@@ -2,8 +2,8 @@
 //! decides what to do, and the driver decides how to do it on its venue. These types live in their
 //! own module because every driver, simulated or live, names them.
 
-use crate::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 use crate::msg::exec::{CancelReason, OrderStyle};
+use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 
 /// Correlates pipelined request/response (sends don't await; ID tethers answer to query).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

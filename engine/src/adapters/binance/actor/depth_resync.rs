@@ -8,9 +8,9 @@ use crate::adapters::binance::parse::{
 };
 use crate::adapters::binance::rest::RestRequest;
 use crate::config::BinanceMarket;
-use crate::ids::InstrumentId;
+use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::{InboundMessage, TappedMessage, VenueMeta};
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 use super::Actor;
 

@@ -5,10 +5,10 @@ use std::collections::HashSet;
 
 use engine::hot::ingress::IngressQueues;
 use engine::hot::spawn::QueueProducer;
-use engine::ids::{QueueId, SourceId};
+use engine::msg::ids::{QueueId, SourceId};
 use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::time::TsUs;
 use engine::shutdown::FatalSignal;
-use engine::time::TsUs;
 use proptest::prelude::*;
 use rtrb::RingBuffer;
 

@@ -11,7 +11,7 @@ use std::sync::{Arc, OnceLock};
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use super::record::{Level, LogRecord};
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 const UNREGISTERED_TAG: &str = "unregistered";
 const RING_CAPACITY: usize = 8192;

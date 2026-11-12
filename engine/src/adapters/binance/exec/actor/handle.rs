@@ -8,9 +8,9 @@ use crate::adapters::edge::{EdgeInputs, EdgeSettings, VenueEdge, run_edge};
 use crate::adapters::exec::{EdgeHandle, EngineIdentity};
 use crate::hot::spawn::QueueProducer;
 use crate::msg::exec::ExecLaneItem;
+use crate::msg::time::DurationUs;
 use crate::registry::{AssetDictionary, InstrumentRow};
 use crate::secrets::Credentials;
-use crate::time::DurationUs;
 
 use super::super::{ExecutionPreflight, RecvWindow, SignError};
 use super::Actor;

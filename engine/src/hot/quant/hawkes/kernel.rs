@@ -2,7 +2,7 @@
 //! in for the whole event history, so each event and each intensity query costs constant time.
 
 use super::HawkesEvents;
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 /// Exponential kernel parameters, every rate per second.
 #[derive(Debug, Clone, Copy, PartialEq)]

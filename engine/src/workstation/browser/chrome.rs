@@ -6,7 +6,7 @@ use eframe::egui;
 
 use super::controls::{self, DropdownSpec};
 use super::theme::{self, DARK, METRICS};
-use crate::ids::InstrumentId;
+use crate::msg::ids::InstrumentId;
 use crate::msg::ui::UiCatalog;
 use crate::workstation::format;
 use crate::workstation::shell::{Area, Arrangement, Pane, Selection, View};

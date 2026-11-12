@@ -20,10 +20,10 @@ use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{ClientIdLayout, ExecSettings, MAX_ORDER_SLOTS, side_base};
 use engine::hot::metrics::MetricsSnapshot;
 use engine::hot::strategy::{Strategy, StrategyCtx};
-use engine::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, Provenance, VenueOrderStatus,
 };
+use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::persist::PersistRecord;
 use engine::registry::InstrumentRow;

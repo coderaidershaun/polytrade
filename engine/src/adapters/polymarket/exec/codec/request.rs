@@ -7,8 +7,8 @@
 //! venue signs `/data/orders` fails auth with no clue as to why.
 
 use crate::adapters::exec::ExecRequest;
-use crate::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 use crate::msg::exec::OrderStyle;
+use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 use crate::secrets::Secret;
 
 use super::super::sign::address::Address;

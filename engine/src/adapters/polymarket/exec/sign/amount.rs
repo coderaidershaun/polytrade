@@ -4,7 +4,7 @@
 //! `tick_decimals + 2` places. These amounts are an equality operand against the venue's own
 //! arithmetic, so `f64` is ruled out and every step below stays in `i128`.
 
-use crate::ids::{FIXED_SCALE, Price, Qty};
+use crate::msg::ids::{FIXED_SCALE, Price, Qty};
 
 use super::order::OrderSide;
 

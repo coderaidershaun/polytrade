@@ -1,7 +1,7 @@
 //! Readiness proofs for starting and recovering simulated execution.
 
 use super::lanes::SimLane;
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 const PROOF_COUNT: usize = 5;
 

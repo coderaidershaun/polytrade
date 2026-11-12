@@ -273,7 +273,7 @@ impl Actor {
         if self.orders.record(venue_order_id, known).is_ok() {
             return;
         }
-        let live: Vec<crate::ids::ClientOrderId> = self
+        let live: Vec<crate::msg::ids::ClientOrderId> = self
             .session
             .core
             .mirror()

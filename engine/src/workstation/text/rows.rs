@@ -2,9 +2,9 @@
 //! the hover record that spells the same columns out untruncated.
 
 use crate::hot::exec::{CloseReason, OrderState, RejectOrigin};
-use crate::ids::{Price, Qty, Side};
 use crate::msg::exec::Liquidity;
-use crate::time::TsUs;
+use crate::msg::ids::{Price, Qty, Side};
+use crate::msg::time::TsUs;
 use crate::workstation::dom_view::tick_index;
 use crate::workstation::format::{self, MISSING};
 use crate::workstation::monitor::model::{

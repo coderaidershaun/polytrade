@@ -1,6 +1,6 @@
 //! Realised volatility: population stdev of consecutive returns, scaled /sec for cross-venue compare.
 
-use crate::time::DurationUs;
+use crate::msg::time::DurationUs;
 
 /// `Log`: scale-free for prices. `Absolute`: for bounded 0..1 probability (log explodes at bounds).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

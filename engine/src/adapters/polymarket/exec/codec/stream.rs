@@ -7,9 +7,9 @@
 
 use crate::adapters::decode::{order_side, price_field, qty_field, unknown_enum};
 use crate::adapters::venue_clock::clamp_or_receipt;
-use crate::ids::{ClientOrderId, InstrumentId, Price, Qty, TradeId};
 use crate::msg::exec::{ExecEvent, ExecKind, Liquidity};
-use crate::time::TsUs;
+use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, TradeId};
+use crate::msg::time::TsUs;
 
 use super::correlation::{trade_id_digest, venue_order_id_digest};
 use super::response::blank_event;

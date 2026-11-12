@@ -4,7 +4,7 @@
 
 use serde::Deserialize;
 
-use crate::ids::{DecimalError, Price, Qty, Side};
+use crate::msg::ids::{DecimalError, Price, Qty, Side};
 use crate::msg::inbound::Level;
 
 /// `MantissaOverflow` is fatal — a venue number this scale cannot hold escalates, never truncates.

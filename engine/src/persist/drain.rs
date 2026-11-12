@@ -13,8 +13,8 @@ use crate::msg::persist::{
     BookEventRow, FeatureRow, FillRow, KlineRow, LinkFrameRow, OrderRow, PersistRecord,
     RotationRow, TradeRow,
 };
+use crate::msg::time::boot_stamp_us;
 use crate::shutdown::WriterThread;
-use crate::time::boot_stamp_us;
 
 use super::retention::Retention;
 use super::schema::{self, TableRow};

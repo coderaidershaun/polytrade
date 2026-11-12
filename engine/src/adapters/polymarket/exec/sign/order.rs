@@ -4,7 +4,7 @@
 //! The field list below IS the typehash, so reordering it invalidates every signature; and
 //! `expiration` is deliberately absent, because V2 moved it to the wire body only.
 
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 use super::address::Address;
 use super::eip712::{self, Eip712Error, Word, ZERO_WORD, keccak256};

@@ -4,7 +4,7 @@
 use std::net::SocketAddr;
 
 use crate::link::RunState;
-use crate::time::DurationUs;
+use crate::msg::time::DurationUs;
 use crate::workstation::link_model::LinkStatus;
 use crate::workstation::text::{self, ChipWords, Tone};
 

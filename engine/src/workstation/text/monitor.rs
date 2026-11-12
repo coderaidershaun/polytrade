@@ -3,8 +3,8 @@
 //! it appears.
 
 use crate::hot::exec::RejectOrigin;
-use crate::ids::Side;
 use crate::msg::exec::RejectClass;
+use crate::msg::ids::Side;
 use crate::workstation::dom_view::DomUnit;
 use crate::workstation::format::{self, Wrote};
 use crate::workstation::monitor::view::{AccountView, AssetRole, AssetRowView, FeatureRowView};

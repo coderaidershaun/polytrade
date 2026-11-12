@@ -8,8 +8,8 @@ use tokio::sync::mpsc;
 
 use crate::config::{Config, RecordedTables, RunIdentity};
 use crate::hot::dispatch::PersistWiring;
-use crate::ids::FIXED_SCALE;
 use crate::info;
+use crate::msg::ids::FIXED_SCALE;
 use crate::msg::persist::{PersistRecord, RotationRow};
 use crate::persist::{PersistConfig, PersistHandle, PersistWriter, RunMeta};
 use crate::registry::Registry;

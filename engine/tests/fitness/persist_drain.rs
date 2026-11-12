@@ -10,10 +10,10 @@ use std::time::{Duration, Instant};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 use engine::config::{RecordedTables, TableKind};
-use engine::ids::{InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::persist::{FeatureId, FeatureRow, PersistRecord, TradeRow};
+use engine::msg::time::TsUs;
 use engine::persist::PersistError;
-use engine::time::TsUs;
 
 use crate::engine_support::ONE;
 use crate::parquet_readback::{

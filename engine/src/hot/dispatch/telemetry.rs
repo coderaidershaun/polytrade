@@ -4,9 +4,9 @@ use crate::hot::book::Book;
 use crate::hot::metrics::{EngineCounters, MessageMeta, Stage};
 use crate::hot::quant::intensity::IntensityCounts;
 use crate::hot::tracker::MicroTracker;
+use crate::msg::time::TsUs;
 use crate::msg::ui::UiLatencySummary;
 use crate::sink::LinkSink;
-use crate::time::TsUs;
 
 use super::HotEngine;
 

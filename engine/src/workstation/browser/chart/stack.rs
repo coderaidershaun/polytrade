@@ -4,7 +4,7 @@
 
 use eframe::egui;
 
-use crate::ids::{InstrumentId, Price};
+use crate::msg::ids::{InstrumentId, Price};
 
 use super::crosshair::{self, CrosshairFrame};
 use super::mid::{self, ChartFrame};

@@ -6,8 +6,8 @@ use engine::adapters::polymarket::rest::{
     GammaError, GammaMarket, fallback_url, parse_events, parse_fallback,
 };
 use engine::config::PolySeries;
-use engine::ids::{Price, Qty};
-use engine::time::TsUs;
+use engine::msg::ids::{Price, Qty};
+use engine::msg::time::TsUs;
 
 use crate::engine_support::ts_secs;
 

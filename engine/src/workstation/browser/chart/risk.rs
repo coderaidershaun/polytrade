@@ -5,7 +5,7 @@
 
 use eframe::egui;
 
-use crate::ids::InstrumentId;
+use crate::msg::ids::InstrumentId;
 
 use super::mid::{self, ChartPaint, Plot, paint_note};
 use crate::workstation::browser::theme::{self, DARK, METRICS};

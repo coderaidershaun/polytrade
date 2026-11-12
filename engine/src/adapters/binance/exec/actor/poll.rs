@@ -5,7 +5,7 @@
 
 use crate::adapters::edge::EdgeDriver;
 use crate::adapters::exec::{SessionOutcome, TimeoutFallout};
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 use crate::warn;
 
 use super::rest::RestJob;

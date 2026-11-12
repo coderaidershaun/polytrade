@@ -1,6 +1,6 @@
 //! Compact typed identity + exact fixed-point numerics: dense indices, prices/quantities as i64 1e-8 mantissas (never float).
 
-use crate::labelled_enum::labelled_enum;
+use crate::msg::labelled_enum::labelled_enum;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstrumentId(pub u16);

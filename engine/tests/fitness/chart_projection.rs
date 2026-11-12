@@ -5,10 +5,10 @@
 //! half-tick integers until the final `0..=1` fraction. The domain grows from left to right before it
 //! slides; the bounds cover fills as well as mids, so an off-mid marker can never be invisible.
 
-use engine::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::exec::Liquidity;
+use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
+use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{UiBookSnapshot, UiBookState, UiEvent};
-use engine::time::{DurationUs, TsUs};
 use engine::workstation::chart::model::{
     BookContinuity, ChartBucket, ChartFill, ChartModel, bucket_open_ts,
 };

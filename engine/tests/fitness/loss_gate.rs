@@ -15,7 +15,7 @@
 use engine::config::{RecordedTables, TableKind, TrackerSpec};
 use engine::exposure::InstrumentExposure;
 use engine::hot::exec::{ExecSettings, LossVerdict, SessionPnl, assess_loss};
-use engine::ids::{InstrumentId, Qty, Side};
+use engine::msg::ids::{InstrumentId, Qty, Side};
 use engine::msg::inbound::InboundMessage;
 
 use crate::engine_support::{FillPen, Idle, ONE, instrument_row, pop, rotation};

@@ -9,7 +9,7 @@ use crate::adapters::binance::rest::{
     AccountInfo, AccountTrade, FailureVerdict, OrderRecord, RestError, SignedRestClient,
 };
 use crate::adapters::exec::EngineIdentity;
-use crate::ids::{ClientOrderId, InstrumentId};
+use crate::msg::ids::{ClientOrderId, InstrumentId};
 use crate::warn;
 
 use super::super::{ClockOffset, SymbolTable, format_client_order_id};

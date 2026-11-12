@@ -5,7 +5,7 @@ mod orderbook_resilience;
 pub use orderbook_resilience::{OrderbookResilience, ResilienceSample};
 
 use crate::hot::quant::BPS;
-use crate::ids::Price;
+use crate::msg::ids::Price;
 use crate::msg::inbound::Level;
 
 /// Size-weighted mid (weighted by opposite side's qty, leans to thinner side; falls back to mid if empty).

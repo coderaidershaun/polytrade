@@ -3,9 +3,9 @@
 use std::borrow::Borrow;
 
 use crate::adapters::chunk::{ChunkEmitter, ChunkPlan};
-use crate::ids::{InstrumentId, Side};
+use crate::msg::ids::{InstrumentId, Side};
 use crate::msg::inbound::{BookChunkKind, InboundMessage, Level};
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 use super::parse::{PolyBook, PolyDelta};
 

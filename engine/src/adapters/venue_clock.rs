@@ -1,6 +1,6 @@
 //! Safe venue timestamp conversion.
 
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 /// Max venue-time skew before saturation (prevents overflow on diff). 400d = REST backfill OK.
 pub const MAX_VENUE_SKEW_US: i64 = 400 * 24 * 60 * 60 * 1_000_000;

@@ -9,7 +9,7 @@
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 
 use engine::link::{RunPhase, RunState};
-use engine::time::DurationUs;
+use engine::msg::time::DurationUs;
 use engine::workstation::link_model::{ConnectionState, ControlVerdict, LinkStatus};
 use engine::workstation::link_view::{ChipKind, LinkBarLayout, PlacedChip, RunConfirm};
 use proptest::prelude::*;

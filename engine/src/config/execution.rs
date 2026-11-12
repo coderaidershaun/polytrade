@@ -8,8 +8,8 @@
 
 use serde::Deserialize;
 
-use crate::ids::fixed_mantissa;
-use crate::labelled_enum::labelled_enum;
+use crate::msg::ids::fixed_mantissa;
+use crate::msg::labelled_enum::labelled_enum;
 
 use super::simulated::SimConfig;
 use super::{ConfigError, MAX_OPERATIONAL_DURATION_MS, RunIdentity};

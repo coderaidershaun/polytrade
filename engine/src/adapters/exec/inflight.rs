@@ -2,7 +2,7 @@
 //! reconciled and never re-sent: the venue may have executed it and only the answer was lost, so a
 //! second copy could double the order.
 
-use crate::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, TsUs};
 use crate::warn;
 
 use super::{ExecRequest, RequestId};

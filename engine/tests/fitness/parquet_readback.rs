@@ -18,7 +18,7 @@ use rtrb::RingBuffer;
 use tokio::sync::mpsc;
 
 use engine::config::{ExecutionMode, RecordedTables, StrategyId, TradingEngineId};
-use engine::ids::FIXED_SCALE;
+use engine::msg::ids::FIXED_SCALE;
 use engine::msg::persist::PersistRecord;
 use engine::persist::{PersistConfig, PersistError, PersistHandle, PersistWriter, RunMeta};
 

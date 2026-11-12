@@ -10,8 +10,10 @@ use engine::adapters::exchange_sim::core::wallet::{
 use engine::adapters::exchange_sim::wire::{SimFill, VenueWire};
 use engine::adapters::exec::{EngineIdentity, TeTag};
 use engine::config::RunIdentity;
-use engine::ids::{AssetId, ClientOrderId, FIXED_SCALE, Price, Qty, Side, TradeId, VenueOrderId};
-use engine::time::TsUs;
+use engine::msg::ids::{
+    AssetId, ClientOrderId, FIXED_SCALE, Price, Qty, Side, TradeId, VenueOrderId,
+};
+use engine::msg::time::TsUs;
 
 const REPORTED_AT: TsUs = TsUs::from_micros(1_785_000_123_456_789);
 const TRADE_ID: TradeId = TradeId(778_291);

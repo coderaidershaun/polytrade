@@ -3,7 +3,7 @@
 use super::{BACKING_MULTIPLE, Latest};
 use crate::config::SpinField;
 use crate::hot::series::FastQueue;
-use crate::ids::{FIXED_SCALE, Price, Qty, Side};
+use crate::msg::ids::{FIXED_SCALE, Price, Qty, Side};
 use crate::msg::inbound::TradeEvent;
 
 /// Since-last-sample trade aggregates (exact i128, f64 at sample point).

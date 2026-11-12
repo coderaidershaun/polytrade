@@ -40,11 +40,11 @@ use crate::hot::strategy::Strategy;
 use crate::link::{LinkActor, LinkActorSetup, OutboundLink};
 use crate::log::{self, LogConfig, LogHandle, LogRecord};
 use crate::msg::persist::RotationRow;
+use crate::msg::time::{DurationUs, EngineClock};
 use crate::msg::ui::{UiCatalog, UiLifecycle, UiWiring, ui_channel};
 use crate::persist::PersistHandle;
 use crate::shutdown::{DrainSignal, FatalSignal, RunControlGate, TaskHandle};
 use crate::sink::{LinkSink, MetricsSink, StrategyLogSink};
-use crate::time::{DurationUs, EngineClock};
 use crate::{error, info};
 
 use drain::install_panic_hook;

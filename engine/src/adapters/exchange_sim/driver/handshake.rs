@@ -6,7 +6,7 @@ use crate::adapters::binance::exec::{DecodeContext, account_snapshot_chunks};
 use crate::adapters::binance::rest::Balance;
 use crate::adapters::exec::{Phase, open_orders_snapshot_end, stream_ready};
 use crate::msg::inbound::InboundMessage;
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 impl SimExecDriver {
     pub fn open(&mut self, effective_ts_us: TsUs) {

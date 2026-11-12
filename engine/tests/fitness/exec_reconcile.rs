@@ -20,11 +20,11 @@ use engine::hot::exec::{
     ReconcileInput, ReconcileOutcome, RejectReason, RestingOrder, TickGrid, apply_exec_event,
     reconcile_side,
 };
-use engine::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, VenueOrderId};
 use engine::msg::exec::{
     ExecEvent, ExecKind, OrderStyle, Provenance, RejectClass, VenueOrderStatus,
 };
-use engine::time::{DurationUs, TsUs};
+use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, VenueOrderId};
+use engine::msg::time::{DurationUs, TsUs};
 use proptest::prelude::*;
 
 use crate::engine_support::{rich, top};

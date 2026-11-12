@@ -3,7 +3,7 @@
 
 use std::net::SocketAddr;
 
-use crate::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, TsUs};
 
 use super::control::TopicSet;
 use super::envelope::{Envelope, LinkHash, TopicId};

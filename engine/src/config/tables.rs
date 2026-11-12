@@ -2,7 +2,7 @@
 
 use serde::Deserialize;
 
-use crate::labelled_enum::labelled_enum;
+use crate::msg::labelled_enum::labelled_enum;
 
 labelled_enum! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]

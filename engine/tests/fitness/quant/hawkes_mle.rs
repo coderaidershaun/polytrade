@@ -4,7 +4,7 @@
 
 use super::{START, exponential_fixture, window};
 use engine::hot::quant::hawkes::HawkesMle;
-use engine::time::DurationUs;
+use engine::msg::time::DurationUs;
 
 #[test]
 fn fit_recovers_exponential_params_and_warm_starts() {

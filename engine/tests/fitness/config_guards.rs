@@ -12,9 +12,9 @@ use engine::config::{
     VolumeThreshold,
 };
 use engine::hot::strategy::{EngineView, StrategyConfig};
-use engine::ids::FIXED_SCALE;
+use engine::msg::ids::FIXED_SCALE;
+use engine::msg::time::DurationUs;
 use engine::registry::{ConnectionCategory, Registry};
-use engine::time::DurationUs;
 
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
 use crate::poly_strategy::{PolyUpParams, PolyUpPublisher};

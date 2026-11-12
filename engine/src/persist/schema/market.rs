@@ -1,10 +1,10 @@
 //! Schemas for venue public data: features, trades, book events, klines, link tape, rotation lineage.
 
-use crate::ids::Side;
+use crate::msg::ids::Side;
 use crate::msg::persist::{
     BookEventKind, BookEventRow, FeatureRow, KlineRow, LinkFrameRow, RotationRow, TradeRow,
 };
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 use super::TableRow;
 use super::column::Column;

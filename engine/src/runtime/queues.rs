@@ -5,7 +5,7 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::hot::ingress::IngressQueues;
 use crate::hot::spawn::{LinkQueueProducer, QueueProducer};
-use crate::ids::{QueueId, SourceId};
+use crate::msg::ids::{QueueId, SourceId};
 use crate::msg::inbound::InboundMessage;
 use crate::registry::Registry;
 use crate::shutdown::FatalSignal;

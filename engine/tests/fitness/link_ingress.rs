@@ -8,15 +8,15 @@
 
 use engine::config::{RecordedTables, TableKind};
 use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
-use engine::ids::InstrumentId;
 use engine::link::{
     Envelope, FrameGuard, InboundLink, LINK_MAX_DATAGRAM, LINK_MAX_FIELDS, LinkBody, LinkDatagram,
     LinkFrame, LinkHash, LinkIdentity, LinkOrigin, LinkPayload, SequenceGate, TopicId,
     schema_hash_of_fields,
 };
+use engine::msg::ids::InstrumentId;
 use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::persist::{FeatureId, LinkFrameRow, LinkRowKind, PersistRecord};
-use engine::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, TsUs};
 
 use crate::engine_support::{
     LinkedEngine, LinkedSetup, drain_persist, engine_with_link, idle_at, instrument_row, pop,

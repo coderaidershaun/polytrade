@@ -2,7 +2,7 @@
 
 use crate::hot::book::{BookState, SnapshotOutcome};
 use crate::hot::strategy::WindowInfo;
-use crate::ids::{InstrumentId, Price};
+use crate::msg::ids::{InstrumentId, Price};
 use crate::msg::inbound::{
     BookChunk, BookChunkKind, BookReset, KlineEvent, MarketRotation, TradeEvent,
 };

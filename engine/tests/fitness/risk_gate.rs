@@ -13,8 +13,8 @@ use engine::hot::exec::{
     ClientIdLayout, ExecHalt, ExposureCheck, HaltReason, QuotePermission, assess_exposure,
     side_base,
 };
-use engine::ids::{Price, Qty, Side};
 use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, RejectClass, VenueOrderStatus};
+use engine::msg::ids::{Price, Qty, Side};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::ui::UiEvent;
 use proptest::prelude::*;

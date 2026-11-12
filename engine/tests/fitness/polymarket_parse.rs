@@ -9,9 +9,9 @@ use engine::adapters::polymarket::book::{BookNormaliser, ChunkStamps};
 use engine::adapters::polymarket::parse::{ParseError, PolyFrame, parse_market_frame};
 use engine::adapters::venue_clock::MAX_VENUE_SKEW_US;
 use engine::hot::book::{Book, SnapshotOutcome};
-use engine::ids::{InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BookChunkKind, InboundMessage, Level};
-use engine::time::TsUs;
+use engine::msg::time::TsUs;
 use proptest::prelude::*;
 
 use crate::engine_support::level;

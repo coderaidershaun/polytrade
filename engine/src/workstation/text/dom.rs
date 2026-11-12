@@ -1,8 +1,8 @@
 //! The ladder's words and roles: the groupings it offers, the status pill, the order and quote
 //! rings, the mid's role and a row's price.
 
-use crate::ids::Price;
-use crate::time::DurationUs;
+use crate::msg::ids::Price;
+use crate::msg::time::DurationUs;
 use crate::workstation::dom_view::{
     DomGrouping, DomRow, DomStatus, DomUnit, QuotePlacement, price_for_row,
 };

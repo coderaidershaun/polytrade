@@ -2,7 +2,7 @@
 //! One module per calculator, each named for the concept rather than the source path.
 
 use engine::hot::quant::hawkes::{HawkesEvents, HawkesParams};
-use engine::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, TsUs};
 
 mod egarch;
 mod gueant;

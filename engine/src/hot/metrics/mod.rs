@@ -3,11 +3,11 @@
 
 mod snapshot;
 
-use crate::ids::QueueId;
-use crate::labelled_enum::labelled_enum;
 use crate::msg::exec::ExecKind;
+use crate::msg::ids::QueueId;
 use crate::msg::inbound::{BookChunkKind, InboundMessage};
-use crate::time::{DurationUs, TsUs};
+use crate::msg::labelled_enum::labelled_enum;
+use crate::msg::time::{DurationUs, TsUs};
 
 pub use snapshot::{EngineCounters, MetricsSnapshot};
 

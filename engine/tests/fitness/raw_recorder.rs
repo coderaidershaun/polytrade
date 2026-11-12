@@ -5,7 +5,7 @@ use engine::config::{Instruments, NoParams, StrategySpec, TableKind};
 use engine::hot::strategy::{
     EngineView, InstrumentMask, Registration, Strategy, StrategyConfig, StrategyCtx, resolve_filter,
 };
-use engine::ids::{InstrumentId, Price, Qty};
+use engine::msg::ids::{InstrumentId, Price, Qty};
 use engine::msg::inbound::{BookChunk, KlineEvent, TradeEvent};
 use engine::msg::persist::{BookEventKind, BookEventRow, FeatureId, KlineRow, TradeRow};
 

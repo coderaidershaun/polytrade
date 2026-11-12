@@ -10,9 +10,9 @@ use crate::hot::strategy::{Registration, Strategy};
 use crate::hot::tracker::MicroTracker;
 use crate::link::{LinkHash, TopicId, schema_hash_of_fields};
 use crate::msg::persist::FeatureId;
+use crate::msg::time::DurationUs;
 use crate::registry::InstrumentRow;
 use crate::sink::{ExecSink, MetricsSink, PersistSink, StrategyLogSink, UiBookSink, UiEventSink};
-use crate::time::DurationUs;
 
 use super::{ExposureWiring, LinkWiring};
 

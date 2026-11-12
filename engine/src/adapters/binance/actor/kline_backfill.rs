@@ -9,7 +9,7 @@ use crate::adapters::binance::parse::{
 };
 use crate::adapters::binance::rest::{KlineQuery, RestRequest};
 use crate::msg::inbound::KlineEvent;
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 use super::Actor;
 

@@ -8,7 +8,7 @@ use engine::config::{KlineInterval, TableKind};
 use engine::hot::strategy::StrategyConfig;
 use engine::msg::inbound::InboundMessage;
 use engine::msg::persist::{FeatureId, PersistRecord};
-use engine::time::DurationUs;
+use engine::msg::time::DurationUs;
 
 use crate::engine_support::{
     NOMINAL_SPIN, ONE, engine_view, engine_with_ui, instrument_row, kline, metrics_ring,

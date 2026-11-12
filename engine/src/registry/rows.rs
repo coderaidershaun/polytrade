@@ -5,7 +5,7 @@ use crate::config::{
     BinanceEnv, ConfigError, Instruments, KlineInterval, SourceSpec, Subscriptions, TrackerSpec,
     VenueMarket, validated_mantissa,
 };
-use crate::ids::{AssetId, FIXED_SCALE, InstrumentId};
+use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId};
 
 use super::InstrumentRow;
 use super::assets::{AssetDictionary, intern_assets};

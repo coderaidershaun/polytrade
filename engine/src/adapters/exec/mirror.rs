@@ -1,8 +1,8 @@
 //! The orders this run believes are resting, which the exit sweep cancels. The mirror owns its
 //! copies, because after a hot-thread panic anything it borrowed may already be gone.
 
-use crate::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 use crate::msg::exec::{ExecEvent, Provenance};
+use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MirrorInsertError {

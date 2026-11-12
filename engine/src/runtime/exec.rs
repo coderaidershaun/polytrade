@@ -22,10 +22,10 @@ use crate::hot::exec::{
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::info;
 use crate::msg::exec::ExecLaneItem;
+use crate::msg::time::{DurationUs, EngineClock};
 use crate::registry::Registry;
 use crate::shutdown::{FatalSignal, RunStateCell};
 use crate::sink::ExecSink;
-use crate::time::{DurationUs, EngineClock};
 
 use super::EngineError;
 use super::exec_identity::ExecutionLease;

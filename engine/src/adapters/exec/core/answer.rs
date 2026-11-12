@@ -2,8 +2,8 @@
 //! an ambiguous answer (a venue "no such order" that also spells "already filled", or no answer at
 //! all) triggers reconciliation, never a guess.
 
-use crate::ids::{ClientOrderId, InstrumentId, Qty};
 use crate::msg::exec::{ExecCommand, ExecEvent, Provenance, RejectClass};
+use crate::msg::ids::{ClientOrderId, InstrumentId, Qty};
 use crate::warn;
 
 use super::super::effect::{ExecEffect, ExecRequest};

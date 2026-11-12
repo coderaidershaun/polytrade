@@ -7,8 +7,8 @@
 
 use crate::adapters::decode::unknown_enum;
 use crate::adapters::exec::blank;
-use crate::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 use crate::msg::exec::{ExecEvent, ExecKind, VenueOrderStatus};
+use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 
 use super::correlation::venue_order_id_digest;
 use super::reject::{RejectSubject, VenueFailure, cancel_refusal, classify_error};

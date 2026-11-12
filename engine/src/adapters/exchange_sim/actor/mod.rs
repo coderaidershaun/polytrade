@@ -14,9 +14,9 @@ use crate::hot::spawn::QueueProducer;
 use crate::link::RunState;
 use crate::msg::exec::{CancelReason, ExecLaneItem, StampedExecCommand};
 use crate::msg::inbound::InboundMessage;
+use crate::msg::time::{EngineClock, TsUs};
 use crate::registry::AssetDictionary;
 use crate::shutdown::{FatalSignal, RunStateCell};
-use crate::time::{EngineClock, TsUs};
 use crate::{info, warn};
 
 use super::core::latency::{LatencyBudget, rewound, shifted};
@@ -100,7 +100,7 @@ impl SimActor {
         loop {
             let horizon = self.horizon.safe_venue_horizon();
             if let Some(at_ts_us) = self.commands_due.peek_ts_us().filter(|at| *at <= horizon) {
-                self.advance_venue(rewound(at_ts_us, crate::time::DurationUs::RESOLUTION));
+                self.advance_venue(rewound(at_ts_us, crate::msg::time::DurationUs::RESOLUTION));
                 if let Some(command) = self.commands_due.next_due(horizon) {
                     self.driver.on_command(command, at_ts_us);
                 }

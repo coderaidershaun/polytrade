@@ -2,7 +2,7 @@
 //! state transitions (retry + converge or give up connection). Pure + clock-free: caller provides
 //! now + retry deadline (testable without socket).
 
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 /// Total passes a connection gets to answer quoting's question. One hiccup is expected; a
 /// connection that cannot answer in four is not going to.

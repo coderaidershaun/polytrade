@@ -6,10 +6,10 @@ use crate::adapters::decode::{
 };
 use crate::adapters::exec::{ChunkStamps, account_chunks, blank};
 use crate::adapters::venue_clock::clamp_exchange_ts;
-use crate::ids::{AssetId, TradeId, VenueOrderId};
 use crate::msg::exec::{
     AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind, Liquidity, RejectClass,
 };
+use crate::msg::ids::{AssetId, TradeId, VenueOrderId};
 use crate::registry::AssetDictionary;
 
 use super::client_id::classify_client_order_id;

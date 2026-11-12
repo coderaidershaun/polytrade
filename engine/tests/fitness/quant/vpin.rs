@@ -4,7 +4,7 @@
 
 use engine::hot::quant::toxicity::vpin;
 use engine::hot::tracker::VolumeBar;
-use engine::time::TsUs;
+use engine::msg::time::TsUs;
 
 fn bar(buy: i64, sell: i64, target: i64) -> VolumeBar {
     VolumeBar {

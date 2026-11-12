@@ -17,13 +17,8 @@
 // compiled.
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
-// macros that declare types, with no runtime code of their own
-mod labelled_enum;
-
 // vocabulary
-pub mod ids;
 pub mod msg;
-pub mod time;
 
 // ring producers
 pub mod sink;

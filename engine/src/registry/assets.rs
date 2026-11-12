@@ -1,6 +1,6 @@
 //! Asset dictionary: base + quote across instruments, interned to dense [`AssetId`] at build.
 
-use crate::ids::AssetId;
+use crate::msg::ids::AssetId;
 
 use super::InstrumentRow;
 

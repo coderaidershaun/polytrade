@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use engine::adapters::binance::exec::{
     ClockOffset, RecvWindow, RequestParams, RequestSigner, SignError,
 };
+use engine::msg::time::{DurationUs, TsUs};
 use engine::secrets::{CredentialVariables, EnvFile, Secret, SecretError};
-use engine::time::{DurationUs, TsUs};
 use proptest::prelude::*;
 
 /// Binance's own worked example for `POST /api/v3/order`, secret and all.

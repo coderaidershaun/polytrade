@@ -3,8 +3,8 @@
 //! `signature`, so nothing here sets them.
 
 use crate::adapters::exec::ExecRequest;
-use crate::ids::{ClientOrderId, FIXED_SCALE, InstrumentId};
 use crate::msg::exec::OrderStyle;
+use crate::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId};
 
 use super::super::sign::RequestParams;
 use super::client_id::format_client_order_id;

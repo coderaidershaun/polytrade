@@ -2,7 +2,7 @@
 //! fractions a painter scales to pixels. The maths stays in exact integers until the last step.
 
 use super::model::{ChartBucket, ChartFill, ChartModel};
-use crate::ids::InstrumentId;
+use crate::msg::ids::InstrumentId;
 use crate::workstation::format::{self, AxisTicks};
 
 /// Air above and below the visible extremes, as a percentage of their span, so the line never runs

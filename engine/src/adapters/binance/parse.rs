@@ -8,9 +8,9 @@ use crate::adapters::decode::{
 };
 use crate::adapters::venue_clock::{boundary_ts, clamp_exchange_ts};
 use crate::config::KlineInterval;
-use crate::ids::{AggregateTradeId, InstrumentId, RawTradeId, Side};
+use crate::msg::ids::{AggregateTradeId, InstrumentId, RawTradeId, Side};
 use crate::msg::inbound::{KlineEvent, Level, TradeEvent};
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 const FRAME: JsonFrame = JsonFrame("binance");
 

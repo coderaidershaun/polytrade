@@ -3,9 +3,9 @@
 use super::BACKING_MULTIPLE;
 use crate::config::{CandlesSpec, KlineInterval};
 use crate::hot::series::{Element, FastQueue};
-use crate::ids::{Price, Qty};
+use crate::msg::ids::{Price, Qty};
 use crate::msg::inbound::KlineEvent;
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 /// POD KlineEvent (minus instrument/transport stamps).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

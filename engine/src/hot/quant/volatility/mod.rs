@@ -10,7 +10,7 @@ pub(crate) use ewma::EwmaVol;
 pub use realised::{Returns, realised_vol_per_sec};
 
 use crate::hot::series::FastQueue;
-use crate::time::DurationUs;
+use crate::msg::time::DurationUs;
 
 /// Written here rather than beside the series type so the dependency runs one way: the series
 /// module never imports quant.

@@ -4,9 +4,9 @@ use super::super::core::schedule::{VenueAnswer, VenueReport, VenueVoice};
 use super::super::wire::{SimBalance, stream_messages};
 use super::{SimExecDriver, asset_name, venue_millis};
 use crate::adapters::binance::exec::DecodeContext;
-use crate::ids::Qty;
+use crate::msg::ids::Qty;
 use crate::msg::inbound::InboundMessage;
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 impl SimExecDriver {
     pub(super) fn settlement_messages(

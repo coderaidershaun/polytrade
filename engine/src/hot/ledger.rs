@@ -4,7 +4,7 @@
 //! partial position. Fills fold during their message, before the strategy sees on_fill.
 
 use crate::exposure::InstrumentExposure;
-use crate::ids::{InstrumentId, Price, Qty, Side};
+use crate::msg::ids::{InstrumentId, Price, Qty, Side};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct LedgerFill {

@@ -11,9 +11,9 @@ use engine::hot::strategy::{
     BookState, DesiredQuote, EngineView, FeatureId, LinkFrame, OrderStyle, QuoteLevel,
     Registration, Strategy, StrategyConfig, StrategyCtx, VolumeBar, resolve_filter,
 };
-use engine::ids::{FIXED_SCALE, InstrumentId, Price, Side};
+use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Side};
 use engine::msg::inbound::{BookChunk, KlineEvent, SpinTick, TradeEvent};
-use engine::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, TsUs};
 
 #[path = "features.rs"]
 pub(crate) mod features;

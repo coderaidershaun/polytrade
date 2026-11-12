@@ -1,8 +1,8 @@
 //! Typed simulated venue answers before wire encoding.
 
-use crate::ids::{ClientOrderId, Qty, TradeId};
 use crate::msg::exec::VenueOrderStatus;
-use crate::time::TsUs;
+use crate::msg::ids::{ClientOrderId, Qty, TradeId};
+use crate::msg::time::TsUs;
 
 use super::super::orders::SimOrder;
 use super::super::resting::RefusalReason;

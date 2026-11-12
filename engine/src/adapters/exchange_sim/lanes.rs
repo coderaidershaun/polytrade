@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 use std::fmt;
 
 use super::core::latency::{LatencyBudget, rewound, shifted};
-use crate::labelled_enum::labelled_enum;
-use crate::time::TsUs;
+use crate::msg::labelled_enum::labelled_enum;
+use crate::msg::time::TsUs;
 
 labelled_enum! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

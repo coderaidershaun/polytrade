@@ -6,9 +6,9 @@ use engine::adapters::binance::parse::{
     RestKlineTail, parse_combined_frame, parse_kline, parse_rest_klines,
 };
 use engine::config::KlineInterval;
-use engine::ids::{Price, Qty};
+use engine::msg::ids::{Price, Qty};
 use engine::msg::inbound::{InboundMessage, KlineEvent};
-use engine::time::TsUs;
+use engine::msg::time::TsUs;
 
 use crate::binance_depth_sequencing::{INSTRUMENT, ctx};
 

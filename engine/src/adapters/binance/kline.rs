@@ -5,7 +5,7 @@
 
 use crate::config::KlineInterval;
 use crate::msg::inbound::{InboundMessage, KlineEvent};
-use crate::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, TsUs};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KlineOutcome {

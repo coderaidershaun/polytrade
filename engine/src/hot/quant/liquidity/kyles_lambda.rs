@@ -2,7 +2,7 @@
 //! One observation per bar (bar clock + flow sum from feeder). λ = price per flow unit (feeder's units).
 
 use crate::hot::series::FastQueue;
-use crate::ids::Price;
+use crate::msg::ids::Price;
 
 const BACKING_MULTIPLE: usize = 2;
 

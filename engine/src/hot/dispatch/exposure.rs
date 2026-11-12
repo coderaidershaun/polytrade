@@ -2,8 +2,8 @@
 
 use crate::exposure::{ExposureSnapshot, InstrumentExposure, MAX_EXPOSURE_INSTRUMENTS};
 use crate::msg::inbound::InboundMessage;
+use crate::msg::time::TsUs;
 use crate::sink::ExposureSink;
-use crate::time::TsUs;
 use crate::warn;
 
 use super::HotState;

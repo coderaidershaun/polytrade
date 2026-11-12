@@ -6,7 +6,7 @@
 
 use super::position_model::{PositionBucket, PositionModel};
 use super::view::{ChartBounds, ChartDomain, pad};
-use crate::ids::{FIXED_SCALE, InstrumentId};
+use crate::msg::ids::{FIXED_SCALE, InstrumentId};
 
 /// One whole quote unit, so a flat series does not label its axis in steps of 1e-8.
 const MIN_SPAN_QUOTE: i64 = FIXED_SCALE;

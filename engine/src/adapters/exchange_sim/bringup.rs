@@ -10,8 +10,8 @@ use crate::config::{SimConfig, validated_mantissa};
 use crate::hot::exec::MAX_ORDER_INSTRUMENTS;
 use crate::info;
 use crate::link::RunState;
+use crate::msg::time::DurationUs;
 use crate::registry::InstrumentRow;
-use crate::time::DurationUs;
 
 use super::actor::SimActor;
 use super::core::latency::{LatencyBudget, StartupBudget};

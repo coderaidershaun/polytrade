@@ -11,9 +11,9 @@ use super::resting::{
 use super::wallet::{ReservationRequest, ReserveOutcome, SimWallet};
 use super::{EmissionBook, VenueEvent};
 use crate::adapters::exec::ExecRequest;
-use crate::ids::{ClientOrderId, Price, Qty, Side};
 use crate::msg::exec::OrderStyle;
-use crate::time::TsUs;
+use crate::msg::ids::{ClientOrderId, Price, Qty, Side};
+use crate::msg::time::TsUs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TimedAction {

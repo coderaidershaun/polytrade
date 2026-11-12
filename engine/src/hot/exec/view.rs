@@ -6,9 +6,11 @@
 //! `remaining()` computed at the call site cannot go stale, whereas a `remaining` field written at
 //! one moment and read at another can.
 
-use crate::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId};
 use crate::msg::exec::{Liquidity, RejectClass};
-use crate::time::TsUs;
+use crate::msg::ids::{
+    AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId,
+};
+use crate::msg::time::TsUs;
 
 use super::desired::QuoteLevel;
 use super::order::OrderState;

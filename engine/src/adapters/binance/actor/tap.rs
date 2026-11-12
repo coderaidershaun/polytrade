@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::adapters::binance::parse::ParseContext;
 use crate::adapters::binance::rest::RestRequest;
 use crate::error;
-use crate::ids::InstrumentId;
+use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::TappedMessage;
 
 use super::{Actor, liveness};

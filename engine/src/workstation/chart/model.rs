@@ -5,9 +5,9 @@
 
 use std::mem;
 
-use crate::ids::{InstrumentId, Price, Side};
+use crate::msg::ids::{InstrumentId, Price, Side};
+use crate::msg::time::{DurationUs, TsUs};
 use crate::msg::ui::{UiBookSnapshot, UiEvent};
-use crate::time::{DurationUs, TsUs};
 use crate::workstation::dom_view::{snapshot_mid, tick_index};
 use crate::workstation::history::{BoundedHistory, grow_to};
 

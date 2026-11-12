@@ -3,9 +3,9 @@
 //! Rustfmt skips the bodies of brace-delimited item macros, so the macro bodies here are formatted by
 //! hand.
 
-use crate::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty};
+use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty};
 use crate::msg::persist::FeatureId;
-use crate::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, TsUs};
 
 use super::envelope::{ByteReader, ByteWriter, LinkDecodeError, LinkHash, TopicId};
 

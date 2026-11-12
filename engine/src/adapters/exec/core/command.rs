@@ -2,8 +2,8 @@
 //! Quoting admits new orders, while every connected phase admits cancels, since cancels are
 //! the exit path when something has failed.
 
-use crate::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 use crate::msg::exec::{ExecCommand, ExecLaneItem, OrderStyle, Provenance};
+use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 
 use super::super::effect::{ExecEffect, ExecRequest, Outgoing, PlaceNotSentReason};
 use super::super::mirror::{MirrorInsertError, MirroredOrder};

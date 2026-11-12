@@ -6,9 +6,9 @@ use super::sampling::{FieldSeries, TradeAggregates, notional_i128};
 use super::{BACKING_MULTIPLE, CandleSeries, Latest};
 use crate::config::{TARGET_WINDOW_CANDLES, VolumeBarsSpec, VolumeThreshold};
 use crate::hot::series::{Element, FastQueue};
-use crate::ids::{FIXED_SCALE, Side};
+use crate::msg::ids::{FIXED_SCALE, Side};
 use crate::msg::inbound::TradeEvent;
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 const MIN_TARGET_CANDLES: usize = 60;
 

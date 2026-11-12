@@ -1,10 +1,10 @@
 //! Fixtures shared by the workstation projection fitness files: the book-snapshot builder, the DOM
 //! overlay, the named-case table alias and the chart-model fixtures.
 
-use engine::ids::{InstrumentId, Price, Qty};
+use engine::msg::ids::{InstrumentId, Price, Qty};
 use engine::msg::inbound::Level;
+use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{DomQuote, UI_BOOK_LEVELS, UiBookSnapshot, UiBookState, UiEvent};
-use engine::time::{DurationUs, TsUs};
 use engine::workstation::chart::model::{BookContinuity, ChartModel};
 use engine::workstation::dom_view::DomOverlay;
 

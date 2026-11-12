@@ -13,8 +13,8 @@
 
 use std::sync::Arc;
 
-use crate::ids::InstrumentId;
-use crate::time::{DurationUs, TsUs};
+use crate::msg::ids::InstrumentId;
+use crate::msg::time::{DurationUs, TsUs};
 
 use super::discovery::PolySchedule;
 

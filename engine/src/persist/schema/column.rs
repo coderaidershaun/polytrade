@@ -10,7 +10,7 @@ use arrow_array::{
 };
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
 
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 /// Column name, arrow type and accessor in one. `Ts` and `Mantissa` are both non-null `Int64` and
 /// stay apart because a clock reading and a fixed-point mantissa are not the same column to a reader.

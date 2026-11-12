@@ -2,8 +2,8 @@
 //! `link_fields()` declaration and never from the wire itself, so two senders whose field lists
 //! differ do not agree about what a given slot index holds.
 
+use crate::msg::time::TsUs;
 use crate::msg::ui::{UiBookSnapshot, UiEvent};
-use crate::time::TsUs;
 
 use super::control::{
     CATALOG_FEATURE_BODY_LEN, CATALOG_INSTRUMENT_BODY_LEN, CatalogFeature, CatalogInstrument,

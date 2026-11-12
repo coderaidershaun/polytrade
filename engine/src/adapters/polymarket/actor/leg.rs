@@ -5,9 +5,9 @@ use crate::adapters::polymarket::parse::{PolyBook, PolyDelta};
 use crate::adapters::polymarket::rotation::TokenId;
 use crate::adapters::polymarket::shadow::{BookFrameOutcome, BookMismatch, ShadowValidator};
 use crate::adapters::polymarket::teardown::{CollapseDetector, LevelUpdate};
-use crate::ids::{InstrumentId, Qty, Side};
+use crate::msg::ids::{InstrumentId, Qty, Side};
 use crate::msg::inbound::{BookReset, InboundMessage, Level};
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 pub(super) struct Leg {
     instrument: InstrumentId,

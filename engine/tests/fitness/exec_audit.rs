@@ -11,7 +11,7 @@
 //! A separate test pins the round trip these rows take to Parquet. This one pins which rows exist.
 
 use engine::config::{RecordedTables, TableKind, TrackerSpec};
-use engine::ids::Side;
+use engine::msg::ids::Side;
 use engine::msg::persist::{OrderLifecycle, OrderTransition};
 
 use crate::engine_support::{

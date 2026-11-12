@@ -3,7 +3,7 @@
 //! crossed, or the deviation is discretisation dust.
 
 use engine::hot::quant::micro::{OrderbookResilience, ResilienceSample};
-use engine::time::TsUs;
+use engine::msg::time::TsUs;
 
 fn sample(ts_us: i64, mid: f64, equilibrium: f64, half_spread: f64) -> ResilienceSample {
     ResilienceSample {

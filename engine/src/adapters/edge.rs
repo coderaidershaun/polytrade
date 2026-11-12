@@ -29,9 +29,9 @@ use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::link::RunState;
 use crate::msg::exec::{AccountChunk, CancelReason, ExecEvent, ExecLaneItem};
 use crate::msg::inbound::InboundMessage;
+use crate::msg::time::{DurationUs, EngineClock, TsUs};
 use crate::registry::Registry;
 use crate::shutdown::{FatalSignal, RunStateCell};
-use crate::time::{DurationUs, EngineClock, TsUs};
 use crate::{info, warn};
 
 // Polling the command ring every millisecond costs a little latency but avoids waking on every push.

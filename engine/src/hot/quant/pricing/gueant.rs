@@ -1,7 +1,7 @@
 //! Guéant-Lehalle-Fernandez-Tapia optimal market-making quotes. Depths are in the caller's one
 //! shared depth unit (ticks, bps, ...); only `QuoteCoefficients::quote` is tick-specific.
 
-use crate::ids::Price;
+use crate::msg::ids::Price;
 
 /// Closed-form objective (fixes ξ, never tuned).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

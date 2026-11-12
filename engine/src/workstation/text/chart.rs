@@ -1,7 +1,7 @@
 //! The charts' words: axis labels, the notes that stand in for a plot with nothing to draw, and
 //! the role of a signed readout.
 
-use crate::ids::Price;
+use crate::msg::ids::Price;
 use crate::workstation::chart::position_view::QuoteBounds;
 use crate::workstation::chart::view::{ChartBounds, ChartDomain};
 use crate::workstation::format::{self, AxisTicks};

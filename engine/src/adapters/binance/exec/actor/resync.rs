@@ -4,7 +4,7 @@
 use crate::adapters::binance::rest::OrderRecord;
 use crate::adapters::exec::{MirroredOrder, Outgoing, ResyncPoll, SessionOutcome};
 use crate::msg::exec::{ExecCommand, ExecKind, Provenance};
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 use crate::{error, info, warn};
 
 use super::rest::RestJob;

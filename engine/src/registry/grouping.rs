@@ -2,8 +2,8 @@
 //! Binance opens a connection per market and category; Polymarket opens one per series.
 
 use crate::config::{BinanceMarket, PolySeries, Subscriptions, VenueMarket};
-use crate::ids::{InstrumentId, QueueId, SourceId};
-use crate::labelled_enum::labelled_enum;
+use crate::msg::ids::{InstrumentId, QueueId, SourceId};
+use crate::msg::labelled_enum::labelled_enum;
 
 use super::InstrumentRow;
 

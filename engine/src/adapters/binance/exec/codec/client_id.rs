@@ -2,7 +2,7 @@
 //! Not display format; bits address slot + generation. Account stream: only ownership evidence.
 
 use crate::adapters::exec::{EngineIdentity, OrderOwnership, TeTag};
-use crate::ids::ClientOrderId;
+use crate::msg::ids::ClientOrderId;
 
 const PREFIX: &str = "pd-";
 const TAG_HEX: usize = 8;

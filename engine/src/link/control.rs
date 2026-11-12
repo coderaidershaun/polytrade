@@ -2,9 +2,9 @@
 //! one item per frame, so a receiver never has to reassemble it.
 
 use crate::config::ExecutionMode;
-use crate::ids::{AssetId, InstrumentId, Price, Qty};
+use crate::msg::ids::{AssetId, InstrumentId, Price, Qty};
 use crate::msg::persist::FeatureId;
-use crate::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, TsUs};
 
 use super::envelope::{
     ByteReader, ByteWriter, ENVELOPE_LEN, LINK_MAX_DATAGRAM, LinkDecodeError, NAME_LEN, TopicId,

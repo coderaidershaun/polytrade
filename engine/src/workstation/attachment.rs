@@ -2,8 +2,8 @@
 //! screen, model, and the rule that a new session starts them over.
 
 use crate::link::RunState;
+use crate::msg::time::TsUs;
 use crate::msg::ui::UiCatalog;
-use crate::time::TsUs;
 
 use super::dom_view::FeedStatus;
 use super::link_model::{ConnectionState, LinkStatus};

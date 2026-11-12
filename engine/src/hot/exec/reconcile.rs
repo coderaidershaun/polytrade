@@ -14,9 +14,9 @@
 //! `spin.rs`'s ladder pass and the matching one in `flatten.rs`. A second copy here would be a
 //! second place to get `max_orders_per_side` wrong.
 
-use crate::ids::{Price, Qty, Side};
 use crate::msg::exec::OrderStyle;
-use crate::time::{DurationUs, TsUs};
+use crate::msg::ids::{Price, Qty, Side};
+use crate::msg::time::{DurationUs, TsUs};
 
 use super::desired::DesiredQuote;
 use super::gates::ReadinessGap;

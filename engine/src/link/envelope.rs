@@ -1,7 +1,7 @@
 //! The envelope every datagram opens with, checked in a fixed order so version skew is caught before
 //! a book body is misread, and the byte cursors every record is written and read through.
 
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 use super::wire::{WireField, wire_struct};
 
@@ -302,7 +302,7 @@ pub enum LinkDecodeError {
     OrderSnapshotTerminalState { state: crate::hot::exec::OrderState },
     #[error("order snapshot detail repeats client id {client_id:?}")]
     OrderSnapshotDuplicate {
-        client_id: crate::ids::ClientOrderId,
+        client_id: crate::msg::ids::ClientOrderId,
     },
     #[error("subscription names {count} topics, capacity {capacity}")]
     TopicCountExceeded { count: u8, capacity: usize },

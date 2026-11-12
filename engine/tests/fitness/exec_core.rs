@@ -8,8 +8,8 @@ use engine::adapters::exec::{
     ExecCore, ExecEffect, ExecRequest, MirroredOrder, ObserveOrderError, Phase, PlaceNotSentReason,
     SkipReason,
 };
-use engine::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::exec::{CancelReason, ExecCommand, OrderStyle, Provenance};
+use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 
 const INSTRUMENT: InstrumentId = InstrumentId(0);
 const OTHER_INSTRUMENT: InstrumentId = InstrumentId(1);

@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use super::LogConfig;
 use super::producer::BacktraceMessage;
 use super::record::LogRecord;
-use crate::time::{TsUs, boot_stamp_us};
+use crate::msg::time::{TsUs, boot_stamp_us};
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 

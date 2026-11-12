@@ -10,8 +10,8 @@ use crate::config::{BinanceMarket, VenueMarket};
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::info;
 use crate::msg::inbound::{BookChunkKind, InboundMessage, MarketTapItem, TappedMessage, VenueMeta};
+use crate::msg::time::TsUs;
 use crate::registry::{ConnectionCategory, Registry};
-use crate::time::TsUs;
 
 pub struct MarketTapLane {
     consumer: Consumer<MarketTapItem>,

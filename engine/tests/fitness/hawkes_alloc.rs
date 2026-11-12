@@ -9,7 +9,7 @@
 
 use crate::quant::ExpSimulation;
 use engine::hot::quant::hawkes::{HawkesEvents, HawkesMle, HawkesParams};
-use engine::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, TsUs};
 
 const START: TsUs = TsUs::from_micros(0);
 

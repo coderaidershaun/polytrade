@@ -2,7 +2,7 @@
 //! bar back and pairs it with the mid move the following close reveals.
 
 use crate::hot::quant::liquidity::kyles_lambda::{KyleEstimate, KylesLambda, KylesLambdaSpec};
-use crate::ids::Price;
+use crate::msg::ids::Price;
 
 /// Bars one closing trade shut, folded to Kyle observation. flow grows as bars arrive; mid sampled pre-impact.
 #[derive(Debug, Clone, Copy)]

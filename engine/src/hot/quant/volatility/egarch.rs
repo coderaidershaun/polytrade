@@ -1,7 +1,7 @@
 //! EGARCH(1,1): 4-param MLE fit (Nelder-Mead), allocation-free, warm-started.
 
 use crate::hot::quant::optimise::NelderMead;
-use crate::time::DurationUs;
+use crate::msg::time::DurationUs;
 
 use super::realised::{Returns, consecutive_returns};
 

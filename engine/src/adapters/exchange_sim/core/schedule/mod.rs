@@ -3,8 +3,8 @@
 mod transition;
 mod voice;
 
-use crate::ids::{ClientOrderId, Qty};
-use crate::time::{DurationUs, TsUs};
+use crate::msg::ids::{ClientOrderId, Qty};
+use crate::msg::time::{DurationUs, TsUs};
 
 use super::latency::shifted;
 use super::resting::OrderSnapshot;

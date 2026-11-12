@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ids::{Price, Qty, Side};
+use crate::msg::ids::{Price, Qty, Side};
 use crate::msg::inbound::Level;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

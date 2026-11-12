@@ -13,7 +13,7 @@
 
 use engine::config::{KlineInterval, RecordedTables, TableKind, TrackerSpec};
 use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
-use engine::ids::{Price, Qty, Side};
+use engine::msg::ids::{Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, TradeEvent};
 use engine::msg::persist::{BookEventKind, BookEventRow, FeatureId, KlineRow, TradeRow};
 

@@ -3,7 +3,7 @@
 //! backwards.
 
 use crate::hot::series::FastQueue;
-use crate::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, TsUs};
 
 /// Event times as seconds since the first event; a full window evicts the oldest.
 #[derive(Debug, Clone, PartialEq)]

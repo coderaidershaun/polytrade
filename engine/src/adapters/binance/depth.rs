@@ -1,9 +1,9 @@
 //! State machine; Spot: u seq, Perp: pu seq. Broken -> BookReset. Timestamp clamped to high-water (prevent backward queue).
 
 use crate::adapters::chunk::{ChunkEmitter, ChunkPlan};
-use crate::ids::InstrumentId;
+use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::{BookChunkKind, BookReset, InboundMessage, VenueMeta};
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 use crate::warn;
 
 use super::parse::{DepthDiff, DepthSnapshot};

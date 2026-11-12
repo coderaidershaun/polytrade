@@ -3,9 +3,9 @@
 //! here, so the mid chart's integer helpers serve this chart unchanged.
 
 use super::model::{bucket_capacity, bucket_index};
-use crate::ids::{InstrumentId, fixed_mantissa};
+use crate::msg::ids::{InstrumentId, fixed_mantissa};
+use crate::msg::time::{DurationUs, TsUs};
 use crate::msg::ui::UiEvent;
-use crate::time::{DurationUs, TsUs};
 use crate::workstation::history::{BoundedHistory, grow_to};
 
 /// The engine's absolute position at the end of a spin, never a change to add up, so a lost frame

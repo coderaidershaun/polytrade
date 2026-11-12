@@ -1,7 +1,7 @@
 //! Exact balances, reservations, fills, and fees for simulated execution.
 
-use crate::ids::{AssetId, FIXED_SCALE, Price, Qty, Side};
 use crate::msg::exec::AssetBalance;
+use crate::msg::ids::{AssetId, FIXED_SCALE, Price, Qty, Side};
 
 const WHOLE_FILL_BPS: i64 = 10_000;
 

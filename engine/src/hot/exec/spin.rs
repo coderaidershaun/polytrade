@@ -9,11 +9,11 @@ use crate::config::MAX_QUOTE_LEVELS;
 use crate::hot::book::{Book, BookState};
 use crate::hot::ledger::PositionLedger;
 use crate::hot::strategy::{Actions, WindowInfo};
-use crate::ids::{InstrumentId, Price, Side};
 use crate::msg::exec::ExecCommand;
+use crate::msg::ids::{InstrumentId, Price, Side};
 use crate::msg::inbound::SpinTick;
 use crate::msg::persist::OrderTransition;
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 use super::desired::{DesiredBook, DesiredQuote, QuoteLevel};
 use super::engine::{ExecEngine, resting_of};

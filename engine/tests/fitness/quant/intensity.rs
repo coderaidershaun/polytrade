@@ -14,7 +14,7 @@ use engine::config::{IntensitySpec, TrackerSpec};
 use engine::hot::book::{Book, SnapshotOutcome};
 use engine::hot::quant::intensity::{IntensityFit, PacedIntensity};
 use engine::hot::tracker::MicroTracker;
-use engine::ids::{InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, Level, TradeEvent};
 
 use crate::engine_support::ts;

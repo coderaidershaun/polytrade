@@ -15,8 +15,8 @@ use serde::de::DeserializeOwned;
 
 use crate::adapters::http::{self, Deadlines, HttpClient, TransportError};
 use crate::config::{BinanceMarket, KlineInterval};
+use crate::msg::time::TsUs;
 use crate::secrets::Secret;
-use crate::time::TsUs;
 
 use weight::{OrderCountBudget, WeightBudget, weight_budget};
 

@@ -1,6 +1,6 @@
 //! Deterministic simulator latency arithmetic.
 
-use crate::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, TsUs};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LatencyBudget {

@@ -14,10 +14,10 @@ use crate::adapters::polymarket::rotation::{
     WindowAssignment, WindowTokens,
 };
 use crate::adapters::polymarket::shadow::BookMismatch;
-use crate::ids::InstrumentId;
+use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::{BookReset, InboundMessage, MarketRotation, TradeEvent};
 use crate::msg::persist::RotationRow;
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 use super::leg::Leg;
 

@@ -1,10 +1,10 @@
 //! The risk scenes: a fixed stream of books and fills folded through the real chart and position
 //! models, so no curve is drawn by hand. The risk chart takes the mid chart's window.
 
-use engine::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::time::DurationUs;
+use engine::msg::time::TsUs;
 use engine::msg::ui::{UiBookState, UiEvent};
-use engine::time::DurationUs;
-use engine::time::TsUs;
 use engine::workstation::chart::model::{BookContinuity, ChartModel};
 use engine::workstation::chart::position_model::PositionModel;
 

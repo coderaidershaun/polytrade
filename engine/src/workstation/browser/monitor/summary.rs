@@ -3,7 +3,7 @@
 
 use eframe::egui;
 
-use crate::ids::Side;
+use crate::msg::ids::Side;
 
 use super::pin::Pins;
 use super::sizes::content_column;

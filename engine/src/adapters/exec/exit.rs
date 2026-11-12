@@ -10,7 +10,7 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 use crate::msg::exec::CancelReason;
-use crate::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, TsUs};
 use crate::warn;
 
 // The sole mechanism for pacing cancel retries after the hot path stops.

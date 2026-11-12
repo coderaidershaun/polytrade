@@ -1,7 +1,7 @@
 //! Wire-visible lifecycle transitions and reconciliation answers for simulated orders.
 
-use crate::ids::ClientOrderId;
 use crate::msg::exec::VenueOrderStatus;
+use crate::msg::ids::ClientOrderId;
 
 use super::super::resting::{OrderPhase, OrderSnapshot};
 use super::super::wallet::FillSettlement;
@@ -58,7 +58,7 @@ impl DeliverySchedule {
         &mut self,
         snapshot: OrderSnapshot,
         settlement: FillSettlement,
-        trade_id: crate::ids::TradeId,
+        trade_id: crate::msg::ids::TradeId,
         at: Landing,
     ) {
         let key = GenerationKey::of(snapshot);

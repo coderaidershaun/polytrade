@@ -6,9 +6,9 @@ use std::collections::BTreeMap;
 use engine::adapters::polymarket::book::BookNormaliser;
 use engine::adapters::polymarket::parse::PolyBook;
 use engine::hot::book::{Book, BookState, SnapshotOutcome};
-use engine::ids::{InstrumentId, Side};
+use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, InboundMessage, Level};
-use engine::time::TsUs;
+use engine::msg::time::TsUs;
 use proptest::prelude::*;
 
 use crate::engine_support::{

@@ -9,8 +9,8 @@ use crate::adapters::exec::EdgeHandle;
 use crate::adapters::polymarket::rotation::WindowAssignment;
 use crate::hot::spawn::QueueProducer;
 use crate::msg::exec::ExecLaneItem;
+use crate::msg::time::DurationUs;
 use crate::registry::InstrumentRow;
-use crate::time::DurationUs;
 
 use super::actor::Actor;
 use super::sign::address::Address;

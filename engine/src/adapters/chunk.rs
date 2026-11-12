@@ -3,9 +3,9 @@
 //! not be taken twice. Venue metadata never reaches here: the caller's sink attaches it, which is
 //! where the continuity evidence is known.
 
-use crate::ids::{InstrumentId, Price, Qty, Side};
+use crate::msg::ids::{InstrumentId, Price, Qty, Side};
 use crate::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, Level};
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 // A chunk reports its own length in a `u8`, and raising the level count lives in another module.
 const _: () = assert!(

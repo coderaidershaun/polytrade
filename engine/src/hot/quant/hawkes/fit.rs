@@ -4,7 +4,7 @@
 use super::{HawkesEvents, HawkesParams};
 use crate::hot::quant::MIN_RATE;
 use crate::hot::quant::optimise::NelderMead;
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 const PARAMS: usize = 3;
 const SIMPLEX: usize = PARAMS + 1;

@@ -1,11 +1,11 @@
 //! The workstation's model of the engine feed: the catalog and each instrument's latest book and
 //! quote, plus the panels' own models. It folds events in event time and never reads the wall clock.
 
-use crate::ids::{FIXED_SCALE, InstrumentId, Price, Side};
+use crate::msg::ids::{FIXED_SCALE, InstrumentId, Price, Side};
+use crate::msg::time::{DurationUs, TsUs};
 use crate::msg::ui::{
     DomQuote, UiBookSnapshot, UiCatalog, UiEvent, UiInstrument, UiLatencySummary,
 };
-use crate::time::{DurationUs, TsUs};
 
 use super::chart::model::{BookContinuity, ChartModel};
 use super::chart::position_model::PositionModel;

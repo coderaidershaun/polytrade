@@ -5,10 +5,10 @@
 
 use crate::config::{BinanceMarket, VenueMarket};
 use crate::hot::exec::{MAX_ORDER_BUDGET_WINDOWS, OrderBudget, OrderBudgetWindow};
-use crate::ids::{DecimalError, InstrumentId, Price, Qty};
 use crate::info;
+use crate::msg::ids::{DecimalError, InstrumentId, Price, Qty};
+use crate::msg::time::DurationUs;
 use crate::registry::{BinanceLimits, InstrumentRow, OrderRateLimit, RateInterval, Registry};
-use crate::time::DurationUs;
 
 use super::rest::{BinanceEnv, ExchangeInfo, RestClient, RestError, SymbolFilter};
 

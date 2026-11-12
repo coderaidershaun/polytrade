@@ -1,12 +1,12 @@
 //! Events and balance chunks that every venue builds the same way. The events raised with no venue
 //! message matter most, because without them the hot thread's order slots stay blocked.
 
-use crate::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use crate::msg::exec::{
     ACCOUNT_CHUNK_ASSETS, AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind,
     Provenance, RejectClass,
 };
-use crate::time::TsUs;
+use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
+use crate::msg::time::TsUs;
 
 // A timed-out request may still have reached the venue, so its outcome is ambiguous and only a
 // reconciliation can settle it.

@@ -3,7 +3,7 @@
 use crate::hot::strategy::Actions;
 use crate::msg::exec::{ExecEvent, ExecKind, Provenance, RejectClass};
 use crate::msg::persist::{FillRow, OrderLifecycle, OrderRow, OrderTransition, PersistRecord};
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 use super::order::{FillDelta, OrderSlot};
 

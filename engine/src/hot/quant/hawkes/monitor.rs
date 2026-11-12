@@ -2,7 +2,7 @@
 //! keeps it current, and the resident evaluator answering λ between fits.
 
 use super::{HawkesEstimate, HawkesEvents, HawkesMle, UnivariateHawkes};
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 /// Hawkes monitor rolling window, fit floor, refit cadence. Strategy constants, not config.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

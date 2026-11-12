@@ -10,8 +10,8 @@ use crate::info;
 use crate::link::{
     FrameGuard, LINK_NAME_LEN, LinkHash, LinkIdentity, PeerFeed, TopicId, schema_hash_of_fields,
 };
+use crate::msg::time::boot_stamp_us;
 use crate::registry::Registry;
-use crate::time::boot_stamp_us;
 
 use super::EngineError;
 

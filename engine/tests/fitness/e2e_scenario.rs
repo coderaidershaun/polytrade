@@ -4,10 +4,10 @@
 //! the read-back assertions.
 
 use engine::config::KlineInterval;
-use engine::ids::{InstrumentId, Side};
+use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::persist::RotationRow;
-use engine::time::TsUs;
+use engine::msg::time::TsUs;
 
 use crate::engine_support::{
     ONE, book_reset, delta_chunk, kline, rotation, snapshot_pair, spin, trade,

@@ -3,7 +3,7 @@
 
 use crate::msg::exec::{Liquidity, OrderStyle, RejectClass};
 use crate::msg::persist::{FillRow, OrderRow};
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 use super::TableRow;
 use super::column::Column;

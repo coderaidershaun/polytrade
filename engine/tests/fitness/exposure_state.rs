@@ -24,10 +24,10 @@ use engine::exposure::{
     ExposureError, ExposureHandle, ExposureSnapshot, ExposureState, ExposureWriter,
     ExposureWriterConfig, InstrumentExposure, file_path, load,
 };
-use engine::ids::{FIXED_SCALE, InstrumentId, Qty};
+use engine::msg::ids::{FIXED_SCALE, InstrumentId, Qty};
+use engine::msg::time::TsUs;
 use engine::registry::Registry;
 use engine::sink::ExposureSink;
-use engine::time::TsUs;
 
 use crate::parquet_readback::TempDir;
 

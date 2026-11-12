@@ -12,7 +12,7 @@ use engine::adapters::polymarket::parse::{PolyBook, PolyFrame};
 use engine::adapters::polymarket::rotation::{
     OutcomeLeg, ProbeOutcome, TokenId, WindowAssignment, WindowTokens,
 };
-use engine::ids::{InstrumentId, Price, Qty};
+use engine::msg::ids::{InstrumentId, Price, Qty};
 use engine::msg::inbound::{BookChunkKind, InboundMessage, Level};
 
 use crate::engine_support::ts_secs;

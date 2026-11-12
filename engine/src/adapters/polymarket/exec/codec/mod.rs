@@ -14,9 +14,9 @@ mod stream;
 mod wire;
 
 use crate::adapters::decode::{DecimalFault, JsonFrame, mantissa_field, qty_field, unknown_enum};
-use crate::ids::{InstrumentId, Price, Qty};
 use crate::msg::exec::VenueOrderStatus;
-use crate::time::TsUs;
+use crate::msg::ids::{InstrumentId, Price, Qty};
+use crate::msg::time::TsUs;
 
 pub use correlation::{
     KnownOrder, OrderIndex, OrderIndexFull, trade_id_digest, venue_order_id_digest,

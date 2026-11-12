@@ -6,9 +6,9 @@ pub mod ladder;
 mod overlay;
 mod pin;
 
-use crate::ids::Price;
+use crate::msg::ids::Price;
+use crate::msg::time::DurationUs;
 use crate::msg::ui::UiBookSnapshot;
-use crate::time::DurationUs;
 use crate::workstation::dom_view::{DomGrouping, DomOverlay, FeedStatus};
 use crate::workstation::text;
 pub(crate) use geometry::{ladder_rect, rows_that_fit};

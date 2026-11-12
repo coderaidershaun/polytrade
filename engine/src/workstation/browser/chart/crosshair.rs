@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use eframe::egui;
 
-use crate::ids::{InstrumentId, Price};
+use crate::msg::ids::{InstrumentId, Price};
 
 use super::mid::PlotGeometry;
 use super::pin::{CrosshairPin, Touch};

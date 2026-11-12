@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::time::DurationUs;
+use crate::msg::time::DurationUs;
 
 pub use error::ConfigError;
 pub use execution::{ExecutionConfig, ExecutionMode, MAX_QUOTE_LEVELS};

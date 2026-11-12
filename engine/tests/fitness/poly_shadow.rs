@@ -6,8 +6,8 @@
 
 use engine::adapters::polymarket::shadow::{BookFrameOutcome, ShadowValidator};
 use engine::adapters::polymarket::teardown::{CollapseDetector, CollapseSignal, LevelUpdate};
-use engine::ids::{Price, Qty, Side};
-use engine::time::TsUs;
+use engine::msg::ids::{Price, Qty, Side};
+use engine::msg::time::TsUs;
 
 use crate::engine_support::level;
 

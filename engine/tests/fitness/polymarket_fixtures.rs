@@ -15,8 +15,8 @@ use engine::adapters::polymarket::parse::{
 use engine::adapters::polymarket::rest::parse_events;
 use engine::config::PolySeries;
 use engine::hot::book::{Book, BookState};
-use engine::ids::{InstrumentId, Price};
-use engine::time::TsUs;
+use engine::msg::ids::{InstrumentId, Price};
+use engine::msg::time::TsUs;
 
 use crate::polymarket_parse::apply;
 
@@ -251,7 +251,7 @@ mod head {
 mod collapse {
     use super::*;
     use engine::adapters::polymarket::teardown::{CollapseDetector, CollapseSignal, LevelUpdate};
-    use engine::ids::{Qty, Side};
+    use engine::msg::ids::{Qty, Side};
     use engine::msg::inbound::Level;
 
     const GAMMA_NEXT: &str = include_str!("../../fixtures/polymarket/gamma_event_next.json");

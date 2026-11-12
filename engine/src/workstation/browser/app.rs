@@ -21,7 +21,7 @@ use crate::config::{ConfigError, StrategyId};
 use crate::hot::exec::ExecHalt;
 use crate::link::LinkHash;
 use crate::msg::relay::RelayHello;
-use crate::time::{DurationUs, EngineClock, TsUs};
+use crate::msg::time::{DurationUs, EngineClock, TsUs};
 use crate::workstation::attachment::{Attachment, Screen};
 use crate::workstation::link_session::{LinkSession, LinkSessionError, LinkTarget};
 use crate::workstation::shell::{self, Arrangement, Navigation, Selection};

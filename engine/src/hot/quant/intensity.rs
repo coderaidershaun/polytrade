@@ -5,9 +5,9 @@
 use crate::config::IntensitySpec;
 use crate::hot::quant::MIN_RATE;
 use crate::hot::quant::optimise::NelderMead;
-use crate::ids::{Price, Side};
+use crate::msg::ids::{Price, Side};
 use crate::msg::inbound::TradeEvent;
-use crate::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, TsUs};
 
 const PARAMS: usize = 2;
 const SIMPLEX: usize = PARAMS + 1;

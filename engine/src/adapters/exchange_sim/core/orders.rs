@@ -1,6 +1,6 @@
 //! Simulated order state.
 
-use crate::ids::{ClientOrderId, Price, Qty, Side, VenueOrderId};
+use crate::msg::ids::{ClientOrderId, Price, Qty, Side, VenueOrderId};
 
 pub const CORPUS_VENUE_ORDER_ID: VenueOrderId = VenueOrderId(12_510_053_279);
 

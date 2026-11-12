@@ -5,7 +5,7 @@ use crate::hot::exec::{
     CloseReason, ExecHalt, HaltReason, OrderState, ReadinessGap, RejectOrigin, RejectReason,
 };
 use crate::msg::exec::{Liquidity, RejectClass};
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 use super::super::envelope::{ByteReader, ByteWriter, LinkDecodeError};
 use super::super::wire::{WireField, wire_enum};

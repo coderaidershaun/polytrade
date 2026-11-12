@@ -8,10 +8,10 @@ use std::thread::{self, JoinHandle};
 use rtrb::Producer;
 
 use super::ingress::{IngressQueues, QueueSample};
-use crate::ids::{QueueId, SourceId};
+use crate::msg::ids::{QueueId, SourceId};
 use crate::msg::inbound::{InboundMessage, MarketTapItem, TappedMessage, VenueMeta};
+use crate::msg::time::TsUs;
 use crate::shutdown::{DrainSignal, FatalSignal};
-use crate::time::TsUs;
 use crate::{error, warn};
 
 /// Keeps market taps open until the simulator finishes its final sweep.

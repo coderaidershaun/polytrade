@@ -11,9 +11,9 @@ use engine::adapters::binance::parse::{
 };
 use engine::adapters::venue_clock::MAX_VENUE_SKEW_US;
 use engine::config::KlineInterval;
-use engine::ids::{InstrumentId, Price, Side};
+use engine::msg::ids::{InstrumentId, Price, Side};
 use engine::msg::inbound::TradeEvent;
-use engine::time::TsUs;
+use engine::msg::time::TsUs;
 use proptest::prelude::*;
 
 use crate::engine_support::level;

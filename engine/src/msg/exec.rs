@@ -3,9 +3,11 @@
 //! spellings before anything reaches here. Absence is spelled two ways: an identity or
 //! classification that may be missing is an `Option`; a missing number is zero.
 
-use crate::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId};
-use crate::labelled_enum::labelled_enum;
-use crate::time::TsUs;
+use crate::msg::ids::{
+    AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId,
+};
+use crate::msg::labelled_enum::labelled_enum;
+use crate::msg::time::TsUs;
 
 /// A normalised order-lifecycle transition. Stream-lifecycle kinds carry only their kind
 /// and their stamps.

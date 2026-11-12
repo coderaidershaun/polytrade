@@ -7,9 +7,9 @@ use serde_json::Value;
 
 use crate::adapters::decode::{DecimalFault, JsonFrame, levels, price_field, qty_field};
 use crate::adapters::venue_clock::clamp_exchange_ts;
-use crate::ids::{Price, Qty, Side};
+use crate::msg::ids::{Price, Qty, Side};
 use crate::msg::inbound::Level;
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 const FRAME: JsonFrame = JsonFrame("polymarket");
 

@@ -8,7 +8,7 @@ use crate::adapters::edge::EdgeDriver;
 use crate::adapters::exec::SessionOutcome;
 use crate::adapters::polymarket::rotation::WindowAssignment;
 use crate::msg::exec::CancelReason;
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 use crate::{info, warn};
 
 use super::super::binding::{BindingStep, EnrichmentRead, TokenOfInstrument};

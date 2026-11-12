@@ -5,9 +5,9 @@
 //! both series bucket one event time identically, the window is never derived here, and a wire value
 //! becomes the exact quote mantissa the engine's ledger held.
 
-use engine::ids::{FIXED_SCALE, InstrumentId};
+use engine::msg::ids::{FIXED_SCALE, InstrumentId};
+use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::UiEvent;
-use engine::time::{DurationUs, TsUs};
 use engine::workstation::chart::model::ChartModel;
 use engine::workstation::chart::position_model::{PositionBucket, PositionModel};
 use engine::workstation::chart::position_view::{RiskSeries, bounds, visible_buckets};

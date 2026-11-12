@@ -12,7 +12,7 @@ use parquet::file::properties::WriterProperties;
 use arrow_schema::SchemaRef;
 
 use crate::info;
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 use super::PersistError;
 use super::schema::TableRow;

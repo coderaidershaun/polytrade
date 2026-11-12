@@ -17,12 +17,12 @@ use crate::adapters::lane::{Flow, Lane, LaneSpec, SessionEnd, run_lane};
 use crate::adapters::rest_quiet::SharedRestQuiet;
 use crate::config::{BinanceMarket, KlineInterval};
 use crate::hot::spawn::QueueProducer;
-use crate::ids::{InstrumentId, StreamEpoch};
 use crate::link::RunState;
+use crate::msg::ids::{InstrumentId, StreamEpoch};
 use crate::msg::inbound::{InboundMessage, TappedMessage, VenueMeta};
+use crate::msg::time::{EngineClock, TsUs};
 use crate::registry::{ConnectionCategory, InstrumentRow, ProducerGroup};
 use crate::shutdown::{FatalSignal, RunStateCell, TaskHandle};
-use crate::time::{EngineClock, TsUs};
 use crate::{error, info, warn, warn_repeating};
 
 use super::kline::KlineSequencer;

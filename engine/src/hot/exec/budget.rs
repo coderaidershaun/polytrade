@@ -5,7 +5,7 @@
 //! closes a position. Metering locally turns that into a choice: quoting stops first, and the
 //! headroom left over belongs to the way out.
 
-use crate::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, TsUs};
 
 /// The venues wired so far declare at most two order buckets per market. Four leaves room for one
 /// that declares more without the meter's memory depending on anything but this constant.

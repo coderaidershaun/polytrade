@@ -7,7 +7,7 @@ mod vpin;
 pub use markouts::{MarkoutFill, MarkoutSide, MarkoutTracker, SideMarkouts};
 pub use vpin::{VpinEstimate, vpin};
 
-use crate::time::DurationUs;
+use crate::msg::time::DurationUs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MarkoutSpec {

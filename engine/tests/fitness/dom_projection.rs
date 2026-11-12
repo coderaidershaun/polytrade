@@ -7,9 +7,9 @@
 //! as `65991.5`. The fit half pins the one geometry rule that can fail silently: asking for more
 //! rows than the panel holds costs rows, never legibility.
 
-use engine::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty};
+use engine::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty};
+use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{DomQuote, UiBookSnapshot, UiBookState, UiEvent};
-use engine::time::{DurationUs, TsUs};
 use engine::workstation::dom_view::{
     DEFAULT_ROWS_PER_SIDE, DomGrouping, DomOverlay, DomRow, DomStatus, DomViewInput, FeedStatus,
     MAX_ROWS_PER_SIDE, MIN_ROWS_PER_SIDE, QuotePlacement, ask_anchor, bid_anchor, build_dom_view,

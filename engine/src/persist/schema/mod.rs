@@ -9,7 +9,7 @@ use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::config::ExecutionMode;
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 use self::column::Column;
 use super::RunMeta;

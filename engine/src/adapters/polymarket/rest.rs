@@ -7,8 +7,8 @@ use serde::de::DeserializeOwned;
 
 use crate::adapters::http::{self, Deadlines, HttpClient, TransportError};
 use crate::config::PolySeries;
-use crate::ids::{FIXED_SCALE, Price, Qty};
-use crate::time::TsUs;
+use crate::msg::ids::{FIXED_SCALE, Price, Qty};
+use crate::msg::time::TsUs;
 
 const GAMMA_BASE: &str = "https://gamma-api.polymarket.com";
 const CLOB_BASE: &str = "https://clob.polymarket.com";

@@ -13,7 +13,7 @@
 //! This drives the REAL `MicroRecorder` against the real engine, because both halves of the
 //! agreement are only present when the real strategy meets the real reconciler.
 
-use engine::ids::{FIXED_SCALE, Price, Side};
+use engine::msg::ids::{FIXED_SCALE, Price, Side};
 
 use crate::engine_support::{ONE, pop};
 use crate::recorder_fixture::{

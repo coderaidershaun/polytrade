@@ -10,11 +10,11 @@ use engine::adapters::exchange_sim::wire::{
 };
 use engine::adapters::exec::{EngineIdentity, ExecRequest, TeTag};
 use engine::config::RunIdentity;
-use engine::ids::{AssetId, ClientOrderId, Price, Qty, Side, TradeId, VenueOrderId};
 use engine::msg::exec::{ExecEvent, OrderStyle, VenueOrderStatus};
+use engine::msg::ids::{AssetId, ClientOrderId, Price, Qty, Side, TradeId, VenueOrderId};
 use engine::msg::inbound::InboundMessage;
+use engine::msg::time::TsUs;
 use engine::registry::{AssetDictionary, Registry};
-use engine::time::TsUs;
 
 pub const STRATEGY_ID: &str = "strat-micro-recorder";
 pub const TE_ID: &str = "te-binance-spot-btcusdt";
@@ -136,8 +136,8 @@ impl FakeVenue {
             identity,
             wire: VenueWire::new(identity),
             orders: ScenarioOrders::new(),
-            best_bid: Price(117_999 * engine::ids::FIXED_SCALE),
-            best_ask: Price(118_001 * engine::ids::FIXED_SCALE),
+            best_bid: Price(117_999 * engine::msg::ids::FIXED_SCALE),
+            best_ask: Price(118_001 * engine::msg::ids::FIXED_SCALE),
             delivery: Delivery::AckFirst,
             next_trade_id: FIRST_TRADE_ID,
         }

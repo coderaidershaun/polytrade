@@ -2,10 +2,10 @@
 //! written once so no venue can spell a safety rule its own way. Each instant is a parameter,
 //! because nothing under this directory may read a clock.
 
-use crate::ids::{ClientOrderId, InstrumentId, Side};
 use crate::msg::exec::{CancelReason, ExecEvent};
+use crate::msg::ids::{ClientOrderId, InstrumentId, Side};
+use crate::msg::time::TsUs;
 use crate::shutdown::FatalSignal;
-use crate::time::TsUs;
 use crate::{error, warn};
 
 use super::{

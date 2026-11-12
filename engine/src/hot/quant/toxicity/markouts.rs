@@ -5,9 +5,9 @@ use std::collections::VecDeque;
 use super::{ForwardHorizon, MarkoutSpec, ReverseHorizon};
 use crate::hot::quant::BPS;
 use crate::hot::series::{Element, FastQueue};
-use crate::ids::{Price, Qty, Side};
+use crate::msg::ids::{Price, Qty, Side};
 use crate::msg::inbound::TradeEvent;
-use crate::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, TsUs};
 
 /// Queue heuristic: our quote joins LAST, fills when this fraction of level qty traded (9/10 covers unknown cancellations).
 const QUEUE_FILL_NUM: i128 = 9;

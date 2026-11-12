@@ -5,7 +5,7 @@
 
 use super::exec_model::{OrderCell, OrderStatus};
 use super::format::BASIS_POINTS_PER_UNIT;
-use crate::ids::{Price, Qty};
+use crate::msg::ids::{Price, Qty};
 use crate::msg::inbound::Level;
 use crate::msg::ui::{DomQuote, UiBookSnapshot, UiBookState};
 

@@ -4,9 +4,9 @@ use std::cmp::Ordering;
 
 use super::queue::{OwnFill, PriceLadder, PublicPolicy, QueueAhead, SimOrderIndex};
 use crate::hot::book::{Book, LevelState, SnapshotOutcome};
-use crate::ids::{AggregateTradeId, InstrumentId, Price, Qty, RawTradeId, Side, StreamEpoch};
+use crate::msg::ids::{AggregateTradeId, InstrumentId, Price, Qty, RawTradeId, Side, StreamEpoch};
 use crate::msg::inbound::{BookChunk, BookChunkKind, TradeEvent, VenueMeta};
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResetReason {

@@ -7,7 +7,7 @@ use std::mem;
 
 use eframe::egui;
 
-use crate::ids::{InstrumentId, Price, Side};
+use crate::msg::ids::{InstrumentId, Price, Side};
 
 use crate::workstation::browser::theme::{self, DARK, METRICS};
 use crate::workstation::chart::model::ChartModel;

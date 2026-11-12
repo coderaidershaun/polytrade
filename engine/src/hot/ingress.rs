@@ -4,9 +4,9 @@
 
 use rtrb::Consumer;
 
-use crate::ids::QueueId;
+use crate::msg::ids::QueueId;
 use crate::msg::inbound::InboundMessage;
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 /// What one pop leaves behind, read after the message came off: `depth` counts only the popped
 /// queue, `spin_backlog` every queue at once. The total is present on spin ticks alone — the one

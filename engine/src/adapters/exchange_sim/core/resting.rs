@@ -3,9 +3,9 @@
 use super::orders::{CORPUS_VENUE_ORDER_ID, SimOrder};
 use super::queue::SimOrderIndex;
 use super::wallet::Reservation;
-use crate::ids::{ClientOrderId, Price, Qty, Side, TradeId, VenueOrderId};
 use crate::msg::exec::VenueOrderStatus;
-use crate::time::{DurationUs, TsUs};
+use crate::msg::ids::{ClientOrderId, Price, Qty, Side, TradeId, VenueOrderId};
+use crate::msg::time::{DurationUs, TsUs};
 
 const FIRST_TRADE_ID: TradeId = TradeId(778_291);
 

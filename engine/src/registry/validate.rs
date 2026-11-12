@@ -4,7 +4,7 @@ use crate::config::{
     ConfigError, KlineInterval, SpinField, TARGET_WINDOW_CANDLES, TrackerSpec, VolumeBarsSpec,
     VolumeThreshold, WindowsSpec,
 };
-use crate::ids::FIXED_SCALE;
+use crate::msg::ids::FIXED_SCALE;
 
 const MAX_THRESHOLD_USD: u64 = (i64::MAX / 4) as u64 / FIXED_SCALE as u64;
 

@@ -1,6 +1,6 @@
 //! Effective-time ordering for buffered simulator inputs.
 
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Phase {

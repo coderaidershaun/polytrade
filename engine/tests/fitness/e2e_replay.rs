@@ -14,7 +14,7 @@ use engine::hot::ingress::IngressQueues;
 use engine::hot::metrics::{Category, MetricsSnapshot};
 use engine::hot::spawn::{HotThreadConfig, QueueProducer, spawn_hot_thread};
 use engine::hot::strategy::StrategyConfig;
-use engine::ids::{FIXED_SCALE, QueueId, SourceId};
+use engine::msg::ids::{FIXED_SCALE, QueueId, SourceId};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::persist::RotationRow;
 use engine::persist::{PersistConfig, PersistWriter, RunMeta};

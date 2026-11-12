@@ -4,7 +4,7 @@
 //! error anywhere — it is a marketable order the venue happily fills.
 
 use engine::hot::quant::pricing::{GueantParams, Objective, QuoteCoefficients, QuoteInputs};
-use engine::ids::Price;
+use engine::msg::ids::Price;
 
 const TICK: Price = Price(1_000_000); // $0.01 at the 1e-8 fixed-point scale.
 

@@ -26,9 +26,9 @@ pub(crate) use revise::ForcedOrderExit;
 use wallet::{FillSettlement, SimWallet, SimWalletSetup, WalletError};
 
 use crate::adapters::exec::ExecRequest;
-use crate::ids::{ClientOrderId, InstrumentId, Price, Qty, TradeId};
+use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, TradeId};
 use crate::msg::inbound::{BookChunkKind, InboundMessage, TappedMessage, VenueMeta};
-use crate::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, TsUs};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct SimEmission {

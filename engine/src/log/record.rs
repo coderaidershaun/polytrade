@@ -2,8 +2,8 @@
 
 use core::fmt;
 
-use crate::labelled_enum::labelled_enum;
-use crate::time::{TsUs, boot_stamp_us};
+use crate::msg::labelled_enum::labelled_enum;
+use crate::msg::time::{TsUs, boot_stamp_us};
 
 labelled_enum! {
     /// Three levels only (no debug/trace).

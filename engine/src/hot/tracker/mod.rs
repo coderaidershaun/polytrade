@@ -13,7 +13,7 @@ use crate::hot::book::Book;
 use crate::hot::quant::intensity::IntensityCounts;
 use crate::hot::quant::micro;
 use crate::hot::series::FastQueue;
-use crate::ids::{Price, Side};
+use crate::msg::ids::{Price, Side};
 use crate::msg::inbound::{KlineEvent, TradeEvent};
 use crate::warn;
 

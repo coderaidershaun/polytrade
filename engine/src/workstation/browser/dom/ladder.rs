@@ -10,7 +10,7 @@ use super::DomFrame;
 use super::geometry::{ASK_COLUMNS, BID_COLUMNS, DomLayout};
 use super::overlay::OverlayPainter;
 use super::pin;
-use crate::ids::Qty;
+use crate::msg::ids::Qty;
 use crate::workstation::browser::theme::{self, DARK, METRICS};
 use crate::workstation::dom_view::{
     DomRow, DomStatus, DomView, DomViewInput, StrategyCell, build_dom_view,

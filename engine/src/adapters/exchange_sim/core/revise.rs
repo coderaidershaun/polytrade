@@ -4,8 +4,8 @@ use super::queue::SimOrderIndex;
 use super::request::{AdmitPlan, RequestFold, TimedAction};
 use super::resting::{ClosedReason, OrderPhase, OrderSnapshot, RefusalReason, RestingOrder};
 use super::{SimVenue, VenueEvent};
-use crate::ids::{ClientOrderId, Qty};
-use crate::time::TsUs;
+use crate::msg::ids::{ClientOrderId, Qty};
+use crate::msg::time::TsUs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ForcedOrderExit {

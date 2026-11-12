@@ -7,7 +7,7 @@
 //! shutdown sweep can reach it), but a stream event racing the HTTP answer resolves to nothing here
 //! and the driver must hold it rather than discard it.
 
-use crate::ids::{ClientOrderId, InstrumentId, TradeId, VenueOrderId};
+use crate::msg::ids::{ClientOrderId, InstrumentId, TradeId, VenueOrderId};
 
 /// An order this run placed, resolved from the venue's own id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

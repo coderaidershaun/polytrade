@@ -3,7 +3,7 @@
 use rtrb::Producer;
 
 use crate::msg::exec::{ExecCommand, ExecLaneItem, StampedExecCommand};
-use crate::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, TsUs};
 
 use super::order::{MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS};
 

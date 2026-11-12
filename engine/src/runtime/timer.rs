@@ -7,8 +7,8 @@ use tokio::time::{self, Instant};
 
 use crate::hot::spawn::QueueProducer;
 use crate::msg::inbound::{InboundMessage, SpinTick};
+use crate::msg::time::{DurationUs, EngineClock};
 use crate::shutdown::TaskHandle;
-use crate::time::{DurationUs, EngineClock};
 use crate::warn;
 
 /// Pushes `SpinTick`s onto `producer`'s input queue, each stamped with its scheduled fire time

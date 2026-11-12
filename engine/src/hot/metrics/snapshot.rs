@@ -3,7 +3,7 @@
 //! without the recording machinery around it.
 
 use crate::hot::strategy::LaneDrops;
-use crate::time::TsUs;
+use crate::msg::time::TsUs;
 
 use super::{CATEGORIES, Category, MAX_QUEUES, QueueDepthStat, STAGES, Stage, StageStat};
 

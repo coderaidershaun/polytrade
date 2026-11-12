@@ -4,8 +4,8 @@
 //! silence (and the definitive `/book` 404) are the rotation FSM's to weigh; the burst alone is the
 //! fast path it is allowed to miss.
 
-use crate::ids::{Price, Qty, Side};
-use crate::time::TsUs;
+use crate::msg::ids::{Price, Qty, Side};
+use crate::msg::time::TsUs;
 
 use super::shadow::ShadowBook;
 

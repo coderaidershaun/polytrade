@@ -2,7 +2,7 @@
 //! derive subscribe/prefetch/probe instants. No I/O or clock reads.
 
 use crate::config::PolySeries;
-use crate::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, TsUs};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Slot {

@@ -13,9 +13,9 @@ use engine::hot::strategy::{
     BookState, DesiredQuote, EngineView, InstrumentRow, OrderStyle, QuoteLevel, Registration,
     Strategy, StrategyConfig, StrategyCtx, TickGrid, TopicId, WindowInfo,
 };
-use engine::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{MarketRotation, SpinTick, TradeEvent};
-use engine::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, TsUs};
 use serde::Deserialize;
 
 #[path = "../link_schema.rs"]

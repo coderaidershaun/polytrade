@@ -13,9 +13,9 @@ use crate::adapters::exec::{
     EventSink, ExecEffect, ExecRequest, InFlightRequest, Outgoing, PlaceNotSentReason, RequestId,
     SessionOutcome, SkipReason, stream_ready,
 };
-use crate::ids::{ClientOrderId, Side};
 use crate::msg::exec::{CancelReason, ExecEvent};
-use crate::time::DurationUs;
+use crate::msg::ids::{ClientOrderId, Side};
+use crate::msg::time::DurationUs;
 use crate::{error, info, warn};
 
 use super::super::codec::{
@@ -222,7 +222,7 @@ impl Actor {
     }
 
     /// The venue's taker hold, during which a cancel is refused rather than queued.
-    fn cancel_hold(&self, request: &ExecRequest) -> Option<crate::time::TsUs> {
+    fn cancel_hold(&self, request: &ExecRequest) -> Option<crate::msg::time::TsUs> {
         let ExecRequest::Cancel { client_id, .. } = request else {
             return None;
         };
