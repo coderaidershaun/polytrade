@@ -22,9 +22,9 @@ use crate::msg::persist::RotationRow;
 use crate::msg::time::{EngineClock, TsUs};
 use crate::registry::{InstrumentRow, ProducerGroup};
 use crate::shutdown::{FatalSignal, RunStateCell, TaskHandle};
-use crate::venues::backoff::BackoffCaps;
-use crate::venues::lane::{Flow, Lane, LaneSpec, SessionEnd, run_lane};
-use crate::venues::rest_quiet::RestQuiet;
+use crate::venues::edge::backoff::BackoffCaps;
+use crate::venues::edge::lane::{Flow, Lane, LaneSpec, SessionEnd, run_lane};
+use crate::venues::edge::rest_quiet::RestQuiet;
 use crate::{error, warn};
 
 use super::discovery::{PolySchedule, Slot};
@@ -32,7 +32,7 @@ use super::parse::{is_frameless, parse_market_frame};
 use super::rest::PolyRest;
 use super::rotation::WindowAssignment;
 use super::ws;
-use crate::venues::socket::{Socket, Writer};
+use crate::venues::edge::socket::{Socket, Writer};
 
 use effects::{CoreEvent, Pending};
 

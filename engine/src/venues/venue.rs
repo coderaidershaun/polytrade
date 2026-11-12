@@ -13,13 +13,14 @@ use crate::msg::persist::RotationRow;
 use crate::msg::time::EngineClock;
 use crate::registry::Registry;
 use crate::shutdown::{FatalSignal, RunStateCell, TaskHandle};
-use crate::venues::backoff::BackoffCaps;
 use crate::venues::binance::actor::{BinanceAdapter, BinanceAdapterContext};
 use crate::venues::binance::exec::{
     self as binance_exec, ExecutionPreflight, ProbeError, SignError, preflight_execution,
 };
 use crate::venues::binance::preflight as binance_preflight;
 use crate::venues::binance::rest::BinanceEnv;
+use crate::venues::edge::backoff::BackoffCaps;
+use crate::venues::edge::rest_quiet::SharedRestQuiet;
 use crate::venues::edge::{EdgeInputs, VenueEdge};
 use crate::venues::exec::{LeaseNamespace, VenueCapabilities};
 use crate::venues::polymarket::actor::{PolymarketAdapter, PolymarketAdapterContext};
@@ -28,7 +29,6 @@ use crate::venues::polymarket::exec::handle::{
     self as polymarket_handle, PolymarketPreflight, PolymarketPreflightError, preflight_polymarket,
 };
 use crate::venues::polymarket::preflight as polymarket_preflight;
-use crate::venues::rest_quiet::SharedRestQuiet;
 use crate::venues::sim::{self, SimVenueError};
 
 pub(crate) use crate::venues::polymarket::rotation::WindowAssignment;

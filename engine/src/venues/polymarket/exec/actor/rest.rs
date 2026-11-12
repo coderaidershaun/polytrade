@@ -17,8 +17,8 @@ use tokio::task::JoinHandle;
 
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId};
 use crate::msg::time::{DurationUs, EngineClock};
+use crate::venues::edge::http::TransportError;
 use crate::venues::exec::{ExecRequest, RequestId};
-use crate::venues::http::TransportError;
 use crate::warn;
 
 use super::super::codec::{EncodedRequest, PlaceRequestContext};

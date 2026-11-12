@@ -3,7 +3,7 @@
 use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::{BookChunkKind, BookReset, InboundMessage, VenueMeta};
 use crate::msg::time::TsUs;
-use crate::venues::chunk::{ChunkEmitter, ChunkPlan};
+use crate::venues::edge::chunk::{ChunkEmitter, ChunkPlan};
 use crate::warn;
 
 use super::parse::{DepthDiff, DepthSnapshot};

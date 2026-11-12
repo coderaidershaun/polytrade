@@ -3,8 +3,8 @@
 //! and where the frames held waiting for it are released.
 
 use crate::msg::exec::ExecEvent;
+use crate::venues::edge::http::TransportError;
 use crate::venues::exec::{ExecRequest, Outgoing, PlaceNotSentReason, SessionOutcome};
-use crate::venues::http::TransportError;
 use crate::{error, info, warn};
 
 use super::super::binding::BindingStep;

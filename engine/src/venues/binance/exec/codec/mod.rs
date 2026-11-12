@@ -13,7 +13,7 @@ use crate::msg::exec::VenueOrderStatus;
 use crate::msg::ids::InstrumentId;
 use crate::msg::time::TsUs;
 use crate::registry::{AssetDictionary, Registry};
-use crate::venues::decode::{DecimalFault, JsonFrame, mantissa_field, unknown_enum};
+use crate::venues::edge::decode::{DecimalFault, JsonFrame, mantissa_field, unknown_enum};
 use crate::venues::exec::EngineIdentity;
 
 pub(super) const FRAME: JsonFrame = JsonFrame("binance execution");

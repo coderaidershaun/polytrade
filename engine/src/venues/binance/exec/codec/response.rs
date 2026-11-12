@@ -5,9 +5,9 @@
 use crate::msg::exec::{ExecEvent, ExecKind};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Side, VenueOrderId};
 use crate::venues::binance::rest::OrderRecord;
-use crate::venues::decode::{order_side, price_field, qty_field};
+use crate::venues::edge::decode::{order_side, price_field, qty_field};
+use crate::venues::edge::venue_clock::clamp_or_receipt;
 use crate::venues::exec::{ExecRequest, blank};
-use crate::venues::venue_clock::clamp_or_receipt;
 
 use super::client_id::classify_client_order_id;
 use super::reject::{RejectSubject, amend_budget_remaining, classify_error};

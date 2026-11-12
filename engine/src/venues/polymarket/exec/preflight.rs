@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::msg::time::DurationUs;
 use crate::secrets::{EnvFile, SecretError};
-use crate::venues::http::TransportError;
+use crate::venues::edge::http::TransportError;
 use crate::{info, warn};
 
 use super::codec::{PROTOCOL_VERSION, collateral_balance, open_orders_page};

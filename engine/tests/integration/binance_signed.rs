@@ -12,7 +12,7 @@
 
 use engine::venues::binance::exec::{ExecutionPreflight, preflight_execution};
 use engine::venues::binance::rest::BinanceEnv;
-use engine::venues::rest_quiet::SharedRestQuiet;
+use engine::venues::edge::rest_quiet::SharedRestQuiet;
 
 const SYMBOL: &str = "BTCUSDT";
 

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use reqwest::Method;
 
-use crate::venues::http::{Deadlines, HttpClient, TransportError};
+use crate::venues::edge::http::{Deadlines, HttpClient, TransportError};
 
 use super::codec::{EncodedRequest, HttpAnswer};
 use super::sign::key::SigningKey;

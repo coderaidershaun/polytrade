@@ -5,7 +5,7 @@ use std::borrow::Borrow;
 use crate::msg::ids::{InstrumentId, Side};
 use crate::msg::inbound::{BookChunkKind, InboundMessage, Level};
 use crate::msg::time::TsUs;
-use crate::venues::chunk::{ChunkEmitter, ChunkPlan};
+use crate::venues::edge::chunk::{ChunkEmitter, ChunkPlan};
 
 use super::parse::{PolyBook, PolyDelta};
 

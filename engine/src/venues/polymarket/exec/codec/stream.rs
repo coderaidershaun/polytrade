@@ -8,8 +8,8 @@
 use crate::msg::exec::{ExecEvent, ExecKind, Liquidity};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, TradeId};
 use crate::msg::time::TsUs;
-use crate::venues::decode::{order_side, price_field, qty_field, unknown_enum};
-use crate::venues::venue_clock::clamp_or_receipt;
+use crate::venues::edge::decode::{order_side, price_field, qty_field, unknown_enum};
+use crate::venues::edge::venue_clock::clamp_or_receipt;
 
 use super::correlation::{trade_id_digest, venue_order_id_digest};
 use super::response::blank_event;

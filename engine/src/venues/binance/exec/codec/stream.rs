@@ -6,11 +6,11 @@ use crate::msg::exec::{
 };
 use crate::msg::ids::{AssetId, TradeId, VenueOrderId};
 use crate::registry::AssetDictionary;
-use crate::venues::decode::{
+use crate::venues::edge::decode::{
     DecimalFault, mantissa_field, order_side, price_field, qty_field, unknown_enum,
 };
+use crate::venues::edge::venue_clock::clamp_exchange_ts;
 use crate::venues::exec::{ChunkStamps, account_chunks, blank};
-use crate::venues::venue_clock::clamp_exchange_ts;
 
 use super::client_id::classify_client_order_id;
 use super::wire::{ExecutionReport, StreamEnvelope, StreamPayload};

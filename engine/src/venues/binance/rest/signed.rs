@@ -8,9 +8,9 @@ use serde::de::DeserializeOwned;
 use crate::config::BinanceMarket;
 use crate::msg::time::EngineClock;
 use crate::secrets::Credentials;
-use crate::venues::backoff::BackoffCaps;
 use crate::venues::binance::exec::{ClockOffset, RecvWindow, RequestParams, RequestSigner};
-use crate::venues::rest_quiet::SharedRestQuiet;
+use crate::venues::edge::backoff::BackoffCaps;
+use crate::venues::edge::rest_quiet::SharedRestQuiet;
 use crate::warn;
 
 use super::{

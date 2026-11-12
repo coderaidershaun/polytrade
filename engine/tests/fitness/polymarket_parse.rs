@@ -8,10 +8,10 @@ use engine::hot::book::{Book, SnapshotOutcome};
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BookChunkKind, InboundMessage, Level};
 use engine::msg::time::TsUs;
-use engine::venues::decode::DecimalFault;
+use engine::venues::edge::decode::DecimalFault;
+use engine::venues::edge::venue_clock::MAX_VENUE_SKEW_US;
 use engine::venues::polymarket::book::{BookNormaliser, ChunkStamps};
 use engine::venues::polymarket::parse::{ParseError, PolyFrame, parse_market_frame};
-use engine::venues::venue_clock::MAX_VENUE_SKEW_US;
 use proptest::prelude::*;
 
 use crate::engine_support::level;

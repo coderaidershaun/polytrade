@@ -7,10 +7,10 @@ use crate::config::KlineInterval;
 use crate::msg::ids::{AggregateTradeId, InstrumentId, RawTradeId, Side};
 use crate::msg::inbound::{KlineEvent, Level, TradeEvent};
 use crate::msg::time::TsUs;
-use crate::venues::decode::{
+use crate::venues::edge::decode::{
     DecimalFault, JsonFrame, levels, mantissa_field, price_field, qty_field,
 };
-use crate::venues::venue_clock::{boundary_ts, clamp_exchange_ts};
+use crate::venues::edge::venue_clock::{boundary_ts, clamp_exchange_ts};
 
 const FRAME: JsonFrame = JsonFrame("binance");
 

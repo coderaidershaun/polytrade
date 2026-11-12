@@ -3,20 +3,12 @@
 
 use std::time::Duration;
 
-pub mod backoff;
 pub mod binance;
-pub(crate) mod chunk;
-pub mod decode;
-pub(crate) mod edge;
+pub mod edge;
 pub mod exec;
-pub mod http;
-pub(crate) mod lane;
 pub mod polymarket;
-pub mod rest_quiet;
 pub mod sim;
-pub(crate) mod socket;
 pub(crate) mod venue;
-pub mod venue_clock;
 
 pub use venue::VenueError;
 

@@ -13,7 +13,7 @@ use engine::venues::binance::parse::{
     DepthDiff, ParseContext, RestKlineTail, parse_agg_trade, parse_combined_frame,
     parse_perp_depth_diff, parse_rest_klines,
 };
-use engine::venues::venue_clock::MAX_VENUE_SKEW_US;
+use engine::venues::edge::venue_clock::MAX_VENUE_SKEW_US;
 use proptest::prelude::*;
 
 use crate::engine_support::level;

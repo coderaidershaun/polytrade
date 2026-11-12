@@ -59,7 +59,7 @@ engine branches solely on the normalised enums.
    Driving commands through `ExecCore::on_command` and answers through `ExecSession::fold` is
    what makes the money rules inherited instead of re-derived.
 
-3. **The session chassis.** `run_edge` (in `venues/edge.rs`) owns the lifecycle every
+3. **The session chassis.** `run_edge` (in `venues/edge/mod.rs`) owns the lifecycle every
    venue shares: connect/backoff with full jitter, the blind-too-long cancel sweep, offline
    settling, exit precedence (Shutdown > Fatal > Park), sweep pacing, and the stop
    protocol. A venue implements the ten-method `EdgeDriver` trait with only its own

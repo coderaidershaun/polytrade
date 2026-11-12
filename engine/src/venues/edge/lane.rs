@@ -4,8 +4,8 @@
 use crate::link::RunState;
 use crate::shutdown::{FatalSignal, RunStateCell};
 use crate::venues::IDLE_POLL;
-use crate::venues::backoff::BackoffCaps;
-use crate::venues::socket::{Socket, connect};
+use crate::venues::edge::backoff::BackoffCaps;
+use crate::venues::edge::socket::{Socket, connect};
 use crate::{info, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

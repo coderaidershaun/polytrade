@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use engine::venues::rest_quiet::{RestQuiet, SharedRestQuiet};
+use engine::venues::edge::rest_quiet::{RestQuiet, SharedRestQuiet};
 use proptest::prelude::*;
 
 const FLOOR: Duration = Duration::from_secs(2);

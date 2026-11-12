@@ -8,7 +8,7 @@ use crate::secrets::{Credentials, EnvFile, SecretError};
 use crate::venues::binance::rest::{
     AccountInfo, BinanceEnv, RestError, SignedRestClient, SignedRestConfig,
 };
-use crate::venues::rest_quiet::SharedRestQuiet;
+use crate::venues::edge::rest_quiet::SharedRestQuiet;
 
 use super::BINANCE_CREDENTIAL_VARIABLES;
 

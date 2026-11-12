@@ -20,7 +20,7 @@ use engine::msg::exec::{
 };
 use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::time::TsUs;
-use engine::venues::decode::DecimalFault;
+use engine::venues::edge::decode::DecimalFault;
 use engine::venues::exec::ExecRequest;
 use engine::venues::polymarket::exec::codec::{
     AccountStamps, DecodeContext, EncodeContext, HttpAnswer, IgnoredReason, KnownOrder, OrderIndex,

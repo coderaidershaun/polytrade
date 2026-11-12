@@ -31,7 +31,7 @@ use engine::msg::time::EngineClock;
 use engine::persist::{PersistConfig, PersistWriter, RunMeta};
 use engine::registry::Registry;
 use engine::shutdown::{FatalSignal, RunStateCell};
-use engine::venues::backoff::BackoffCaps;
+use engine::venues::edge::backoff::BackoffCaps;
 use engine::venues::polymarket::actor::{PolymarketAdapter, PolymarketAdapterContext};
 use engine::venues::polymarket::rest::PolyRest;
 

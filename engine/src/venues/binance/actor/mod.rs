@@ -20,16 +20,16 @@ use crate::msg::inbound::{InboundMessage, TappedMessage, VenueMeta};
 use crate::msg::time::{EngineClock, TsUs};
 use crate::registry::{ConnectionCategory, InstrumentRow, ProducerGroup};
 use crate::shutdown::{FatalSignal, RunStateCell, TaskHandle};
-use crate::venues::backoff::BackoffCaps;
-use crate::venues::lane::{Flow, Lane, LaneSpec, SessionEnd, run_lane};
-use crate::venues::rest_quiet::SharedRestQuiet;
+use crate::venues::edge::backoff::BackoffCaps;
+use crate::venues::edge::lane::{Flow, Lane, LaneSpec, SessionEnd, run_lane};
+use crate::venues::edge::rest_quiet::SharedRestQuiet;
 use crate::{error, info, warn, warn_repeating};
 
 use super::kline::KlineSequencer;
 use super::parse::{ParseContext, ParseError, parse_agg_trade, parse_combined_frame};
 use super::rest::{BinanceEnv, RestClient, RestError};
 use super::ws::{self, StreamCategory};
-use crate::venues::socket::Socket;
+use crate::venues::edge::socket::Socket;
 
 use depth_resync::DepthState;
 use liveness::LivenessMonitor;

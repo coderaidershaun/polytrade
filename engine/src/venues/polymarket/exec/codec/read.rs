@@ -10,9 +10,9 @@ use crate::msg::exec::{
 };
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use crate::msg::time::TsUs;
-use crate::venues::decode::{order_side, price_field, qty_field, unknown_enum};
+use crate::venues::edge::decode::{order_side, price_field, qty_field, unknown_enum};
+use crate::venues::edge::venue_clock::clamp_exchange_ts;
 use crate::venues::exec::{ChunkStamps, account_chunks};
-use crate::venues::venue_clock::clamp_exchange_ts;
 
 use super::correlation::venue_order_id_digest;
 use super::reject::RejectSubject;

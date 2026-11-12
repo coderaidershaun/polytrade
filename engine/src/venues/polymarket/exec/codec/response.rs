@@ -7,7 +7,7 @@
 
 use crate::msg::exec::{ExecEvent, ExecKind, VenueOrderStatus};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
-use crate::venues::decode::unknown_enum;
+use crate::venues::edge::decode::unknown_enum;
 use crate::venues::exec::blank;
 
 use super::correlation::venue_order_id_digest;

@@ -7,7 +7,7 @@
 use serde::Deserialize;
 
 use crate::secrets::Secret;
-use crate::venues::http::TransportError;
+use crate::venues::edge::http::TransportError;
 
 use super::super::codec::{ApiKeyPayload, decode_closed_only, decode_protocol_version};
 use super::super::rest::ClobResponse;

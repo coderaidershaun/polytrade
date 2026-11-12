@@ -22,7 +22,7 @@ use crate::msg::exec::ExecLaneItem;
 use crate::msg::time::{DurationUs, EngineClock};
 use crate::registry::Registry;
 use crate::shutdown::{FatalSignal, RunStateCell};
-use crate::venues::backoff::BackoffCaps;
+use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::{EdgeInputs, EdgeSettings, EdgeSpawn, VenueEdge};
 use crate::venues::exec::{TeTag, VenueCapabilities};
 use crate::venues::venue::{ExecutionVenue, WindowAssignment};

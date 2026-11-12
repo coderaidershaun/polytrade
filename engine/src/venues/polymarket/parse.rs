@@ -8,8 +8,8 @@ use serde_json::Value;
 use crate::msg::ids::{Price, Qty, Side};
 use crate::msg::inbound::Level;
 use crate::msg::time::TsUs;
-use crate::venues::decode::{DecimalFault, JsonFrame, levels, price_field, qty_field};
-use crate::venues::venue_clock::clamp_exchange_ts;
+use crate::venues::edge::decode::{DecimalFault, JsonFrame, levels, price_field, qty_field};
+use crate::venues::edge::venue_clock::clamp_exchange_ts;
 
 const FRAME: JsonFrame = JsonFrame("polymarket");
 

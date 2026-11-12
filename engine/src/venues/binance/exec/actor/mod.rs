@@ -23,6 +23,7 @@ use crate::msg::time::{DurationUs, TsUs};
 use crate::registry::AssetDictionary;
 use crate::venues::binance::rest::BinanceEnv;
 use crate::venues::binance::ws;
+use crate::venues::edge::socket::{Reader, Writer};
 use crate::venues::edge::{
     COMMAND_POLL, EdgeControl, EdgeDriver, EventFunnel, HOUSEKEEPING, OfflineStep, RECENT_TRADES,
     RECONCILE_INTERVAL,
@@ -30,7 +31,6 @@ use crate::venues::edge::{
 use crate::venues::exec::{
     EngineIdentity, ExecCore, ExecSession, ExecStop, SessionOutcome, SessionSetup,
 };
-use crate::venues::socket::{Reader, Writer};
 use crate::{info, warn};
 
 use super::{DecodeContext, RecvWindow, RequestSigner, SymbolTable};

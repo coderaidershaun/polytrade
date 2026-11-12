@@ -16,7 +16,9 @@ mod wire;
 use crate::msg::exec::VenueOrderStatus;
 use crate::msg::ids::{InstrumentId, Price, Qty};
 use crate::msg::time::TsUs;
-use crate::venues::decode::{DecimalFault, JsonFrame, mantissa_field, qty_field, unknown_enum};
+use crate::venues::edge::decode::{
+    DecimalFault, JsonFrame, mantissa_field, qty_field, unknown_enum,
+};
 
 pub use correlation::{
     KnownOrder, OrderIndex, OrderIndexFull, trade_id_digest, venue_order_id_digest,

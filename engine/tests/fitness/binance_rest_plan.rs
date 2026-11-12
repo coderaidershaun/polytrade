@@ -9,7 +9,7 @@ use engine::venues::binance::rest::{
     AccountInfo, BinanceEnv, FailureVerdict, HttpMethod, KlineQuery, OrderCountWindow, OrderRecord,
     RequestAuth, RestClient, RestError, RestRequest,
 };
-use engine::venues::http::TransportError;
+use engine::venues::edge::http::TransportError;
 
 /// Weights verified against <https://developers.binance.com/docs/binance-spot-api-docs/rest-api>
 /// on 2026-07-27 — account 20, myTrades 20 without `orderId`, openOrders 6 for one symbol,

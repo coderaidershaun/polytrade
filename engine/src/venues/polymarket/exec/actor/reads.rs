@@ -8,7 +8,7 @@
 
 use crate::msg::exec::AccountChunkKind;
 use crate::msg::ids::AssetId;
-use crate::venues::http::TransportError;
+use crate::venues::edge::http::TransportError;
 use crate::{info, warn};
 
 use super::super::binding::BindingStep;

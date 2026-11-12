@@ -20,7 +20,7 @@ use engine::venues::binance::exec::{
     format_client_order_id, parse_client_order_id,
 };
 use engine::venues::binance::rest::OrderRecord;
-use engine::venues::decode::DecimalFault;
+use engine::venues::edge::decode::DecimalFault;
 use engine::venues::exec::{EngineIdentity, ExecRequest, TeTag, TimeoutFallout};
 use proptest::prelude::*;
 

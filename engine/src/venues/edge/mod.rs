@@ -12,6 +12,15 @@
 //! It also holds what every venue's bring-up is handed and what it hands back, so the runtime can
 //! start any venue without naming one.
 
+pub mod backoff;
+pub(crate) mod chunk;
+pub mod decode;
+pub mod http;
+pub(crate) mod lane;
+pub mod rest_quiet;
+pub(crate) mod socket;
+pub mod venue_clock;
+
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -27,11 +36,11 @@ use crate::msg::time::{DurationUs, EngineClock, TsUs};
 use crate::registry::Registry;
 use crate::shutdown::{FatalSignal, RunStateCell};
 use crate::venues::IDLE_POLL;
-use crate::venues::backoff::BackoffCaps;
+use crate::venues::edge::backoff::BackoffCaps;
+use crate::venues::edge::socket::{Reader, Writer, connect};
 use crate::venues::exec::{
     EdgeHandle, EngineIdentity, EventSink, ExecStop, ExitPlan, SessionOutcome,
 };
-use crate::venues::socket::{Reader, Writer, connect};
 use crate::{info, warn};
 
 // Polling the command ring every millisecond costs a little latency but avoids waking on every push.

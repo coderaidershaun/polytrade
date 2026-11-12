@@ -25,13 +25,13 @@ use crate::msg::exec::{AssetBalance, CancelReason, ExecLaneItem};
 use crate::msg::ids::{AssetId, InstrumentId};
 use crate::msg::time::{DurationUs, TsUs};
 use crate::registry::InstrumentRow;
+use crate::venues::edge::socket::{Reader, Writer};
 use crate::venues::edge::{
     COMMAND_POLL, EdgeControl, EdgeDriver, EventFunnel, HOUSEKEEPING, OfflineStep, RECENT_TRADES,
     RECONCILE_INTERVAL,
 };
 use crate::venues::exec::{ExecCore, ExecSession, ExecStop, SessionOutcome, SessionSetup};
 use crate::venues::polymarket::rotation::WindowAssignment;
-use crate::venues::socket::{Reader, Writer};
 use crate::{info, warn};
 
 use super::codec::{OrderIndex, OrderSigner, SettlementWatermark, TokenTable, VenueAvailability};

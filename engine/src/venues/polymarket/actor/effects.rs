@@ -11,7 +11,8 @@ use crate::msg::inbound::Level;
 use crate::msg::time::TsUs;
 use crate::{warn, warn_repeating};
 
-use crate::venues::lane::Flow;
+use crate::venues::edge::lane::Flow;
+use crate::venues::edge::socket::Writer;
 use crate::venues::polymarket::parse::ParseError;
 use crate::venues::polymarket::rest::{BookProbe, GammaError, GammaMarket, PolyRest};
 use crate::venues::polymarket::rotation::{
@@ -19,7 +20,6 @@ use crate::venues::polymarket::rotation::{
 };
 use crate::venues::polymarket::shadow::BookMismatch;
 use crate::venues::polymarket::ws;
-use crate::venues::socket::Writer;
 
 use super::Actor;
 use super::core::DriverEffect;

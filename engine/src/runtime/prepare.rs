@@ -7,7 +7,7 @@ use crate::config::{Config, ExecutionMode, RunIdentity, SourceSpec};
 use crate::exposure::{self, ExposureState};
 use crate::info;
 use crate::registry::{InstrumentRow, Registry};
-use crate::venues::rest_quiet::SharedRestQuiet;
+use crate::venues::edge::rest_quiet::SharedRestQuiet;
 use crate::venues::venue::{self, ExecutionVenue};
 
 use super::EngineError;
