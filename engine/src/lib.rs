@@ -42,7 +42,3 @@ pub mod operator;
 /// Feature-gated, so a headless engine never builds the agent protocol stack.
 #[cfg(feature = "mcp")]
 pub mod mcp;
-
-/// Feature-gated, so a headless engine never builds the browser workstation's HTTP server.
-#[cfg(feature = "web")]
-pub mod web;

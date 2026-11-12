@@ -129,7 +129,7 @@ mod suite_integrity;
 mod tracker;
 mod ui_feed;
 mod volume_bars;
-/// These drive `engine::web` and its binary, which exist only under feature `web`.
+/// These drive `engine::operator::relay` and its binary, which exist only under feature `web`.
 #[cfg(feature = "web")]
 mod web_http;
 mod workstation_format;

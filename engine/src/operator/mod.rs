@@ -9,3 +9,7 @@
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, unused_imports))]
 #[cfg_attr(target_arch = "wasm32", warn(dead_code))]
 pub mod workstation;
+
+/// Feature-gated, so a headless engine never builds the browser workstation's HTTP server.
+#[cfg(feature = "web")]
+pub mod relay;

@@ -4,7 +4,7 @@
 
 mod arguments;
 mod bundle;
-mod relay;
+mod tab;
 
 use std::convert::Infallible;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -26,7 +26,7 @@ use tokio::net::TcpListener;
 use crate::msg::relay::RELAY_PATH;
 
 use bundle::Bundle;
-use relay::Relay;
+use tab::Relay;
 
 pub use arguments::{ArgumentError, WebConfig};
 
