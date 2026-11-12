@@ -20,7 +20,10 @@ use crate::msg::time::{
 };
 use crate::msg::ui::LatencyReport;
 use crate::runtime::config::LatencyConfig;
+use crate::runtime::pin::spawn_pinned;
 use crate::{warn, warn_repeating};
+
+use super::EngineError;
 
 pub use error::MetricsError;
 pub use ring::{SampleProducers, SampleRing};
@@ -168,9 +171,15 @@ pub(super) struct MetricsBringUpSetup<'a> {
     pub stamper: &'a Stamper,
     pub clock_source: ClockSource,
     pub queue_count: usize,
+    /// The housekeeping core the thread pins itself to. Absent, the OS places it.
+    pub core_id: Option<usize>,
 }
 
-pub(super) fn metrics_bring_up(setup: MetricsBringUpSetup<'_>) -> MetricsBringUp {
+/// # Errors
+/// [`EngineError::HousekeepingPin`] when the thread cannot pin itself to its core on Linux.
+pub(super) fn metrics_bring_up(
+    setup: MetricsBringUpSetup<'_>,
+) -> Result<MetricsBringUp, EngineError> {
     let stamper = setup.stamper.clone();
     let first = read_anchor(setup.clock, &stamper).0;
     std::thread::sleep(FIRST_ANCHOR_GAP);
@@ -188,11 +197,17 @@ pub(super) fn metrics_bring_up(setup: MetricsBringUpSetup<'_>) -> MetricsBringUp
         scale,
         start_ts_us: second.at,
     });
-    MetricsBringUp {
-        thread: MetricsThread::spawn(metrics, setup.clock.clone(), stamper),
+    let thread = MetricsThread::spawn(MetricsThreadSetup {
+        metrics,
+        clock: setup.clock.clone(),
+        stamper,
+        core_id: setup.core_id,
+    })?;
+    Ok(MetricsBringUp {
+        thread,
         samples,
         reports,
-    }
+    })
 }
 
 /// The anchor, and the counter read after the clock, which bounds how exact the anchor is.
@@ -203,24 +218,46 @@ fn read_anchor(clock: &EngineClock, stamper: &Stamper) -> (TickAnchor, Tick) {
     (TickAnchor { tick, at }, after)
 }
 
-pub(super) struct MetricsThread {
+/// What the metrics thread runs, the clock and counter of its anchors, and its housekeeping core.
+pub struct MetricsThreadSetup {
+    pub metrics: Metrics,
+    pub clock: EngineClock,
+    pub stamper: Stamper,
+    /// Absent, the OS places the thread.
+    pub core_id: Option<usize>,
+}
+
+pub struct MetricsThread {
     join: JoinHandle<()>,
     stop: Arc<AtomicBool>,
 }
 
 impl MetricsThread {
-    fn spawn(metrics: Metrics, clock: EngineClock, stamper: Stamper) -> MetricsThread {
+    /// The thread pins itself to its core first, and runs nothing if the pin is refused.
+    ///
+    /// # Errors
+    /// [`EngineError::HousekeepingPin`] when the thread cannot pin itself to `core_id` on Linux.
+    pub fn spawn(setup: MetricsThreadSetup) -> Result<MetricsThread, EngineError> {
+        let MetricsThreadSetup {
+            metrics,
+            clock,
+            stamper,
+            core_id,
+        } = setup;
         let stop = Arc::new(AtomicBool::new(false));
         let stop_flag = Arc::clone(&stop);
-        let join = std::thread::Builder::new()
-            .name("polysim-metrics".to_owned())
-            .spawn(move || run(metrics, &clock, &stamper, &stop_flag))
-            .expect("failed to spawn the metrics thread");
-        MetricsThread { join, stop }
+        let join = spawn_pinned("polysim-metrics", core_id, move || {
+            run(metrics, &clock, &stamper, &stop_flag);
+        })
+        .map_err(|refused| EngineError::HousekeepingPin {
+            core_id: refused.core_id,
+            thread: "metrics",
+        })?;
+        Ok(MetricsThread { join, stop })
     }
 
     /// Closes the interval that is filling, so its log lines reach the log before the drain.
-    pub(super) fn stop(self) {
+    pub fn stop(self) {
         self.stop.store(true, Ordering::Release);
         if self.join.join().is_err() {
             warn!("metrics thread panicked — cause already logged");

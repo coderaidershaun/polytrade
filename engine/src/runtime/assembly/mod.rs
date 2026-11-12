@@ -140,9 +140,14 @@ impl Engine {
                 ring_capacity: config.logging.ring_capacity,
                 drain_deadline: Duration::from_millis(config.logging.drain_deadline_ms),
                 reopen_limit: config.logging.reopen_limit,
+                core_id: config.engine.housekeeping_core_id,
             },
             &clock,
-        );
+        )
+        .map_err(|refused| EngineError::HousekeepingPin {
+            core_id: refused.core_id,
+            thread: "log",
+        })?;
         log::register_thread("main");
         info!("polysim starting — trading engine {identity}");
         match latency_clock {
@@ -225,13 +230,21 @@ impl Engine {
             thread: metrics,
             samples,
             reports: latency_reports,
-        } = metrics_bring_up(MetricsBringUpSetup {
+        } = match metrics_bring_up(MetricsBringUpSetup {
             latency: &config.latency,
             clock: &clock,
             stamper: &stamper,
             clock_source: latency_clock.unwrap_or_else(|refusal| refusal.fallback()),
             queue_count: registry.input_queue_count(),
-        });
+            core_id: config.engine.housekeeping_core_id,
+        }) {
+            Ok(brought_up) => brought_up,
+            Err(error) => {
+                error!("startup failed before the hot thread spawned: {error}");
+                log_handle.drain();
+                return Err(error);
+            }
+        };
         // SMELL: the metrics thread reads a ring of wire samples that nothing writes, so the
         // decision-to-wire stage stays empty until a sender stamps each command it sends.
         let SampleProducers {

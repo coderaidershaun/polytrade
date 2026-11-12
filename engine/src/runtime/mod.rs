@@ -8,6 +8,8 @@ pub mod registry;
 pub mod secrets;
 pub mod shutdown;
 
+pub use pin::PinRefused;
+
 #[cfg(not(target_arch = "wasm32"))]
 mod assembly;
 
