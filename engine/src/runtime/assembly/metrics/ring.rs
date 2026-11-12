@@ -4,8 +4,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rtrb::{Consumer, Producer, RingBuffer};
+use rtrb::{Consumer, RingBuffer};
 
+use crate::hot::sink::SampleSink;
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::latency::{CounterSample, StageSample, WireSample};
 
@@ -28,40 +29,12 @@ labelled_enum! {
     pub fn label;
 }
 
-/// The write end of one sample ring.
-pub struct SampleProducer<T> {
-    producer: Producer<T>,
-    dropped: Arc<AtomicU64>,
-}
-
-impl<T> SampleProducer<T> {
-    /// Never waits: a full ring drops `sample` and counts it.
-    #[inline]
-    pub fn push(&mut self, sample: T) {
-        if self.producer.push(sample).is_err() {
-            self.count_drop();
-        }
-    }
-
-    /// The producer is the counter's only writer, so a load and a store add one exactly, and the
-    /// metrics thread reads the total with no lock.
-    #[cold]
-    fn count_drop(&self) {
-        let dropped = self.dropped.load(Ordering::Relaxed);
-        self.dropped.store(dropped + 1, Ordering::Relaxed);
-    }
-
-    pub fn dropped(&self) -> u64 {
-        self.dropped.load(Ordering::Relaxed)
-    }
-}
-
 /// The write ends of every sample ring: the driver takes the stage and counter rings, a sender the
 /// wire ring.
 pub struct SampleProducers {
-    pub stages: SampleProducer<StageSample>,
-    pub counters: SampleProducer<CounterSample>,
-    pub wires: SampleProducer<WireSample>,
+    pub stages: SampleSink<StageSample>,
+    pub counters: SampleSink<CounterSample>,
+    pub wires: SampleSink<WireSample>,
 }
 
 struct SampleConsumer<T> {
@@ -118,14 +91,9 @@ pub(super) fn sample_rings(stage_capacity: usize) -> (SampleProducers, SampleCon
     )
 }
 
-fn ring<T>(capacity: usize) -> (SampleProducer<T>, SampleConsumer<T>) {
+fn ring<T>(capacity: usize) -> (SampleSink<T>, SampleConsumer<T>) {
     let (producer, consumer) = RingBuffer::new(capacity);
-    let dropped = Arc::new(AtomicU64::new(0));
-    (
-        SampleProducer {
-            producer,
-            dropped: Arc::clone(&dropped),
-        },
-        SampleConsumer { consumer, dropped },
-    )
+    let sink = SampleSink::new(producer);
+    let dropped = sink.drops_handle();
+    (sink, SampleConsumer { consumer, dropped })
 }

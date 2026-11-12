@@ -23,7 +23,7 @@ use crate::runtime::config::LatencyConfig;
 use crate::{warn, warn_repeating};
 
 pub use error::MetricsError;
-pub use ring::{SampleProducer, SampleProducers, SampleRing};
+pub use ring::{SampleProducers, SampleRing};
 pub use rows::{BacklogRow, DropRow, LatencyRow, RollupRow, RollupSink, SinkKind};
 
 use ring::{SampleConsumers, sample_rings};
