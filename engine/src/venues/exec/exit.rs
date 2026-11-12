@@ -104,7 +104,7 @@ impl ExitPlan {
 
 /// How a served connection ended: reconnect and carry on, or the exit sweep finished under it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SessionOutcome {
+pub enum SessionOutcome {
     Reconnect,
     Swept,
 }

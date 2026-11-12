@@ -2,33 +2,14 @@
 //! Quoting admits new orders, while every connected phase admits cancels, since cancels are
 //! the exit path when something has failed.
 
-use crate::msg::exec::{ExecCommand, ExecLaneItem, OrderStyle, Provenance};
+use crate::msg::exec::{ExecCommand, OrderStyle, Provenance};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 
-use super::super::effect::{ExecEffect, ExecRequest, Outgoing, PlaceNotSentReason};
+use super::super::effect::{ExecEffect, ExecRequest, PlaceNotSentReason};
 use super::super::mirror::{MirrorInsertError, MirroredOrder};
 use super::ExecCore;
 
 impl ExecCore {
-    /// Empties the command lane and folds every command through the phase machine, returning what
-    /// has to reach the venue. A simulated venue's watermarks ride the same lane and belong to it
-    /// alone, so a live edge steps over them.
-    pub(crate) fn drain_commands(
-        &mut self,
-        commands: &mut rtrb::Consumer<ExecLaneItem>,
-    ) -> Vec<Outgoing> {
-        let mut outgoing = Vec::new();
-        while let Ok(item) = commands.pop() {
-            let ExecLaneItem::Command(stamped) = item else {
-                continue;
-            };
-            let command = stamped.command;
-            let recon_seq = command.recon_seq();
-            self.on_command(command, &mut Outgoing::sink(&mut outgoing, recon_seq));
-        }
-        outgoing
-    }
-
     /// Phase is the gate; refused commands are normal, not errors.
     pub fn on_command(&mut self, command: ExecCommand, emit: &mut dyn FnMut(ExecEffect)) {
         match command {

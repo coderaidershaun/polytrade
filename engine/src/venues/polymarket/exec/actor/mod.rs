@@ -21,16 +21,19 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::msg::exec::{AssetBalance, CancelReason, ExecLaneItem};
+use crate::msg::exec::{AssetBalance, CancelReason, ExecCommand};
 use crate::msg::ids::{AssetId, InstrumentId};
 use crate::msg::time::{DurationUs, TsUs};
 use crate::runtime::registry::InstrumentRow;
+use crate::venues::edge::sender::{CommandTransport, Handover};
 use crate::venues::edge::socket::{Reader, Writer};
 use crate::venues::edge::{
-    COMMAND_POLL, EdgeControl, EdgeDriver, EventFunnel, HOUSEKEEPING, OfflineStep, RECENT_TRADES,
+    EdgeControl, EdgeDriver, EdgeSender, EventFunnel, HOUSEKEEPING, OfflineStep, RECENT_TRADES,
     RECONCILE_INTERVAL,
 };
-use crate::venues::exec::{ExecCore, ExecSession, ExecStop, SessionOutcome, SessionSetup};
+use crate::venues::exec::{
+    ExecCore, ExecEffect, ExecSession, ExecStop, Outgoing, SessionOutcome, SessionSetup,
+};
 use crate::venues::polymarket::rotation::WindowAssignment;
 use crate::{info, warn};
 
@@ -116,7 +119,6 @@ pub(super) struct Actor {
     // The user stream uses this credential; no other channel does.
     credentials: ApiCredentials,
     control: EdgeControl,
-    commands: rtrb::Consumer<ExecLaneItem>,
     lanes: RestLanes,
     outcomes: mpsc::Receiver<RestOutcome>,
     assignments: mpsc::Receiver<WindowAssignment>,
@@ -150,7 +152,6 @@ impl Actor {
             credentials,
             key,
             wallet,
-            commands,
             producer,
             assignments,
             venue_clock_offset,
@@ -199,7 +200,6 @@ impl Actor {
             signer,
             credentials,
             control: EdgeControl::new(&edge, stop),
-            commands,
             lanes,
             outcomes,
             assignments,
@@ -261,9 +261,52 @@ impl Actor {
         self.session.lose_connection(self.control.clock.now());
     }
 
-    async fn drain_lane(&mut self, writer: &mut Writer) -> Option<SessionOutcome> {
-        let outgoing = self.session.core.drain_commands(&mut self.commands);
-        self.dispatch(outgoing, Some(writer)).await
+    async fn drain_lane(
+        &mut self,
+        sender: &mut EdgeSender,
+        writer: &mut Writer,
+    ) -> Option<SessionOutcome> {
+        let mut transport = LaneTransport {
+            actor: self,
+            writer,
+        };
+        sender.drain(&mut transport).await
+    }
+}
+
+/// How the shared sender reaches this venue. Each command's requests are signed and handed to a REST
+/// lane as soon as the core decides them, so its bytes are taken when its lane accepts them. A
+/// request the venue withholds or refuses never enters the in-flight table, which is how a command
+/// with no byte on the wire is told apart.
+struct LaneTransport<'a> {
+    actor: &'a mut Actor,
+    writer: &'a mut Writer,
+}
+
+impl CommandTransport for LaneTransport<'_> {
+    async fn hand_over(&mut self, command: ExecCommand) -> Result<Handover, SessionOutcome> {
+        let mut outgoing = Vec::new();
+        self.actor.session.core.on_command(
+            command,
+            &mut Outgoing::sink(&mut outgoing, command.recon_seq()),
+        );
+        let requests: Vec<_> = outgoing
+            .iter()
+            .filter_map(|decided| match decided.effect {
+                ExecEffect::Send { request_id, .. } => Some(request_id),
+                _ => None,
+            })
+            .collect();
+        if let Some(ended) = self.actor.dispatch(outgoing, Some(&mut *self.writer)).await {
+            return Err(ended);
+        }
+        let inflight = &self.actor.session.inflight;
+        let is_taken = requests.iter().any(|&request| inflight.holds(request));
+        Ok(if is_taken { Handover::Taken } else { Handover::NotSent })
+    }
+
+    async fn flush(&mut self) -> Result<(), SessionOutcome> {
+        Ok(())
     }
 }
 
@@ -280,8 +323,12 @@ impl EdgeDriver for Actor {
         &mut self.control
     }
 
-    async fn serve(&mut self, mut writer: Writer, mut reader: Reader) -> SessionOutcome {
-        let mut command_ticker = tokio::time::interval(COMMAND_POLL);
+    async fn serve(
+        &mut self,
+        mut writer: Writer,
+        mut reader: Reader,
+        sender: &mut EdgeSender,
+    ) -> SessionOutcome {
         let mut housekeeping = tokio::time::interval(HOUSEKEEPING);
         let mut reconcile = tokio::time::interval(RECONCILE_INTERVAL);
         let mut ping = tokio::time::interval(PING_INTERVAL);
@@ -294,15 +341,20 @@ impl EdgeDriver for Actor {
         }
 
         loop {
-            let ended = tokio::select! {
-                frame = reader.next() => self.on_frame(frame, &mut writer).await,
-                _ = command_ticker.tick() => self.drain_lane(&mut writer).await,
-                _ = housekeeping.tick() => self.on_housekeeping(&mut writer).await,
-                _ = reconcile.tick() => self.on_reconcile_tick(),
-                _ = ping.tick() => self.send_ping(&mut writer).await,
-                assignment = self.assignments.recv() => self.on_assignment(assignment),
-                outcome = self.outcomes.recv() => self.on_rest_answer(outcome, &mut writer).await,
-            };
+            let mut ended = self.drain_lane(sender, &mut writer).await;
+            if ended.is_none() {
+                ended = tokio::select! {
+                    frame = reader.next() => self.on_frame(frame, &mut writer).await,
+                    () = sender.wait() => None,
+                    _ = housekeeping.tick() => self.on_housekeeping(&mut writer).await,
+                    _ = reconcile.tick() => self.on_reconcile_tick(),
+                    _ = ping.tick() => self.send_ping(&mut writer).await,
+                    assignment = self.assignments.recv() => self.on_assignment(assignment),
+                    outcome = self.outcomes.recv() => {
+                        self.on_rest_answer(outcome, &mut writer).await
+                    }
+                };
+            }
             if let Some(ended) = ended {
                 self.on_disconnected();
                 return ended;

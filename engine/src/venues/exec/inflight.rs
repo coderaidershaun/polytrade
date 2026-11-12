@@ -45,6 +45,13 @@ impl InFlightTable {
         }
     }
 
+    /// Whether the request left and is still owed an answer.
+    pub fn holds(&self, request_id: RequestId) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.request_id == request_id)
+    }
+
     pub fn take(&mut self, request_id: RequestId) -> Option<InFlightRequest> {
         let position = self
             .entries

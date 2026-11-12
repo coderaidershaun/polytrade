@@ -47,6 +47,7 @@ pub(crate) fn bring_up(inputs: EdgeInputs<'_>) -> Result<VenueEdge, SimVenueErro
         lane_capacity,
         spin_interval,
         input_capacity,
+        sender: _,
     } = inputs;
     let sim = execution.sim.as_ref().ok_or(SimVenueError::NotWired {
         detail: "the sim: block is absent, and config validation should have refused that",

@@ -232,12 +232,10 @@ impl Engine {
             clock_source: latency_clock.unwrap_or_else(|refusal| refusal.fallback()),
             queue_count: registry.input_queue_count(),
         });
-        // SMELL: the metrics thread reads a ring of wire samples that nothing writes, so the
-        // decision-to-wire stage stays empty until a sender stamps each command it sends.
         let SampleProducers {
             stages,
             counters,
-            wires: _unwritten_wires,
+            wires,
         } = samples;
 
         // A dedicated ring isolates a telemetry flood from engine WARN/ERROR records.
@@ -283,6 +281,8 @@ impl Engine {
             window_assignments: assignments_rx,
             clock: &clock,
             stamper: &stamper,
+            wires,
+            senders: &config.senders,
             fatal: &fatal,
             desired_run_state: control.desired().clone(),
             drain_deadline,
@@ -396,6 +396,8 @@ impl Engine {
                     spin_interval,
                     topic_count: bound.topic_count,
                     feature_count: bound.feature_count,
+                    placement: config.senders.placement,
+                    flush_period: config.senders.link_flush(),
                 },
                 &tokio_handle,
             )
