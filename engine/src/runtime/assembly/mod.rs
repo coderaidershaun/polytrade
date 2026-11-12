@@ -35,7 +35,7 @@ use crate::hot::strategy::Strategy;
 use crate::link::{LinkActor, LinkActorSetup, OutboundLink};
 use crate::log::{self, LogConfig, LogHandle, LogRecord};
 use crate::msg::persist::RotationRow;
-use crate::msg::time::{DurationUs, EngineClock};
+use crate::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter};
 use crate::msg::ui::UiCatalog;
 use crate::msg::ui::channel::{UiLifecycle, UiWiring, ui_channel};
 use crate::runtime::config::{Config, ExecutionMode, RunIdentity};
@@ -44,7 +44,7 @@ use crate::runtime::shutdown::{DrainSignal, FatalSignal, RunControlGate, TaskHan
 use crate::tape::PersistHandle;
 use crate::venues::exec::EdgeHandle;
 use crate::venues::venue::{MarketDataWiring, WindowAssignment, spawn_market_data, tap_heartbeat};
-use crate::{error, info};
+use crate::{error, info, warn};
 
 use drain::install_panic_hook;
 use exec::{ExecBringUp, ExecBringUpSetup, exec_bring_up};
@@ -117,6 +117,11 @@ impl Engine {
         config: Config<P>,
         strategy: Box<dyn Strategy>,
     ) -> Result<Engine, EngineError> {
+        // The one clock of the process: every producer of message stamps reads it. The hot engine
+        // still keeps a clock of its own, for its latency figures only.
+        let clock = EngineClock::start();
+        let latency_clock = ClockSource::check(InvariantCounter::detect());
+
         // The workstation feed is built here. Its receiving end goes to the link actor, which is
         // the only reader.
         let (wiring, ui_channels) = ui_channel();
@@ -133,6 +138,10 @@ impl Engine {
         });
         log::register_thread("main");
         info!("polysim starting — trading engine {identity}");
+        match latency_clock {
+            Ok(source) => info!("latency stamps read the {} counter", source.label()),
+            Err(refusal) => warn!("{refusal}"),
+        }
 
         let Prepared {
             registry,
@@ -235,9 +244,6 @@ impl Engine {
             exec: exec_producer,
         } = queues;
 
-        // One clock serves every edge producer's received/queued stamps; the hot engine
-        // keeps its own separate one.
-        let clock = EngineClock::start();
         let drain_deadline = Duration::from_millis(config.engine.drain_deadline_ms);
         let spin_interval = config.engine.spin_interval();
         // SMELL: this start refusal, the execution lease among them, comes after the log, Parquet,

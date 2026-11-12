@@ -1,7 +1,9 @@
 //! The clock parts of latency measurement: a counter tick that no code can decide by, and a start
 //! check that names the clock the stamps really read.
 
-use engine::msg::time::{DurationUs, Stamper, Tick, TsUs};
+use engine::msg::time::{
+    ClockError, ClockSource, DurationUs, InvariantCounter, Stamper, Tick, TsUs,
+};
 
 /// Compiles only while the type lacks the bound. A second impl that the bound switches on would
 /// make the call ambiguous, so the build fails on the line that names the bound.
@@ -46,4 +48,31 @@ fn tick_has_no_ordering_or_conversion() {
         first,
         "with measurement off every stamp is the same tick, so no output can differ by one"
     );
+}
+
+#[test]
+fn counter_absent_is_named_in_anchor() {
+    let refusal = ClockSource::check(InvariantCounter::Absent)
+        .expect_err("a cpu with no invariant counter refuses the counter");
+    assert!(matches!(refusal, ClockError::CounterAbsent));
+    assert_eq!(
+        refusal.fallback(),
+        ClockSource::Monotonic,
+        "the run still starts, and its stamps read the os clock"
+    );
+    let start_line = refusal.to_string();
+    assert!(
+        start_line.contains(ClockSource::Monotonic.label()),
+        "the start line must name the clock that the stamps read: {start_line}"
+    );
+
+    let present = ClockSource::check(InvariantCounter::Present);
+    match std::env::consts::ARCH {
+        "x86_64" => assert_eq!(present.map(ClockSource::label), Ok("tsc")),
+        "aarch64" => assert_eq!(present.map(ClockSource::label), Ok("cntvct_el0")),
+        other => assert!(
+            matches!(present, Err(ClockError::CounterAbsent)),
+            "{other} has no counter that the stamps can read"
+        ),
+    }
 }
