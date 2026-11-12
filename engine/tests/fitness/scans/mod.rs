@@ -1,0 +1,8 @@
+//! Tests that read the repository as data: manifests, source folders, and log call sites that no
+//! type can pin.
+
+mod cargo_bins;
+mod exec_no_clock;
+mod log_lane_ownership;
+
+pub(crate) use exec_no_clock::rust_sources;
