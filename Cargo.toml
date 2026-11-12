@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["engine", "strategies/strat-micro-recorder"]
+members = ["engine", "lab", "strategies/strat-micro-recorder"]
 
 [workspace.lints.rust]
 unsafe_code = "deny"
