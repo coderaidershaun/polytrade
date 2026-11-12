@@ -1,8 +1,7 @@
 //! Integration suite: real venue, real time, real serialisation — never CI. Every test is `#[ignore]`.
 //! Only the live-runner role of a job runs a test that signs, by its runbook and the live policy. An
 //! agent runs a public read only where a plan names it, by its exact name and with an empty
-//! environment. Grouped as one target, the same way the fitness tests share one target. None of
-//! these tests places an order.
+//! environment. None of these tests places an order.
 
 mod binance_scale;
 mod binance_signed;
