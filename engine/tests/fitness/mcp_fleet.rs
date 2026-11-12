@@ -12,7 +12,8 @@ use crate::mcp_support::{
     MODE_OFF, MODE_SIM, NO_EXECUTION, TRAP_TERM, UNPARSEABLE, identity, wait_for_file_containing,
 };
 
-const SHIPPED_BINANCE: &str = "strategies/strat-micro-recorder/te-binance-spot-btcusdt/config.yaml";
+const SHIPPED_BINANCE: &str =
+    "../strategies/strat-micro-recorder/te-binance-spot-btcusdt/config.yaml";
 
 #[test]
 fn discovery_lists_every_engine_folder_with_its_mode_and_skips_the_rest() {

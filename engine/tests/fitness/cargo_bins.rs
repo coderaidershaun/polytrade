@@ -72,7 +72,7 @@ fn every_trading_engine_bin_is_named_and_placed_by_its_two_part_identity() {
             engine.name
         );
         assert!(
-            Path::new(&engine.path).is_file(),
+            Path::new("..").join(&engine.path).is_file(),
             "bin {} points at {}, which does not exist",
             engine.name,
             engine.path
@@ -219,8 +219,34 @@ fn read_manifest() -> String {
     std::fs::read_to_string("Cargo.toml").expect("Cargo.toml is readable")
 }
 
+/// The engine package's own targets, then each strategy package's. A strategy path is declared
+/// relative to its package, so it is re-rooted at the workspace to read
+/// `strategies/<strategy-id>/<te-id>/main.rs`.
 fn declared_targets() -> Vec<TargetDeclaration> {
-    let manifest = read_manifest();
+    let mut targets = targets_of(&read_manifest(), "");
+    for (strategy_id, manifest) in strategy_manifests() {
+        targets.extend(targets_of(&manifest, &format!("strategies/{strategy_id}/")));
+    }
+    targets
+}
+
+/// Every `strategies/<strategy-id>/Cargo.toml`. The suite runs from the engine package root, one
+/// level below the workspace root that holds `strategies/`.
+fn strategy_manifests() -> Vec<(String, String)> {
+    let mut manifests: Vec<(String, String)> = std::fs::read_dir("../strategies")
+        .expect("../strategies is readable")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter_map(|folder| {
+            let manifest = std::fs::read_to_string(folder.join("Cargo.toml")).ok()?;
+            let strategy_id = folder.file_name()?.to_str()?.to_owned();
+            Some((strategy_id, manifest))
+        })
+        .collect();
+    manifests.sort();
+    manifests
+}
+
+fn targets_of(manifest: &str, path_prefix: &str) -> Vec<TargetDeclaration> {
     let mut targets: Vec<TargetDeclaration> = Vec::new();
     let mut kind = String::new();
     for line in manifest.lines().map(str::trim) {
@@ -247,7 +273,7 @@ fn declared_targets() -> Vec<TargetDeclaration> {
             target.name = unquote(value);
         }
         if let Some(value) = value_of(line, "path") {
-            target.path = unquote(value);
+            target.path = format!("{path_prefix}{}", unquote(value));
         }
         if let Some(value) = value_of(line, "required-features") {
             target.required_features = value.to_owned();

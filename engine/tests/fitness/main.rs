@@ -72,7 +72,7 @@ mod mcp_support;
 mod mcp_tools;
 /// The shipped strategy, included from its folder so the fitness suite drives the real thing. One
 /// include point only — a second would mint a distinct `MicroRecorder` type.
-#[path = "../../strategies/strat-micro-recorder/te-binance-spot-btcusdt/strategy.rs"]
+#[path = "../../../strategies/strat-micro-recorder/te-binance-spot-btcusdt/strategy.rs"]
 mod micro_strategy;
 mod monitor_fit;
 mod monitor_pin;
@@ -99,7 +99,7 @@ mod poly_sign;
 /// duplicate IS the shared link schema, and `poly_publisher` exists to prove the two agree — but
 /// each engine is its own crate in every other build, so neither can `use` the other's copy.
 #[allow(clippy::duplicate_mod)]
-#[path = "../../strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/strategy.rs"]
+#[path = "../../../strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/strategy.rs"]
 mod poly_strategy;
 mod polymarket_fixtures;
 mod polymarket_gamma;

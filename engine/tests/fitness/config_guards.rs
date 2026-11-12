@@ -471,7 +471,7 @@ fn load<P: serde::de::DeserializeOwned + Default>(path: &str) -> polysim::config
 #[test]
 fn the_shipped_configs_run_their_strategies_and_ship_disarmed() {
     let micro = load::<MicroRecorderParams>(
-        "strategies/strat-micro-recorder/te-binance-spot-btcusdt/config.yaml",
+        "../strategies/strat-micro-recorder/te-binance-spot-btcusdt/config.yaml",
     );
     assert_eq!(
         micro.strategy.tables,
@@ -528,7 +528,7 @@ fn the_shipped_configs_run_their_strategies_and_ship_disarmed() {
     let _ = MicroRecorder::from_spec(&micro.strategy, micro_engine);
 
     let publisher = load::<PolyUpParams>(
-        "strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/config.yaml",
+        "../strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/config.yaml",
     );
     assert!(
         publisher.strategy.tables.is_empty(),
