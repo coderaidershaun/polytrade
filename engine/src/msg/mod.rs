@@ -7,6 +7,7 @@ pub(crate) mod labelled_enum;
 pub mod exec;
 pub mod ids;
 pub mod inbound;
+pub mod latency;
 pub mod persist;
 #[cfg(any(feature = "web", target_arch = "wasm32"))]
 pub(crate) mod relay;
