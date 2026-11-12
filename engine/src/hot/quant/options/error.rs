@@ -1,5 +1,7 @@
 //! The one error type of the options maths, so that a caller can count each refusal by its cause.
 
+use super::implied_volatility::{HIGHEST_VOLATILITY, LOWEST_VOLATILITY};
+
 /// Each variant refuses an input or a result. None of them is a fault of the code.
 #[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
 pub enum OptionsError {
@@ -10,7 +12,9 @@ pub enum OptionsError {
     NotFinite { output: &'static str },
 
     #[error(
-        "no volatility from 0.0001 to 100 gives price {price}: those bounds price at {low} and {high}"
+        "no volatility from {lowest} to {highest} gives price {price}: those bounds price at {low} and {high}",
+        lowest = LOWEST_VOLATILITY,
+        highest = HIGHEST_VOLATILITY
     )]
     NoRoot { price: f64, low: f64, high: f64 },
 

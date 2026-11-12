@@ -105,7 +105,7 @@ impl Black76 {
         require_positive("volatility", volatility)?;
         let root_years = self.years.sqrt();
         let deviation = volatility * root_years;
-        let (d1, d2) = self.d1_d2(deviation);
+        let (d1, d2) = d1_d2(self.log_moneyness(), deviation);
         let density = normal_density(d1);
         let delta = match right {
             OptionRight::Call => self.discount * cumulative_normal(d1),
@@ -137,7 +137,7 @@ impl Black76 {
     pub fn coin_delta(&self, right: OptionRight, volatility: f64) -> Result<f64, OptionsError> {
         self.check_market_before_expiry()?;
         require_positive("volatility", volatility)?;
-        let (_, d2) = self.d1_d2(volatility * self.years.sqrt());
+        let (_, d2) = d1_d2(self.log_moneyness(), volatility * self.years.sqrt());
         let discounted_strike_in_coins = self.discount * (self.strike / self.forward);
         let coin_delta = match right {
             OptionRight::Call => discounted_strike_in_coins * cumulative_normal(d2),
@@ -198,7 +198,7 @@ impl Black76 {
         Ok(())
     }
 
-    fn check_market_before_expiry(&self) -> Result<(), OptionsError> {
+    pub(super) fn check_market_before_expiry(&self) -> Result<(), OptionsError> {
         require_positive("forward", self.forward)?;
         require_positive("strike", self.strike)?;
         require_positive("years", self.years)?;
@@ -211,7 +211,17 @@ impl Black76 {
         if deviation <= 0.0 {
             return self.intrinsic_value(right);
         }
-        let (d1, d2) = self.d1_d2(deviation);
+        self.price_at(right, self.log_moneyness(), deviation)
+    }
+
+    pub(super) fn log_moneyness(&self) -> f64 {
+        ln(self.forward / self.strike)
+    }
+
+    /// `log_moneyness` is `ln(forward / strike)`, and `deviation` is `volatility × √years`,
+    /// above 0.
+    pub(super) fn price_at(&self, right: OptionRight, log_moneyness: f64, deviation: f64) -> f64 {
+        let (d1, d2) = d1_d2(log_moneyness, deviation);
         self.price_from(right, d1, d2)
     }
 
@@ -239,12 +249,12 @@ impl Black76 {
         };
         if payoff > 0.0 { self.discount * payoff } else { 0.0 }
     }
+}
 
-    /// `deviation` is `volatility × √years`, above 0.
-    fn d1_d2(&self, deviation: f64) -> (f64, f64) {
-        let d1 = (ln(self.forward / self.strike) + 0.5 * deviation * deviation) / deviation;
-        (d1, d1 - deviation)
-    }
+/// `deviation` is `volatility × √years`, above 0.
+fn d1_d2(log_moneyness: f64, deviation: f64) -> (f64, f64) {
+    let d1 = (log_moneyness + 0.5 * deviation * deviation) / deviation;
+    (d1, d1 - deviation)
 }
 
 impl CoinParity {

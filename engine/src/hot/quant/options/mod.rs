@@ -4,6 +4,7 @@
 mod black76;
 mod elementary;
 mod error;
+mod implied_volatility;
 
 pub use black76::{Black76, CoinParity, Greeks, OptionRight};
 pub(crate) use elementary::{exp, ln};
