@@ -65,6 +65,14 @@ fn counter_absent_is_named_in_anchor() {
         start_line.contains(ClockSource::Monotonic.label()),
         "the start line must name the clock that the stamps read: {start_line}"
     );
+    let row_sources = super::metrics::row_clock_sources(refusal.fallback());
+    assert!(
+        !row_sources.is_empty()
+            && row_sources
+                .iter()
+                .all(|source| *source == ClockSource::Monotonic),
+        "each row of the metrics thread names the clock that its stamps read: {row_sources:?}"
+    );
 
     let present = ClockSource::check(InvariantCounter::Present);
     match std::env::consts::ARCH {

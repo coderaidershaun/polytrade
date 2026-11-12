@@ -7,6 +7,7 @@
 mod error;
 mod execution;
 mod identity;
+mod latency;
 mod link;
 mod simulated;
 mod sources;
@@ -23,6 +24,7 @@ use crate::msg::time::DurationUs;
 pub use error::ConfigError;
 pub use execution::{ExecutionConfig, ExecutionMode, MAX_QUOTE_LEVELS};
 pub use identity::{RunIdentity, StrategyId, TradingEngineId};
+pub use latency::LatencyConfig;
 pub use link::{ControllerLoss, LinkConfig, PeerSubscription};
 pub use simulated::SimConfig;
 pub use sources::{
@@ -60,6 +62,8 @@ pub struct Config<P = NoParams> {
     #[serde(default)]
     pub exposure: ExposureConfig,
     pub logging: LoggingConfig,
+    #[serde(default)]
+    pub latency: LatencyConfig,
 }
 
 impl<P: serde::de::DeserializeOwned + Default> Config<P> {
@@ -141,6 +145,7 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
             )?;
         }
         self.source.validate()?;
+        self.latency.validate()?;
         if let Some(link) = &self.link {
             link.validate()?;
         }

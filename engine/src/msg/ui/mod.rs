@@ -13,7 +13,10 @@ use crate::msg::time::TsUs;
 use crate::runtime::config::{ExecutionMode, StrategyId};
 use crate::runtime::registry::Registry;
 
-pub use latency::{UiLatencyCell, UiLatencyRow, UiLatencySummary};
+pub use latency::{
+    LATENCY_REPORT_CELLS, LatencyCell, LatencyFlow, LatencyReading, LatencyReport, Percentile,
+    UiLatencyCell, UiLatencyRow, UiLatencySummary,
+};
 
 /// Book levels per side. The ladder shows 12 rows a side, but a grouped row sums several ticks, so
 /// a 16-level feed would leave a grouped ladder half empty.

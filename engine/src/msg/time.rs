@@ -1,5 +1,6 @@
 //! Microsecond time types, the engine's monotonic clock, and the counter ticks of latency stamps.
-//! A timestamp is microseconds since the Unix epoch in a typed wrapper; a tick is never a time.
+//! A timestamp is microseconds since the Unix epoch in a typed wrapper; a tick becomes a time only
+//! through the scale between two anchors.
 
 use core::ops::{Add, Sub};
 #[cfg(not(target_arch = "wasm32"))]
@@ -167,6 +168,71 @@ impl Stamper {
             Stamper::Counter(clock) => Tick(clock.raw()),
             Stamper::Off => Tick(0),
         }
+    }
+}
+
+/// A tick read beside a reading of the engine clock, so that ticks can be placed in engine time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TickAnchor {
+    pub tick: Tick,
+    pub at: TsUs,
+}
+
+/// The rate of the counter between two anchors. This is the only way to turn ticks into time, and
+/// only the metrics thread holds one, so no other code can decide anything by a tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TickScale {
+    first: TickAnchor,
+    last: TickAnchor,
+    span_ticks: u64,
+    span_ns: u64,
+}
+
+impl TickScale {
+    /// `None` unless `last` is later than `first` on both the counter and the engine clock.
+    pub fn between(first: TickAnchor, last: TickAnchor) -> Option<TickScale> {
+        let span_ticks = last
+            .tick
+            .0
+            .checked_sub(first.tick.0)
+            .filter(|&ticks| ticks > 0)?;
+        let span_us = last
+            .at
+            .micros()
+            .checked_sub(first.at.micros())
+            .filter(|&us| us > 0)?;
+        Some(TickScale {
+            first,
+            last,
+            span_ticks,
+            span_ns: (span_us as u64).saturating_mul(1_000),
+        })
+    }
+
+    /// The same first anchor with a later last one, which makes the rate more exact as the run
+    /// goes on. `None` when `anchor` is not later than the first.
+    pub fn extended_to(self, anchor: TickAnchor) -> Option<TickScale> {
+        TickScale::between(self.first, anchor)
+    }
+
+    /// Nanoseconds from `start` to `end`. `None` when `end` reads before `start`: the pair ran
+    /// backward, because a thread moved core or the counter is not invariant.
+    pub fn nanos(&self, start: Tick, end: Tick) -> Option<u64> {
+        let ticks = end.0.checked_sub(start.0)?;
+        let nanos = u128::from(ticks) * u128::from(self.span_ns) / u128::from(self.span_ticks);
+        Some(u64::try_from(nanos).unwrap_or(u64::MAX))
+    }
+
+    /// Nanoseconds from the engine time `since` to `tick`. `None` when the tick reads before it.
+    pub fn nanos_since(&self, since: TsUs, tick: Tick) -> Option<u64> {
+        let ticks_after_last = i128::from(tick.0) - i128::from(self.last.tick.0);
+        let nanos_after_last =
+            ticks_after_last.saturating_mul(i128::from(self.span_ns)) / i128::from(self.span_ticks);
+        let gap_us = i128::from(self.last.at.micros()) - i128::from(since.micros());
+        let nanos = gap_us
+            .saturating_mul(1_000)
+            .saturating_add(nanos_after_last);
+        (nanos >= 0).then(|| u64::try_from(nanos).unwrap_or(u64::MAX))
     }
 }
 
