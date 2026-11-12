@@ -25,11 +25,9 @@ mod execution_lease;
 mod exposure_boot;
 mod exposure_state;
 mod hot;
+mod link;
 mod link_bar;
-mod link_control;
-mod link_ingress;
 mod link_session;
-mod link_wire;
 /// These drive `engine::operator::fleet` and its binary, which exist only under feature `mcp`.
 #[cfg(feature = "mcp")]
 mod mcp_fleet;

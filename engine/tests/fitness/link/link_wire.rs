@@ -1250,7 +1250,7 @@ fn event_encoding_is_independent_of_buffer_reuse() {
 const FRAMES: &str = include_str!("link_frames.txt");
 
 /// Where `POLYSIM_BLESS_LINK` writes, relative to the package root the suite runs from.
-const FRAMES_PATH: &str = "tests/fitness/link_frames.txt";
+const FRAMES_PATH: &str = "tests/fitness/link/link_frames.txt";
 
 fn event(seq: u64, event: UiEvent) -> LinkDatagram {
     let mut datagram = event_datagram(event);
