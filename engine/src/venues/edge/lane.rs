@@ -1,7 +1,7 @@
 //! One reconnect loop for both market-data feeds. Each feed supplies only its session, so the rule
 //! for when the back-off starts over is written once.
 
-use crate::link::RunState;
+use crate::msg::run_state::RunState;
 use crate::runtime::shutdown::{FatalSignal, RunStateCell};
 use crate::venues::IDLE_POLL;
 use crate::venues::edge::backoff::BackoffCaps;

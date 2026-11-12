@@ -7,12 +7,11 @@ use crate::msg::persist::FeatureId;
 use crate::msg::time::TsUs;
 use crate::msg::ui::{UiCatalog, UiLifecycle};
 
-use super::super::control::{
-    CatalogFeature, CatalogInstrument, Lifecycle, RunPhase, RunState, Subscribe,
-};
+use super::super::control::{CatalogFeature, CatalogInstrument, Lifecycle, RunPhase, Subscribe};
 use super::super::envelope::{Envelope, TopicId, WireName};
 use super::super::frame::{LinkBody, LinkDatagram};
 use super::{Actor, REPORT_TICKS};
+use crate::msg::run_state::RunState;
 
 impl Actor {
     pub(super) fn flush_feeds(&mut self, now: TsUs) {

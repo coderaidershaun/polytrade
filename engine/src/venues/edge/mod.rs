@@ -28,9 +28,9 @@ use std::time::Duration;
 use futures_util::StreamExt;
 
 use crate::hot::spawn::{QueueProducer, SimTapGate};
-use crate::link::RunState;
 use crate::msg::exec::{AccountChunk, CancelReason, ExecEvent, ExecLaneItem};
 use crate::msg::inbound::InboundMessage;
+use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, EngineClock, TsUs};
 use crate::runtime::config::ExecutionConfig;
 use crate::runtime::registry::Registry;

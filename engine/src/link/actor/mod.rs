@@ -21,7 +21,7 @@ use crate::runtime::config::{ConfigError, ControllerLoss, ExecutionMode, PeerSub
 use crate::runtime::shutdown::{RunAssertion, RunControlGate, TaskHandle};
 use crate::{info, warn, warn_repeating};
 
-use super::control::{LINK_MAX_TOPICS, RunPhase, RunState, Subscribe, TopicSet};
+use super::control::{LINK_MAX_TOPICS, RunPhase, Subscribe, TopicSet};
 use super::envelope::{FrameGuard, LINK_MAX_DATAGRAM, LinkDecodeError, LinkIdentity, TopicId};
 use super::frame::{
     InboundLink, LinkBody, LinkDatagram, LinkFrame, LinkOrigin, LinkPayload, OutboundLink,
@@ -29,6 +29,7 @@ use super::frame::{
 use super::subscribers::{
     LINK_MAX_SUBSCRIBERS, LINK_SUBSCRIPTION_TTL, RefreshOutcome, SequenceGate, SubscriberTable,
 };
+use crate::msg::run_state::RunState;
 
 /// Not awaitable; 10ms keeps DOM responsive vs blocking socket's latency+2000 idle syscalls/s.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(10);

@@ -8,8 +8,9 @@ use std::net::SocketAddr;
 
 use crate::link::{
     CatalogFeature, CatalogInstrument, Envelope, LINK_SUBSCRIPTION_TTL, Lifecycle, LinkHash,
-    RunPhase, RunState,
+    RunPhase,
 };
+use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, TsUs};
 use crate::msg::ui::{UiCatalog, UiInstrument};
 use crate::runtime::shutdown::RunAssertion;

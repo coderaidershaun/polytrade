@@ -4,9 +4,10 @@
 
 use crate::hot::sink::LinkSink;
 use crate::info;
-use crate::link::{InboundLink, RunState, TopicId};
+use crate::link::{InboundLink, TopicId};
 use crate::msg::inbound::RunControl;
 use crate::msg::persist::{LinkFrameRow, LinkRowKind, PersistRecord};
+use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, TsUs};
 use crate::runtime::shutdown::{RunAssertion, RunStateCell};
 

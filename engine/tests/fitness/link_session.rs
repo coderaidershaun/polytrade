@@ -14,10 +14,11 @@ use std::net::SocketAddr;
 use engine::link::{
     CatalogFeature, CatalogInstrument, Envelope, FrameGuard, GateVerdict, LINK_MAX_DATAGRAM,
     LINK_MAX_GATE_KEYS, Lifecycle, LinkBody, LinkDatagram, LinkHash, LinkIdentity, RunPhase,
-    RunState, SequenceGate, Subscribe, TopicId, WireName,
+    SequenceGate, Subscribe, TopicId, WireName,
 };
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::persist::FeatureId;
+use engine::msg::run_state::RunState;
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{UiBookSnapshot, UiBookState, UiCatalog, UiEvent};
 use engine::operator::workstation::link_model::{ConnectionState, ControlVerdict};

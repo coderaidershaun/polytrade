@@ -3,6 +3,7 @@
 
 use crate::msg::ids::{AssetId, InstrumentId, Price, Qty};
 use crate::msg::persist::FeatureId;
+use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, TsUs};
 use crate::runtime::config::ExecutionMode;
 
@@ -68,13 +69,6 @@ impl TopicSet {
 pub enum TopicSetError {
     #[error("subscription names {count} topics, capacity {LINK_MAX_TOPICS}")]
     TooManyTopics { count: usize },
-}
-
-/// Trading or parked (assertion vs report = one comparison).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RunState {
-    Running,
-    Idle,
 }
 
 /// Sender lifecycle (independent of RunState; draining engine reports Running until stop).

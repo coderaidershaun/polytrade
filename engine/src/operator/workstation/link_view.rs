@@ -3,7 +3,7 @@
 
 use std::net::SocketAddr;
 
-use crate::link::RunState;
+use crate::msg::run_state::RunState;
 use crate::msg::time::DurationUs;
 use crate::operator::workstation::link_model::LinkStatus;
 use crate::operator::workstation::text::{self, ChipWords, Tone};

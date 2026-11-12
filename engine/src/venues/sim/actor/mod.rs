@@ -8,9 +8,9 @@ use std::time::Duration;
 use tokio::runtime::Handle;
 
 use crate::hot::spawn::QueueProducer;
-use crate::link::RunState;
 use crate::msg::exec::{CancelReason, ExecLaneItem, StampedExecCommand};
 use crate::msg::inbound::InboundMessage;
+use crate::msg::run_state::RunState;
 use crate::msg::time::{EngineClock, TsUs};
 use crate::runtime::registry::AssetDictionary;
 use crate::runtime::shutdown::{FatalSignal, RunStateCell};

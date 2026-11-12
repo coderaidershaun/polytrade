@@ -12,7 +12,7 @@ use engine::hot::sink::LinkSink;
 use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
 use engine::hot::tracker::MicroTracker;
 use engine::link::{
-    InboundLink, LinkFrame, LinkHash, LinkOrigin, LinkPayload, OutboundLink, RunState, TopicId,
+    InboundLink, LinkFrame, LinkHash, LinkOrigin, LinkPayload, OutboundLink, TopicId,
     schema_hash_of_fields,
 };
 use engine::log::LogRecord;
@@ -20,6 +20,7 @@ use engine::msg::exec::OrderStyle;
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, RunControl, SpinTick};
 use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::msg::run_state::RunState;
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
 use engine::runtime::config::{

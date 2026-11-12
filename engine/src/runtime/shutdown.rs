@@ -7,7 +7,7 @@ use std::any::Any;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use crate::link::RunState;
+use crate::msg::run_state::RunState;
 use crate::warn;
 
 /// A one-way latch: the engine drains and exits immediately. Cheap to clone and to check, and the

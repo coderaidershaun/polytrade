@@ -1,7 +1,7 @@
 //! One attached trading engine as the workstation holds it, toolkit-free: link session, status,
 //! screen, model, and the rule that a new session starts them over.
 
-use crate::link::RunState;
+use crate::msg::run_state::RunState;
 use crate::msg::time::TsUs;
 use crate::msg::ui::UiCatalog;
 

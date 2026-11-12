@@ -14,8 +14,8 @@ mod wire;
 pub(crate) use actor::{LinkActor, LinkActorSetup, PeerFeed};
 
 pub use control::{
-    CatalogFeature, CatalogInstrument, LINK_MAX_TOPICS, Lifecycle, RunPhase, RunState, Subscribe,
-    TopicSet, TopicSetError,
+    CatalogFeature, CatalogInstrument, LINK_MAX_TOPICS, Lifecycle, RunPhase, Subscribe, TopicSet,
+    TopicSetError,
 };
 pub use envelope::{
     Envelope, FrameGuard, LINK_MAGIC, LINK_MAX_DATAGRAM, LINK_NAME_LEN, LINK_VERSION,

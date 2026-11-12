@@ -15,13 +15,14 @@ use engine::link::{
     CatalogFeature, CatalogInstrument, Envelope, FrameGuard, GateVerdict, LINK_MAGIC,
     LINK_MAX_DATAGRAM, LINK_MAX_FIELDS, LINK_MAX_GATE_KEYS, LINK_MAX_SUBSCRIBERS, LINK_MAX_TOPICS,
     LINK_SUBSCRIPTION_TTL, LINK_VERSION, Lifecycle, LinkBody, LinkDatagram, LinkDecodeError,
-    LinkHash, LinkIdentity, LinkPayload, RefreshOutcome, RunPhase, RunState, SequenceGate,
-    Subscribe, SubscriberTable, TopicId, TopicSet, WireName,
+    LinkHash, LinkIdentity, LinkPayload, RefreshOutcome, RunPhase, SequenceGate, Subscribe,
+    SubscriberTable, TopicId, TopicSet, WireName,
 };
 use engine::msg::exec::{Liquidity, RejectClass};
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::Level;
 use engine::msg::persist::FeatureId;
+use engine::msg::run_state::RunState;
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{
     DomQuote, UI_BOOK_LEVELS, UI_ORDER_SNAPSHOT_CAPACITY, UI_ORDER_SNAPSHOT_MAX_TOTAL,

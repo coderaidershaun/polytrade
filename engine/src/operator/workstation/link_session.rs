@@ -6,8 +6,9 @@ use std::net::SocketAddr;
 
 use crate::link::{
     Envelope, FrameGuard, LINK_MAX_DATAGRAM, Lifecycle, LinkBody, LinkDatagram, LinkDecodeError,
-    LinkHash, LinkIdentity, RunState, SequenceGate, Subscribe, TopicId, TopicSet,
+    LinkHash, LinkIdentity, SequenceGate, Subscribe, TopicId, TopicSet,
 };
+use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, TsUs};
 use crate::msg::ui::{UiBookSnapshot, UiCatalog, UiEvent};
 use crate::runtime::config::StrategyId;

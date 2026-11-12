@@ -12,5 +12,6 @@ pub mod inbound;
 pub mod persist;
 #[cfg(any(feature = "web", target_arch = "wasm32"))]
 pub(crate) mod relay;
+pub mod run_state;
 pub mod time;
 pub mod ui;

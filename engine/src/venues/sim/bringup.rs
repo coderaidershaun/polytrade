@@ -5,7 +5,7 @@
 
 use crate::hot::exec::MAX_ORDER_INSTRUMENTS;
 use crate::info;
-use crate::link::RunState;
+use crate::msg::run_state::RunState;
 use crate::msg::time::DurationUs;
 use crate::runtime::config::{SimConfig, validated_mantissa};
 use crate::runtime::registry::InstrumentRow;

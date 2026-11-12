@@ -1,7 +1,8 @@
 //! The connection strip's words: each chip in a full and a short form, and what the run button says
 //! before and after it is armed.
 
-use crate::link::{RunPhase, RunState};
+use crate::link::RunPhase;
+use crate::msg::run_state::RunState;
 use crate::operator::workstation::format::MISSING;
 use crate::operator::workstation::link_model::{ConnectionState, ControlVerdict, LinkStatus};
 

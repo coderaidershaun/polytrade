@@ -6,7 +6,7 @@ use core::time::Duration;
 
 use eframe::egui::{self, emath::GuiRounding};
 
-use crate::link::RunState;
+use crate::msg::run_state::RunState;
 use crate::msg::time::DurationUs;
 
 use super::theme::{self, DARK};

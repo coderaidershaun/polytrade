@@ -14,7 +14,7 @@ use engine::hot::sink::{
     UiEventSink,
 };
 use engine::hot::strategy::{EngineView, Strategy, StrategyConfig};
-use engine::link::{OutboundLink, RunState};
+use engine::link::OutboundLink;
 use engine::log::LogRecord;
 use engine::msg::exec::{
     ACCOUNT_CHUNK_ASSETS, AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind,
@@ -28,6 +28,7 @@ use engine::msg::inbound::{
     MarketRotation, RunControl, SpinTick, TradeEvent,
 };
 use engine::msg::persist::{FeatureId, FillRow, OrderRow, PersistRecord};
+use engine::msg::run_state::RunState;
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{UI_BOOK_RING_CAPACITY, UI_EVENT_RING_CAPACITY, UiBookSnapshot, UiEvent};
 use engine::runtime::config::{BinanceMarket, Subscriptions, VenueMarket};

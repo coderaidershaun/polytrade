@@ -8,7 +8,8 @@
 
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 
-use engine::link::{RunPhase, RunState};
+use engine::link::RunPhase;
+use engine::msg::run_state::RunState;
 use engine::msg::time::DurationUs;
 use engine::operator::workstation::link_model::{ConnectionState, ControlVerdict, LinkStatus};
 use engine::operator::workstation::link_view::{ChipKind, LinkBarLayout, PlacedChip, RunConfirm};
