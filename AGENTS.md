@@ -38,14 +38,17 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 # step 3
 cargo clippy --target wasm32-unknown-unknown -p engine --lib --bin polysim-ui --bin dom-fixture -- -D warnings
 # step 4
-cargo test --workspace
-cargo test --workspace --all-features
+cargo test -p engine --test fitness
+cargo test -p engine --test integration
+cargo test -p engine --all-features --test fitness
+cargo test -p engine --all-features --test integration
 # step 5
 (cd browser && trunk build --release) && (cd tools/dom-fixture && trunk build --release)
 docker buildx build --platform linux/arm64 --build-arg BIN=strat-micro-recorder-te-binance-spot-btcusdt --output type=local,dest=dist .
 ```
 
-- Step 4 runs no ignored test. Do not add a flag that runs ignored tests.
+- Step 4 names each test target of each package. Today only `engine` has test targets: `fitness` and `integration`. A change that adds a `[[test]]` target adds its two lines here and in `CONSTITUTION.md` §14. A named target that is missing makes `cargo test` fail.
+- Step 4 runs no ignored test. Do not add a flag that runs ignored tests. Target `integration` only compiles: each of its tests is ignored.
 - Step 5 needs the Docker daemon. The Docker build passes at exit 0 when the file `dist/strat-micro-recorder-te-binance-spot-btcusdt` exists. Git ignores `dist/`.
 - After step 4, `git status --short --untracked-files=all` prints nothing. A test that writes below its working folder shows here.
 

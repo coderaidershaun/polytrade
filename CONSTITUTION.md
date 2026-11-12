@@ -210,6 +210,22 @@ at boot is a trap.
   on it.
 - [ ] `mode: sim` with no block stays refused.
 
+### Amended 2026-11-12: panics unwind in each profile
+
+WHY: the bounded drain after an invariant panic and the last exposure write in `Drop` need unwind,
+and `panic = "abort"` skips both.
+
+- [ ] Each profile of the workspace unwinds on a panic: `dev`, `release`, `test`, `bench`, and
+  `deploy` of the root manifest. No manifest sets `panic = "abort"`.
+- [ ] The panic hook trips the fatal latch, and the drain runs inside its deadline
+  (`install_panic_hook`, `engine/src/runtime/assembly/drain.rs`). `ExposureSink` writes its last
+  snapshot in `Drop` while the panic unwinds (`engine/src/hot/sink/replacing.rs`).
+- [ ] A latency measurement times the `deploy` profile as it ships, with unwind. The build rule of
+  `rex-code-latency` that measures with `panic = "abort"` yields to this clause. WHY: determinism
+  and the safety of funds rank above low latency (the ranking of §8).
+- [ ] IF a change wants `abort`, THEN it amends this clause first, with a drain that needs no
+  unwind.
+
 ## 7. Logging
 
 - [ ] Bespoke minimal subsystem. No logging framework dependency.
@@ -699,6 +715,9 @@ style in a comment, so the two clauses could not both hold.
 | `js-sys`                                                     | ratified 2026-10-26. See note.                     | JS values (wasm32 only)          |
 | `wasm-bindgen-futures`                                       | ratified 2026-10-26. See note.                     | browser task spawn (wasm32 only) |
 | `web-time`                                                   | ratified 2026-10-26. See note.                     | wasm32 clock (wasm32 only)       |
+| `quanta`                                                     | ratified 2026-11-12. See note.                     | latency ticks (native only)      |
+| `raw-cpuid`                                                  | ratified 2026-11-12. See note.                     | invariant TSC check (x86_64)     |
+| `hdrhistogram`                                               | ratified 2026-11-12. See note.                     | latency percentiles (native only) |
 | `smol_str`                                                   | candidate: only on demonstrated ergonomic need     | edge string handling             |
 | `criterion`                                                  | candidate (dev): only if benchmark warranted       | measurement                      |
 
@@ -906,6 +925,52 @@ Each note = justification + limits of that crate's row. Same force as the row.
   - For: `Instant`, `SystemTime` and `UNIX_EPOCH` on wasm32, where std's clock panics. The lib's
     `msg::time` module switches the import by target, so no caller notices.
   - wasm32 table only. Already in the lock via eframe.
+- `quanta`
+  - WHY (2026-11-12): the hot thread stamps latency with raw counter reads of a few ns, with no
+    `unsafe` in polysim. `Instant::now()` costs 15 to over 50 ns and reads µs only.
+  - 0.13.0 = latest stable at adoption. MSRV 1.87 < toolchain. `default-features = false`, NO
+    features: its defaults `flaky_tests` and `mock` stay off in each build that ships.
+  - Native table only: `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`. The browser
+    build takes no latency stamps, so it has no `quanta` and no counting `Stamper`.
+  - For: `Tick` and `Stamper` of `msg::time`. The driver reads 2 ticks for each message, the command
+    sink 1 for each banked command, and a sender 2 for each command it sends. The metrics thread
+    turns ticks into time through the same `quanta::Clock`.
+  - Dev feature `mock`: one line in `[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]`,
+    so that a test scripts each tick through `Clock::mock()`. Cargo adds a dev feature only to
+    builds of tests and examples. Thus no engine binary builds `mock`.
+  - A tick is never engine state (§2). `Tick` has no ordering, no arithmetic and no conversion on
+    the hot side. Only the metrics thread converts it.
+  - A counter that is not invariant does not refuse the start: `quanta` then reads the OS clock and
+    gives no signal, so the start check names the clock source.
+  - Honest cost, from its manifest at adoption: new crates `quanta`, `portable-atomic` (feature
+    `fallback`), `raw-cpuid` (x86 and x86_64 only), and a lock entry `wasip1` that no polysim
+    target builds. `libc`, `windows-sys` and `wasip2` were in the lock already. The lock diff of the
+    commit that adds the line is the measured form.
+- `raw-cpuid`
+  - WHY (2026-11-12): on x86_64 the start check must know whether the TSC is invariant, because
+    `quanta` falls back to the OS clock with no signal.
+  - 11.6.0 = latest stable at adoption. It declares no MSRV, edition 2018. `default-features =
+    false`, NO features: it has no default feature.
+  - x86_64 table only: `[target.'cfg(target_arch = "x86_64")'.dependencies]`. An aarch64 host and
+    the linux/arm64 deploy image never build it.
+  - For: one read of the invariant-TSC flag at start, nothing else. The CPUID instruction is
+    `unsafe` inside the crate, never in polysim.
+  - `quanta` pulls the same crate on x86 and x86_64. Thus the direct line adds no crate. This is the
+    `ring` precedent. Its one dependency, `bitflags` 2, was in the lock already.
+- `hdrhistogram`
+  - WHY (2026-11-12): percentiles with a bounded error, from memory of a fixed size, on the metrics
+    thread. The power-of-two lanes that they replace err by up to 2 times and show a mean.
+  - 7.6.0 = latest stable at adoption. MSRV 1.88 < toolchain. `default-features = false`, NO
+    features: `serialization` (flate2, nom, base64) and `sync` (crossbeam-channel) stay off.
+  - Native table only: its one user, the metrics thread below `runtime/assembly/`, compiles for
+    native targets only.
+  - For: p50, p99, p99.9 and max of each latency stage, for each interval and for the rolling
+    window, with `u32` counts. Each histogram is allocated at start.
+  - Never on the hot thread. The hot thread pushes raw samples, and a histogram update there is a
+    defect.
+  - Honest cost, from its manifest at adoption: new crates `hdrhistogram` and `byteorder` 1.5.0
+    (MSRV 1.60). `num-traits` was in the lock already. The lock diff of the commit that adds the
+    line is the measured form.
 
 ### Amended 2026-10-26: the egui-free half of the workstation compiles in every build
 
@@ -955,6 +1020,8 @@ serializer with its own escaping bugs, for a crate already in the tree.
   - link wire format (amended 2026-07-25)
   - quant leaf-math pins (amended 2026-07-28)
   - web server guard + relay (amended 2026-10-26)
+  - Amended 2026-11-12: a fitness test can be replaced. Date, WHY, and the rule: the 2026-11-12
+    section on replaced fitness tests below.
 - [ ] Live-network tests: `engine/tests/integration/`, gated `#[ignore]`. Never CI. Only the
   `live-runner` role of a job runs a signed test or the probe, by a runbook and the live policy. An
   agent runs a public read only where a plan names it, by its exact name and with an empty
@@ -965,6 +1032,8 @@ serializer with its own escaping bugs, for a crate already in the tree.
     - Amended 2026-07-18. WHY: user directive. Agent runs ALL tests, live-network included. Network
       reach to venue endpoints is verified. Human is not required.
 - [ ] Contract seam tests only when specific seam proves unstable.
+  - Amended 2026-11-12: each seam that a change reshapes gets a contract test. Date, WHY, and the
+    rule: the 2026-11-12 section on seams that change below.
 - [ ] IF bug is found, THEN write failing fitness regression first. Then fix.
 - [ ] No mocks unless forced. Preferred fixture = recorded real exchange payloads.
 - [ ] §2 determinism makes replay fixtures the backbone of testing.
@@ -1078,6 +1147,52 @@ law names two tiers, so each lane needs one place.
 - [ ] An ignore reason, a comment, or a README never names a command that runs an ignored test or
   the probe.
 
+### Amended 2026-11-12: a fitness test can be replaced
+
+WHY: the owner decided that each mechanism of polysim gets a better form, and a test that pins the
+old form cannot stay beside it. The knowledge of the suite stays immortal, and a test function can
+go.
+
+- [ ] A fitness test goes only after a new test in target `fitness` pins the same behavior with the
+  same values, and that new test is green.
+- [ ] The unit of deletion is the test function. A module file goes when it holds no test and no
+  module that stays uses it.
+- [ ] No task cuts inside a test function. IF a test that goes also holds a claim about code that no
+  task replaces, THEN that claim first becomes a new test, with the same values, in a module that
+  stays.
+- [ ] A test whose subject is code that no task replaces stays, also when it runs through a
+  replaced mechanism to reach its subject.
+- [ ] An old test that stays changes only where a changed interface forces it: the form of a call,
+  never an asserted value.
+- [ ] The task that deletes a test records it in the hand-off file of its job: one table row with
+  the old test, the new test that pins its behavior, and the module. The hand-off file also holds
+  the list of tests (`cargo test -- --list`) before and after.
+- [ ] The suite-integrity test of `engine/tests/fitness/scans/` holds during each deletion: a file
+  with no `mod` line fails it, and a file that goes with its `mod` line passes.
+
+### Amended 2026-11-12: a seam that changes gets a contract test
+
+WHY: the link token hash is derived in two places, the relay and the engine guard, and no test
+drives both. A seam that a change reshapes and that no test drives can break with each gate green.
+
+- [ ] Each seam that a change reshapes gets a contract test in the same change. The test is a
+  module of target `fitness`, in the folder of the top module of the seam (lanes and real funds,
+  above).
+- [ ] A contract test drives real code on both sides of the seam. Only the outside world is a
+  stand-in: the network, the clock, the file system. Time and ticks are passed in.
+- [ ] A contract test reaches its seam through the public API (2026-07-28). An item is `pub` for it
+  only on its own merit: a caller that is not a test (another compile root, a strategy crate that
+  expands a macro, the timing harness), or a module that is a concept in its own right (root
+  comment of `engine/src/lib.rs`).
+- [ ] Ruling, 2026-11-12: one seam has no such caller, and it is `pub` by this ruling. It is the
+  value form of the log drain in `engine::log`: the lanes that a caller builds and hands in, the
+  drain loop, its output writer, its deadline and clock passed in, and the counts of written,
+  dropped and lost lines and of write errors that a drain returns. WHY: the loss and RESET policy
+  of the log (drop counts, reopen of the file, fall back to stderr, deadline) is a seam that
+  changes, and `log::init` runs once in a process, so no test can drive it more than one time.
+- [ ] This ruling makes no other item `pub`. A further item needs its own ruling in this section.
+  The ban of 2026-07-28 on `pub(crate) -> pub` for a test holds for each other item.
+
 ## 13. Performance
 
 - [ ] Design principles protect performance, not a standing benchmark mandate. Principles: zero
@@ -1111,10 +1226,32 @@ law names two tiers, so each lane needs one place.
   2. `cargo clippy --workspace --all-targets -- -D warnings`, then
      `cargo clippy --workspace --all-targets --all-features -- -D warnings`
   3. `cargo clippy --target wasm32-unknown-unknown -p engine --lib --bin polysim-ui --bin dom-fixture -- -D warnings`
-  4. `cargo test --workspace`, then `cargo test --workspace --all-features`
+  4. For each package and each test target of its manifest:
+     `cargo test -p <package> --test <target>`, then the same commands with `--all-features`.
+     Today only package `engine` has test targets:
+     - `cargo test -p engine --test fitness`
+     - `cargo test -p engine --test integration`
+     - `cargo test -p engine --all-features --test fitness`
+     - `cargo test -p engine --all-features --test integration`
   5. `(cd browser && trunk build --release) && (cd tools/dom-fixture && trunk build --release)`,
      then
      `docker buildx build --platform linux/arm64 --build-arg BIN=strat-micro-recorder-te-binance-spot-btcusdt --output type=local,dest=dist .`
+  - Amended 2026-11-12, named test targets. WHY: `cargo test --workspace` passes when a test target
+    goes from a manifest, and the guard of the suite goes with the target that it guards. A named
+    target that is missing makes cargo 1.92.0 exit 101 ("error: no test target named ..."), so the
+    gate sees a lost suite.
+    - [ ] Step 4 names each test target of each package. A change that adds a `[[test]]` target
+      adds its two commands to step 4, here and in `AGENTS.md`, in the same change.
+    - [ ] Packages `lab` and `strat-micro-recorder` have no test target today.
+    - [ ] Target `integration` only compiles in step 4: each of its tests is `#[ignore]`d (§12).
+    - [ ] Step 4 runs no lib, bin or doc test. This law has no unit tier and no doc tier (§12), and
+      step 2 still compiles each target. A task that writes an inline scaffold (§12, 2026-11-12)
+      runs it by its own command inside that task.
+    - [ ] CAUTION: Delete or rename a test target only in the same change as its step-4 commands.
+      The `engine` manifest has no `autotests = false`, so Cargo still finds target `fitness` from
+      `engine/tests/fitness/main.rs` when its `[[test]]` table is gone.
+    - Replaced 2026-11-12: step 4 was `cargo test --workspace`, then
+      `cargo test --workspace --all-features`.
   - Amended 2026-11-12. WHY: the workspace holds three packages, so each command names the
     workspace or package `engine`. Step 5 holds the two Trunk builds and the deploy build of one
     engine binary: only they prove the two pages, `Dockerfile`, and the `deploy` profile of the

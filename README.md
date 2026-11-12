@@ -58,8 +58,11 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo clippy --target wasm32-unknown-unknown -p engine --lib --bin polysim-ui --bin dom-fixture -- -D warnings
-cargo test --workspace
-cargo test --workspace --all-features
+# Step 4 names each test target; the integration tests only compile, each one is ignored.
+cargo test -p engine --test fitness
+cargo test -p engine --test integration
+cargo test -p engine --all-features --test fitness
+cargo test -p engine --all-features --test integration
 (cd browser && trunk build --release) && (cd tools/dom-fixture && trunk build --release)
 
 # ARM64 Linux binary for deployment, built in Docker, lands in dist/
