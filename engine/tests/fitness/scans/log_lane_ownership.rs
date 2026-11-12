@@ -12,7 +12,7 @@
 
 use std::path::Path;
 
-use super::exec_no_clock::rust_sources;
+use crate::scans::exec_no_clock::rust_sources;
 
 /// This engine's complete OS-thread census: the process entry, the single hot thread, and the two
 /// dedicated output threads. Everything else that runs concurrently here is a tokio task. The
