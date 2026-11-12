@@ -27,6 +27,10 @@ path = "../tools/dom-fixture/main.rs"
 name = "poly-probe"
 path = "../tools/poly-probe/main.rs"
 
+[[example]]
+name = "latency-probe"
+path = "../tools/latency-probe/main.rs"
+
 [features]
 mcp = ["dep:hyper", "dep:hyper-util", "dep:rmcp", "dep:rustix"]
 web = ["dep:hyper", "dep:hyper-util", "dep:http-body-util"]

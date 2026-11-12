@@ -1,0 +1,29 @@
+# The full start of the timing harness: one engine on public Binance spot data, with execution off,
+# so it reads no keys and sends no order. It writes its logs below the folder it runs from.
+engine:
+  # On a Linux host, name an isolated core here and set idle to spin, by the runbook.
+  idle: park
+  tokio_workers: 2
+  spin_interval_us: 250000
+  drain_deadline_ms: 5000
+  warmup_secs: 0
+queues:
+  input_capacity: 65536
+  persistence_capacity: 65536
+source:
+  exchange: binance
+  market: spot
+  base: BTC
+  quote: USDT
+  kline_intervals: ["1m"]
+  max_exposure_quote: 50
+  tracker:
+    candles: { keep: 1440 }
+    imbalance: { top_n: 5, windows: [] }
+    ewma_vol: { halflife_events: 600 }
+strategy:
+  instruments: all
+logging:
+  dir: ./logs
+latency:
+  interval_secs: 60

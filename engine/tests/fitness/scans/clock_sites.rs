@@ -78,7 +78,7 @@ const ISSUE_TICK: &str = "issue_tick";
 /// Each file of the production code that names the issue tick, and what it does with it. The tick
 /// is a latency stamp: a reader of it outside a sender could order or time a command by a counter
 /// reading, and replay would then send other orders than the live run sent.
-const ISSUE_TICK_SITES: [(&str, &str); 5] = [
+const ISSUE_TICK_SITES: [(&str, &str); 6] = [
     (
         "engine/src/msg/exec.rs",
         "declares the tick on the lane item that carries a command to its edge",
@@ -98,6 +98,10 @@ const ISSUE_TICK_SITES: [(&str, &str); 5] = [
     (
         "engine/src/runtime/assembly/metrics/stage.rs",
         "subtracts the ticks of a wire sample on the metrics thread",
+    ),
+    (
+        "tools/latency-probe/sender.rs",
+        "the timing harness stamps each command it puts on the lane, as the command sink does",
     ),
 ];
 
@@ -140,7 +144,7 @@ fn issue_tick_is_read_only_by_senders() {
 
 /// Each production file that holds a permitted clock read, and the banned calls that it makes. Each
 /// site in it says why in the reason of its `#[expect(clippy::disallowed_methods, ...)]`.
-const PERMITTED_CLOCK_SITES: [(&str, &[&str]); 47] = [
+const PERMITTED_CLOCK_SITES: [(&str, &[&str]); 48] = [
     (
         "engine/src/hot/metrics.rs",
         &["engine::msg::time::Stamper::stamp"],
@@ -379,6 +383,15 @@ const PERMITTED_CLOCK_SITES: [(&str, &[&str]); 47] = [
     (
         "engine/src/venues/sim/actor.rs",
         &["engine::msg::time::EngineClock::now"],
+    ),
+    (
+        "tools/latency-probe/clock.rs",
+        &[
+            "engine::msg::time::EngineClock::now",
+            "engine::msg::time::EngineClock::start",
+            "engine::msg::time::Stamper::stamp",
+            "quanta::Clock::raw",
+        ],
     ),
 ];
 
