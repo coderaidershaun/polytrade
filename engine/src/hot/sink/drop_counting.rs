@@ -82,7 +82,16 @@ impl StrategyLogSink {
 
     pub(crate) fn push(&mut self, record: HotRecord) {
         if self.producer.push(record).is_err() {
-            self.drops.fetch_add(1, Ordering::Relaxed);
+            self.count_drop();
         }
+    }
+
+    /// The hot thread is the one writer of this counter, so a plain store does what an atomic add
+    /// would, with no locked instruction.
+    #[cold]
+    #[inline(never)]
+    fn count_drop(&self) {
+        let dropped = self.drops.load(Ordering::Relaxed);
+        self.drops.store(dropped + 1, Ordering::Relaxed);
     }
 }

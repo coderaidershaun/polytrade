@@ -1134,3 +1134,39 @@ fn execution_numeric_fields_reject_out_of_range_values() {
         }
     }
 }
+
+/// The log gets its own share of the shutdown: a log deadline at or past the engine's would let
+/// the drain watchdog cut the last log lines off, so such a document is refused at load.
+#[test]
+fn log_deadline_at_or_above_the_engine_drain_deadline_refuses_start() {
+    let with_log_deadline = |log_ms: u64| {
+        config_with_source(BINANCE_PERP_SOURCE)
+            .replacen("engine:\n", "engine:\n  drain_deadline_ms: 5000\n", 1)
+            .replacen(
+                "logging:\n  dir: ./logs\n",
+                &format!("logging:\n  dir: ./logs\n  drain_deadline_ms: {log_ms}\n"),
+                1,
+            )
+    };
+    for log_ms in [5_000, 6_000] {
+        let refusal =
+            engine::runtime::config::Config::<NoParams>::from_yaml(&with_log_deadline(log_ms))
+                .expect_err("a log deadline at or past the engine's is refused");
+        let ConfigError::LogDeadline {
+            log_deadline_ms,
+            engine_deadline_ms,
+        } = &refusal
+        else {
+            panic!("expected LogDeadline, got {refusal:?}");
+        };
+        assert_eq!((*log_deadline_ms, *engine_deadline_ms), (log_ms, 5_000));
+        let message = refusal.to_string();
+        assert!(
+            message.contains("logging.drain_deadline_ms")
+                && message.contains("engine.drain_deadline_ms"),
+            "the refusal names both keys: {message}"
+        );
+    }
+    engine::runtime::config::Config::<NoParams>::from_yaml(&with_log_deadline(4_999))
+        .expect("a log deadline below the engine's loads");
+}

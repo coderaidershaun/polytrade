@@ -281,7 +281,7 @@ fn replay_on_own_thread(sequence: &[InboundMessage], warmup: DurationUs) -> Logg
         let mut hot_lane = open_hot_lane(64);
         let strategy = run_sequence(&sequence, warmup).logs;
         let mut hot = Vec::new();
-        while let Ok(record) = hot_lane.pop() {
+        while let Some(record) = hot_lane.pop() {
             hot.push(record);
         }
         LoggedReplay { hot, strategy }

@@ -9,6 +9,7 @@ mod execution;
 mod identity;
 mod latency;
 mod link;
+mod logging;
 mod simulated;
 mod sources;
 mod tables;
@@ -26,6 +27,7 @@ pub use execution::{ExecutionConfig, ExecutionMode, MAX_QUOTE_LEVELS};
 pub use identity::{RunIdentity, StrategyId, TradingEngineId};
 pub use latency::LatencyConfig;
 pub use link::{ControllerLoss, LinkConfig, PeerSubscription};
+pub use logging::LoggingConfig;
 pub use simulated::SimConfig;
 pub use sources::{
     BinanceEnv, BinanceMarket, KlineInterval, PolySeries, PolySubscriptions, SourceSpec,
@@ -144,6 +146,7 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
                 "1..=87600 (1 hour to 10 years)",
             )?;
         }
+        self.logging.validate(self.engine.drain_deadline_ms)?;
         self.source.validate()?;
         self.latency.validate()?;
         if let Some(link) = &self.link {
@@ -258,13 +261,6 @@ pub struct PersistenceConfig {
     pub retention_hours: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LoggingConfig {
-    #[serde(default = "default_logs_dir")]
-    pub dir: PathBuf,
-}
-
 /// Separate from `persistence:` and always in force, because position outlives any single run.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -367,10 +363,6 @@ fn default_data_dir() -> PathBuf {
 
 fn default_retention_hours() -> u64 {
     6
-}
-
-fn default_logs_dir() -> PathBuf {
-    PathBuf::from("./logs")
 }
 
 fn default_exposure_dir() -> PathBuf {
