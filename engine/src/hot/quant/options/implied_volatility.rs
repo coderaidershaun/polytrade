@@ -22,9 +22,10 @@ impl Black76 {
     /// # Errors
     ///
     /// `OutsideDomain` names the first input, in the order of the fields and then the arguments,
-    /// that is not finite or not inside its domain: years and price must be above 0. `NoRoot` when
-    /// no volatility inside the bounds gives the price. It carries the prices of `right` at the two
-    /// bounds, and a price at or below intrinsic value is one such case.
+    /// that is not finite or not inside its domain: years and price must be above 0. `NotFinite`
+    /// names `low` or `high` when a price at a bound overflows. `NoRoot` when no volatility inside
+    /// the bounds gives the price. It carries the prices of `right` at the two bounds, and a price
+    /// at or below intrinsic value is one such case.
     pub fn implied_volatility(&self, right: OptionRight, price: f64) -> Result<f64, OptionsError> {
         self.check_market_before_expiry()?;
         require_positive("price", price)?;
@@ -36,12 +37,14 @@ impl Black76 {
             |volatility: f64| self.price_at(leg, log_moneyness, volatility * root_years);
         let leg_low = leg_price(LOWEST_VOLATILITY);
         let leg_high = leg_price(HIGHEST_VOLATILITY);
+        let low_bound = require_finite_output("low", self.parity_price(leg, leg_low, right))?;
+        let high_bound = require_finite_output("high", self.parity_price(leg, leg_high, right))?;
         let is_bracketed = target > leg_low && target < leg_high;
         if !is_bracketed {
             return Err(OptionsError::NoRoot {
                 price,
-                low: self.parity_price(leg, leg_low, right),
-                high: self.parity_price(leg, leg_high, right),
+                low: low_bound,
+                high: high_bound,
             });
         }
         let mut low = LOWEST_VOLATILITY;
