@@ -6,13 +6,15 @@ use crate::config::RecordedTables;
 use crate::hot::book::Book;
 use crate::hot::exec::{ExecEngineSetup, ExecSettings};
 use crate::hot::quant::volatility::EwmaVol;
+use crate::hot::sink::{
+    ExecSink, MetricsSink, PersistSink, StrategyLogSink, UiBookSink, UiEventSink,
+};
 use crate::hot::strategy::{Registration, Strategy};
 use crate::hot::tracker::MicroTracker;
 use crate::link::{LinkHash, TopicId, schema_hash_of_fields};
 use crate::msg::persist::FeatureId;
 use crate::msg::time::DurationUs;
 use crate::registry::InstrumentRow;
-use crate::sink::{ExecSink, MetricsSink, PersistSink, StrategyLogSink, UiBookSink, UiEventSink};
 
 use super::{ExposureWiring, LinkWiring};
 

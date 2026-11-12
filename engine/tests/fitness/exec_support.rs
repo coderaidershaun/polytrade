@@ -8,6 +8,7 @@ use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetu
 use engine::hot::exec::{
     DesiredQuote, ExecLimits, ExecSettings, FeeModel, OrderBudget, QuoteLevel,
 };
+use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{CancelReason, ExecCommand, ExecLaneItem, OrderStyle};
 use engine::msg::ids::{AssetId, InstrumentId, Qty, Side};
@@ -15,7 +16,6 @@ use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::time::DurationUs;
 use engine::msg::ui::UiEvent;
 use engine::registry::InstrumentRow;
-use engine::sink::ExecSink;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{

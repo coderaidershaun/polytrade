@@ -35,6 +35,7 @@ use crate::config::{Config, ExecutionMode, RunIdentity};
 use crate::exposure::{ExposureHandle, ExposureWriter, ExposureWriterConfig};
 use crate::hot::dispatch::{ExposureWiring, HotEngine, HotEngineSetup, LinkWiring};
 use crate::hot::metrics::MetricsSnapshot;
+use crate::hot::sink::{LinkSink, MetricsSink, StrategyLogSink};
 use crate::hot::spawn::{HotThreadConfig, SimTapGate, spawn_hot_thread};
 use crate::hot::strategy::Strategy;
 use crate::link::{LinkActor, LinkActorSetup, OutboundLink};
@@ -44,7 +45,6 @@ use crate::msg::time::{DurationUs, EngineClock};
 use crate::msg::ui::{UiCatalog, UiLifecycle, UiWiring, ui_channel};
 use crate::persist::PersistHandle;
 use crate::shutdown::{DrainSignal, FatalSignal, RunControlGate, TaskHandle};
-use crate::sink::{LinkSink, MetricsSink, StrategyLogSink};
 use crate::{error, info};
 
 use drain::install_panic_hook;

@@ -1,9 +1,9 @@
 //! Exposure persistence write half: banked ledger snapshot to disk on change.
 
 use crate::exposure::{ExposureSnapshot, InstrumentExposure, MAX_EXPOSURE_INSTRUMENTS};
+use crate::hot::sink::ExposureSink;
 use crate::msg::inbound::InboundMessage;
 use crate::msg::time::TsUs;
-use crate::sink::ExposureSink;
 use crate::warn;
 
 use super::HotState;

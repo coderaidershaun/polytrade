@@ -27,12 +27,12 @@ use engine::exposure::{
 };
 use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{DesiredQuote, ExecSettings, QuoteLevel};
+use engine::hot::sink::{ExecSink, ExposureSink};
 use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle};
 use engine::msg::ids::{ClientOrderId, InstrumentId, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::registry::InstrumentRow;
-use engine::sink::{ExecSink, ExposureSink};
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{

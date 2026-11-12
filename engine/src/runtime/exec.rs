@@ -19,13 +19,13 @@ use crate::hot::dispatch::ExecWiring;
 use crate::hot::exec::{
     ExecLaneBudget, ExecLimits, ExecSettings, FeeModel, MAX_ORDER_INSTRUMENTS, exec_lane_capacity,
 };
+use crate::hot::sink::ExecSink;
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::info;
 use crate::msg::exec::ExecLaneItem;
 use crate::msg::time::{DurationUs, EngineClock};
 use crate::registry::Registry;
 use crate::shutdown::{FatalSignal, RunStateCell};
-use crate::sink::ExecSink;
 
 use super::EngineError;
 use super::exec_identity::ExecutionLease;

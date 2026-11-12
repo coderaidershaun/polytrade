@@ -7,7 +7,7 @@
 //! A submodule that only splits up an implementation stays private behind a `pub use`. A submodule
 //! that is a concept in its own right stays `pub mod`, and callers name it.
 //!
-//! Every ring the hot thread writes to is fed through a `*Sink` in [`sink`], with one type for each
+//! Every ring the hot thread writes to is fed through a `*Sink` in [`hot::sink`], with one type for each
 //! policy on a full ring.
 
 #![forbid(unsafe_code)]
@@ -19,9 +19,6 @@
 
 // vocabulary
 pub mod msg;
-
-// ring producers
-pub mod sink;
 
 // hot path
 pub mod hot;

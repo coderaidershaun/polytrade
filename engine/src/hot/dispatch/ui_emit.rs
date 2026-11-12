@@ -4,6 +4,7 @@
 use crate::hot::book::{Book, BookState};
 use crate::hot::exec::{Balance, ExecHalt, Fill, OrderReject, OrderUpdate, WorkingOrderView};
 use crate::hot::ledger::LedgerRow;
+use crate::hot::sink::{UiBookSink, UiEventSink};
 #[cfg(debug_assertions)]
 use crate::msg::ids::ClientOrderId;
 use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
@@ -13,7 +14,6 @@ use crate::msg::ui::{
     DomQuote, UI_BOOK_LEVELS, UI_ORDER_SNAPSHOT_CAPACITY, UI_ORDER_SNAPSHOT_MAX_TOTAL,
     UiBookSnapshot, UiBookState, UiEvent, UiLatencySummary, UiWorkingOrder,
 };
-use crate::sink::{UiBookSink, UiEventSink};
 
 pub(crate) struct UiEmitter {
     pub(crate) event_sink: UiEventSink,

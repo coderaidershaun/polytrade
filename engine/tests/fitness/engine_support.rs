@@ -16,6 +16,10 @@ use engine::hot::exec::{
 };
 use engine::hot::ingress::QueueSample;
 use engine::hot::metrics::MetricsSnapshot;
+use engine::hot::sink::{
+    ExecSink, ExposureSink, LinkSink, MetricsSink, PersistSink, StrategyLogSink, UiBookSink,
+    UiEventSink,
+};
 use engine::hot::strategy::{EngineView, Strategy, StrategyConfig};
 use engine::link::{OutboundLink, RunState};
 use engine::log::LogRecord;
@@ -35,10 +39,6 @@ use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{UI_BOOK_RING_CAPACITY, UI_EVENT_RING_CAPACITY, UiBookSnapshot, UiEvent};
 use engine::registry::InstrumentRow;
 use engine::shutdown::{RunAssertion, RunControlGate};
-use engine::sink::{
-    ExecSink, ExposureSink, LinkSink, MetricsSink, PersistSink, StrategyLogSink, UiBookSink,
-    UiEventSink,
-};
 use rtrb::{Consumer, RingBuffer};
 
 use crate::micro_strategy::MicroRecorder;

@@ -32,4 +32,6 @@ pub mod strategy;
 
 // output lanes
 pub mod metrics;
-pub(crate) mod ui_emit;
+
+// ring producers
+pub mod sink;

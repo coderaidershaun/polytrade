@@ -11,6 +11,7 @@ use engine::adapters::polymarket::exec::codec::{
 };
 use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{ClientIdLayout, DesiredQuote, ExecSettings, QuoteLevel, level_of_slot};
+use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{
     AccountChunk, AccountChunkKind, AssetBalance, ExecCommand, ExecEvent, ExecKind, ExecLaneItem,
@@ -19,7 +20,6 @@ use engine::msg::exec::{
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::time::TsUs;
-use engine::sink::ExecSink;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{ONE, account_chunk, detached_setup, exec_event, instrument_row, pop};

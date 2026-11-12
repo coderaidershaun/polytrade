@@ -8,12 +8,12 @@ use tokio::sync::mpsc;
 
 use crate::config::{Config, RecordedTables, RunIdentity};
 use crate::hot::dispatch::PersistWiring;
+use crate::hot::sink::PersistSink;
 use crate::info;
 use crate::msg::ids::FIXED_SCALE;
 use crate::msg::persist::{PersistRecord, RotationRow};
 use crate::persist::{PersistConfig, PersistHandle, PersistWriter, RunMeta};
 use crate::registry::Registry;
-use crate::sink::PersistSink;
 
 pub(super) struct PersistBringUp {
     /// `None` with no `persistence:` block: no output ring, and every `ctx.emit*` discards.

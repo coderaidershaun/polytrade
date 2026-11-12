@@ -2,13 +2,13 @@
 //! the clock, so a replay calls back at the same points. Peer link frames are recorded here rather
 //! than at the link actor, so a frame dropped on a full ring never reaches the tape.
 
+use crate::hot::sink::LinkSink;
 use crate::info;
 use crate::link::{InboundLink, RunState, TopicId};
 use crate::msg::inbound::RunControl;
 use crate::msg::persist::{LinkFrameRow, LinkRowKind, PersistRecord};
 use crate::msg::time::{DurationUs, TsUs};
 use crate::shutdown::{RunAssertion, RunStateCell};
-use crate::sink::LinkSink;
 
 use super::HotEngine;
 

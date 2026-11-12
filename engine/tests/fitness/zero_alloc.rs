@@ -11,6 +11,7 @@ use engine::hot::book::{Book, SnapshotOutcome};
 use engine::hot::dispatch::{HotEngine, HotEngineSetup, LinkWiring};
 use engine::hot::exec::{DesiredQuote, QuoteLevel};
 use engine::hot::quant::intensity::IntensityFit;
+use engine::hot::sink::LinkSink;
 use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
 use engine::hot::tracker::MicroTracker;
 use engine::link::{
@@ -25,7 +26,6 @@ use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
 use engine::shutdown::{RunAssertion, RunControlGate};
-use engine::sink::LinkSink;
 use rtrb::Consumer;
 
 use crate::engine_support::{

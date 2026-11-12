@@ -24,6 +24,7 @@ use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{
     ExecLimits, ExecSettings, FeeModel, OrderBudget, RejectOrigin, RejectReason,
 };
+use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{Strategy, StrategyConfig};
 use engine::link::{
     Envelope, FrameGuard, InboundLink, LINK_MAX_DATAGRAM, LinkBody, LinkDatagram, LinkFrame,
@@ -38,7 +39,6 @@ use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::time::DurationUs;
 use engine::msg::ui::{DomQuote, UiEvent};
 use engine::registry::InstrumentRow;
-use engine::sink::ExecSink;
 use proptest::prelude::*;
 use rtrb::{Consumer, RingBuffer};
 
