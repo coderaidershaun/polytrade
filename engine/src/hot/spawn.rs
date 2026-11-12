@@ -11,6 +11,7 @@ use super::ingress::{IngressQueues, QueueSample};
 use crate::msg::ids::{QueueId, SourceId};
 use crate::msg::inbound::{InboundMessage, MarketTapItem, TappedMessage, VenueMeta};
 use crate::msg::time::TsUs;
+use crate::runtime::pin::pin_current_thread;
 use crate::runtime::shutdown::{DrainSignal, FatalSignal};
 use crate::{error, warn};
 
@@ -266,22 +267,4 @@ pub fn spawn_hot_thread(
             }
         })
         .expect("failed to spawn hot thread")
-}
-
-/// Linux: pinning mandatory (failure trips fatal). Other OS: best-effort, single WARN.
-fn pin_current_thread(core_id: usize, fatal: &FatalSignal) {
-    let pinned = core_affinity::set_for_current(core_affinity::CoreId { id: core_id });
-    if !cfg!(target_os = "linux") {
-        warn!(
-            "cpu pinning is best-effort on {} — hot thread may float",
-            std::env::consts::OS
-        );
-        return;
-    }
-    if !pinned {
-        error!("hot thread failed to pin to core {core_id} — pinning is mandatory on linux");
-        fatal.trip(format!(
-            "hot thread failed to pin to core {core_id} — pinning is mandatory on linux"
-        ));
-    }
 }

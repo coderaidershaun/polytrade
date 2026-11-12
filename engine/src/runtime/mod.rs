@@ -3,6 +3,7 @@
 
 pub mod config;
 pub mod exposure;
+pub(crate) mod pin;
 pub mod registry;
 pub mod secrets;
 pub mod shutdown;
