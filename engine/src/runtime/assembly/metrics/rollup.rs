@@ -8,8 +8,9 @@ use crate::msg::ids::{MAX_INPUT_QUEUES, QueueId};
 use crate::msg::latency::{Category, CounterSample, Stage, StageSample, WireSample};
 use crate::msg::time::{ClockSource, DurationUs, TickScale, TsUs};
 use crate::msg::ui::{LatencyCell, LatencyFlow, Percentile};
+use crate::runtime::config::LatencyBudgets;
 
-use super::report::RunCounts;
+use super::report::{BudgetBreach, IntervalLog, RunCounts};
 use super::ring::SampleRing;
 use super::rows::{BacklogRow, DropRow, LatencyRow, RollupRow, RollupSink, SinkKind};
 use super::stage::{Fault, PAIRS, stage_nanos, wire_nanos};
@@ -29,6 +30,7 @@ pub(super) struct RollupSettings {
     pub window_intervals: usize,
     pub clock_source: ClockSource,
     pub queue_count: usize,
+    pub budget: LatencyBudgets,
 }
 
 struct Interval {
@@ -116,6 +118,8 @@ pub(super) struct LatencyRollup {
     drop_totals: [u64; SinkKind::ALL.len()],
     drops_at_interval_start: [u64; SinkKind::ALL.len()],
     counts: RunCounts,
+    budget_breaches: u64,
+    breaches: Vec<BudgetBreach>,
     scratch: Interval,
     rows: Vec<LatencyRow>,
 }
@@ -145,6 +149,8 @@ impl LatencyRollup {
             drop_totals: [0; SinkKind::ALL.len()],
             drops_at_interval_start: [0; SinkKind::ALL.len()],
             counts: RunCounts::default(),
+            budget_breaches: 0,
+            breaches: Vec::with_capacity(PAIRS.len()),
             scratch: Interval::new(),
             rows: Vec::with_capacity(PAIRS.len()),
         }
@@ -289,9 +295,13 @@ impl LatencyRollup {
                 p99_ns: value_at(&interval.histogram, Percentile::P99),
                 p999_ns: value_at(&interval.histogram, Percentile::P999),
                 max_ns: interval.max_ns,
+                budget_p99_ns: None,
+                budget_p999_ns: None,
+                is_over_budget: false,
                 clock_source: self.settings.clock_source,
             });
         }
+        self.check_budgets();
         for &row in &self.rows {
             sink.write(RollupRow::Latency(row));
         }
@@ -313,7 +323,15 @@ impl LatencyRollup {
                 ema: ema.value,
             }));
         }
-        super::report::log_interval(&self.rows, &self.interval_drops(), &self.counts);
+        self.budget_breaches += BudgetBreach::stage_count(&self.breaches);
+        IntervalLog {
+            rows: &self.rows,
+            breaches: &self.breaches,
+            drops: &self.interval_drops(),
+            counts: &self.counts,
+            budget_breaches: self.budget_breaches,
+        }
+        .write();
         self.backlog_max = [0; MAX_INPUT_QUEUES];
         self.drops_at_interval_start = self.drop_totals;
     }
@@ -334,12 +352,46 @@ impl LatencyRollup {
         SinkKind::ALL.map(|sink| (sink, self.drops_in_interval(sink)))
     }
 
+    /// Flags each row whose stage has a budget that the window broke, and notes the breach.
+    fn check_budgets(&mut self) {
+        self.breaches.clear();
+        for index in 0..self.rows.len() {
+            let row = self.rows[index];
+            let Some(budget) = self.settings.budget.of(row.stage) else {
+                continue;
+            };
+            let window =
+                self.window_cell(|category, stage| category == row.category && stage == row.stage);
+            let breach = BudgetBreach {
+                category: row.category,
+                stage: row.stage,
+                window,
+                budget,
+            };
+            let row = &mut self.rows[index];
+            row.budget_p99_ns = budget.p99_us.map(micros_to_nanos);
+            row.budget_p999_ns = budget.p999_us.map(micros_to_nanos);
+            row.is_over_budget = breach.is_broken();
+            if row.is_over_budget {
+                self.breaches.push(breach);
+            }
+        }
+    }
+
     /// The window of one flow for one stage: the closed intervals of the window and the one that
     /// is filling, over each category of the flow.
     pub(super) fn flow_cell(&mut self, flow: LatencyFlow, stage: Stage) -> LatencyCell {
+        self.window_cell(|category, pair_stage| {
+            pair_stage == stage && flow.categories().contains(&category)
+        })
+    }
+
+    /// The closed intervals of the window and the one that is filling, over each pair that
+    /// `is_included` takes.
+    fn window_cell(&mut self, is_included: impl Fn(Category, Stage) -> bool) -> LatencyCell {
         self.scratch.clear();
         for pair in &self.pairs {
-            if pair.stage != stage || !flow.categories().contains(&pair.category) {
+            if !is_included(pair.category, pair.stage) {
                 continue;
             }
             for interval in &pair.slots {
@@ -380,6 +432,10 @@ fn value_at(histogram: &Histogram<u32>, percentile: Percentile) -> u64 {
         return 0;
     }
     histogram.value_at_quantile(percentile.quantile())
+}
+
+fn micros_to_nanos(micros: u64) -> u64 {
+    micros.saturating_mul(1_000)
 }
 
 fn interval_index(at: TsUs, interval: DurationUs) -> i64 {

@@ -83,6 +83,7 @@ impl Metrics {
             window_intervals: setup.latency.window_intervals as usize,
             clock_source: setup.clock_source,
             queue_count: setup.queue_count,
+            budget: setup.latency.budget,
         };
         let (samples, consumers) = sample_rings(setup.latency.sample_ring as usize);
         let (report_producer, reports) = RingBuffer::new(REPORT_RING_CAPACITY);
