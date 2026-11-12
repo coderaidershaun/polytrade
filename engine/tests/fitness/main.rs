@@ -35,7 +35,6 @@ mod poly_strategy;
 mod raw_recorder;
 mod runtime;
 mod scans;
-mod suite_integrity;
 mod tape;
 mod venues;
 
