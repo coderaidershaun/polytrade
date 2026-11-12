@@ -110,12 +110,8 @@ fn report_window_sweep(instrument: InstrumentId, pulled: usize) {
 /// A position still open when its market rotates is a loss with no upper bound: the contracts settle
 /// at nothing or at everything and no order can be placed against them any more.
 ///
-/// At WARN rather than ERROR for the reason the reconciliation sweep's own warning is, and it binds
-/// harder here. This carries the numbers an operator acts on and it repeats — every window that
-/// strands something strands something NEW, so it cannot be latched — while `error!` captures a
-/// backtrace by construction. A backtrace tells nobody anything the message has not already said,
-/// and capturing one on the hot thread every few minutes is a cost the hot path does not accept
-/// for a line that is already as loud as it needs to be.
+/// It stays at WARN, the level operators know it by. It repeats on purpose: every window that
+/// strands something strands something NEW, so it cannot be latched.
 #[cold]
 fn stranded_position_warning(instrument: InstrumentId, position: Qty) {
     hot_warn!(

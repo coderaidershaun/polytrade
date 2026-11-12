@@ -318,7 +318,7 @@ impl ExecEngine {
         }
     }
 
-    /// Numbers at WARN not ERROR (no second backtrace per event).
+    /// At WARN, the level operators know this line by.
     #[cold]
     fn warn_duplicate_resting(&self, instrument: InstrumentId, side: Side, resting: usize) {
         hot_warn!(
