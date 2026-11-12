@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use rtrb::Producer;
 
@@ -14,6 +15,7 @@ use super::metrics::{DriverSamples, Folded};
 use crate::log::{hot_error, hot_warn};
 use crate::msg::ids::{QueueId, SourceId};
 use crate::msg::inbound::{InboundMessage, MarketTapItem, TappedMessage, VenueMeta};
+use crate::msg::latency::CounterSample;
 use crate::msg::time::TsUs;
 use crate::runtime::pin::pin_current_thread;
 use crate::runtime::shutdown::{DrainSignal, FatalSignal};
@@ -242,6 +244,18 @@ pub struct HotThreadConfig {
     pub core_id: Option<usize>,
     pub tag: &'static str,
     pub samples: Option<DriverSamples>,
+    pub idle: IdleWait,
+}
+
+/// How the hot loop waits while every queue is empty. Either way the fold is the same: only when a
+/// message is popped changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IdleWait {
+    /// Spins on its core, so the next message is popped the moment it lands. It takes the core
+    /// whole.
+    Spin,
+    /// Sleeps this long and looks again, which leaves the core to other threads.
+    Park(Duration),
 }
 
 /// What one step of the hot loop did.
@@ -260,6 +274,7 @@ pub struct HotDriver {
     engine: HotEngine,
     samples: Option<DriverSamples>,
     pops: u32,
+    parks: u64,
 }
 
 impl HotDriver {
@@ -273,6 +288,7 @@ impl HotDriver {
             engine,
             samples,
             pops: 0,
+            parks: 0,
         }
     }
 
@@ -297,9 +313,22 @@ impl HotDriver {
         });
         self.pops = self.pops.wrapping_add(1);
         if let InboundMessage::SpinTick(tick) = &message {
-            samples.record_spin(tick, self.queues.backlog_by_queue(), self.engine.counters());
+            samples.counters.push(CounterSample {
+                spin_ts_us: tick.received_ts_us,
+                spin_seq: tick.seq,
+                backlog: self.queues.backlog_by_queue(),
+                counters: self.engine.counters(),
+                idle_parks: self.parks,
+            });
         }
         Step::Folded
+    }
+
+    /// Sleeps while every queue is empty, and counts it: each counter sample carries the count.
+    #[cold]
+    fn park(&mut self, nap: Duration) {
+        self.parks += 1;
+        thread::sleep(nap);
     }
 }
 
@@ -328,7 +357,10 @@ pub fn spawn_hot_thread(
                 match driver.step() {
                     Step::Folded => {}
                     Step::Idle if drain.is_requested() => return,
-                    Step::Idle => std::hint::spin_loop(),
+                    Step::Idle => match config.idle {
+                        IdleWait::Spin => std::hint::spin_loop(),
+                        IdleWait::Park(nap) => driver.park(nap),
+                    },
                 }
             }
         })

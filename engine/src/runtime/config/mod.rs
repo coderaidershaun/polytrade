@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-pub use engine::EngineConfig;
+pub use engine::{EngineConfig, IdleMode};
 pub use error::ConfigError;
 pub use execution::{ExecutionConfig, ExecutionMode, MAX_QUOTE_LEVELS};
 pub use identity::{RunIdentity, StrategyId, TradingEngineId};
@@ -93,9 +93,7 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
-        if cfg!(target_os = "linux") && self.engine.hot_core_id.is_none() {
-            return Err(ConfigError::MissingHotCoreId);
-        }
+        self.engine.validate()?;
         if self.persistence.is_none() && !self.strategy.tables.is_empty() {
             let named: Vec<&str> = self
                 .strategy

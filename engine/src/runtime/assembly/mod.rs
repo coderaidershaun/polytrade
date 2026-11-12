@@ -30,7 +30,7 @@ use tokio::sync::mpsc;
 use crate::hot::dispatch::{ExposureWiring, HotEngine, HotEngineSetup, LinkWiring};
 use crate::hot::metrics::DriverSamples;
 use crate::hot::sink::{LinkSink, StrategyLogSink};
-use crate::hot::spawn::{HotThreadConfig, SimTapGate, spawn_hot_thread};
+use crate::hot::spawn::{HotThreadConfig, IdleWait, SimTapGate, spawn_hot_thread};
 use crate::hot::strategy::Strategy;
 use crate::link::{LinkActor, LinkActorSetup, OutboundLink};
 use crate::log::{self, LaneReader, LogConfig, LogHandle};
@@ -38,7 +38,7 @@ use crate::msg::persist::RotationRow;
 use crate::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, Stamper};
 use crate::msg::ui::UiCatalog;
 use crate::msg::ui::channel::{UiLifecycle, UiWiring, ui_channel};
-use crate::runtime::config::{Config, ExecutionMode, RunIdentity};
+use crate::runtime::config::{Config, ExecutionMode, IdleMode, RunIdentity};
 use crate::runtime::exposure::{ExposureHandle, ExposureWriter, ExposureWriterConfig};
 use crate::runtime::shutdown::{DrainSignal, FatalSignal, RunControlGate, TaskHandle};
 use crate::tape::PersistHandle;
@@ -336,6 +336,10 @@ impl Engine {
                     stages,
                     counters,
                 }),
+                idle: match config.engine.idle {
+                    IdleMode::Spin => IdleWait::Spin,
+                    IdleMode::Park => IdleWait::Park(config.engine.park()),
+                },
             },
             ingress,
             hot_engine,

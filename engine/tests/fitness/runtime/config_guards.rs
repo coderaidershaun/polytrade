@@ -377,23 +377,42 @@ source:
     }
 }
 
-/// A Linux engine with no hot core named would run its hot thread unpinned without a word, so the
-/// config refuses it there. macOS cannot pin a thread at all, so the same document loads.
+/// A Linux engine that spins with no hot core named would spin unpinned on a shared core without a
+/// word, so the config refuses it there and names both keys. A parking engine needs no core of its
+/// own, and macOS cannot pin a thread at all, so there both documents load.
 #[test]
-fn the_hot_core_is_required_on_linux_and_ignored_elsewhere() {
-    let unpinned = config_with_source(BINANCE_PERP_SOURCE).replace("  hot_core_id: 0\n", "");
+fn spin_without_hot_core_refuses_start() {
+    let spinning = config_with_source(BINANCE_PERP_SOURCE).replace("  hot_core_id: 0\n", "");
     assert!(
-        !unpinned.contains("hot_core_id"),
+        !spinning.contains("hot_core_id"),
         "the document under test must name no hot core"
     );
-    let loaded = engine::runtime::config::Config::<NoParams>::from_yaml(&unpinned);
+    let parking = spinning.replacen("engine:\n", "engine:\n  idle: park\n", 1);
+    assert!(
+        parking.contains("  idle: park\n"),
+        "the parking document parks"
+    );
+
+    let parked = engine::runtime::config::Config::<NoParams>::from_yaml(&parking)
+        .expect("a parking engine needs no hot core");
+    Registry::build(&parked).expect("and its registry builds");
+
+    let spun = engine::runtime::config::Config::<NoParams>::from_yaml(&spinning);
     if cfg!(target_os = "linux") {
+        let Err(refusal) = spun else {
+            panic!("linux must refuse an engine that spins with no hot core");
+        };
         assert!(
-            matches!(loaded, Err(ConfigError::MissingHotCoreId)),
-            "linux must refuse a document with no hot core, got {loaded:?}"
+            matches!(refusal, ConfigError::SpinWithoutHotCore),
+            "the refusal is the spin one, got {refusal}"
+        );
+        let message = refusal.to_string();
+        assert!(
+            message.contains("engine.idle") && message.contains("engine.hot_core_id"),
+            "the refusal names both keys: {message}"
         );
     } else {
-        let config = loaded.expect("a document with no hot core loads where nothing is pinned");
+        let config = spun.expect("a spinning engine loads where nothing is pinned");
         Registry::build(&config).expect("and its registry builds");
     }
 }

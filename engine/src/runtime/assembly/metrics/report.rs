@@ -35,11 +35,14 @@ pub(super) fn build_report(rollup: &mut LatencyRollup) -> LatencyReport {
 
 /// One line for each category that took a sample, one warning for each kind of fault, and one line
 /// of the engine's own counters.
-pub(super) fn log_interval(
-    rows: &[LatencyRow],
-    drops: &[(SinkKind, u64)],
-    counters: &EngineCounters,
-) {
+/// The run totals of the latest counter sample.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct RunCounts {
+    pub(super) counters: EngineCounters,
+    pub(super) idle_parks: u64,
+}
+
+pub(super) fn log_interval(rows: &[LatencyRow], drops: &[(SinkKind, u64)], counts: &RunCounts) {
     for category in Category::ALL {
         let mut line: Option<CappedLine> = None;
         for row in rows.iter().filter(|row| row.category == category) {
@@ -52,7 +55,7 @@ pub(super) fn log_interval(
     }
     warn_faults(rows);
     warn_ring_drops(drops);
-    emit_counters(drops, counters);
+    emit_counters(drops, counts);
 }
 
 fn stage_segment(row: &LatencyRow) -> String {
@@ -132,7 +135,8 @@ fn warn_ring_drops(drops: &[(SinkKind, u64)]) {
     }
 }
 
-fn emit_counters(drops: &[(SinkKind, u64)], counters: &EngineCounters) {
+fn emit_counters(drops: &[(SinkKind, u64)], counts: &RunCounts) {
+    let counters = &counts.counters;
     let mut line = CappedLine::new("metrics counters".to_owned());
     // Always written, zero or not: these three are what "the engine lost nothing" is read off.
     line.push(&format!(
@@ -148,6 +152,7 @@ fn emit_counters(drops: &[(SinkKind, u64)], counters: &EngineCounters) {
         ],
     );
     line.push_count("klines_unconfigured", counters.klines_unconfigured);
+    line.push_count("idle_parks", counts.idle_parks);
     let interval_drops: Vec<(&str, u64)> = drops
         .iter()
         .map(|(sink, dropped)| (sink.label(), *dropped))
