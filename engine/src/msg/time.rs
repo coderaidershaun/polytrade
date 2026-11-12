@@ -1,5 +1,5 @@
-//! Microsecond time types and the engine's monotonic clock. Every timestamp is microseconds since
-//! the Unix epoch inside a typed wrapper, so a bare integer never passes for a time.
+//! Microsecond time types, the engine's monotonic clock, and the counter ticks of latency stamps.
+//! A timestamp is microseconds since the Unix epoch in a typed wrapper; a tick is never a time.
 
 use core::ops::{Add, Sub};
 #[cfg(not(target_arch = "wasm32"))]
@@ -136,6 +136,35 @@ impl EngineClock {
     pub fn now(&self) -> TsUs {
         let elapsed_us = self.mono_anchor.elapsed().as_micros() as i64;
         TsUs::from_micros(self.wall_anchor_ts_us + elapsed_us)
+    }
+}
+
+/// A raw reading of the cpu counter, for latency stamps only. It has no order, no arithmetic and no
+/// conversion, so no code can decide anything by it. Only the metrics thread may turn a pair of
+/// them into nanoseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct Tick(u64);
+
+/// The one way to take a latency stamp. `Off` reads no counter, so a replay or a test with
+/// measurement off folds exactly what a live run folds.
+#[derive(Debug, Clone)]
+pub enum Stamper {
+    /// Build the clock once at start: building it calibrates the counter.
+    #[cfg(not(target_arch = "wasm32"))]
+    Counter(quanta::Clock),
+    Off,
+}
+
+impl Stamper {
+    /// `Off` reads nothing and gives the same tick every time.
+    #[inline]
+    pub fn stamp(&self) -> Tick {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Stamper::Counter(clock) => Tick(clock.raw()),
+            Stamper::Off => Tick(0),
+        }
     }
 }
 
