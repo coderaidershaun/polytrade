@@ -48,13 +48,8 @@ cargo run --release --features web --bin polysim-web -- --strategy strat-micro-r
 # Add --mcp http://127.0.0.1:8765/mcp so the app descriptor also names the agent control plane below.
 # Then open http://127.0.0.1:7879/ — or host the page in Jet: /app add 7879 "Polysim"
 
-# Agent control plane — an MCP server over stdio by default, or over loopback HTTP with --http.
-# Needs the `mcp` feature. Build it first: a cold release build can outlast an MCP host's start-up
-# timeout.
-cargo build --release --features mcp --bin polysim-mcp
-cargo run -q --release --features mcp --bin polysim-mcp
-cargo run -q --release --features mcp --bin polysim-mcp -- --http 8765
-# A parent passes --watch-stdin and holds a stdin pipe open, so the server and engines end with it.
+# Agent control plane — the MCP server stays off until its guard exists (stage 3 of the build),
+# so this file gives no command that starts it. The text after this block says why.
 
 # Gate G — each step must pass before anything merges (CONSTITUTION.md §14). Run it at the
 # workspace root. The Docker build below is its last step.
@@ -78,13 +73,7 @@ docker buildx build \
 
 That file has the name `.mcp.json.off` on purpose, so no session starts this server: its tools set an engine to `live` and start it with no guard. The file gets its name `.mcp.json` back when that guard exists. Until then, Claude Code reads no project entry for this server.
 
-A stdio server lives only as long as the client that spawned it, and stops every engine it started when that client exits. Use `--http <port>` when engines must outlive one client: the workstation and every `claude -p` reply then share one long-lived server and its engines. Start it once, then register it under `polysim`, the name of the entry in `.mcp.json.off`, so that it replaces the stdio entry instead of sitting beside it when the file has its name back:
-
-```shell
-claude mcp add --transport http polysim http://127.0.0.1:8765/mcp
-```
-
-That registration has local scope, which overrides the project entry. Under any other name every reply still spawns its own stdio server, and an engine started through that server dies with the reply. Ctrl-C or SIGTERM ends the HTTP server and stops every engine it started. It listens on 127.0.0.1 only, has no auth, and refuses requests from browser pages. `--engines <dir>` points either transport at another folder of prebuilt engine binaries.
+Until that guard exists (stage 3 of the build), this file gives no command that starts the server or registers it with Claude Code. A session that reaches its tools can set an engine to `live` and start it, so the server stays off.
 
 ## Browser workstation
 

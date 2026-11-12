@@ -2,9 +2,8 @@
 //! Book payloads chunk [Level; BOOK_CHUNK_LEVELS]. Every variant carries received_ts_us (uniform key).
 
 // SMELL: the plain message data imports the link and the runtime config here, and other message
-// files import the hot thread and the registry, so the vocabulary depends on the code it should
-// sit beneath. The venue code also imports the link, and two quant and tracker modules import
-// each other. These types need a home that imports nothing above it.
+// files import the hot thread, its sinks, and the runtime registry, so the vocabulary depends on
+// the code it should sit beneath. These types need a home that imports nothing above it.
 use crate::link::InboundLink;
 use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{AggregateTradeId, InstrumentId, Price, Qty, RawTradeId, Side, StreamEpoch};
