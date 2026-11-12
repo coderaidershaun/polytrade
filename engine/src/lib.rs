@@ -28,7 +28,7 @@ pub mod exposure;
 pub mod link;
 pub mod log;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod persist;
+pub mod tape;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod venues;
 

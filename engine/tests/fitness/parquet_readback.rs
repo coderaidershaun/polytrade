@@ -20,7 +20,7 @@ use tokio::sync::mpsc;
 use engine::config::{ExecutionMode, RecordedTables, StrategyId, TradingEngineId};
 use engine::msg::ids::FIXED_SCALE;
 use engine::msg::persist::PersistRecord;
-use engine::persist::{PersistConfig, PersistError, PersistHandle, PersistWriter, RunMeta};
+use engine::tape::{PersistConfig, PersistError, PersistHandle, PersistWriter, RunMeta};
 
 /// `f64` is stored as bits so cells compare exactly — deterministic replay is bit-for-bit equal.
 #[derive(Clone, Debug, PartialEq, Eq)]

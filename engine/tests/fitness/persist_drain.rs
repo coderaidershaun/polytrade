@@ -13,7 +13,7 @@ use engine::config::{RecordedTables, TableKind};
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::persist::{FeatureId, FeatureRow, PersistRecord, TradeRow};
 use engine::msg::time::TsUs;
-use engine::persist::PersistError;
+use engine::tape::PersistError;
 
 use crate::engine_support::ONE;
 use crate::parquet_readback::{

@@ -12,8 +12,8 @@ use crate::hot::sink::PersistSink;
 use crate::info;
 use crate::msg::ids::FIXED_SCALE;
 use crate::msg::persist::{PersistRecord, RotationRow};
-use crate::persist::{PersistConfig, PersistHandle, PersistWriter, RunMeta};
 use crate::registry::Registry;
+use crate::tape::{PersistConfig, PersistHandle, PersistWriter, RunMeta};
 
 pub(super) struct PersistBringUp {
     /// `None` with no `persistence:` block: no output ring, and every `ctx.emit*` discards.

@@ -17,8 +17,8 @@ use engine::hot::strategy::StrategyConfig;
 use engine::msg::ids::{FIXED_SCALE, QueueId, SourceId};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::persist::RotationRow;
-use engine::persist::{PersistConfig, PersistWriter, RunMeta};
 use engine::shutdown::{DrainSignal, FatalSignal};
+use engine::tape::{PersistConfig, PersistWriter, RunMeta};
 
 use crate::e2e_scenario::{HOUR_US, ROTATIONS, message_sequence};
 use crate::engine_support::{

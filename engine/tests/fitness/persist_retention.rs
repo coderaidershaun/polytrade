@@ -10,7 +10,7 @@ use engine::config::{ExecutionMode, RecordedTables, TableKind};
 use engine::msg::ids::InstrumentId;
 use engine::msg::persist::{FeatureId, FeatureRow, PersistRecord};
 use engine::msg::time::TsUs;
-use engine::persist::PersistConfig;
+use engine::tape::PersistConfig;
 
 use crate::parquet_readback::{
     BASE_TS_US, TempDir, drain_blocking, parquet_files, run_dir, spawn_writer_with,
