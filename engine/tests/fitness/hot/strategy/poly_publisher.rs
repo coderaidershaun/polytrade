@@ -31,7 +31,7 @@ use engine::msg::exec::{
 use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BookChunk, InboundMessage};
 use engine::msg::persist::{FeatureId, PersistRecord};
-use engine::msg::time::DurationUs;
+use engine::msg::time::{DurationUs, Stamper};
 use engine::msg::ui::{DomQuote, UiEvent};
 use engine::runtime::config::{
     Instruments, IntensitySpec, PolySeries, RecordedTables, StrategySpec, Subscriptions, TableKind,
@@ -920,7 +920,7 @@ impl Maker {
         let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(1_024);
         let engine = HotEngine::new(HotEngineSetup {
             exec: Some(ExecWiring {
-                sink: ExecSink::new(commands_producer),
+                sink: ExecSink::new(commands_producer, Stamper::Off),
                 settings: maker_settings(),
                 // Zero because [`FillPen`] addresses this engine's slots with that constant.
                 run_nonce: 0,

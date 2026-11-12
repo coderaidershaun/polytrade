@@ -16,7 +16,7 @@ use engine::msg::exec::{
 };
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
-use engine::msg::time::TsUs;
+use engine::msg::time::{Stamper, TsUs};
 use engine::venues::polymarket::exec::codec::{
     AccountStamps, SettlementWatermark, account_snapshot,
 };
@@ -81,7 +81,7 @@ fn engine_with_settings(
     let (producer, commands) = RingBuffer::new(256);
     let engine = HotEngine::new(HotEngineSetup {
         exec: Some(ExecWiring {
-            sink: ExecSink::new(producer),
+            sink: ExecSink::new(producer, Stamper::Off),
             settings,
             run_nonce: 0,
         }),

@@ -28,6 +28,7 @@ use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle};
 use engine::msg::ids::{ClientOrderId, InstrumentId, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::time::Stamper;
 use engine::runtime::config::TrackerSpec;
 use engine::runtime::exposure::{
     ExposureError, ExposureSnapshot, ExposureState, InstrumentExposure, MAX_EXPOSURE_INSTRUMENTS,
@@ -109,7 +110,7 @@ fn engine_with_exposure(
     let engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),
         exec: Some(ExecWiring {
-            sink: ExecSink::new(commands_producer),
+            sink: ExecSink::new(commands_producer, Stamper::Off),
             // Wide band and a long book age: these tests are about the LOSS gate, and a quote
             // refused by the price band or a stale book would read the same as one the gate pulled.
             settings: ExecSettings {

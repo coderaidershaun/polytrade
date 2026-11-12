@@ -25,6 +25,7 @@ use engine::msg::exec::{
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::persist::PersistRecord;
+use engine::msg::time::Stamper;
 use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
 use engine::runtime::registry::InstrumentRow;
 use rtrb::{Consumer, RingBuffer};
@@ -94,7 +95,7 @@ fn fixture_with_lane(lane_capacity: usize) -> Fixture {
     let engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),
         exec: Some(ExecWiring {
-            sink: ExecSink::new(commands_producer),
+            sink: ExecSink::new(commands_producer, Stamper::Off),
             settings: ExecSettings::disabled(),
             run_nonce: 0,
         }),

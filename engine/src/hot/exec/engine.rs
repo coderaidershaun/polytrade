@@ -171,7 +171,7 @@ impl ExecEngine {
             orders: OrderTable::new(setup.run_nonce),
             prior_orders: PriorRunOrders::new(),
             account: AccountTable::new(),
-            pending: PendingCommands::new(),
+            pending: PendingCommands::for_sink(setup.sink.as_ref()),
             sink: setup.sink,
             halt: ExecHalt::Armed,
             readiness: Readiness::default(),

@@ -10,7 +10,7 @@ use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{CancelReason, ExecCommand, ExecLaneItem, OrderStyle};
 use engine::msg::ids::{AssetId, InstrumentId, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
-use engine::msg::time::DurationUs;
+use engine::msg::time::{DurationUs, Stamper};
 use engine::msg::ui::UiEvent;
 use engine::runtime::config::{RecordedTables, TrackerSpec};
 use engine::runtime::exposure::InstrumentExposure;
@@ -144,7 +144,7 @@ pub(crate) fn built_quoting_engine(setup: QuotingSetup<'_>) -> QuotingEngine {
         persistence: Some(persistence),
         ui_event_sink,
         exec: Some(ExecWiring {
-            sink: ExecSink::new(commands_producer),
+            sink: ExecSink::new(commands_producer, Stamper::Off),
             settings: setup.settings,
             run_nonce: setup.run_nonce,
         }),

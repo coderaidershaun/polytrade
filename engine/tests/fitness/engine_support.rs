@@ -25,7 +25,7 @@ use engine::msg::inbound::{
 use engine::msg::persist::{FeatureId, FillRow, OrderRow, PersistRecord};
 use engine::msg::run_state::RunAssertion;
 use engine::msg::run_state::RunState;
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, Stamper, TsUs};
 use engine::msg::ui::{UI_BOOK_RING_CAPACITY, UI_EVENT_RING_CAPACITY, UiBookSnapshot, UiEvent};
 use engine::runtime::config::{BinanceMarket, Subscriptions, VenueMarket};
 use engine::runtime::config::{
@@ -412,7 +412,7 @@ pub fn engine_with_ui_and_exec(
 ) {
     let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(1024);
     let exec = ExecWiring {
-        sink: ExecSink::new(commands_producer),
+        sink: ExecSink::new(commands_producer, Stamper::Off),
         settings: ExecSettings::disabled(),
         run_nonce,
     };

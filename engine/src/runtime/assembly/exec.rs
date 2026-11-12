@@ -14,7 +14,7 @@ use crate::hot::sink::{ExecLaneBudget, ExecSink, exec_lane_capacity};
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::info;
 use crate::msg::exec::ExecLaneItem;
-use crate::msg::time::{DurationUs, EngineClock};
+use crate::msg::time::{DurationUs, EngineClock, Stamper};
 use crate::runtime::config::{
     DEFAULT_QUOTE_STOP_MARGIN_MS, ExecutionConfig, ExecutionMode, RunIdentity, validated_mantissa,
 };
@@ -68,6 +68,8 @@ pub(super) struct ExecBringUpSetup<'a> {
     /// venue that rotates markets reads.
     pub(super) window_assignments: mpsc::Receiver<WindowAssignment>,
     pub(super) clock: &'a EngineClock,
+    /// The latency counter the command bank reads when a command enters it.
+    pub(super) stamper: &'a Stamper,
     pub(super) fatal: &'a FatalSignal,
     pub(super) desired_run_state: RunStateCell,
     pub(super) drain_deadline: Duration,
@@ -167,7 +169,7 @@ pub(super) fn exec_bring_up(mut setup: ExecBringUpSetup<'_>) -> Result<ExecBring
     );
     Ok(ExecBringUp {
         wiring: Some(ExecWiring {
-            sink: ExecSink::new(commands_producer),
+            sink: ExecSink::new(commands_producer, setup.stamper.clone()),
             settings: settings(execution, &capabilities),
             run_nonce,
         }),

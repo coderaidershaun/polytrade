@@ -1,6 +1,7 @@
 //! Message time must come from one clock. Two clocks can stamp the same moment apart, and then a
 //! replay folds an order of messages that the live run never saw. So each place in the library that
-//! starts an engine clock is named here, with the reason that it may.
+//! starts an engine clock is named here, with the reason that it may, and so is each file that names
+//! the latency tick a command carries.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -69,5 +70,66 @@ fn one_engine_clock_stamps_every_producer() {
          passes on, or two time bases stamp the same moment apart. Pass that clock in, or name the \
          new site in the list with its reason:\n{}",
         problems.join("\n")
+    );
+}
+
+const ISSUE_TICK: &str = "issue_tick";
+
+/// Each file of the production code that names the issue tick, and what it does with it. The tick
+/// is a latency stamp: a reader of it outside a sender could order or time a command by a counter
+/// reading, and replay would then send other orders than the live run sent.
+const ISSUE_TICK_SITES: [(&str, &str); 4] = [
+    (
+        "engine/src/msg/exec.rs",
+        "declares the tick on the lane item that carries a command to its edge",
+    ),
+    (
+        "engine/src/hot/sink/exec.rs",
+        "reads the counter when a command enters the bank and hands the tick to the lane",
+    ),
+    (
+        "engine/src/msg/latency.rs",
+        "declares the tick on the wire sample that a sender writes",
+    ),
+    (
+        "engine/src/runtime/assembly/metrics/stage.rs",
+        "subtracts the ticks of a wire sample on the metrics thread",
+    ),
+];
+
+#[test]
+fn issue_tick_is_read_only_by_senders() {
+    let package = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace = package.parent().expect("the package sits in the workspace");
+    let roots = ["engine/src", "strategies", "tools", "lab/src"];
+    let mut naming: Vec<String> = Vec::new();
+    for root in roots {
+        for path in rust_sources(&workspace.join(root)) {
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+            let names_it = source
+                .lines()
+                .map(|line| line.split("//").next().unwrap_or(line))
+                .any(|code| code.contains(ISSUE_TICK));
+            if names_it {
+                let relative = path
+                    .strip_prefix(workspace)
+                    .expect("each source sits below the workspace")
+                    .to_string_lossy()
+                    .into_owned();
+                naming.push(relative);
+            }
+        }
+    }
+    naming.sort();
+    let mut listed: Vec<String> = ISSUE_TICK_SITES
+        .iter()
+        .map(|(file, _)| (*file).to_owned())
+        .collect();
+    listed.sort();
+    assert_eq!(
+        naming, listed,
+        "the issue tick of a command is a latency stamp for the sender alone. The fold, a strategy \
+         and the simulator must never read it; a new file that does needs its reason in the list"
     );
 }

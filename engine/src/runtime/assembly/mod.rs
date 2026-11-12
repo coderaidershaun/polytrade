@@ -282,6 +282,7 @@ impl Engine {
             groups: &mut group_producers,
             window_assignments: assignments_rx,
             clock: &clock,
+            stamper: &stamper,
             fatal: &fatal,
             desired_run_state: control.desired().clone(),
             drain_deadline,

@@ -8,7 +8,7 @@ use engine::msg::exec::{ExecCommand, ExecLaneItem};
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::persist::PersistRecord;
-use engine::msg::time::DurationUs;
+use engine::msg::time::{DurationUs, Stamper};
 use engine::runtime::config::{IntensitySpec, KlineInterval, TableKind};
 use engine::runtime::registry::InstrumentRow;
 use rtrb::{Consumer, RingBuffer};
@@ -83,7 +83,7 @@ pub(crate) fn recorder_engine(
         persistence: Some(persistence),
         ui_event_sink: ui_event_ring(1_024).0,
         exec: Some(ExecWiring {
-            sink: ExecSink::new(commands_producer),
+            sink: ExecSink::new(commands_producer, Stamper::Off),
             settings: exec_settings(),
             run_nonce: 0,
         }),

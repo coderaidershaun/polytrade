@@ -7,7 +7,7 @@ use crate::msg::ids::{
     AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId,
 };
 use crate::msg::labelled_enum::labelled_enum;
-use crate::msg::time::TsUs;
+use crate::msg::time::{Tick, TsUs};
 
 /// A normalised order-lifecycle transition. Stream-lifecycle kinds carry only their kind
 /// and their stamps.
@@ -297,11 +297,15 @@ impl ExecCommand {
     }
 }
 
-/// Stamped when the hot bank drains for deterministic replay.
+/// A command on its way to the edge, stamped with the message time of the spin whose drain sent it,
+/// for a replay to reproduce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StampedExecCommand {
     pub command: ExecCommand,
     pub issued_ts_us: TsUs,
+    /// The latency counter when the command entered the bank. A command that waited there keeps
+    /// it. Only a sender reads it, to time the command's way to the wire.
+    pub issue_tick: Tick,
 }
 
 /// Transport envelope carrying lane progress.

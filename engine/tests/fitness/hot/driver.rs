@@ -8,17 +8,22 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{
-    ClientIdLayout, ExecLimits, ExecSettings, FeeModel, OrderBudget, side_base,
+    ClientIdLayout, DesiredQuote, ExecLimits, ExecSettings, FeeModel, OrderBudget, QuoteLevel,
+    side_base,
 };
 use engine::hot::ingress::IngressQueues;
 use engine::hot::metrics::DriverSamples;
 use engine::hot::sink::ExecSink;
 use engine::hot::spawn::{HotDriver, Step};
-use engine::hot::strategy::{Strategy, StrategyConfig};
+use engine::hot::strategy::{Strategy, StrategyConfig, StrategyCtx};
 use engine::log::{HotRecord, TextRecord, open_hot_lane, open_text_lane};
-use engine::msg::exec::{ExecEvent, ExecKind, ExecLaneItem, Provenance, VenueOrderStatus};
+use engine::msg::exec::{
+    ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, Provenance, StampedExecCommand,
+    VenueOrderStatus,
+};
 use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty, QueueId, Side};
-use engine::msg::inbound::{InboundMessage, TradeEvent};
+use engine::msg::inbound::{InboundMessage, SpinTick, TradeEvent};
+use engine::msg::latency::{Category, CommandKind, Stage, WireSample};
 use engine::msg::persist::PersistRecord;
 use engine::msg::time::{DurationUs, Stamper};
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
@@ -27,6 +32,7 @@ use engine::runtime::config::{
     Subscriptions, TableKind, TrackerSpec, VenueMarket,
 };
 use engine::runtime::exposure::ExposureSnapshot;
+use engine::runtime::metrics::{SampleProducers, SinkKind};
 use engine::runtime::registry::InstrumentRow;
 use engine::venues::binance::depth::{ChainRule, DepthSequencer, DiffOutcome, SnapshotOutcome};
 use engine::venues::binance::parse::{
@@ -40,11 +46,9 @@ use engine::venues::polymarket::parse::{PolyFrame, is_frameless, parse_market_fr
 use engine::venues::polymarket::rotation::{OutcomeLeg, TokenId, WindowAssignment};
 use rtrb::{Consumer, RingBuffer};
 
-use engine::runtime::metrics::{SampleProducers, SinkKind};
-
 use crate::engine_support::{
     Idle, ONE, account_chunk, detached_setup, engine_view, exec_event, exposure_ring,
-    instrument_row, level, persist_ring_for, spin, strategy_log_ring, stream_ready,
+    instrument_row, level, persist_ring_for, snapshot_pair, spin, strategy_log_ring, stream_ready,
     tracker_spec_all, ts, ui_book_ring, ui_event_ring,
 };
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
@@ -616,7 +620,7 @@ fn armed_engine(shipped: Shipped, rows: &[InstrumentRow], log_lane: usize) -> (H
         ui_book_sink,
         ui_event_sink,
         exec: Some(ExecWiring {
-            sink: ExecSink::new(commands_producer),
+            sink: ExecSink::new(commands_producer, Stamper::Off),
             settings: exec_settings(shipped),
             run_nonce: 0,
         }),
@@ -887,4 +891,160 @@ fn full_observation_rings_change_nothing() {
             choked.first_difference(&free)
         );
     }
+}
+
+/// The spin at which [`ThreeBids`] starts to quote.
+const QUOTING_SPIN: u64 = 5;
+
+/// The instruments of [`ThreeBids`]. A side holds one unanswered command at a time, so three
+/// placements in one pass need three instruments.
+const BID_INSTRUMENTS: [u16; 3] = [0, 1, 2];
+
+/// Declares a bid on each of [`BID_INSTRUMENTS`] from [`QUOTING_SPIN`] on, so that one execution
+/// pass banks three placements.
+struct ThreeBids;
+
+impl Strategy for ThreeBids {
+    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, tick: &SpinTick) {
+        if tick.seq < QUOTING_SPIN {
+            return;
+        }
+        for instrument in BID_INSTRUMENTS {
+            ctx.quote(
+                InstrumentId(instrument),
+                Side::Buy,
+                QuoteLevel::ZERO,
+                Some(DesiredQuote {
+                    price: Price(99 * ONE),
+                    qty: Qty(ONE / 10),
+                    style: OrderStyle::PostOnly,
+                }),
+            );
+        }
+    }
+}
+
+fn commands_of(lane: &mut Consumer<ExecLaneItem>) -> Vec<ExecLaneItem> {
+    std::iter::from_fn(|| lane.pop().ok()).collect()
+}
+
+fn stamped(item: ExecLaneItem) -> StampedExecCommand {
+    match item {
+        ExecLaneItem::Command(stamped) => stamped,
+        ExecLaneItem::Watermark(at) => panic!("a watermark at {at:?} where a command was due"),
+    }
+}
+
+/// A command that the full lane holds in the bank keeps the tick it read when it entered the bank,
+/// so the time it waited there shows in its stage. Read again when it leaves, the tick would hide
+/// that wait, and a full lane would look like a fast one.
+#[test]
+fn held_command_keeps_its_issue_tick() {
+    const INTERVAL_US: i64 = 60_000_000;
+    let mut harness = Harness::new(10);
+    let instruments = BID_INSTRUMENTS.map(|id| InstrumentRow {
+        tick_size: Some(Price(ONE)),
+        lot_size: Some(Qty(1)),
+        ..instrument_row(id, TrackerSpec::default(), 64)
+    });
+    let (commands_producer, mut lane) = RingBuffer::<ExecLaneItem>::new(2);
+    let engine = HotEngine::new(HotEngineSetup {
+        exec: Some(ExecWiring {
+            sink: ExecSink::new(commands_producer, harness.counter.stamper.clone()),
+            settings: settings(FeeModel::None, true),
+            run_nonce: 0,
+        }),
+        ..detached_setup(&instruments, Box::new(ThreeBids))
+    });
+    let (mut input, queue) = RingBuffer::new(32);
+    let mut start: Vec<InboundMessage> = readiness(1).into();
+    for instrument in BID_INSTRUMENTS {
+        let (bids, asks) = snapshot_pair(instrument, &[(99 * ONE, ONE)], &[(101 * ONE, ONE)], 1);
+        start.push(InboundMessage::Book(bids));
+        start.push(InboundMessage::Book(asks));
+        start.push(InboundMessage::Exec(open_orders_snapshot_end(
+            InstrumentId(instrument),
+            ts(1),
+        )));
+    }
+    for message in start {
+        input.push(message).expect("the input ring has room");
+    }
+    let mut driver = HotDriver::new(IngressQueues::new(vec![queue]), engine, None);
+    let mut fold_spin = |input: &mut rtrb::Producer<InboundMessage>, seq: u64| {
+        input
+            .push(InboundMessage::SpinTick(spin(seq, 10 + seq as i64)))
+            .expect("the input ring has room");
+        while driver.step() == Step::Folded {}
+    };
+    for seq in 0..QUOTING_SPIN {
+        fold_spin(&mut input, seq);
+        commands_of(&mut lane);
+    }
+
+    let banked_at = harness.counter.at(100);
+    fold_spin(&mut input, QUOTING_SPIN);
+    let held_spin = commands_of(&mut lane);
+    assert_eq!(
+        held_spin.len(),
+        2,
+        "the lane takes two, and the third waits in the bank"
+    );
+    for item in held_spin {
+        assert_eq!(
+            stamped(item).issue_tick,
+            banked_at,
+            "each placement read the bank's tick"
+        );
+    }
+
+    harness.counter.at(1_000_500);
+    fold_spin(&mut input, QUOTING_SPIN + 1);
+    let mut next_spin = commands_of(&mut lane).into_iter();
+    let held = stamped(next_spin.next().expect("the held placement goes out first"));
+    assert!(
+        matches!(held.command, ExecCommand::Place { .. }),
+        "the third placement: {held:?}"
+    );
+    assert_eq!(
+        held.issue_tick, banked_at,
+        "the held placement kept the tick of its bank entry, read no second one"
+    );
+    assert!(
+        matches!(next_spin.next(), Some(ExecLaneItem::Watermark(_))),
+        "then the watermark of its spin"
+    );
+
+    let pop_tick = harness.counter.at(1_000_500);
+    let wire_tick = harness.counter.at(1_000_800);
+    let ExecCommand::Place { client_id, .. } = held.command else {
+        unreachable!("matched above");
+    };
+    harness.samples.wires.push(WireSample {
+        issue_tick: held.issue_tick,
+        pop_tick,
+        wire_tick,
+        issued_ts_us: held.issued_ts_us,
+        client_id,
+        kind: CommandKind::Place,
+        queue: QueueId(0),
+    });
+    harness.pass(INTERVAL_US);
+    let stage = |stage: Stage| {
+        harness
+            .rows
+            .stage(Category::Command, stage)
+            .map(|row| (row.count, row.max_ns))
+    };
+    assert_eq!(
+        stage(Stage::BankAndLaneWait),
+        Some((1, 1_000_400)),
+        "the held spin shows in the wait"
+    );
+    assert_eq!(stage(Stage::DecisionToWire), Some((1, 1_000_700)));
+    assert_eq!(
+        harness.rows.dropped_total(SinkKind::WireSamples),
+        Some(0),
+        "no sample lost"
+    );
 }
