@@ -68,6 +68,10 @@ pub enum EngineError {
     #[error("hot_core_id {core_id} is not an available core (found {available})")]
     CoreId { core_id: usize, available: usize },
     #[error(
+        "the sender thread could not pin to senders.core_id {core_id} — set a core this process may use, or senders.placement: shared"
+    )]
+    SenderPin { core_id: usize },
+    #[error(
         "trading engine {trading_engine} could not bind link.bind {bind} — another process holds that port, or this host has no such address"
     )]
     LinkBind {

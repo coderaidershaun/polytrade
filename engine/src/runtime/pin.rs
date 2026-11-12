@@ -20,3 +20,17 @@ pub(crate) fn pin_current_thread(core_id: usize, fatal: &FatalSignal) {
         ));
     }
 }
+
+/// Pins the calling thread for a start that refuses when the pin fails, and answers whether the
+/// start may go on. Only linux refuses: elsewhere pinning is best-effort and only warns.
+pub(crate) fn pin_for_start(core_id: usize, thread: &str) -> bool {
+    let is_pinned = core_affinity::set_for_current(core_affinity::CoreId { id: core_id });
+    if !cfg!(target_os = "linux") {
+        warn!(
+            "cpu pinning is best-effort on {} — the {thread} thread may float",
+            std::env::consts::OS
+        );
+        return true;
+    }
+    is_pinned
+}

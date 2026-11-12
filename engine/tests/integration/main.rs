@@ -1,7 +1,8 @@
 //! Integration suite: real venue, real time, real serialisation — never CI. Every test is `#[ignore]`.
 //! Only the live-runner role of a job runs a test that signs, by its runbook and the live policy. An
 //! agent runs a public read only where a plan names it, by its exact name and with an empty
-//! environment. None of these tests places an order.
+//! environment. None of these tests places an order. A person runs the timing test of the pinned
+//! sender on a linux host, by the latency runbook.
 
 mod binance_scale;
 mod binance_signed;
@@ -9,6 +10,7 @@ mod observer;
 mod poly_rotation;
 mod rest_check;
 mod rotations_parquet;
+mod sender;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

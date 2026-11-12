@@ -15,11 +15,11 @@ use std::path::Path;
 use crate::scans::exec_no_clock::rust_sources;
 
 /// This engine's complete census of thread lanes: the text lane of each OS thread it owns (the
-/// process entry, the single hot thread, the metrics thread, and the two dedicated output
-/// threads), and the hot lane of the hot thread. Everything else that runs concurrently here is a
+/// process entry, the single hot thread, the metrics thread, the pinned senders' thread, and the
+/// two dedicated output threads), and the hot lane of the hot thread. Everything else that runs concurrently here is a
 /// tokio task. The browser workstation runs on one thread with no log lane. Each entry is (call,
 /// file, tag).
-const LANE_OWNERS: [(&str, &str, &str); 6] = [
+const LANE_OWNERS: [(&str, &str, &str); 7] = [
     (TEXT_LANE_CALL, "src/hot/spawn.rs", "config.tag"),
     (
         TEXT_LANE_CALL,
@@ -27,6 +27,7 @@ const LANE_OWNERS: [(&str, &str, &str); 6] = [
         "metrics",
     ),
     (TEXT_LANE_CALL, "src/runtime/assembly/mod.rs", "main"),
+    (TEXT_LANE_CALL, "src/runtime/assembly/senders.rs", "sender"),
     (TEXT_LANE_CALL, "src/runtime/exposure/writer.rs", "exposure"),
     (TEXT_LANE_CALL, "src/tape/drain.rs", "persist"),
     (HOT_LANE_CALL, "src/hot/spawn.rs", "config.tag"),

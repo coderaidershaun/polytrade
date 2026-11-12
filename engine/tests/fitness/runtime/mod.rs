@@ -7,4 +7,5 @@ mod execution_lease;
 mod exposure_boot;
 mod exposure_state;
 pub(crate) mod metrics;
+mod pin;
 mod runtime_exit;

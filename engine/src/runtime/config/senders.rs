@@ -7,6 +7,9 @@ use serde::Deserialize;
 
 use super::{ConfigError, check_range};
 
+/// A cpu set names 1,024 cores, and a pin to a core past it cannot even be asked for.
+const MAX_CORE_ID: u64 = 1_023;
+
 /// Where the senders run. `Shared` is the default: each sender wakes on a tick, on the runtime of
 /// every other edge. `Pinned` gives them one thread on a core of their own, where a loop that never
 /// sleeps sends each command on its next pass.
@@ -66,6 +69,14 @@ impl SendersConfig {
                 value: "absent".into(),
                 expected: "a core id when senders.placement is pinned on linux",
             });
+        }
+        if let Some(core_id) = self.core_id {
+            check_range(
+                "senders.core_id",
+                core_id as u64,
+                0..=MAX_CORE_ID,
+                "0..=1023, the cores a cpu set can name",
+            )?;
         }
         check_range(
             "senders.tick_us",
