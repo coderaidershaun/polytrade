@@ -5,6 +5,9 @@
 //! Every module on disk is declared here. A suite that compiles but is not listed runs nowhere, so
 //! absence from this file is the one way coverage can be lost without a diff showing it.
 
+// The counting allocator implements an unsafe trait, and the workspace denies unsafe code.
+#![allow(unsafe_code)]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 

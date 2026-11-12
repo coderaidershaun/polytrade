@@ -2,6 +2,9 @@
 resolver = "3"
 members = ["engine", "strategies/strat-micro-recorder"]
 
+[workspace.lints.rust]
+unsafe_code = "deny"
+
 [profile.deploy]
 inherits = "release"
 lto = "fat"

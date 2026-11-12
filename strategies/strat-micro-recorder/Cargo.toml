@@ -16,3 +16,6 @@ path = "te-polymarket-btc-updown-5m/main.rs"
 [dependencies]
 polysim = { path = "../../engine" }
 serde = { version = "1.0.228", default-features = false, features = ["std", "derive"] }
+
+[lints]
+workspace = true

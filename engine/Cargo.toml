@@ -76,3 +76,6 @@ path = "tests/fitness/main.rs"
 [[test]]
 name = "integration"
 path = "tests/integration/main.rs"
+
+[lints]
+workspace = true
