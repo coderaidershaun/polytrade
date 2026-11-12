@@ -16,7 +16,7 @@
 use engine::msg::ids::{FIXED_SCALE, Price, Side};
 
 use crate::engine_support::{ONE, pop};
-use crate::recorder_fixture::{
+use crate::hot::strategy::recorder_fixture::{
     STEP_US, STEPS, column_value, drain_places, make_ready, recorded_row, recorder_engine,
     seed_book, spin_columns, step_messages,
 };

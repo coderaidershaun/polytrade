@@ -5,11 +5,11 @@
 use engine::msg::ids::Side;
 
 use crate::engine_support::{ONE, pop};
-use crate::micro_strategy::models::MIN_QUOTE_DISTANCE_BPS;
-use crate::recorder_fixture::{
+use crate::hot::strategy::recorder_fixture::{
     STEP_US, STEPS, TICK, column_value, drain_places, make_ready, recorded_row, recorder_engine,
     seed_book, spin_columns, step_messages,
 };
+use crate::micro_strategy::models::MIN_QUOTE_DISTANCE_BPS;
 
 const BASE: i64 = 10_000 * ONE;
 const STEP: i64 = ONE / 100_000;
