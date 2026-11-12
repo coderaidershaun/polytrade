@@ -12,6 +12,21 @@ The project is NOT optimised for latency. It is rather optimised for adaptabilit
 
 Note that live trading is untested and just there for now as a placeholder. This repo is NOT meant for live trading execution so please use at your own risk.
 
+## Layout
+
+The repo is one Cargo workspace. Run each command of this file at its root.
+
+| Path | What it holds |
+| --- | --- |
+| `engine/` | Package `engine`: the library that each live engine links, and the binaries `polysim-mcp`, `polysim-ui`, `polysim-web` and `dom-fixture`. Its tests are in `engine/tests/fitness/` and `engine/tests/integration/`, and its recorded exchange payloads are in `engine/fixtures/<venue>/`. |
+| `engine/src/` | One folder for each job: `msg/` (messages), `log/` (logging), `hot/` (the trading thread), `venues/` (exchanges and the simulator), `link/` (state between engines), `tape/` (Parquet files), `runtime/` (start and stop of a process), `operator/` (workstation, web relay, agent control plane). |
+| `lab/` | Package `lab`: scoring and research over recorded history. It holds only its root file for now. |
+| `strategies/strat-micro-recorder/` | Package `strat-micro-recorder`: one binary for each trading engine, and `link_schema.rs`, the link schema that both engines share. |
+| `strategies/` | Also the Python post-trade environment and its notebook. |
+| `tools/` | `dom-fixture` and `poly-probe`, described in `tools/README.md`. |
+| `browser/` | The Trunk page of the browser workstation. |
+| `wiki/`, `static/` | Notes on the models, and the images of this file. |
+
 ## Run
 
 ```shell
@@ -41,20 +56,17 @@ cargo run -q --release --features mcp --bin polysim-mcp
 cargo run -q --release --features mcp --bin polysim-mcp -- --http 8765
 # A parent passes --watch-stdin and holds a stdin pipe open, so the server and engines end with it.
 
-# Gate — all six must pass before anything merges, and both Trunk builds must succeed
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo clippy --all-targets --all-features -- -D warnings
-cargo clippy --target wasm32-unknown-unknown --lib --bin polysim-ui --bin dom-fixture -- -D warnings
-cargo test
-cargo test --all-features
-(cd browser && trunk build --release)
-(cd tools/dom-fixture && trunk build --release)
+# Gate G — each step must pass before anything merges (CONSTITUTION.md §14). Run it at the
+# workspace root. The Docker build below is its last step.
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo clippy --target wasm32-unknown-unknown -p engine --lib --bin polysim-ui --bin dom-fixture -- -D warnings
+cargo test --workspace
+cargo test --workspace --all-features
+(cd browser && trunk build --release) && (cd tools/dom-fixture && trunk build --release)
 
 # ARM64 Linux binary for deployment, built in Docker, lands in dist/
-./scripts/build-strategy.sh strat-micro-recorder-te-binance-spot-btcusdt
-
-# ...which is a name check plus this. Run it directly if you prefer:
 docker buildx build \
     --platform linux/arm64 \
     --build-arg BIN=strat-micro-recorder-te-binance-spot-btcusdt \
@@ -62,11 +74,11 @@ docker buildx build \
     .
 ```
 
-`polysim-mcp` gives an agent four tools: `list_strategies`, `start_strategy`, `stop_strategy` and `set_execution_mode`. It starts each engine as a child process from its prebuilt release binary, and stops every engine it started when it exits. The `.mcp.json` at the repo root registers it for Claude Code.
+`polysim-mcp` gives an agent four tools: `list_strategies`, `start_strategy`, `stop_strategy` and `set_execution_mode`. It starts each engine as a child process from its prebuilt release binary, and stops every engine it started when it exits. The file `.mcp.json.off` at the repo root holds its Claude Code entry, under the name `polysim`.
 
-For now that file is in the repo as `.mcp.json.off`, so no session starts this server: its tools set an engine to `live` and start it with no guard. The file gets its name back when that guard exists.
+That file has the name `.mcp.json.off` on purpose, so no session starts this server: its tools set an engine to `live` and start it with no guard. The file gets its name `.mcp.json` back when that guard exists. Until then, Claude Code reads no project entry for this server.
 
-A stdio server lives only as long as the client that spawned it, and stops every engine it started when that client exits. Use `--http <port>` when engines must outlive one client: the workstation and every `claude -p` reply then share one long-lived server and its engines. Start it once, then register it under the same name the tracked `.mcp.json` uses, so it replaces the stdio entry instead of sitting beside it:
+A stdio server lives only as long as the client that spawned it, and stops every engine it started when that client exits. Use `--http <port>` when engines must outlive one client: the workstation and every `claude -p` reply then share one long-lived server and its engines. Start it once, then register it under `polysim`, the name of the entry in `.mcp.json.off`, so that it replaces the stdio entry instead of sitting beside it when the file has its name back:
 
 ```shell
 claude mcp add --transport http polysim http://127.0.0.1:8765/mcp
@@ -116,7 +128,7 @@ Go ahead and select you jupyter notebook and start analysing data.
 
 ## Live Tests
 
-Live-network tests are `#[ignore]`d and never run in CI. Only the `live-runner` role of a job runs a signed test or the probe, by a runbook and the live policy. An agent runs a public read only where a plan names it, by its exact name and with an empty environment.
+Live-network tests live in `engine/tests/integration/`. They are `#[ignore]`d and never run in CI. Only the `live-runner` role of a job runs a signed test or the probe, by a runbook and the live policy. An agent runs a public read only where a plan names it, by its exact name and with an empty environment.
 
 ## Architecture
 
@@ -132,4 +144,4 @@ How it actually works: one thread — a single line of execution on one core —
 
 Plugging in an exchange means writing two pieces, and they are deliberately not the same shape. The market-data piece is the easy half: every exchange gets its own small translator that connects, listens, and turns whatever that exchange broadcasts into the engine's one common message format. The translators share a toolbox — opening connections, retrying after a disconnect, parsing prices exactly — but each writes its own loop, because exchanges differ too much for a template to help. The order-sending piece is the strict half, because mistakes here cost money. Everything dangerous is shared code, written once: remembering which orders are alive, what to do when the connection drops mid-order, never sending the same order twice, cancelling everything on the way out. A new exchange only writes the translation — how to format, sign and send requests that venue understands, and how to read its replies — plus a short declaration of the venue's quirks: its fees, its rate limits, how its markets behave. The simulator slots into that same socket: it pretends to be the exchange, drives the same shared machinery, and the trading thread genuinely cannot tell the difference.
 
-The order-sending half is governed by a written contract — every promise a venue integration must keep, and exactly what you would have to write to add the next exchange, lives in [`src/adapters/exec/README.md`](src/adapters/exec/README.md).
+The order-sending half is governed by a written contract — every promise a venue integration must keep, and exactly what you would have to write to add the next exchange, lives in [`engine/src/venues/exec/README.md`](engine/src/venues/exec/README.md).
