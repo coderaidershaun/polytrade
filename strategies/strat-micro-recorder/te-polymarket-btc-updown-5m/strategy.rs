@@ -18,8 +18,8 @@ use engine::msg::inbound::{MarketRotation, SpinTick, TradeEvent};
 use engine::time::{DurationUs, TsUs};
 use serde::Deserialize;
 
-#[path = "../common.rs"]
-pub(crate) mod common;
+#[path = "../link_schema.rs"]
+pub(crate) mod link_schema;
 
 const UP_SUFFIX: &str = "-up";
 
@@ -97,11 +97,11 @@ impl StrategyConfig for PolyUpPublisher {
 
 impl Strategy for PolyUpPublisher {
     fn link_fields(&self) -> &'static [&'static str] {
-        &common::LINK_FIELDS
+        &link_schema::LINK_FIELDS
     }
 
     fn link_topics(&self) -> &'static [&'static str] {
-        common::LINK_TOPICS
+        link_schema::LINK_TOPICS
     }
 
     fn register(&mut self, registration: Registration<'_>) {
@@ -158,7 +158,7 @@ impl Strategy for PolyUpPublisher {
 impl PolyUpPublisher {
     fn publish(&mut self, ctx: &mut StrategyCtx<'_>, now: TsUs) {
         let Some(topic) = self.topic else { return };
-        let mut frame = common::UpFrame::ABSENT;
+        let mut frame = link_schema::UpFrame::ABSENT;
         let mut has_role = false;
         for slot in self.slots.iter_mut().flatten() {
             let Some(block) = slot.role_block(ctx, now, &mut frame) else {
@@ -298,22 +298,22 @@ impl UpSlot {
         &self,
         ctx: &StrategyCtx<'_>,
         now: TsUs,
-        frame: &'f mut common::UpFrame,
-    ) -> Option<&'f mut common::UpRole> {
+        frame: &'f mut link_schema::UpFrame,
+    ) -> Option<&'f mut link_schema::UpRole> {
         match role_at(ctx.window(self.instrument)?, now)? {
             Role::Current => Some(&mut frame.cur),
             Role::Next => Some(&mut frame.next),
         }
     }
 
-    fn write(&mut self, ctx: &StrategyCtx<'_>, now: TsUs, block: &mut common::UpRole) {
+    fn write(&mut self, ctx: &StrategyCtx<'_>, now: TsUs, block: &mut link_schema::UpRole) {
         block.buy_vol = self.buy_qty.to_f64();
         block.sell_vol = self.sell_qty.to_f64();
         self.write_book(ctx, block);
         self.write_intensity(ctx, now, block);
     }
 
-    fn write_book(&self, ctx: &StrategyCtx<'_>, block: &mut common::UpRole) {
+    fn write_book(&self, ctx: &StrategyCtx<'_>, block: &mut link_schema::UpRole) {
         let book = ctx.book(self.instrument);
         if book.state() != BookState::Valid {
             return;
@@ -328,7 +328,12 @@ impl UpSlot {
         }
     }
 
-    fn write_intensity(&mut self, ctx: &StrategyCtx<'_>, now: TsUs, block: &mut common::UpRole) {
+    fn write_intensity(
+        &mut self,
+        ctx: &StrategyCtx<'_>,
+        now: TsUs,
+        block: &mut link_schema::UpRole,
+    ) {
         let counts = ctx.tracker(self.instrument).intensity();
         let Some(estimate) = self.intensity.refit(counts, now) else {
             return;

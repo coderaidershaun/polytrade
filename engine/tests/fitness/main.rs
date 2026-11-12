@@ -97,7 +97,7 @@ mod poly_sign;
 /// The second trading engine of the same strategy, included from its folder for the same reason
 /// `micro_strategy` is: the suite drives the real publisher, not a copy of it.
 ///
-/// Both engines `#[path]`-include the strategy-level `common.rs`, so compiling the two of them
+/// Both engines `#[path]`-include the strategy-level `link_schema.rs`, so compiling the two of them
 /// into this one binary loads that file twice. That is the point rather than an accident — the
 /// duplicate IS the shared link schema, and `poly_publisher` exists to prove the two agree — but
 /// each engine is its own crate in every other build, so neither can `use` the other's copy.

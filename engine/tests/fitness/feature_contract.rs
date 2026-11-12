@@ -14,7 +14,7 @@ use engine::link::{LinkHash, schema_hash_of_fields};
 
 use crate::engine_support::recorder_feature_id;
 use crate::micro_strategy::features::{FEATURE_NAMES, Features, QuoteSide};
-use crate::poly_strategy::common::LINK_FIELDS;
+use crate::poly_strategy::link_schema::LINK_FIELDS;
 
 /// Copied by hand from the `features![…]` list, in order. Append-only: a new column is added at the
 /// END here and nowhere else, and no line ever moves or changes.

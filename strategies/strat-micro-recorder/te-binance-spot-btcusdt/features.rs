@@ -62,7 +62,7 @@ engine::features! {
         kyle_intercept,
         inventory_quote,
         // Polymarket up legs from the other TE over link, recorded on own instrument. Names and order
-        // mirror common::LINK_FIELDS; `cur` hosts the open window, `next` the one not yet open.
+        // mirror link_schema::LINK_FIELDS; `cur` hosts the open window, `next` the one not yet open.
         poly_cur_up_bid,
         poly_cur_up_ask,
         poly_cur_up_bid_qty,

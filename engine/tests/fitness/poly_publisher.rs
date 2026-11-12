@@ -50,7 +50,7 @@ use crate::engine_support::{
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
 /// The publisher's own copy of the shared schema — the same file the peer includes, so the frame
 /// this suite builds expectations in is the one the engines run on.
-use crate::poly_strategy::{PolyUpParams, PolyUpPublisher, common};
+use crate::poly_strategy::{PolyUpParams, PolyUpPublisher, link_schema};
 
 /// This strategy's two engines. The ids are what the link hashes into every envelope, so a peer of
 /// another strategy — or another run — is rejected before its body is read.
@@ -263,7 +263,7 @@ fn as_wire(values: &[f64]) -> Wire {
 
 /// An expectation is authored as the frame the publisher would have built, then flattened by the
 /// publisher's own `to_array` — so a test names the slots it fills instead of the offsets they sit at.
-fn wire_of(frame: common::UpFrame) -> Wire {
+fn wire_of(frame: link_schema::UpFrame) -> Wire {
     as_wire(&frame.to_array())
 }
 
@@ -272,13 +272,13 @@ fn wire_of(frame: common::UpFrame) -> Wire {
 #[test]
 fn an_untouched_frame_is_absent_in_every_slot() {
     assert_eq!(
-        wire_of(common::UpFrame::ABSENT),
-        vec![None; common::LINK_FIELDS.len()]
+        wire_of(link_schema::UpFrame::ABSENT),
+        vec![None; link_schema::LINK_FIELDS.len()]
     );
 }
 
 /// What a priced, untraded, unfitted slot owes in its role's block.
-fn quoted_block(block: &mut common::UpRole, slot: usize) {
+fn quoted_block(block: &mut link_schema::UpRole, slot: usize) {
     let (bid, ask) = QUOTES[slot];
     let (bid_qty, ask_qty) = DEPTHS[slot];
     block.bid = Price(bid).to_f64();
@@ -291,7 +291,7 @@ fn quoted_block(block: &mut common::UpRole, slot: usize) {
 
 /// Resolved by NAME so the assertion also pins the ordered name list the `schema_hash` digests.
 fn slot_of(name: &str) -> usize {
-    common::LINK_FIELDS
+    link_schema::LINK_FIELDS
         .iter()
         .position(|field| *field == name)
         .unwrap_or_else(|| panic!("{name} is not a declared link field"))
@@ -300,7 +300,7 @@ fn slot_of(name: &str) -> usize {
 /// The frame the two tiling windows owe `elapsed` µs past the first open, with neither leg traded
 /// nor fitted.
 fn expected_at(elapsed: i64) -> Wire {
-    let mut expected = common::UpFrame::ABSENT;
+    let mut expected = link_schema::UpFrame::ABSENT;
     match elapsed {
         // Slot a is open, slot b has rotated but not opened.
         _ if elapsed < WINDOW => {
@@ -373,7 +373,7 @@ fn book_slots_read_absent_until_the_snapshot_is_whole() {
         InboundMessage::MarketRotation(rotation(A_UP, FIRST_OPEN, FIRST_OPEN + WINDOW, FIRST_OPEN)),
     );
 
-    let mut unpriced = common::UpFrame::ABSENT;
+    let mut unpriced = link_schema::UpFrame::ABSENT;
     unpriced.cur.buy_vol = 0.0;
     unpriced.cur.sell_vol = 0.0;
     let unpriced = wire_of(unpriced);
@@ -384,7 +384,7 @@ fn book_slots_read_absent_until_the_snapshot_is_whole() {
     );
 
     price_slot(&mut linked, A_UP, FIRST_OPEN + 2);
-    let mut priced = common::UpFrame::ABSENT;
+    let mut priced = link_schema::UpFrame::ABSENT;
     quoted_block(&mut priced.cur, A_UP as usize);
     assert_eq!(
         spin_and_collect(&mut linked, FIRST_OPEN + 3),
@@ -401,7 +401,7 @@ fn book_slots_read_absent_until_the_snapshot_is_whole() {
     );
 
     dispatch(&mut linked, InboundMessage::Book(asks));
-    let mut resnapshotted = common::UpFrame::ABSENT;
+    let mut resnapshotted = link_schema::UpFrame::ABSENT;
     quoted_block(&mut resnapshotted.cur, A_UP as usize);
     resnapshotted.cur.bid = Price(cents(37)).to_f64();
     resnapshotted.cur.ask = Price(cents(39)).to_f64();
@@ -662,14 +662,14 @@ fn every_finite_slot_decodes_on_the_peer_as_the_feature_column_of_the_same_name(
         .filter(|(_, value)| value.is_finite())
         .map(|(index, value)| {
             (
-                feature_id(consumer.features(), common::LINK_FIELDS[index]),
+                feature_id(consumer.features(), link_schema::LINK_FIELDS[index]),
                 *value,
             )
         })
         .collect();
     assert_eq!(
         expected.len(),
-        common::LINK_FIELDS.len() - 2,
+        link_schema::LINK_FIELDS.len() - 2,
         "the frame under test must carry every slot the drives above promised, absent pair included,
          else this proves less than it claims"
     );

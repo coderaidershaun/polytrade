@@ -15,10 +15,10 @@ use engine::ids::{FIXED_SCALE, InstrumentId, Price, Side};
 use engine::msg::inbound::{BookChunk, KlineEvent, SpinTick, TradeEvent};
 use engine::time::{DurationUs, TsUs};
 
-#[path = "../common.rs"]
-mod common;
 #[path = "features.rs"]
 pub(crate) mod features;
+#[path = "../link_schema.rs"]
+mod link_schema;
 #[path = "models.rs"]
 pub(crate) mod models;
 #[path = "params.rs"]
@@ -72,7 +72,7 @@ pub struct MicroRecorder {
     /// Peer's instrument row for link column.
     link_target: Option<InstrumentId>,
     /// Link slot index -> feature column, so `on_link` is a zip rather than twenty branches.
-    poly_features: Option<[FeatureId; common::LINK_FIELDS.len()]>,
+    poly_features: Option<[FeatureId; link_schema::LINK_FIELDS.len()]>,
 }
 
 impl MicroRecorder {
@@ -108,16 +108,16 @@ impl Strategy for MicroRecorder {
     }
 
     fn link_fields(&self) -> &'static [&'static str] {
-        &common::LINK_FIELDS
+        &link_schema::LINK_FIELDS
     }
 
     /// Declares topics (never sends). List resolves topic name → peer ID on wire.
     fn link_topics(&self) -> &'static [&'static str] {
-        common::LINK_TOPICS
+        link_schema::LINK_TOPICS
     }
 
     fn register(&mut self, registration: Registration<'_>) {
-        self.poly_features = Some(registration.feature_ids_of(&common::LINK_FIELDS));
+        self.poly_features = Some(registration.feature_ids_of(&link_schema::LINK_FIELDS));
         self.features = self
             .has_features_table
             .then(|| Features::from_ids(registration.features));
