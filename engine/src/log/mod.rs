@@ -1,5 +1,6 @@
-//! Logging that never blocks a producer: a lock-free ring per thread feeds one drain thread. In the
-//! browser build the same macros print straight to the console instead.
+//! Logging that never blocks a producer: a lock-free ring per thread feeds one drain thread, and
+//! the hot thread hands over raw records that only the drain turns into text. In the browser build
+//! the same macros print straight to the console instead.
 
 #[cfg(target_arch = "wasm32")]
 mod console;
@@ -7,6 +8,7 @@ mod drain;
 mod output;
 mod producer;
 mod record;
+mod render;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,20 +18,31 @@ use std::thread::{self, JoinHandle};
 #[cfg(target_arch = "wasm32")]
 pub use console::register_thread;
 #[cfg(not(target_arch = "wasm32"))]
+pub use drain::LogDrain;
+#[cfg(not(target_arch = "wasm32"))]
+pub use producer::open_hot_lane;
+#[cfg(not(target_arch = "wasm32"))]
 pub use producer::register_thread;
-pub use record::{Level, LogRecord};
+pub use record::{Callsite, HotRecord, Level, TextRecord, WORDS_PER_RECORD};
+pub use render::{LogValue, Spec};
 
+#[cfg(target_arch = "wasm32")]
+pub(crate) use console::register_hot_lane;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use producer::{register_external_ring, tag_task};
+pub(crate) use producer::{register_external_ring, register_hot_lane, tag_task};
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use record::MSG_CAPACITY;
+pub(crate) use record::TEXT_CAPACITY;
+pub(crate) use record::set_message_time;
+pub(crate) use render::fieldless_log_value;
 
 #[cfg(target_arch = "wasm32")]
 #[doc(hidden)]
-pub use console::{error_message, info_message, warn_message};
+pub use console::{hot_message, text_message};
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
-pub use producer::{error_message, info_message, warn_message};
+pub use producer::{hot_message, text_message};
+#[doc(hidden)]
+pub use render::{LogArgs, Renderer};
 
 const DEFAULT_FILE_STEM: &str = "polysim";
 
@@ -84,14 +97,29 @@ pub fn init(config: &LogConfig) -> LogHandle {
     LogHandle { drain, join }
 }
 
+/// The call site of a text macro, made once at compile time.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __text_callsite {
+    ($level:ident) => {{
+        static CALLSITE: $crate::log::Callsite = $crate::log::Callsite::new(
+            $crate::log::Level::$level,
+            ::core::module_path!(),
+            ::core::file!(),
+            ::core::line!(),
+            "",
+            &[],
+        );
+        &CALLSITE
+    }};
+}
+
 /// Logs at INFO. It takes the same arguments as `format!`.
 #[macro_export]
 macro_rules! info {
     ($($arg:tt)*) => {
-        $crate::log::info_message(
-            ::core::module_path!(),
-            ::core::file!(),
-            ::core::line!(),
+        $crate::log::text_message(
+            $crate::__text_callsite!(Info),
             ::core::format_args!($($arg)*),
         )
     };
@@ -101,10 +129,8 @@ macro_rules! info {
 #[macro_export]
 macro_rules! warn {
     ($($arg:tt)*) => {
-        $crate::log::warn_message(
-            ::core::module_path!(),
-            ::core::file!(),
-            ::core::line!(),
+        $crate::log::text_message(
+            $crate::__text_callsite!(Warn),
             ::core::format_args!($($arg)*),
         )
     };
@@ -127,11 +153,61 @@ macro_rules! warn_repeating {
 #[macro_export]
 macro_rules! error {
     ($($arg:tt)*) => {
-        $crate::log::error_message(
-            ::core::module_path!(),
-            ::core::file!(),
-            ::core::line!(),
+        $crate::log::text_message(
+            $crate::__text_callsite!(Error),
             ::core::format_args!($($arg)*),
         )
     };
 }
+
+/// The call site and the argument tuple of one hot or strategy log call. The call site is a
+/// constant of the argument types, so a template that does not fit its arguments, or arguments
+/// that are not all `LogValue`s, fail the build.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __hot_parts {
+    ($level:ident, $template:literal $(, $arg:expr)* $(,)?) => {{
+        fn __polysim_callsite<A: $crate::log::LogArgs>(_: &A) -> &'static $crate::log::Callsite {
+            const {
+                &$crate::log::Callsite::new(
+                    $crate::log::Level::$level,
+                    ::core::module_path!(),
+                    ::core::file!(),
+                    ::core::line!(),
+                    $template,
+                    A::RENDERERS,
+                )
+            }
+        }
+        let args = ($($arg,)*);
+        (__polysim_callsite(&args), args)
+    }};
+}
+
+/// Logs at INFO from code below `hot/`. The template takes `{}`, `{:?}`, `{:x}` and `{:.N}`, and
+/// each argument is a `LogValue`: the hot thread copies raw words, and the drain makes the text.
+macro_rules! hot_info {
+    ($($arg:tt)*) => {{
+        let (callsite, args) = $crate::__hot_parts!(Info, $($arg)*);
+        $crate::log::hot_message(callsite, args)
+    }};
+}
+
+/// Logs at WARN from code below `hot/`, flushed at once on the drain. See `hot_info!`.
+macro_rules! hot_warn {
+    ($($arg:tt)*) => {{
+        let (callsite, args) = $crate::__hot_parts!(Warn, $($arg)*);
+        $crate::log::hot_message(callsite, args)
+    }};
+}
+
+/// Logs at ERROR from code below `hot/`, with no backtrace: its call site already names the file
+/// and line. See `hot_info!`.
+macro_rules! hot_error {
+    ($($arg:tt)*) => {{
+        let (callsite, args) = $crate::__hot_parts!(Error, $($arg)*);
+        $crate::log::hot_message(callsite, args)
+    }};
+}
+
+pub(crate) use {hot_error, hot_info, hot_warn};

@@ -13,7 +13,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// Test override (shorten window).
 const SUMMARY_SECS_ENV: &str = "POLYSIM_METRICS_SUMMARY_SECS";
 /// Past this a record truncates silently, dropping the LAST segments rather than reporting the loss.
-const LINE_BUDGET: usize = crate::log::MSG_CAPACITY;
+const LINE_BUDGET: usize = crate::log::TEXT_CAPACITY;
 
 /// An output consumer with nothing to flush: [`MetricsHandle::abort`] alone tears it down, so
 /// unlike its edge-producer peers it has no async `shutdown`.

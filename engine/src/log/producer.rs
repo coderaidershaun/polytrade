@@ -1,8 +1,8 @@
-//! One lock-free ring per producing unit — an OS thread, or a tokio task that opts in — plus
-//! registration and the emit entry points. Push = POD copy; error! -> backtrace (heap).
+//! One lock-free ring per producing unit — an OS thread, or a tokio task that opts in — plus the
+//! hot lane of the hot thread, registration, and the emit entry points. Push = POD copy; error! -> backtrace (heap).
 
 use std::backtrace::Backtrace;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -10,11 +10,13 @@ use std::sync::{Arc, OnceLock};
 
 use rtrb::{Consumer, Producer, RingBuffer};
 
-use super::record::{Level, LogRecord};
-use crate::msg::time::TsUs;
+use super::record::{Callsite, HotRecord, Level, TextRecord, WORDS_PER_RECORD, message_time};
+use super::render::LogArgs;
+use crate::msg::time::{TsUs, boot_stamp_us};
 
 const UNREGISTERED_TAG: &str = "unregistered";
 const RING_CAPACITY: usize = 8192;
+const HOT_LANE_CAPACITY: usize = 4096;
 
 struct Globals {
     registrations: Sender<Registration>,
@@ -25,8 +27,14 @@ static GLOBALS: OnceLock<Globals> = OnceLock::new();
 
 pub(super) struct Registration {
     pub(super) tag: &'static str,
-    pub(super) consumer: Consumer<LogRecord>,
+    pub(super) reader: LaneReader,
     pub(super) drops: Arc<AtomicU64>,
+}
+
+/// The read end of one lane: text made on its producer, or hot records the drain renders.
+pub(super) enum LaneReader {
+    Text(Consumer<TextRecord>),
+    Hot(Consumer<HotRecord>),
 }
 
 pub(super) struct BacktraceMessage {
@@ -43,12 +51,21 @@ pub(super) struct DrainChannels {
 }
 
 struct Lane {
-    producer: Producer<LogRecord>,
+    producer: Producer<TextRecord>,
+    drops: Arc<AtomicU64>,
+}
+
+struct HotLane {
+    producer: Producer<HotRecord>,
     drops: Arc<AtomicU64>,
 }
 
 thread_local! {
     static THREAD_LANE: RefCell<Option<Lane>> = const { RefCell::new(None) };
+    static HOT_LANE: RefCell<Option<HotLane>> = const { RefCell::new(None) };
+    /// Read before `HOT_LANE`: the first touch of a thread-local that owns a destructor can
+    /// allocate, and a thread with no hot lane must not pay that on its first hot log call.
+    static HAS_HOT_LANE: Cell<bool> = const { Cell::new(false) };
 }
 
 tokio::task_local! {
@@ -87,10 +104,37 @@ pub(crate) fn tag_task<F: Future>(tag: &'static str, body: F) -> impl Future<Out
     TASK_LANE.scope(RefCell::new(open_lane(tag)), body)
 }
 
-/// `drops` = shared full-ring counter. No-op if init() not run.
+/// Builds a hot lane on the calling thread and hands back its reader: each hot log call on this
+/// thread lands there from now on, as a raw record that the reader's owner renders. A thread with
+/// no hot lane renders each hot call into text at once.
+pub fn open_hot_lane(capacity: usize) -> Consumer<HotRecord> {
+    install_hot_lane(capacity, Arc::new(AtomicU64::new(0)))
+}
+
+/// The hot lane of a hot thread, read by the drain. No-op if init() not run.
+pub(crate) fn register_hot_lane(tag: &'static str) {
+    if GLOBALS.get().is_none() {
+        return;
+    }
+    let drops = Arc::new(AtomicU64::new(0));
+    let reader = install_hot_lane(HOT_LANE_CAPACITY, Arc::clone(&drops));
+    register_external_ring(tag, reader, drops);
+}
+
+fn install_hot_lane(capacity: usize, drops: Arc<AtomicU64>) -> Consumer<HotRecord> {
+    let (producer, consumer) = RingBuffer::<HotRecord>::new(capacity);
+    HOT_LANE.with(|cell| {
+        *cell.borrow_mut() = Some(HotLane { producer, drops });
+    });
+    HAS_HOT_LANE.with(|flag| flag.set(true));
+    consumer
+}
+
+/// A lane of hot records that another owner writes, such as the strategy lane. `drops` = shared
+/// full-ring counter. No-op if init() not run.
 pub(crate) fn register_external_ring(
     tag: &'static str,
-    consumer: Consumer<LogRecord>,
+    consumer: Consumer<HotRecord>,
     drops: Arc<AtomicU64>,
 ) {
     let Some(globals) = GLOBALS.get() else {
@@ -98,7 +142,7 @@ pub(crate) fn register_external_ring(
     };
     let registration = Registration {
         tag,
-        consumer,
+        reader: LaneReader::Hot(consumer),
         drops,
     };
     // Post-shutdown: drain gone -> ring fills, counts drops.
@@ -107,11 +151,11 @@ pub(crate) fn register_external_ring(
 
 fn open_lane(tag: &'static str) -> Option<Lane> {
     let globals = GLOBALS.get()?;
-    let (producer, consumer) = RingBuffer::<LogRecord>::new(RING_CAPACITY);
+    let (producer, consumer) = RingBuffer::<TextRecord>::new(RING_CAPACITY);
     let drops = Arc::new(AtomicU64::new(0));
     let registration = Registration {
         tag,
-        consumer,
+        reader: LaneReader::Text(consumer),
         drops: Arc::clone(&drops),
     };
     if globals.registrations.send(registration).is_err() {
@@ -120,54 +164,65 @@ fn open_lane(tag: &'static str) -> Option<Lane> {
     Some(Lane { producer, drops })
 }
 
+/// The entry point of the text macros. Only Level::Error captures a backtrace, and it always does.
 #[doc(hidden)]
-pub fn info_message(
-    module: &'static str,
-    file: &'static str,
-    line: u32,
-    args: core::fmt::Arguments<'_>,
-) {
-    push(LogRecord::new(Level::Info, module, file, line, args));
-}
-
-#[doc(hidden)]
-pub fn warn_message(
-    module: &'static str,
-    file: &'static str,
-    line: u32,
-    args: core::fmt::Arguments<'_>,
-) {
-    push(LogRecord::new(Level::Warn, module, file, line, args));
-}
-
-/// Only path for Level::Error (always captures backtrace).
-#[doc(hidden)]
-pub fn error_message(
-    module: &'static str,
-    file: &'static str,
-    line: u32,
-    args: core::fmt::Arguments<'_>,
-) {
-    let record = LogRecord::new(Level::Error, module, file, line, args);
-    let ts_us = record.ts_us;
+pub fn text_message(callsite: &'static Callsite, args: core::fmt::Arguments<'_>) {
+    let record = TextRecord::formatted(callsite, boot_stamp_us(), args);
     push(record);
-    send_backtrace(BacktraceMessage {
-        ts_us,
-        module,
-        file,
-        line,
-        backtrace: Backtrace::force_capture().to_string(),
-    });
+    if callsite.level() == Level::Error {
+        send_backtrace(BacktraceMessage {
+            ts_us: record.at(),
+            module: callsite.module(),
+            file: callsite.file(),
+            line: callsite.line(),
+            backtrace: Backtrace::force_capture().to_string(),
+        });
+    }
 }
 
-fn push(record: LogRecord) {
+/// The entry point of the hot macros. It copies raw words and formats nothing, unless this thread
+/// has no hot lane or no message is under fold yet: then the line is rendered here, at once.
+#[doc(hidden)]
+#[inline]
+pub fn hot_message<A: LogArgs>(callsite: &'static Callsite, args: A) {
+    let mut words = [0; WORDS_PER_RECORD];
+    args.write_words(&mut words);
+    push_hot(callsite, words);
+}
+
+fn push_hot(callsite: &'static Callsite, words: [u64; WORDS_PER_RECORD]) {
+    let Some(at) = message_time().filter(|_| HAS_HOT_LANE.with(Cell::get)) else {
+        return push_rendered(callsite, &words);
+    };
+    let record = HotRecord::from_words(callsite, at, words);
+    let has_lane = HOT_LANE.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        let Some(lane) = slot.as_mut() else {
+            return false;
+        };
+        if lane.producer.push(record).is_err() {
+            lane.drops.fetch_add(1, Ordering::Relaxed);
+        }
+        true
+    });
+    if !has_lane {
+        push_rendered(callsite, &words);
+    }
+}
+
+#[cold]
+fn push_rendered(callsite: &'static Callsite, words: &[u64; WORDS_PER_RECORD]) {
+    push(TextRecord::rendered(callsite, boot_stamp_us(), words));
+}
+
+fn push(record: TextRecord) {
     if TASK_LANE.try_with(|cell| push_into(cell, record)).is_ok() {
         return;
     }
     THREAD_LANE.with(|cell| push_into(cell, record));
 }
 
-fn push_into(cell: &RefCell<Option<Lane>>, record: LogRecord) {
+fn push_into(cell: &RefCell<Option<Lane>>, record: TextRecord) {
     let mut slot = cell.borrow_mut();
     if slot.is_none() {
         *slot = open_lane(UNREGISTERED_TAG);

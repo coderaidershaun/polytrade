@@ -171,6 +171,7 @@ impl HotEngine {
     }
 
     pub fn dispatch(&mut self, pop: QueueSample, message: &InboundMessage) {
+        crate::log::set_message_time(message.received_ts_us());
         let dequeued_at = self.clock.now();
         self.metrics
             .record_occupancy(pop.queue_id, pop.depth, dequeued_at);

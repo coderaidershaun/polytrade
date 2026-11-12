@@ -6,7 +6,7 @@
 
 use crate::hot::sink::{LinkSink, PersistSink, StrategyLogSink, UiEventSink};
 use crate::link::{LinkHash, LinkPayload, OutboundLink, TopicId};
-use crate::log::LogRecord;
+use crate::log::HotRecord;
 use crate::msg::persist::{FeatureRow, PersistRecord};
 use crate::msg::time::TsUs;
 use crate::msg::ui::UiEvent;
@@ -20,7 +20,7 @@ pub(crate) const FEATURE_LANE_CAPACITY: usize = 4096;
 /// Raw rows (trades, book events, klines); book chunk widest callback. Deep headroom legacy. ~384 KB.
 pub(crate) const PERSIST_LANE_CAPACITY: usize = 4096;
 
-/// Lines-per-tick, ~15 KB.
+/// Lines-per-tick, 4 KB.
 pub(crate) const LOG_LANE_CAPACITY: usize = 64;
 
 /// Few topics/callback; backlog pointless (far side sees only newest STATE). ~9 KB.
@@ -56,7 +56,7 @@ pub(crate) struct Actions {
     /// Features only lane with UI tee. Separate from persist: tee-only rows don't displace Parquet rows.
     features: Vec<FeatureRow>,
     persist: Vec<PersistRecord>,
-    logs: Vec<LogRecord>,
+    logs: Vec<HotRecord>,
     link: Vec<OutboundLink>,
     /// Config authority over persist lane; empty = persistence-off.
     tables: RecordedTables,
@@ -104,7 +104,7 @@ impl Actions {
     }
 
     #[inline]
-    pub(crate) fn push_log(&mut self, record: LogRecord) {
+    pub(crate) fn push_log(&mut self, record: HotRecord) {
         if self.logs.len() == LOG_LANE_CAPACITY {
             self.dropped.logs += 1;
             return;

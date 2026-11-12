@@ -15,7 +15,7 @@ use engine::hot::sink::{
 };
 use engine::hot::strategy::{EngineView, Strategy, StrategyConfig};
 use engine::link::OutboundLink;
-use engine::log::LogRecord;
+use engine::log::HotRecord;
 use engine::msg::exec::{
     ACCOUNT_CHUNK_ASSETS, AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind,
     ExecLaneItem, Liquidity, Provenance, VenueOrderStatus,
@@ -580,8 +580,8 @@ pub fn persist_ring_for(
 
 /// The strategy log lane, mirroring [`persist_ring`]. Keep the consumer to drain the banked log
 /// records; drop it and the ring merely fills and counts (never fatal).
-pub fn strategy_log_ring(capacity: usize) -> (StrategyLogSink, Consumer<LogRecord>) {
-    let (producer, consumer) = RingBuffer::<LogRecord>::new(capacity);
+pub fn strategy_log_ring(capacity: usize) -> (StrategyLogSink, Consumer<HotRecord>) {
+    let (producer, consumer) = RingBuffer::<HotRecord>::new(capacity);
     (StrategyLogSink::new(producer), consumer)
 }
 

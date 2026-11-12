@@ -15,7 +15,7 @@ use engine::link::{
     InboundLink, LinkFrame, LinkHash, LinkOrigin, LinkPayload, OutboundLink, TopicId,
     schema_hash_of_fields,
 };
-use engine::log::LogRecord;
+use engine::log::HotRecord;
 use engine::msg::exec::OrderStyle;
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, RunControl, SpinTick};
@@ -754,11 +754,11 @@ struct LaneProbe;
 impl Strategy for LaneProbe {
     fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, tick: &SpinTick) {
         declare_quote(ctx);
-        engine::strategy_info!(ctx, "spin {}", tick.seq);
+        engine::note!(ctx, "spin {}", tick.seq);
     }
 }
 
-fn drain_lanes(persist: &mut Consumer<PersistRecord>, logs: &mut Consumer<LogRecord>) {
+fn drain_lanes(persist: &mut Consumer<PersistRecord>, logs: &mut Consumer<HotRecord>) {
     while let Ok(record) = persist.pop() {
         std::hint::black_box(record);
     }

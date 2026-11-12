@@ -4,13 +4,13 @@
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
-use engine::log::LogRecord;
+use engine::log::{HotRecord, open_hot_lane};
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{
     BookChunk, InboundMessage, KlineEvent, MarketRotation, SpinTick, TradeEvent,
 };
 use engine::msg::persist::{FeatureId, PersistRecord};
-use engine::msg::time::DurationUs;
+use engine::msg::time::{DurationUs, TsUs};
 use engine::runtime::config::{Instruments, KlineInterval, NoParams, StrategySpec, TableKind};
 
 use rtrb::Consumer;
@@ -33,7 +33,12 @@ struct Probe {
 impl Probe {
     fn log(&self, ctx: &mut StrategyCtx<'_>, instrument: InstrumentId, code: f64) {
         ctx.emit(self.call.expect("features registered"), instrument, code);
-        engine::strategy_info!(ctx, "probe callback {code} on instrument {}", instrument.0);
+        engine::note!(
+            ctx,
+            "probe callback {} on instrument {}",
+            code,
+            instrument.0
+        );
     }
 }
 
@@ -166,7 +171,7 @@ fn probe_sequence() -> Vec<InboundMessage> {
 /// pure function of the input sequence.
 struct Replayed {
     persist: Vec<PersistRecord>,
-    logs: Vec<LogRecord>,
+    logs: Vec<HotRecord>,
 }
 
 fn run_sequence(sequence: &[InboundMessage], warmup: DurationUs) -> Replayed {
@@ -211,7 +216,7 @@ fn dispatch_replay_is_deterministic() {
     );
 
     // The strategy log lane is a pure function of the sequence too: records stamp event time with
-    // no wall-clock read, so two runs bank byte-identical `LogRecord`s.
+    // no wall-clock read, so two runs bank byte-identical `HotRecord`s.
     assert!(
         !first.logs.is_empty(),
         "the probe banked strategy log lines"
@@ -260,6 +265,77 @@ fn warmup_sequence() -> Vec<InboundMessage> {
         InboundMessage::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 11_000_000)),
         InboundMessage::SpinTick(spin(1, 12_000_000)),
     ]
+}
+
+/// The log records of one replay, run on a thread of its own with its own hot lane, as the hot thread
+/// runs: the engine's hot records and the strategy's banked records.
+#[derive(Debug, PartialEq, Eq)]
+struct LoggedReplay {
+    hot: Vec<HotRecord>,
+    strategy: Vec<HotRecord>,
+}
+
+fn replay_on_own_thread(sequence: &[InboundMessage], warmup: DurationUs) -> LoggedReplay {
+    let sequence = sequence.to_vec();
+    std::thread::spawn(move || {
+        let mut hot_lane = open_hot_lane(64);
+        let strategy = run_sequence(&sequence, warmup).logs;
+        let mut hot = Vec::new();
+        while let Ok(record) = hot_lane.pop() {
+            hot.push(record);
+        }
+        LoggedReplay { hot, strategy }
+    })
+    .join()
+    .expect("the replay thread finished")
+}
+
+fn rendered(record: &HotRecord) -> String {
+    let mut text = String::new();
+    record
+        .render(&mut text)
+        .expect("a String takes every write");
+    text
+}
+
+/// Hot log records are a pure function of the messages: each carries the time of the message under
+/// fold and raw words, never a clock value, so two replays write the same records byte for byte.
+#[test]
+fn engine_hot_log_records_replay_identically() {
+    let probe = (probe_sequence(), DurationUs::ZERO);
+    let warmed = (warmup_sequence(), WARMUP_SPAN);
+    let mut replays = Vec::new();
+    for (sequence, warmup) in [probe, warmed] {
+        let first = replay_on_own_thread(&sequence, warmup);
+        let second = replay_on_own_thread(&sequence, warmup);
+        assert_eq!(first, second, "log records diverged across replays");
+        let stamps: Vec<TsUs> = sequence
+            .iter()
+            .map(InboundMessage::received_ts_us)
+            .collect();
+        for record in first.hot.iter().chain(&first.strategy) {
+            assert!(
+                stamps.contains(&record.at()),
+                "{record:?} carries a time that no message carries"
+            );
+        }
+        replays.push(first);
+    }
+
+    let [probe, warmed] = <[LoggedReplay; 2]>::try_from(replays).expect("two sequences");
+    assert!(
+        !probe.strategy.is_empty(),
+        "the probe banked strategy records"
+    );
+    let warmup_line = warmed
+        .hot
+        .iter()
+        .find(|record| {
+            rendered(record)
+                == "warmup complete after 10s of message time — strategy callbacks now live"
+        })
+        .expect("the boundary message wrote the warmup line to the hot lane");
+    assert_eq!(warmup_line.at(), TsUs::from_micros(10_000_000));
 }
 
 /// `engine.warmup_secs`: warmup is decided by message stamps alone. The suppressed prefix is

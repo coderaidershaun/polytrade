@@ -97,6 +97,25 @@ pub enum ExecKind {
     StreamReady,
 }
 
+crate::log::fieldless_log_value!(ExecKind {
+    AckPlaced,
+    PlaceNotSent,
+    AmendNotSent,
+    AckCanceled,
+    AckAmended,
+    AckFailed,
+    ReportNew,
+    ReportTrade,
+    ReportCanceled,
+    ReportExpired,
+    ReportRejected,
+    ReportAmended,
+    SnapshotOrder,
+    SnapshotEnd,
+    StreamReset,
+    StreamReady,
+});
+
 labelled_enum! {
     /// The rejection classification for state; the hot path branches on nothing else.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

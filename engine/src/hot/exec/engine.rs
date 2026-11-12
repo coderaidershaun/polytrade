@@ -4,13 +4,13 @@
 
 use crate::hot::ledger::PositionLedger;
 use crate::hot::strategy::Actions;
+use crate::log::{hot_error, hot_warn};
 use crate::msg::exec::{AccountChunk, CancelReason, ExecCommand, ExecEvent, ExecKind, Provenance};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Qty, Side};
 use crate::msg::persist::OrderTransition;
 use crate::msg::time::{DurationUs, TsUs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 use crate::runtime::registry::InstrumentRow;
-use crate::{error, warn};
 
 use super::account::{AccountTable, Balance};
 use super::audit::bank_engine_driven;
@@ -320,7 +320,10 @@ impl ExecEngine {
         if self.halt.is_halted() {
             return;
         }
-        error!("execution halted: {reason:?} — cancelling every order this run owns");
+        hot_error!(
+            "execution halted: {:?} — cancelling every order this run owns",
+            reason
+        );
         self.halt = ExecHalt::Halted {
             reason,
             halted_ts_us: at,
@@ -330,7 +333,9 @@ impl ExecEngine {
 
     #[cold]
     fn on_stream_reset(&mut self, at: TsUs, bank: &mut Actions) -> ExecCallback {
-        warn!("execution stream reset — every open order is unknown until a reconciliation lands");
+        hot_warn!(
+            "execution stream reset — every open order is unknown until a reconciliation lands"
+        );
         self.readiness.observe_stream_reset();
         // Every reason the pass last reported was derived from order state that is now a memory, so
         // the next refusal is news again rather than a repeat the latch would swallow.
@@ -377,9 +382,10 @@ impl ExecEngine {
 
     #[cold]
     fn orphan_error(&self, event: &ExecEvent) {
-        error!(
+        hot_error!(
             "execution event {:?} for client id {:x} matches no slot — reaped too early, or a state-machine leak",
-            event.kind, event.client_id.0
+            event.kind,
+            event.client_id.0
         );
     }
 
@@ -400,7 +406,7 @@ impl ExecEngine {
             return;
         }
         self.instruments[index].is_prior_run_cancel_sent = true;
-        warn!(
+        hot_warn!(
             "an earlier run of this trading engine left orders resting on instrument {} — cancelling them",
             event.instrument.0
         );
@@ -412,7 +418,7 @@ impl ExecEngine {
 /// still on the venue and somebody has to go and pull them.
 #[cold]
 fn unswept_error(instrument: InstrumentId) {
-    error!(
+    hot_error!(
         "the command bank is full, so the sweep of every order this run owns on instrument {} could not be sent — they may still be resting on the venue",
         instrument.0
     );
@@ -423,9 +429,11 @@ fn unswept_error(instrument: InstrumentId) {
 /// as a warning because otherwise a duplicate resting on the venue is the first anyone hears of it.
 #[cold]
 fn swept_warning(slot: &OrderSlot, recon_seq: u64) {
-    warn!(
-        "reconciliation pass {recon_seq} did not name order {:x} on instrument {} — closing it as gone",
-        slot.client_id.0, slot.instrument.0
+    hot_warn!(
+        "reconciliation pass {} did not name order {:x} on instrument {} — closing it as gone",
+        recon_seq,
+        slot.client_id.0,
+        slot.instrument.0
     );
 }
 

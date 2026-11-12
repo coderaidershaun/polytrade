@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use super::LogConfig;
 use super::producer::BacktraceMessage;
-use super::record::LogRecord;
+use super::record::Callsite;
 use crate::msg::time::{TsUs, boot_stamp_us};
 
 const FLUSH_INTERVAL: Duration = Duration::from_secs(1);
@@ -29,24 +29,28 @@ impl Output {
         } else {
             open_file_target(&config.dir, &config.file_stem)
         };
+        Self::new(target)
+    }
+
+    pub(super) fn new(target: Box<dyn Write + Send>) -> Self {
         Self {
             target,
             last_flush: Instant::now(),
         }
     }
 
-    pub(super) fn write_record(&mut self, tag: &str, record: &LogRecord) {
+    pub(super) fn write_line(&mut self, tag: &str, callsite: &Callsite, at: TsUs, text: &str) {
+        let level = callsite.level();
         let line = format!(
-            "{ts} {level:<5} [{tag}] {module} ({file}:{line}) {msg}\n",
-            ts = format_timestamp(record.ts_us),
-            level = record.level.as_str(),
-            module = record.module,
-            file = record.file,
-            line = record.line,
-            msg = record.message(),
+            "{ts} {level:<5} [{tag}] {module} ({file}:{line}) {text}\n",
+            ts = format_timestamp(at),
+            level = level.as_str(),
+            module = callsite.module(),
+            file = callsite.file(),
+            line = callsite.line(),
         );
-        self.write_line(&line);
-        if record.level.should_flush_immediately() {
+        self.write_raw(&line);
+        if level.should_flush_immediately() {
             self.flush();
         }
     }
@@ -60,7 +64,7 @@ impl Output {
             line = message.line,
             backtrace = message.backtrace,
         );
-        self.write_line(&line);
+        self.write_raw(&line);
         self.flush();
     }
 
@@ -71,7 +75,7 @@ impl Output {
             since_last = notice.since_last,
             total = notice.total,
         );
-        self.write_line(&line);
+        self.write_raw(&line);
         self.flush();
     }
 
@@ -88,7 +92,7 @@ impl Output {
         self.last_flush = Instant::now();
     }
 
-    fn write_line(&mut self, line: &str) {
+    fn write_raw(&mut self, line: &str) {
         if let Err(err) = self.target.write_all(line.as_bytes()) {
             eprintln!("polysim: log sink write failed: {err}");
         }

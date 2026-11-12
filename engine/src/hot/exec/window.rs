@@ -6,9 +6,9 @@
 
 use crate::hot::ledger::{PositionLedger, narrow};
 use crate::hot::strategy::Actions;
+use crate::log::hot_warn;
 use crate::msg::ids::{InstrumentId, Qty, Side};
 use crate::msg::time::TsUs;
-use crate::warn;
 
 use super::engine::ExecEngine;
 use super::spin::SpinInput;
@@ -100,9 +100,10 @@ impl ExecEngine {
 /// something to pull, which past the first pass means a cancel the venue refused.
 #[cold]
 fn report_window_sweep(instrument: InstrumentId, pulled: usize) {
-    warn!(
-        "instrument {} is inside the margin before its window closes — pulled {pulled} resting order(s)",
-        instrument.0
+    hot_warn!(
+        "instrument {} is inside the margin before its window closes — pulled {} resting order(s)",
+        instrument.0,
+        pulled
     );
 }
 
@@ -117,9 +118,10 @@ fn report_window_sweep(instrument: InstrumentId, pulled: usize) {
 /// for a line that is already as loud as it needs to be.
 #[cold]
 fn stranded_position_warning(instrument: InstrumentId, position: Qty) {
-    warn!(
+    hot_warn!(
         "instrument {} rotated to a new window still holding {} base — that position is stranded on \
          a market this engine can no longer trade",
-        instrument.0, position.0
+        instrument.0,
+        position.0
     );
 }
