@@ -13,7 +13,7 @@ comply. IF one cannot comply, THEN surface conflict explicitly. Amendments: §15
 | bin                 | binary                                                                       |
 | TE                  | trading engine (§8)                                                          |
 | fitness             | test target `fitness` of a lib crate: `engine/tests/fitness/` (§12)          |
-| gate G              | the five gate steps of §14                                                   |
+| gate G              | the six gate steps of §14                                                    |
 | live policy         | rules of the owner for keys and live runs. Git does not track them (§12)     |
 | `live-runner`       | the one role of a job that starts a live run, by the live policy (§12)       |
 | polysim             | the repo that this workspace came from. In a clause: the code of this repo   |
@@ -232,7 +232,11 @@ and `panic = "abort"` skips both.
 - [ ] Exactly three levels: `INFO`, `WARN`, `ERROR`.
 - [ ] `ERROR` captures backtrace + call-site file/line by construction. API makes omission
   impossible.
+  - Amended 2026-11-12: a hot `ERROR` line (`hot_error!`) carries file and line through its call
+    site and no backtrace. Section on typed hot records below.
 - [ ] Producers hand records to dedicated logging thread. No thread blocks or formats inline.
+  - Amended 2026-11-12: the hot thread formats nothing. Another thread formats its own line into
+    its fixed-size record and does no I/O. Section on typed hot records below.
 - [ ] Debug builds: terminal. Release builds: efficient file sink.
 - [ ] Hot path steady state emits nothing. `WARN`/`ERROR` from hot path = OK: exceptional by
   definition.
@@ -250,11 +254,13 @@ WHY: strategy telemetry is research output, not engine noise.
 - [ ] Dedicated ring = drop isolation, not routing. A telemetry flood fills its own ring. It does
   not displace engine `WARN`/`ERROR`.
 - [ ] Engine hot-path code stays bound by steady-state silence.
-- [ ] Strategy records stamp event time (§2 purity). They format into the fixed-size record at
-  bank time.
-- [ ] Strategy-lane ERROR carries file/line, no backtrace. WHY: capture allocates, and §3 wins on
-  hot thread.
+- [ ] Strategy records stamp event time (§2 purity). Amended 2026-11-12: they are typed hot records
+  that `note!` and `alert!` bank, and the drain makes their text (section on typed hot records
+  below).
 - [ ] IF lane is full, THEN drop + count (§6).
+- Replaced 2026-11-12: strategy records formatted into the fixed-size record at bank time, through
+  three text macros, one for each level. Strategy-lane ERROR carried file/line, no backtrace (WHY
+  then: capture allocates, and §3 wins on hot thread). A strategy now has no ERROR line.
 - Replaced 2026-07-25: sink was ONE per run, named by strategy id. Release file was
   `logs/<strategy-id>-<date>.log`.
 
@@ -277,6 +283,8 @@ carve-out.
 WHY: N trading engines per strategy fight over one strategy-id-named file.
 
 - [ ] Sink name = two-part identity (§8): `logs/<strategy-id>-<te-id>-<date>.log`. ONE per TE run.
+  - Amended 2026-11-12: one file for each UTC day of record time, so a run of several days writes
+    one file for each day. Section on typed hot records below.
 - [ ] Everything else in the 2026-07-20 amendment stands.
 
 ### Amended 2026-07-29: sim runs write separate artifacts
@@ -319,6 +327,78 @@ still have to work in code that the engine and the tab share.
 - [ ] The macros stay the ONLY polysim logging API (2026-07-23). Only the sink differs by target.
 - [ ] `polysim-web` installs no bespoke log. Its diagnostics are plain lines on stderr, like
   `polysim-mcp`'s. Steady state emits one line per closed tab, never one per datagram.
+
+### Amended 2026-11-12: typed hot records, lanes and drain
+
+WHY: text made on the hot thread cost formatting and a wall-clock read for each line, and a stop
+flag lost queued lines with no count.
+
+Records:
+
+- [ ] The hot thread and a strategy write a `HotRecord`: 64 bytes, alignment 64. It holds its call
+  site, the message time of the message under fold, and at most 6 words of argument values. The
+  hot thread copies raw words and makes no text.
+- [ ] Each other thread writes a `TextRecord`: 256 bytes, alignment 64. That thread makes its text
+  into the fixed buffer, and the record takes engine time from the one `EngineClock` of the
+  process.
+- [ ] The log drain makes the text of each hot record from its template and words. One template
+  parser serves the compile-time check of each call site and the drain, so the two cannot differ.
+- [ ] A hot record takes message time, never a clock read. Thus two replays of one tape give
+  byte-equal hot and strategy records (§2).
+
+Macros:
+
+- [ ] Code below `engine/src/hot/` logs with `hot_info!`, `hot_warn!` and `hot_error!`. A strategy
+  logs with `note!` (INFO) and `alert!` (WARN) on its banked context. Each other thread keeps
+  `info!`, `warn!`, `error!` and `warn_repeating!`.
+- [ ] A hot template takes only the placeholders `{}`, `{:?}`, `{:x}` and `{:.N}`, and each argument
+  is a `LogValue`. A wrong argument type, a placeholder count that differs from the argument count,
+  or more than 6 words fails the build.
+- [ ] A hot line keeps the text that its text macro printed for the same values. A value renders
+  its `Display` text under `{}` and its `Debug` text under `{:?}`.
+- [ ] A hot macro on a thread with no hot lane, or before the first message, makes its text at once
+  into a `TextRecord` on the lane of that thread.
+- [ ] A strategy has no ERROR line: a broken invariant of its own is a bug, and a bug panics.
+- [ ] A hot `ERROR` carries file and line through its call site and no backtrace. An `error!` of
+  another thread captures a backtrace on its thread, and the drain turns it into text.
+- [ ] `engine/src/hot/` and `strategies/` hold no text macro and no text formatting outside the
+  message of an assertion. The fitness test `hot_path_holds_no_text_macro` holds it, with each
+  exception named in the test with its reason.
+- [ ] On wasm32 the hot macros make their text at once with the renderer of the drain and print to
+  the console (2026-10-26 above).
+
+Lanes:
+
+- [ ] One SPSC lane for each producer: each OS thread, each tagged tokio task, and the hot lane and
+  the strategy lane of the hot thread. One drain thread reads them all.
+- [ ] The hot thread builds its hot lane after it pins, and touches each slot once with a marker
+  record. Thus no first write to a slot faults a page in steady state.
+- [ ] A full lane drops the record and counts it. The producer never waits. Each drop counter has
+  one writer: a load and a store, no locked instruction.
+- [ ] The hot lane holds 4,096 records. Each thread lane and the strategy lane hold
+  `logging.ring_capacity` records (default 8,192).
+
+Drain:
+
+- [ ] The drain reads each lane in batches and writes through one buffered writer. Its thread pins
+  to `engine.housekeeping_core_id` when that key is set. On Linux a failed pin refuses the start.
+- [ ] Loss policy: IF a write fails, THEN the drain counts the lost line and reopens the file. IF
+  `logging.reopen_limit` reopens in a row fail (default 3), THEN lines go to stderr, and the drain
+  still counts. A fault of the log disk never halts the engine: the log holds no engine state.
+- [ ] One log file for each UTC day of record time: the drain opens a new file when the date of a
+  record changes.
+- [ ] At shutdown the drain runs until each lane has ended and is empty, OR until
+  `logging.drain_deadline_ms` passes (default 2,000). The config refuses a value at or above
+  `engine.drain_deadline_ms`, so the watchdog of the engine never cuts the log flush.
+- [ ] `LogHandle::drain` returns the counts and prints them to stderr: lines written, records
+  dropped, lines lost at a write error or at the deadline, I/O errors, reopens, and the lanes that
+  had not finished at the deadline.
+- [ ] The value form of the drain is `pub` by the ruling of §12 (2026-11-12, section on seams that
+  change).
+- Replaced 2026-11-12: the hot thread and each strategy formatted each line into a text record of
+  about 240 bytes and stamped it with a wall-clock read. The drain stopped one pass after a flag. A
+  write error reached only `eprintln!`. The date of the file came from its open. A drop counter was
+  a `fetch_add`.
 
 ## 8. Code Organisation
 
@@ -1221,10 +1301,11 @@ drives both. A seam that a change reshapes and that no test drives can break wit
 - [ ] Toolchain: `1.92.0`, pinned in `rust-toolchain.toml` with `rustfmt`, `clippy`, and target
   `wasm32-unknown-unknown`. Edition 2024. Upgrades deliberate: a new toolchain = an amendment of
   this clause.
-- [ ] Gate G: gate every change with five steps, run at the workspace root. All green or no merge:
+- [ ] Gate G: gate every change with six steps, run at the workspace root. All green or no merge:
   1. `cargo fmt --all -- --check`
   2. `cargo clippy --workspace --all-targets -- -D warnings`, then
-     `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+     `cargo clippy --workspace --all-targets --all-features -- -D warnings`. Both read the clock
+     lint of `clippy.toml`.
   3. `cargo clippy --target wasm32-unknown-unknown -p engine --lib --bin polysim-ui --bin dom-fixture -- -D warnings`
   4. For each package and each test target of its manifest:
      `cargo test -p <package> --test <target>`, then the same commands with `--all-features`.
@@ -1233,9 +1314,37 @@ drives both. A seam that a change reshapes and that no test drives can break wit
      - `cargo test -p engine --test integration`
      - `cargo test -p engine --all-features --test fitness`
      - `cargo test -p engine --all-features --test integration`
-  5. `(cd browser && trunk build --release) && (cd tools/dom-fixture && trunk build --release)`,
+  5. `cargo test -p engine --release --test fitness step_allocates_nothing`
+  6. `(cd browser && trunk build --release) && (cd tools/dom-fixture && trunk build --release)`,
      then
      `docker buildx build --platform linux/arm64 --build-arg BIN=strat-micro-recorder-te-binance-spot-btcusdt --output type=local,dest=dist .`
+  - Amended 2026-11-12, clock lint and release proof. WHY: a clock read that reaches engine state,
+    and an allocation that only the release optimizer adds or removes, each passed a debug gate.
+    The lint and a release run of the zero-allocation proof make each of them a red step.
+    - [ ] Step 2 reads `clippy.toml` at the workspace root. `[workspace.lints.clippy]
+      disallowed_methods = "deny"` of the root manifest makes each banned call an error in each
+      crate of the workspace.
+    - [ ] The ban holds each call that reads a clock or a counter, or that turns a counter tick
+      into time: the std, wasm, tokio and `quanta` clocks, and the clocks of the engine
+      (`EngineClock::start`, `EngineClock::now`, `boot_stamp_us`, `Stamper::stamp`, and the tick
+      scale).
+    - [ ] Each permitted site carries `#[expect(clippy::disallowed_methods, reason = "...")]`. An
+      `#[expect]` that meets no read fails step 2. The fitness test
+      `permitted_clock_sites_equal_the_list` holds the list of permitted sites, and each banned
+      engine path keeps at least one site there. A new site needs its reason and its line in that
+      list. No production root holds an `allow` of the lint.
+    - [ ] The two test targets hold one `allow` each, with its reason: a test deadline is never
+      engine state.
+    - [ ] Step 5 runs the zero-allocation proof of the hot driver in the `release` profile. Its
+      name filter selects one test. A filter with no match passes with 0 tests, so the
+      suite-integrity test holds that name (`FILTERED_TEST_NAMES`): a rename fails step 4.
+    - [ ] The last task of each part also runs the proof one time in profile `deploy`, the profile
+      that ships: `cargo test -p engine --profile deploy --test fitness step_allocates_nothing`.
+      It is no gate step: a build with full link-time optimisation takes minutes.
+    - [ ] The Trunk and Docker step that the amendments below call step 5 is step 6 from this
+      date.
+    - Replaced 2026-11-12: gate G had five steps, and step 5 was the Trunk and Docker step. A word
+      scan of four folders held the clock rule.
   - Amended 2026-11-12, named test targets. WHY: `cargo test --workspace` passes when a test target
     goes from a manifest, and the guard of the suite goes with the target that it guards. A named
     target that is missing makes cargo 1.92.0 exit 101 ("error: no test target named ..."), so the
@@ -1258,7 +1367,7 @@ drives both. A seam that a change reshapes and that no test drives can break wit
     root manifest. The toolchain stays `1.92.0`: a new compiler in the same change as the
     workspace split gives one red gate two causes.
   - [ ] Step 4 runs no ignored test. No agent adds a flag that runs one (§12).
-  - [ ] Step 5 passes at exit 0, with the file `dist/strat-micro-recorder-te-binance-spot-btcusdt`.
+  - [ ] Step 6 passes at exit 0, with the file `dist/strat-micro-recorder-te-binance-spot-btcusdt`.
   - Amended 2026-10-26. WHY: the browser workstation compiles only for wasm32, so a gate that
     lints only the native target never reads it. `--all-features` (`mcp` + `web`) covers the
     gated native paths. A single-config gate rots the path it never compiles.
