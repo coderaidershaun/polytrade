@@ -7,10 +7,11 @@ use std::sync::{Arc, Mutex};
 
 use engine::hot::exec::HaltReason;
 use engine::hot::strategy::Strategy;
-use engine::log::{Level, LogDrain, LogValue, open_hot_lane};
+use engine::log::{Level, LogDrain, LogOutput, LogValue, LogWriter, open_hot_lane};
 use engine::msg::exec::ExecKind;
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::InboundMessage;
+use engine::msg::time::{EngineClock, TsUs};
 use engine::runtime::config::KlineInterval;
 
 use crate::engine_support::{
@@ -32,6 +33,8 @@ impl MemoryWriter {
         String::from_utf8(bytes.clone()).expect("log lines are utf-8")
     }
 }
+
+impl LogWriter for MemoryWriter {}
 
 impl Write for MemoryWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
@@ -95,7 +98,7 @@ fn hot_warning_is_formatted_on_the_drain() {
     let allocations = crate::alloc_count() - before;
     assert_eq!(allocations, 0, "the hot thread touched the allocator");
 
-    assert_eq!(hot_lane.slots(), 1, "one trim episode, one hot record");
+    assert_eq!(hot_lane.len(), 1, "one trim episode, one hot record");
     let record = *hot_lane.peek().expect("the hot lane holds the warning");
     let callsite = record.callsite();
     assert_eq!(callsite.level(), Level::Warn);
@@ -112,7 +115,15 @@ fn hot_warning_is_formatted_on_the_drain() {
     assert_eq!(record.words(), &[0, 64, 0, 0, 0, 0], "raw words, no text");
 
     let writer = MemoryWriter::default();
-    let mut drain = LogDrain::new(Box::new(writer.clone()));
+    let output = LogOutput {
+        open: Box::new({
+            let writer = writer.clone();
+            move |_at: TsUs| Ok(Box::new(writer.clone()) as Box<dyn LogWriter>)
+        }),
+        fallback: Box::new(io::stderr()),
+        reopen_limit: 3,
+    };
+    let mut drain = LogDrain::new(output, EngineClock::start());
     drain.add_hot_lane("hot", hot_lane);
     drain.drain_once();
 

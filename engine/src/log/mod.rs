@@ -14,22 +14,22 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 #[cfg(target_arch = "wasm32")]
 pub use console::register_thread;
-#[cfg(not(target_arch = "wasm32"))]
-pub use drain::LogDrain;
-#[cfg(not(target_arch = "wasm32"))]
-pub use lane::open_hot_lane;
+pub use drain::{DrainReport, LogDrain};
 #[cfg(not(target_arch = "wasm32"))]
 pub use lane::register_thread;
+pub use lane::{LaneReader, open_hot_lane, open_text_lane};
+pub use output::{LogOutput, LogWriter, OpenWriter};
 pub use record::{Callsite, HotRecord, Level, TextRecord, WORDS_PER_RECORD};
 pub use render::{LogValue, Spec};
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) use console::register_hot_lane;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use lane::{register_external_ring, register_hot_lane, tag_task};
+pub(crate) use lane::{hot_ring, register_external_ring, register_hot_lane, tag_task};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use record::TEXT_CAPACITY;
 pub(crate) use record::set_message_time;
@@ -44,15 +44,23 @@ pub use lane::{hot_message, text_message};
 #[doc(hidden)]
 pub use render::{LogArgs, Renderer};
 
+use crate::msg::time::EngineClock;
+
 const DEFAULT_FILE_STEM: &str = "polysim";
 
 #[derive(Debug, Clone)]
 pub struct LogConfig {
     /// Where the log file goes in a release build. A debug build logs to stderr instead.
     pub dir: PathBuf,
-    /// The log file is `{file_stem}-YYYY-MM-DD.log`. The engine sets it from its strategy and
-    /// engine ids, with `-sim` added for a simulated run.
+    /// The log file is `{file_stem}-YYYY-MM-DD.log`, one for each UTC day of record time. The
+    /// engine sets it from its strategy and engine ids, with `-sim` added for a simulated run.
     pub file_stem: Box<str>,
+    /// Records each thread's lane holds before it drops.
+    pub ring_capacity: usize,
+    /// How long the drain keeps writing at shutdown before it counts the rest as lost.
+    pub drain_deadline: Duration,
+    /// Reopens of a failing log file in a row before the drain falls back to stderr.
+    pub reopen_limit: u32,
 }
 
 impl Default for LogConfig {
@@ -60,6 +68,9 @@ impl Default for LogConfig {
         Self {
             dir: PathBuf::from("logs"),
             file_stem: DEFAULT_FILE_STEM.into(),
+            ring_capacity: 8_192,
+            drain_deadline: Duration::from_secs(2),
+            reopen_limit: 3,
         }
     }
 }
@@ -67,34 +78,43 @@ impl Default for LogConfig {
 /// Call `drain` to flush and stop the log thread. Dropping the handle does neither.
 #[derive(Debug)]
 pub struct LogHandle {
-    drain: Arc<AtomicBool>,
-    join: JoinHandle<()>,
+    stop: Arc<AtomicBool>,
+    join: JoinHandle<DrainReport>,
 }
 
 impl LogHandle {
-    pub fn drain(self) {
-        self.drain.store(true, Ordering::Release);
-        if self.join.join().is_err() {
+    /// Closes the calling thread's lane, drains every lane under the configured deadline, prints
+    /// the counts to stderr, and returns them.
+    pub fn drain(self) -> DrainReport {
+        lane::close_thread_lane();
+        self.stop.store(true, Ordering::Release);
+        let Ok(report) = self.join.join() else {
             eprintln!("polysim: logging drain thread panicked during shutdown");
-        }
+            return DrainReport::default();
+        };
+        eprintln!("polysim: {report}");
+        report
     }
 }
 
-/// Call at startup, before any thread logs.
+/// Call at startup, before any thread logs. Text lines take their time from `clock`, the one clock
+/// of the process.
 ///
 /// # Panics
 /// Panics if called more than once in a process, and in the browser build, which can start no
 /// drain thread. The browser needs no init: there the macros print straight to the console.
-pub fn init(config: &LogConfig) -> LogHandle {
-    let channels = lane::install();
-    let output = output::Output::open(config);
-    let drain = Arc::new(AtomicBool::new(false));
-    let thread_drain = Arc::clone(&drain);
+pub fn init(config: &LogConfig, clock: &EngineClock) -> LogHandle {
+    let channels = lane::install(clock, config.ring_capacity);
+    let output = LogOutput::from_config(config);
+    let log_drain = LogDrain::with_channels(output, clock.clone(), channels);
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = Arc::clone(&stop);
+    let deadline = config.drain_deadline;
     let join = thread::Builder::new()
         .name("polysim-log".to_owned())
-        .spawn(move || drain::run(channels, output, thread_drain))
+        .spawn(move || drain::run(log_drain, thread_stop, deadline))
         .expect("failed to spawn logging drain thread");
-    LogHandle { drain, join }
+    LogHandle { stop, join }
 }
 
 /// The call site of a text macro, made once at compile time.

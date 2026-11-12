@@ -142,6 +142,7 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
                 "1..=87600 (1 hour to 10 years)",
             )?;
         }
+        self.logging.validate(self.engine.drain_deadline_ms)?;
         self.source.validate()?;
         if let Some(link) = &self.link {
             link.validate()?;

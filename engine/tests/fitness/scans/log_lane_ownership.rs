@@ -14,37 +14,49 @@ use std::path::Path;
 
 use crate::scans::exec_no_clock::rust_sources;
 
-/// This engine's complete OS-thread census: the process entry, the single hot thread, and the two
-/// dedicated output threads. Everything else that runs concurrently here is a tokio task. The
-/// browser workstation runs on one thread with no log lane.
-const THREAD_LANE_OWNERS: [(&str, &str); 4] = [
-    ("src/hot/spawn.rs", "config.tag"),
-    ("src/runtime/assembly/mod.rs", "main"),
-    ("src/runtime/exposure/writer.rs", "exposure"),
-    ("src/tape/drain.rs", "persist"),
+/// This engine's complete census of thread lanes: the text lane of each OS thread it owns (the
+/// process entry, the single hot thread, and the two dedicated output threads), and the hot lane
+/// of the hot thread. Everything else that runs concurrently here is a tokio task. The browser
+/// workstation runs on one thread with no log lane. Each entry is (call, file, tag).
+const LANE_OWNERS: [(&str, &str, &str); 5] = [
+    (TEXT_LANE_CALL, "src/hot/spawn.rs", "config.tag"),
+    (TEXT_LANE_CALL, "src/runtime/assembly/mod.rs", "main"),
+    (TEXT_LANE_CALL, "src/runtime/exposure/writer.rs", "exposure"),
+    (TEXT_LANE_CALL, "src/tape/drain.rs", "persist"),
+    (HOT_LANE_CALL, "src/hot/spawn.rs", "config.tag"),
 ];
 
-const CALL_MARKER: &str = "log::register_thread(";
+const TEXT_LANE_CALL: &str = "log::register_thread(";
+const HOT_LANE_CALL: &str = "log::register_hot_lane(";
+
+/// Calls that put a lane on a thread with no tag and no drain. The engine never makes them: they
+/// exist for a caller that runs its own drain.
+const UNTAGGED_LANE_CALLS: [&str; 2] = ["log::open_hot_lane(", "log::open_text_lane("];
 
 #[test]
-fn every_lane_registered_by_thread_belongs_to_an_os_thread_this_engine_owns() {
-    let mut found = registration_sites(Path::new("src"));
-    found.sort();
-    let expected: Vec<(String, String)> = THREAD_LANE_OWNERS
-        .iter()
-        .map(|(path, tag)| ((*path).to_owned(), (*tag).to_owned()))
+fn every_thread_lane_belongs_to_an_owned_thread() {
+    let calls = [TEXT_LANE_CALL, HOT_LANE_CALL]
+        .into_iter()
+        .chain(UNTAGGED_LANE_CALLS);
+    let mut found: Vec<(String, String, String)> = calls
+        .flat_map(|call| registration_sites(Path::new("src"), call))
         .collect();
+    found.sort();
+    let mut expected: Vec<(String, String, String)> = LANE_OWNERS
+        .iter()
+        .map(|(call, path, tag)| ((*call).to_owned(), (*path).to_owned(), (*tag).to_owned()))
+        .collect();
+    expected.sort();
     assert_eq!(
         found, expected,
-        "the `log::register_thread` call sites under src/ no longer match the OS-thread census. A \
-         tokio task must instead be wrapped at its spawn site — `rt.spawn(log::tag_task(tag, \
-         body))` — because a task registering by thread files its records under whichever tag its \
-         worker last saw. If this genuinely is a new OS thread the engine owns, name it in \
-         THREAD_LANE_OWNERS"
+        "the lane call sites under src/ no longer match the census of thread lanes. A tokio task \
+         must instead be wrapped at its spawn site — `rt.spawn(log::tag_task(tag, body))` — \
+         because a task registering by thread files its records under whichever tag its worker \
+         last saw. If this genuinely is a new OS thread the engine owns, name it in LANE_OWNERS"
     );
 }
 
-fn registration_sites(dir: &Path) -> Vec<(String, String)> {
+fn registration_sites(dir: &Path, call: &str) -> Vec<(String, String, String)> {
     let mut sites = Vec::new();
     for path in rust_sources(dir) {
         let source = std::fs::read_to_string(&path)
@@ -53,15 +65,15 @@ fn registration_sites(dir: &Path) -> Vec<(String, String)> {
         sites.extend(
             source
                 .lines()
-                .filter_map(tag_argument)
-                .map(|tag| (file.clone(), tag)),
+                .filter_map(|line| tag_argument(line, call))
+                .map(|tag| (call.to_owned(), file.clone(), tag)),
         );
     }
     sites
 }
 
-fn tag_argument(line: &str) -> Option<String> {
-    let (_, rest) = line.split_once(CALL_MARKER)?;
+fn tag_argument(line: &str, call: &str) -> Option<String> {
+    let (_, rest) = line.split_once(call)?;
     let (argument, _) = rest.split_once(')')?;
     Some(argument.trim_matches('"').to_owned())
 }

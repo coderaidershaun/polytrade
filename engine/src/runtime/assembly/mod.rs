@@ -33,7 +33,7 @@ use crate::hot::sink::{LinkSink, MetricsSink, StrategyLogSink};
 use crate::hot::spawn::{HotThreadConfig, SimTapGate, spawn_hot_thread};
 use crate::hot::strategy::Strategy;
 use crate::link::{LinkActor, LinkActorSetup, OutboundLink};
-use crate::log::{self, HotRecord, LogConfig, LogHandle};
+use crate::log::{self, LaneReader, LogConfig, LogHandle};
 use crate::msg::persist::RotationRow;
 use crate::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter};
 use crate::msg::ui::UiCatalog;
@@ -70,7 +70,6 @@ const ROTATIONS_CHANNEL_CAPACITY: usize = 256;
 /// One rotation binding every five minutes, drained on every edge select pass; the depth exists so
 /// a slow bring-up cannot lose the first window.
 const ASSIGNMENTS_CHANNEL_CAPACITY: usize = 8;
-const STRATEGY_LOG_RING_CAPACITY: usize = 65_536;
 const LINK_RING_CAPACITY: usize = 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,10 +131,16 @@ impl Engine {
         } = wiring;
 
         let mode = config.execution.as_ref().map(|execution| execution.mode);
-        let log_handle = log::init(&LogConfig {
-            dir: config.logging.dir.clone(),
-            file_stem: ExecutionMode::artifact_stem(mode, &identity).into(),
-        });
+        let log_handle = log::init(
+            &LogConfig {
+                dir: config.logging.dir.clone(),
+                file_stem: ExecutionMode::artifact_stem(mode, &identity).into(),
+                ring_capacity: config.logging.ring_capacity,
+                drain_deadline: Duration::from_millis(config.logging.drain_deadline_ms),
+                reopen_limit: config.logging.reopen_limit,
+            },
+            &clock,
+        );
         log::register_thread("main");
         info!("polysim starting — trading engine {identity}");
         match latency_clock {
@@ -223,7 +228,7 @@ impl Engine {
 
         // A dedicated ring isolates a telemetry flood from engine WARN/ERROR records.
         let (strategy_log_producer, strategy_log_consumer) =
-            RingBuffer::<HotRecord>::new(STRATEGY_LOG_RING_CAPACITY);
+            log::hot_ring(config.logging.ring_capacity);
         let strategy_log_sink = StrategyLogSink::new(strategy_log_producer);
         // Leaked exactly once, since the id is only known now; log::init panics on a
         // second call, so this never repeats.
@@ -231,8 +236,7 @@ impl Engine {
             Box::leak(identity.strategy_id.as_str().to_owned().into_boxed_str());
         log::register_external_ring(
             strategy_tag,
-            strategy_log_consumer,
-            strategy_log_sink.drops_handle(),
+            LaneReader::new(strategy_log_consumer, strategy_log_sink.drops_handle()),
         );
 
         let queues = build_input_queues(&registry, config.queues.input_capacity, &fatal);

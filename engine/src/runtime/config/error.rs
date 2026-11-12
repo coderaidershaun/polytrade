@@ -22,6 +22,13 @@ pub enum ConfigError {
     #[error("engine.hot_core_id is required on linux — add a core id to pin the hot thread")]
     MissingHotCoreId,
     #[error(
+        "logging.drain_deadline_ms = {log_deadline_ms} is not below engine.drain_deadline_ms = {engine_deadline_ms} — the engine's drain watchdog would cut the last log lines off; set logging.drain_deadline_ms below {engine_deadline_ms}"
+    )]
+    LogDeadline {
+        log_deadline_ms: u64,
+        engine_deadline_ms: u64,
+    },
+    #[error(
         "strategy.tables names {tables} but there is no persistence: block to write them into — add one, or drop the tables list to run without persistence"
     )]
     TablesWithoutPersistence { tables: Box<str> },
