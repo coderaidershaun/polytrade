@@ -1,11 +1,13 @@
-//! Microsecond time types and the engine's monotonic clock. Every timestamp is microseconds since
-//! the Unix epoch inside a typed wrapper, so a bare integer never passes for a time.
+//! Microsecond time types, the engine's monotonic clock, and the counter ticks of latency stamps.
+//! A timestamp is microseconds since the Unix epoch in a typed wrapper; a tick is never a time.
 
 use core::ops::{Add, Sub};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 #[cfg(target_arch = "wasm32")]
 use web_time::{Instant, SystemTime, UNIX_EPOCH};
+
+use crate::msg::labelled_enum::labelled_enum;
 
 /// Microseconds since the Unix epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -136,6 +138,126 @@ impl EngineClock {
     pub fn now(&self) -> TsUs {
         let elapsed_us = self.mono_anchor.elapsed().as_micros() as i64;
         TsUs::from_micros(self.wall_anchor_ts_us + elapsed_us)
+    }
+}
+
+/// A raw reading of the cpu counter, for latency stamps only. It has no order, no arithmetic and no
+/// conversion, so no code can decide anything by it. Only the metrics thread may turn a pair of
+/// them into nanoseconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct Tick(u64);
+
+/// The one way to take a latency stamp. `Off` reads no counter, so a replay or a test with
+/// measurement off folds exactly what a live run folds.
+#[derive(Debug, Clone)]
+pub enum Stamper {
+    /// Build the clock once at start: building it calibrates the counter.
+    #[cfg(not(target_arch = "wasm32"))]
+    Counter(quanta::Clock),
+    Off,
+}
+
+impl Stamper {
+    /// `Off` reads nothing and gives the same tick every time.
+    #[inline]
+    pub fn stamp(&self) -> Tick {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Stamper::Counter(clock) => Tick(clock.raw()),
+            Stamper::Off => Tick(0),
+        }
+    }
+}
+
+/// Whether the cpu has a counter that ticks at one rate on every core, which is what makes two
+/// latency stamps from different cores comparable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InvariantCounter {
+    Present,
+    Absent,
+}
+
+impl InvariantCounter {
+    /// Asks the cpu by the same rule that the counter crate uses to pick its source, so the start
+    /// check names the clock that the stamps really read.
+    pub fn detect() -> InvariantCounter {
+        #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+        let is_present = tsc_is_invariant();
+        #[cfg(not(all(target_arch = "x86_64", target_feature = "sse2")))]
+        let is_present = TARGET_COUNTER.is_some();
+        if is_present { InvariantCounter::Present } else { InvariantCounter::Absent }
+    }
+}
+
+/// The counter crate reads the tsc only when the cpu also has `rdtscp`, so this asks both.
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+fn tsc_is_invariant() -> bool {
+    let cpu = raw_cpuid::CpuId::new();
+    let is_invariant = cpu
+        .get_advanced_power_mgmt_info()
+        .is_some_and(|power| power.has_invariant_tsc());
+    let has_rdtscp = cpu
+        .get_extended_processor_and_feature_identifiers()
+        .is_some_and(|features| features.has_rdtscp());
+    is_invariant && has_rdtscp
+}
+
+labelled_enum! {
+    /// The clock that latency stamps read. It is named at start, so that nobody takes numbers of
+    /// the os clock for numbers of the cpu counter.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum ClockSource {
+        /// The time stamp counter of an x86_64 cpu.
+        Tsc = "tsc",
+        /// The virtual counter of an aarch64 cpu.
+        Cntvct = "cntvct_el0",
+        /// The monotonic clock of the os, which costs more to read than a cpu counter.
+        Monotonic = "monotonic",
+    }
+    pub fn label;
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+const TARGET_COUNTER: Option<ClockSource> = Some(ClockSource::Tsc);
+#[cfg(all(target_arch = "aarch64", not(target_os = "ios")))]
+const TARGET_COUNTER: Option<ClockSource> = Some(ClockSource::Cntvct);
+#[cfg(not(any(
+    all(target_arch = "x86_64", target_feature = "sse2"),
+    all(target_arch = "aarch64", not(target_os = "ios"))
+)))]
+const TARGET_COUNTER: Option<ClockSource> = None;
+
+impl ClockSource {
+    /// The start check: the clock that latency stamps read on a cpu that reports `counter`. The
+    /// counter crate falls back to the os clock without a word, so this is how a run learns it.
+    ///
+    /// # Errors
+    /// [`ClockError::CounterAbsent`] when the cpu has no invariant counter. That refuses the
+    /// counter, never the start.
+    pub fn check(counter: InvariantCounter) -> Result<ClockSource, ClockError> {
+        match (counter, TARGET_COUNTER) {
+            (InvariantCounter::Present, Some(source)) => Ok(source),
+            _ => Err(ClockError::CounterAbsent),
+        }
+    }
+}
+
+#[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClockError {
+    #[error(
+        "the cpu reports no invariant counter, so latency stamps read the {} clock instead",
+        ClockError::CounterAbsent.fallback().label()
+    )]
+    CounterAbsent,
+}
+
+impl ClockError {
+    /// The clock that latency stamps read once the counter is refused.
+    pub const fn fallback(self) -> ClockSource {
+        match self {
+            ClockError::CounterAbsent => ClockSource::Monotonic,
+        }
     }
 }
 
