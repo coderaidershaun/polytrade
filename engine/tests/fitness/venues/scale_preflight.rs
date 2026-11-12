@@ -22,8 +22,8 @@ use engine::venues::polymarket::rest::GammaMarket;
 
 use crate::engine_support::{ONE, instrument_row, tracker_spec_all};
 
-const PERP_EXCHANGE_INFO: &str = include_str!("../../fixtures/binance/perp_exchange_info.json");
-const SPOT_EXCHANGE_INFO: &str = include_str!("../../fixtures/binance/spot_exchange_info.json");
+const PERP_EXCHANGE_INFO: &str = include_str!("../../../fixtures/binance/perp_exchange_info.json");
+const SPOT_EXCHANGE_INFO: &str = include_str!("../../../fixtures/binance/spot_exchange_info.json");
 
 fn perp_info() -> ExchangeInfo {
     serde_json::from_str(PERP_EXCHANGE_INFO).expect("parse committed perp exchangeInfo fixture")

@@ -13,7 +13,7 @@ use crate::engine_support::ts_secs;
 
 const SERIES: PolySeries = PolySeries::BtcUpDown5m;
 
-const FALLBACK: &str = include_str!("../../fixtures/polymarket/gamma_fallback.json");
+const FALLBACK: &str = include_str!("../../../../fixtures/polymarket/gamma_fallback.json");
 
 // Verbatim market object from a real discovery capture; clobTokenIds + outcomes are each JSON inside
 // a JSON string.

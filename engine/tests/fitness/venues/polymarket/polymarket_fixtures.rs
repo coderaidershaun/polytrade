@@ -18,13 +18,14 @@ use engine::venues::polymarket::parse::{
 };
 use engine::venues::polymarket::rest::parse_events;
 
-use crate::polymarket_parse::apply;
+use crate::venues::polymarket::polymarket_parse::apply;
 
 const SERIES: PolySeries = PolySeries::BtcUpDown5m;
 
-const HEAD: &str = include_str!("../../fixtures/polymarket/poly_market.jsonl");
-const COLLAPSE: &str = include_str!("../../fixtures/polymarket/poly_market_collapse.jsonl");
-const GAMMA_CURRENT: &str = include_str!("../../fixtures/polymarket/gamma_event_current.json");
+const HEAD: &str = include_str!("../../../../fixtures/polymarket/poly_market.jsonl");
+const COLLAPSE: &str = include_str!("../../../../fixtures/polymarket/poly_market_collapse.jsonl");
+const GAMMA_CURRENT: &str =
+    include_str!("../../../../fixtures/polymarket/gamma_event_current.json");
 
 const BOOK_CAPACITY: usize = 128;
 // Any receipt stamp inside the capture window keeps the ms→µs clamp exact; the checks read prices.
@@ -254,7 +255,7 @@ mod collapse {
     use engine::msg::inbound::Level;
     use engine::venues::polymarket::teardown::{CollapseDetector, CollapseSignal, LevelUpdate};
 
-    const GAMMA_NEXT: &str = include_str!("../../fixtures/polymarket/gamma_event_next.json");
+    const GAMMA_NEXT: &str = include_str!("../../../../fixtures/polymarket/gamma_event_next.json");
 
     /// Parse one capture line, flattening the venue's `[{},{}]` subscribe batch to its inner frames.
     fn frames_in(line: &str) -> Vec<PolyFrame> {

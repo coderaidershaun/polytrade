@@ -11,11 +11,6 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-mod binance_depth_sequencing;
-mod binance_kline_sequencing;
-mod binance_parse;
-mod binance_rest_plan;
-mod binance_sign;
 mod chart_axis;
 mod chart_pane;
 mod chart_projection;
@@ -25,17 +20,10 @@ mod dom_projection;
 mod e2e_replay;
 mod e2e_scenario;
 mod engine_support;
-mod exec_codec;
-mod exec_core;
-mod exec_session;
 mod exec_support;
 mod execution_lease;
 mod exposure_boot;
 mod exposure_state;
-/// The deterministic Binance Spot matching model. It is where every fill, partial fill,
-/// post-only rejection and ack/report race is exercised, because production is the only other
-/// venue this engine will ever reach.
-mod fake_venue;
 mod hot;
 mod link_bar;
 mod link_control;
@@ -63,14 +51,6 @@ mod persist_drain;
 mod persist_exec;
 mod persist_retention;
 mod persist_tables;
-mod poly_discovery;
-mod poly_driver;
-mod poly_exec_codec;
-mod poly_exec_policy;
-mod poly_exec_rows;
-mod poly_rotation;
-mod poly_shadow;
-mod poly_sign;
 /// The second trading engine of the same strategy, included from its folder for the same reason
 /// `micro_strategy` is: the suite drives the real publisher, not a copy of it.
 ///
@@ -81,18 +61,12 @@ mod poly_sign;
 #[allow(clippy::duplicate_mod)]
 #[path = "../../../strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/strategy.rs"]
 mod poly_strategy;
-mod polymarket_fixtures;
-mod polymarket_gamma;
-mod polymarket_parse;
 mod position_projection;
 mod raw_recorder;
-mod reconnect_backoff;
-mod rest_quiet;
 mod runtime_exit;
-mod scale_preflight;
 mod scans;
-mod sim_wire;
 mod suite_integrity;
+mod venues;
 /// These drive `engine::operator::relay` and its binary, which exist only under feature `web`.
 #[cfg(feature = "web")]
 mod web_http;

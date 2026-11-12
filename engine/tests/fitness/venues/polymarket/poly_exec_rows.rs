@@ -17,7 +17,7 @@ use engine::runtime::config::VenueMarket;
 use engine::runtime::registry::InstrumentRow;
 use engine::venues::polymarket::preflight::stamp_poly_scales;
 
-use crate::scale_preflight::{build_poly_registry, poly_market};
+use crate::venues::scale_preflight::{build_poly_registry, poly_market};
 
 /// The venue's ordinary grid: a 0.01 tick and a five-share minimum, both exact at the 1e-8 scale.
 const TICK: Price = Price(FIXED_SCALE / 100);

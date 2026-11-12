@@ -184,8 +184,8 @@ mod recorded_agg_trade {
     //! the wire shape trades depend on, the way the depth/kline goldens lock theirs.
     use super::*;
 
-    const SPOT: &str = include_str!("../../fixtures/binance/spot_aggTrade.jsonl");
-    const PERP: &str = include_str!("../../fixtures/binance/perp_aggTrade.jsonl");
+    const SPOT: &str = include_str!("../../../../fixtures/binance/spot_aggTrade.jsonl");
+    const PERP: &str = include_str!("../../../../fixtures/binance/perp_aggTrade.jsonl");
 
     // The recording ran in a ~60 s window; every venue trade time converts into this µs bracket
     // (proof the ms→µs conversion neither clamped nor mangled the stamps).

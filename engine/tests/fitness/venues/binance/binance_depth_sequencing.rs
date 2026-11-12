@@ -117,8 +117,8 @@ mod depth_golden {
     use super::*;
     use engine::msg::inbound::VenueMeta;
 
-    const PERP_DEPTH: &str = include_str!("../../fixtures/binance/perp_depth.jsonl");
-    const SPOT_DEPTH: &str = include_str!("../../fixtures/binance/spot_depth.jsonl");
+    const PERP_DEPTH: &str = include_str!("../../../../fixtures/binance/perp_depth.jsonl");
+    const SPOT_DEPTH: &str = include_str!("../../../../fixtures/binance/spot_depth.jsonl");
 
     fn assert_chain_holds(fixture: &str, rule: ChainRule) {
         let diffs = parse_depth_diffs(fixture, rule);

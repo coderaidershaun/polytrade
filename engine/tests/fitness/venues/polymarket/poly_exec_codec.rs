@@ -36,15 +36,19 @@ use engine::venues::polymarket::exec::sign::address::Address;
 use engine::venues::polymarket::exec::sign::order::SignatureType;
 use serde_json::Value;
 
-use crate::poly_sign::{text, wallet_key};
+use crate::venues::polymarket::poly_sign::{text, wallet_key};
 
 macro_rules! fixture {
     ($name:literal) => {
-        include_str!(concat!("../../fixtures/polymarket/exec/", $name, ".json"))
+        include_str!(concat!(
+            "../../../../fixtures/polymarket/exec/",
+            $name,
+            ".json"
+        ))
     };
 }
 
-const SIGN_VECTORS: &str = include_str!("../../fixtures/polymarket/sign_vectors.json");
+const SIGN_VECTORS: &str = include_str!("../../../../fixtures/polymarket/sign_vectors.json");
 
 const NOW: TsUs = TsUs::from_micros(1_786_046_870_000_000);
 

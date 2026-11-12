@@ -171,7 +171,7 @@ variant there, and a dependency-allowlist amendment if signing needs a new crate
    refuses a run the probe would have refused.
 7. `fixtures/<venue>/exec/` — committed real venue payloads with a non-Rust generator, the
    independent statement of the venue's wire.
-8. `tests/fitness/<venue>_exec_codec.rs` — goldens over those fixtures: the full
+8. `tests/fitness/venues/<venue>/<venue>_exec_codec.rs` — goldens over those fixtures: the full
    kind/status table, the reject table plus an unknown-input-halts proptest, id round-trip
    or correlation-policy pins, exactly-one-snapshot-end, byte-exact signed bodies.
 9. Registry stamps: scales, order caps, amend budget, order-rate buckets, written by the

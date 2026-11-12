@@ -10,10 +10,10 @@ use engine::venues::binance::parse::{
     RestKlineTail, parse_combined_frame, parse_kline, parse_rest_klines,
 };
 
-use crate::binance_depth_sequencing::{INSTRUMENT, ctx};
+use crate::venues::binance::binance_depth_sequencing::{INSTRUMENT, ctx};
 
-const PERP_KLINE: &str = include_str!("../../fixtures/binance/perp_kline_1m.jsonl");
-const PERP_REST_KLINES: &str = include_str!("../../fixtures/binance/perp_klines.json");
+const PERP_KLINE: &str = include_str!("../../../../fixtures/binance/perp_kline_1m.jsonl");
+const PERP_REST_KLINES: &str = include_str!("../../../../fixtures/binance/perp_klines.json");
 
 const MINUTE_US: i64 = 60_000_000;
 const FIRST_OPEN_US: i64 = 1_784_410_620_000_000;

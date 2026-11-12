@@ -24,7 +24,7 @@ use engine::venues::polymarket::exec::sign::order::{
 use proptest::prelude::*;
 use serde_json::Value;
 
-const VECTORS: &str = include_str!("../../fixtures/polymarket/sign_vectors.json");
+const VECTORS: &str = include_str!("../../../../fixtures/polymarket/sign_vectors.json");
 
 fn vectors() -> Value {
     serde_json::from_str(VECTORS).expect("sign vector fixture is valid json")

@@ -24,7 +24,7 @@ use engine::venues::edge::decode::DecimalFault;
 use engine::venues::exec::{EngineIdentity, ExecRequest, TeTag, TimeoutFallout};
 use proptest::prelude::*;
 
-use crate::fake_venue::{Delivery, FakeVenue, exec_events};
+use crate::venues::binance::fake_venue::{Delivery, FakeVenue, exec_events};
 
 const NOW: TsUs = TsUs::from_micros(1_785_000_000_700_000);
 
@@ -40,7 +40,11 @@ const PRIOR_RUN_ORDER: ClientOrderId = ClientOrderId(0x6a64_e230_0004_0001);
 
 macro_rules! fixture {
     ($name:literal) => {
-        include_str!(concat!("../../fixtures/binance/exec/", $name, ".json"))
+        include_str!(concat!(
+            "../../../../fixtures/binance/exec/",
+            $name,
+            ".json"
+        ))
     };
 }
 
