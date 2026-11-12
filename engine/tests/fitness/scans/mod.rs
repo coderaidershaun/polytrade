@@ -3,6 +3,5 @@
 
 mod cargo_bins;
 mod clock_sites;
-mod exec_no_clock;
 mod log_lane_ownership;
 mod suite_integrity;

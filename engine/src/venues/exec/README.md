@@ -78,7 +78,8 @@ engine branches solely on the normalised enums.
    `EdgeHandle::spawn` gives a live venue its handle; the simulator builds its own,
    because a sweep it misses invalidates the run rather than leaving orders on a venue. The
    chassis file legitimately owns a clock; everything under `venues/exec/` is clock-free by
-   scanned law — deadlines there take `now` as a parameter.
+   the clock lint of `clippy.toml`, which permits no site there — deadlines there take `now`
+   as a parameter.
 
 4. **Written obligations** — the rules no signature can carry:
    - Every command is eventually answered. A refusal, a timeout, a disconnect — each
