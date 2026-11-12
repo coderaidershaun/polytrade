@@ -1,13 +1,13 @@
 //! Folding a venue event: the slot transition, the money it moves, the reservation it releases and
 //! the audit rows it earns, for this run's orders and for those an earlier run left resting.
 
-use crate::config::MAX_QUOTE_LEVELS;
 use crate::error;
 use crate::hot::ledger::{LedgerFill, PositionLedger};
 use crate::hot::strategy::Actions;
 use crate::msg::exec::{ExecEvent, ExecKind, RejectClass};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Side};
 use crate::msg::persist::OrderLifecycle;
+use crate::runtime::config::MAX_QUOTE_LEVELS;
 
 use super::account::ReleaseOutcome;
 use super::audit::bank_event_rows;

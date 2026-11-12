@@ -8,13 +8,13 @@ use std::time::{Duration, Instant};
 use rtrb::Consumer;
 use tokio::sync::mpsc;
 
-use crate::config::{ExecutionMode, RecordedTables, TableKind};
 use crate::msg::persist::{
     BookEventRow, FeatureRow, FillRow, KlineRow, LinkFrameRow, OrderRow, PersistRecord,
     RotationRow, TradeRow,
 };
 use crate::msg::time::boot_stamp_us;
-use crate::shutdown::WriterThread;
+use crate::runtime::config::{ExecutionMode, RecordedTables, TableKind};
+use crate::runtime::shutdown::WriterThread;
 
 use super::retention::Retention;
 use super::schema::{self, TableRow};

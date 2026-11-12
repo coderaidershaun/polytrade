@@ -2,7 +2,6 @@
 //! wiring resolves to before the first message. Separate from the loop body so a new optional
 //! subsystem lands here rather than lengthening the constructor.
 
-use crate::config::RecordedTables;
 use crate::hot::book::Book;
 use crate::hot::exec::{ExecEngineSetup, ExecSettings};
 use crate::hot::quant::volatility::EwmaVol;
@@ -14,7 +13,8 @@ use crate::hot::tracker::MicroTracker;
 use crate::link::{LinkHash, TopicId, schema_hash_of_fields};
 use crate::msg::persist::FeatureId;
 use crate::msg::time::DurationUs;
-use crate::registry::InstrumentRow;
+use crate::runtime::config::RecordedTables;
+use crate::runtime::registry::InstrumentRow;
 
 use super::{ExposureWiring, LinkWiring};
 

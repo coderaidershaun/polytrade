@@ -4,15 +4,15 @@
 //! Also pins `realised_vol_per_sec`, which reads those candle closes — its 1/sqrt(Δt) scaling is
 //! what makes venues sampled on different bucket sizes comparable.
 
-use engine::config::{
-    CandlesSpec, ImbalanceSpec, KlineInterval, SpinField, SpinSampledSpec, TrackerSpec,
-    VolumeBarsSpec, VolumeThreshold, WindowsSpec,
-};
 use engine::hot::book::{Book, SnapshotOutcome};
 use engine::hot::quant::volatility::{Returns, realised_vol_per_sec};
 use engine::hot::tracker::{MicroTracker, SideFilter};
 use engine::msg::ids::{Price, Side};
 use engine::msg::time::DurationUs;
+use engine::runtime::config::{
+    CandlesSpec, ImbalanceSpec, KlineInterval, SpinField, SpinSampledSpec, TrackerSpec,
+    VolumeBarsSpec, VolumeThreshold, WindowsSpec,
+};
 use proptest::prelude::*;
 
 use crate::engine_support::{ONE, kline, snapshot_pair, trade};

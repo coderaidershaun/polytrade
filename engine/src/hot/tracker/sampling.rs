@@ -1,10 +1,10 @@
 //! Spin/volume-clock field samplers: same SpinField set from committed inputs (latest/trade/agg).
 
 use super::{BACKING_MULTIPLE, Latest};
-use crate::config::SpinField;
 use crate::hot::series::FastQueue;
 use crate::msg::ids::{FIXED_SCALE, Price, Qty, Side};
 use crate::msg::inbound::TradeEvent;
+use crate::runtime::config::SpinField;
 
 /// Since-last-sample trade aggregates (exact i128, f64 at sample point).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

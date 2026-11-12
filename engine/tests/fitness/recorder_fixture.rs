@@ -1,7 +1,6 @@
 //! The engine, tape and readers the shipped recorder's seam tests share. Each test file owns its
 //! price level and lot step, because those are what its claim is about.
 
-use engine::config::{IntensitySpec, KlineInterval, TableKind};
 use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::StrategyConfig;
@@ -10,7 +9,8 @@ use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::persist::PersistRecord;
 use engine::msg::time::DurationUs;
-use engine::registry::InstrumentRow;
+use engine::runtime::config::{IntensitySpec, KlineInterval, TableKind};
+use engine::runtime::registry::InstrumentRow;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{

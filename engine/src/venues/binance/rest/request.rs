@@ -1,6 +1,6 @@
 //! REST request plans: path, params, weight, method, auth per venue call.
 
-use crate::config::BinanceMarket;
+use crate::runtime::config::BinanceMarket;
 
 use super::weight::{depth_weight, exchange_info_weight, klines_weight};
 use super::{KlineQuery, RestRequest};

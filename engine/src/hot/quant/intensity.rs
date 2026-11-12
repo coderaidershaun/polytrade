@@ -2,12 +2,12 @@
 //! Hot thread: [`IntensityCounts`] (in-place, zero alloc). Strategy: [`IntensityFit`] (warm-started Poisson MLE).
 //! Depth in ticks behind same-side best; A in /sec, k in /tick.
 
-use crate::config::IntensitySpec;
 use crate::hot::quant::MIN_RATE;
 use crate::hot::quant::optimise::NelderMead;
 use crate::msg::ids::{Price, Side};
 use crate::msg::inbound::TradeEvent;
 use crate::msg::time::{DurationUs, TsUs};
+use crate::runtime::config::IntensitySpec;
 
 const PARAMS: usize = 2;
 const SIMPLEX: usize = PARAMS + 1;

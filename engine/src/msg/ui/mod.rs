@@ -7,7 +7,6 @@ use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
 use rtrb::{Consumer, RingBuffer};
 
-use crate::config::{ExecutionMode, StrategyId};
 use crate::hot::exec::{ExecHalt, OrderState, QuoteLevel, RejectOrigin};
 use crate::hot::sink::{UiBookSink, UiEventSink};
 use crate::msg::exec::Liquidity;
@@ -15,7 +14,8 @@ use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use crate::msg::inbound::Level;
 use crate::msg::persist::FeatureId;
 use crate::msg::time::TsUs;
-use crate::registry::Registry;
+use crate::runtime::config::{ExecutionMode, StrategyId};
+use crate::runtime::registry::Registry;
 
 pub use latency::{UiLatencyCell, UiLatencyRow, UiLatencySummary};
 

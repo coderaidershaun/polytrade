@@ -6,7 +6,7 @@
 //! An agent runs these reads only where a plan names them, by their exact names and with an empty
 //! environment.
 
-use engine::config::BinanceMarket;
+use engine::runtime::config::BinanceMarket;
 use engine::venues::binance::preflight::check_order_rate_limits;
 use engine::venues::binance::rest::{BinanceEnv, RestClient, RestError};
 

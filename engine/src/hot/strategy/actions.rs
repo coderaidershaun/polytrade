@@ -4,13 +4,13 @@
 //! Order load-bearing: UI tee + engine tees need consistent sequence.
 //! No ORDER/QUOTE lane: strategy declares desired quote into engine-owned level-triggered state.
 
-use crate::config::{RecordedTables, TableKind};
 use crate::hot::sink::{LinkSink, PersistSink, StrategyLogSink, UiEventSink};
 use crate::link::{LinkHash, LinkPayload, OutboundLink, TopicId};
 use crate::log::LogRecord;
 use crate::msg::persist::{FeatureRow, PersistRecord};
 use crate::msg::time::TsUs;
 use crate::msg::ui::UiEvent;
+use crate::runtime::config::{RecordedTables, TableKind};
 
 pub use crate::msg::ids::ClientOrderId;
 

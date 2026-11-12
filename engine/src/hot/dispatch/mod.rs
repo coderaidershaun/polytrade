@@ -10,8 +10,6 @@ mod ui_emit;
 use exposure::{moves_position, restored_snapshot, warn_uncovered_instruments};
 use gate::Warmup;
 
-use crate::config::RecordedTables;
-use crate::exposure::{ExposureSnapshot, MAX_EXPOSURE_INSTRUMENTS};
 use crate::hot::book::Book;
 use crate::hot::dispatch::ui_emit::UiEmitter;
 use crate::hot::exec::{DesiredBook, ExecCallback, ExecEngine, QuoteLevel, SpinInput};
@@ -27,7 +25,9 @@ use crate::msg::ids::{InstrumentId, Price, Qty, Side};
 use crate::msg::inbound::{InboundMessage, SpinTick};
 use crate::msg::time::{EngineClock, TsUs};
 use crate::msg::ui::{DomQuote, UI_QUOTE_LEVELS};
-use crate::shutdown::{RunAssertion, RunStateCell};
+use crate::runtime::config::RecordedTables;
+use crate::runtime::exposure::{ExposureSnapshot, MAX_EXPOSURE_INSTRUMENTS};
+use crate::runtime::shutdown::{RunAssertion, RunStateCell};
 
 pub use exposure::ExposureWiring;
 pub use gate::LinkWiring;

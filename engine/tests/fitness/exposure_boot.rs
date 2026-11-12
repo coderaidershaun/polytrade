@@ -21,10 +21,6 @@
 //! the run that takes fills WRITES one, so they drive the whole path — engine, snapshot, ring, writer
 //! thread, file — and pin that the final snapshot survives the sink's owner going away.
 
-use engine::config::TrackerSpec;
-use engine::exposure::{
-    ExposureError, ExposureSnapshot, ExposureState, InstrumentExposure, MAX_EXPOSURE_INSTRUMENTS,
-};
 use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{DesiredQuote, ExecSettings, QuoteLevel};
 use engine::hot::sink::{ExecSink, ExposureSink};
@@ -32,7 +28,11 @@ use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle};
 use engine::msg::ids::{ClientOrderId, InstrumentId, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
-use engine::registry::InstrumentRow;
+use engine::runtime::config::TrackerSpec;
+use engine::runtime::exposure::{
+    ExposureError, ExposureSnapshot, ExposureState, InstrumentExposure, MAX_EXPOSURE_INSTRUMENTS,
+};
+use engine::runtime::registry::InstrumentRow;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{

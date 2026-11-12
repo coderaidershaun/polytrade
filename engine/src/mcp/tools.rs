@@ -10,7 +10,7 @@ use rmcp::{Json, ServerHandler, tool, tool_handler, tool_router};
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
-use crate::config::{ExecutionMode, RunIdentity};
+use crate::runtime::config::{ExecutionMode, RunIdentity};
 
 use super::error::FleetError;
 use super::fleet::{Fleet, StopOutcome};

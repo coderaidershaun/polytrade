@@ -4,11 +4,11 @@
 //! otherwise `egarch_vol_lt` would take hours of live 1m candles to reach its 300 floor. Regression
 //! for that ordering bug.
 
-use engine::config::{KlineInterval, TableKind};
 use engine::hot::strategy::StrategyConfig;
 use engine::msg::inbound::InboundMessage;
 use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::time::DurationUs;
+use engine::runtime::config::{KlineInterval, TableKind};
 
 use crate::engine_support::{
     NOMINAL_SPIN, ONE, engine_view, engine_with_ui, instrument_row, kline, metrics_ring,

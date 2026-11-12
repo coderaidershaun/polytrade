@@ -7,12 +7,12 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use crate::config::{Config, SourceSpec, VenueMarket};
 use crate::hot::spawn::QueueProducer;
 use crate::msg::persist::RotationRow;
 use crate::msg::time::EngineClock;
-use crate::registry::Registry;
-use crate::shutdown::{FatalSignal, RunStateCell, TaskHandle};
+use crate::runtime::config::{Config, SourceSpec, VenueMarket};
+use crate::runtime::registry::Registry;
+use crate::runtime::shutdown::{FatalSignal, RunStateCell, TaskHandle};
 use crate::venues::binance::actor::{BinanceAdapter, BinanceAdapterContext};
 use crate::venues::binance::exec::{
     self as binance_exec, ExecutionPreflight, ProbeError, SignError, preflight_execution,

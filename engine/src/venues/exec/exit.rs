@@ -69,7 +69,7 @@ impl EdgeHandle {
                 self.missed_sweep_cost
             );
         }
-        crate::shutdown::abort_and_warn(self.join, self.venue).await;
+        crate::runtime::shutdown::abort_and_warn(self.join, self.venue).await;
     }
 }
 

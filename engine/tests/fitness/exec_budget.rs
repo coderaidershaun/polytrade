@@ -10,8 +10,6 @@
 //! Every number here comes from message stamps: the meter advances on the spin tick and counts the
 //! placements the spin minted, so a replayed tape refuses at exactly the same point.
 
-use engine::config::RecordedTables;
-use engine::exposure::InstrumentExposure;
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
     DesiredQuote, ExecSettings, OrderBudget, OrderBudgetWindow, QuoteLevel, RejectReason,
@@ -21,6 +19,8 @@ use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, OrderStyle, VenueOrder
 use engine::msg::ids::{Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::time::DurationUs;
+use engine::runtime::config::RecordedTables;
+use engine::runtime::exposure::InstrumentExposure;
 
 use crate::engine_support::{ALL_TABLES, ONE, exec_event, local_refusals, pop};
 use crate::exec_support::{

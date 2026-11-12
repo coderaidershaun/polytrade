@@ -7,8 +7,8 @@ use std::process::{Child, ExitStatus};
 
 use rustix::process::{Pid, Signal, kill_process};
 
-use crate::config::{ExecutionMode, RunIdentity};
 use crate::msg::time::{TsUs, boot_stamp_us};
+use crate::runtime::config::{ExecutionMode, RunIdentity};
 
 use super::catalog::ParsedConfig;
 use super::error::FleetError;

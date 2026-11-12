@@ -12,14 +12,14 @@ use futures_util::StreamExt;
 use tokio::runtime::Handle;
 use tokio_tungstenite::tungstenite::Message;
 
-use crate::config::{BinanceMarket, KlineInterval};
 use crate::hot::spawn::QueueProducer;
 use crate::link::RunState;
 use crate::msg::ids::{InstrumentId, StreamEpoch};
 use crate::msg::inbound::{InboundMessage, TappedMessage, VenueMeta};
 use crate::msg::time::{EngineClock, TsUs};
-use crate::registry::{ConnectionCategory, InstrumentRow, ProducerGroup};
-use crate::shutdown::{FatalSignal, RunStateCell, TaskHandle};
+use crate::runtime::config::{BinanceMarket, KlineInterval};
+use crate::runtime::registry::{ConnectionCategory, InstrumentRow, ProducerGroup};
+use crate::runtime::shutdown::{FatalSignal, RunStateCell, TaskHandle};
 use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::lane::{Flow, Lane, LaneSpec, SessionEnd, run_lane};
 use crate::venues::edge::rest_quiet::SharedRestQuiet;

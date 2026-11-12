@@ -1,7 +1,6 @@
 //! Per-instrument state + emission plumbing: volatility, model feeds (EGARCH, intensity, Guéant, markouts, Kyle, Hawkes),
 //! per-side emit helpers. Strategy owns callbacks; this module owns folded state.
 
-use engine::config::KlineInterval;
 use engine::hot::quant::hawkes::{HawkesChoice, HawkesSide};
 use engine::hot::quant::intensity::{PacedIntensity, SideEstimate};
 use engine::hot::quant::liquidity::{KyleFeed, KylesLambdaSpec};
@@ -16,6 +15,7 @@ use engine::hot::strategy::{InstrumentRow, StrategyCtx};
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::Level;
 use engine::msg::time::{DurationUs, TsUs};
+use engine::runtime::config::KlineInterval;
 
 use super::features::{
     Features, GueantSideColumns, HawkesColumns, IntensityColumns, MarkoutColumns, QuoteSide,

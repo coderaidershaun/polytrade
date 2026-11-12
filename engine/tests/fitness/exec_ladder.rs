@@ -3,7 +3,7 @@
 //! same boundary, in both directions, on a venue that locks an order's funds and on one that
 //! does not.
 
-use engine::config::TrackerSpec;
+use engine::runtime::config::TrackerSpec;
 use std::sync::{Arc, Mutex};
 
 use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};

@@ -6,13 +6,13 @@ use std::time::Duration;
 use rtrb::RingBuffer;
 use tokio::sync::mpsc;
 
-use crate::config::{Config, RecordedTables, RunIdentity};
 use crate::hot::dispatch::PersistWiring;
 use crate::hot::sink::PersistSink;
 use crate::info;
 use crate::msg::ids::FIXED_SCALE;
 use crate::msg::persist::{PersistRecord, RotationRow};
-use crate::registry::Registry;
+use crate::runtime::config::{Config, RecordedTables, RunIdentity};
+use crate::runtime::registry::Registry;
 use crate::tape::{PersistConfig, PersistHandle, PersistWriter, RunMeta};
 
 pub(super) struct PersistBringUp {

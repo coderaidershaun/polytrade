@@ -3,11 +3,11 @@
 //! run: a fill report whose settlement totals disagree with the order it names is money invented
 //! between the matching model and the wallet.
 
-use engine::config::RunIdentity;
 use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, Price, Qty, Side, TradeId, VenueOrderId,
 };
 use engine::msg::time::TsUs;
+use engine::runtime::config::RunIdentity;
 use engine::venues::exec::{EngineIdentity, TeTag};
 use engine::venues::sim::core::orders::SimOrder;
 use engine::venues::sim::core::wallet::{

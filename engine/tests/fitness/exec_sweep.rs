@@ -1,7 +1,6 @@
 //! FITNESS: reconciliation may retire only orders that predate its question, and conservative side
 //! occupancy must halt rather than admit a quote beyond the configured cap.
 
-use engine::config::{RecordedTables, TableKind};
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
     ClientIdLayout, ExecHalt, ExecSettings, HaltReason, OrderClaim, OrderState, OrderTable,
@@ -14,6 +13,7 @@ use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::time::TsUs;
 use engine::msg::ui::UiEvent;
+use engine::runtime::config::{RecordedTables, TableKind};
 use rtrb::Consumer;
 
 use crate::engine_support::{ONE, exec_event, pop};

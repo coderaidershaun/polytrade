@@ -11,10 +11,10 @@
 //! `scale_preflight` pins the tick and the step this same pass writes; the split is deliberate —
 //! that file is about parsing a venue's grid, this one is about arming execution against it.
 
-use engine::config::VenueMarket;
 use engine::hot::exec::MAX_QUOTE_LEVELS;
 use engine::msg::ids::{FIXED_SCALE, Price, Qty};
-use engine::registry::InstrumentRow;
+use engine::runtime::config::VenueMarket;
+use engine::runtime::registry::InstrumentRow;
 use engine::venues::polymarket::preflight::stamp_poly_scales;
 
 use crate::scale_preflight::{build_poly_registry, poly_market};

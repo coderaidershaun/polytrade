@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use rtrb::Producer;
 
-use crate::exposure::ExposureSnapshot;
+use crate::runtime::exposure::ExposureSnapshot;
 use crate::warn;
 
 /// Output ring: replace pending, retry cadence, destructor drains final.

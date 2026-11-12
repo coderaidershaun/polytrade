@@ -6,11 +6,11 @@
 
 use std::ops::Range;
 
-use crate::config::MAX_QUOTE_LEVELS;
 use crate::msg::exec::{ExecEvent, OrderStyle};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side, VenueOrderId};
 use crate::msg::persist::OrderLifecycle;
 use crate::msg::time::{DurationUs, TsUs};
+use crate::runtime::config::MAX_QUOTE_LEVELS;
 
 use super::account::AccountWatermark;
 use super::desired::QuoteLevel;

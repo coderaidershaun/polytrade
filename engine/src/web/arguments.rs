@@ -4,7 +4,7 @@ use std::net::{AddrParseError, SocketAddr};
 use std::num::ParseIntError;
 use std::path::PathBuf;
 
-use crate::config::{ConfigError, StrategyId};
+use crate::runtime::config::{ConfigError, StrategyId};
 
 const DEFAULT_PORT: u16 = 7879;
 const DEFAULT_BUNDLE: &str = "browser/dist";

@@ -12,13 +12,13 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine::config::TrackerSpec;
 use engine::hot::dispatch::HotEngine;
 use engine::hot::strategy::{Fill, Registration, Strategy, StrategyCtx};
 use engine::msg::exec::ExecEvent;
 use engine::msg::ids::{AssetId, InstrumentId, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
-use engine::registry::InstrumentRow;
+use engine::runtime::config::TrackerSpec;
+use engine::runtime::registry::InstrumentRow;
 use proptest::prelude::*;
 use proptest::strategy::Strategy as _;
 

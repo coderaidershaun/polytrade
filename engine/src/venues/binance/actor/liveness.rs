@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::config::KlineInterval;
+use crate::runtime::config::KlineInterval;
 use crate::warn;
 
 pub(super) const LIVENESS_POLL: Duration = Duration::from_secs(5);

@@ -1,13 +1,6 @@
 //! Shared builders for the dispatch fitness tests (zero-alloc + replay): synthetic messages,
 //! a fully-configured instrument row, and a persistence ring wired to a `PersistSink`.
 
-use engine::config::{BinanceMarket, Subscriptions, VenueMarket};
-use engine::config::{
-    CandlesSpec, EwmaVolSpec, ImbalanceSpec, Instruments, KlineInterval, RecordedTables, SpinField,
-    SpinSampledSpec, StrategySpec, TableKind, TrackerSpec, VolumeBarsSpec, VolumeThreshold,
-    WindowsSpec,
-};
-use engine::exposure::ExposureSnapshot;
 use engine::hot::dispatch::{
     ExecWiring, ExposureWiring, HotEngine, HotEngineSetup, LinkWiring, PersistWiring,
 };
@@ -37,8 +30,15 @@ use engine::msg::inbound::{
 use engine::msg::persist::{FeatureId, FillRow, OrderRow, PersistRecord};
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{UI_BOOK_RING_CAPACITY, UI_EVENT_RING_CAPACITY, UiBookSnapshot, UiEvent};
-use engine::registry::InstrumentRow;
-use engine::shutdown::{RunAssertion, RunControlGate};
+use engine::runtime::config::{BinanceMarket, Subscriptions, VenueMarket};
+use engine::runtime::config::{
+    CandlesSpec, EwmaVolSpec, ImbalanceSpec, Instruments, KlineInterval, RecordedTables, SpinField,
+    SpinSampledSpec, StrategySpec, TableKind, TrackerSpec, VolumeBarsSpec, VolumeThreshold,
+    WindowsSpec,
+};
+use engine::runtime::exposure::ExposureSnapshot;
+use engine::runtime::registry::InstrumentRow;
+use engine::runtime::shutdown::{RunAssertion, RunControlGate};
 use rtrb::{Consumer, RingBuffer};
 
 use crate::micro_strategy::MicroRecorder;

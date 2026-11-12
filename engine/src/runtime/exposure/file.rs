@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::RunIdentity;
 use crate::msg::ids::FIXED_SCALE;
+use crate::runtime::config::RunIdentity;
 use crate::warn;
 
 use super::ExposureError;

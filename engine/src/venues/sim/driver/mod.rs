@@ -13,8 +13,8 @@ use crate::msg::exec::{CancelReason, ExecEvent, StampedExecCommand};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId};
 use crate::msg::inbound::InboundMessage;
 use crate::msg::time::TsUs;
-use crate::registry::AssetDictionary;
-use crate::shutdown::FatalSignal;
+use crate::runtime::registry::AssetDictionary;
+use crate::runtime::shutdown::FatalSignal;
 use crate::venues::binance::exec::{DecodeContext, ResponseContext};
 use crate::venues::exec::{
     ExecCore, ExecEffect, ExecRequest, ExecSession, InFlightRequest, Outgoing, RequestId,

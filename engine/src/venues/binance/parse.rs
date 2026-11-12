@@ -3,10 +3,10 @@
 
 use serde::Deserialize;
 
-use crate::config::KlineInterval;
 use crate::msg::ids::{AggregateTradeId, InstrumentId, RawTradeId, Side};
 use crate::msg::inbound::{KlineEvent, Level, TradeEvent};
 use crate::msg::time::TsUs;
+use crate::runtime::config::KlineInterval;
 use crate::venues::edge::decode::{
     DecimalFault, JsonFrame, levels, mantissa_field, price_field, qty_field,
 };

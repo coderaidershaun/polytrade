@@ -118,7 +118,7 @@ pub(super) fn frame_request(
 ///
 /// # Errors
 /// [`FrameError::ApiKeyNotText`] when the key is not UTF-8.
-pub(super) fn api_key_text(key: &crate::secrets::Secret) -> Result<String, FrameError> {
+pub(super) fn api_key_text(key: &crate::runtime::secrets::Secret) -> Result<String, FrameError> {
     std::str::from_utf8(key.expose_bytes())
         .map(str::to_owned)
         .map_err(|_| FrameError::ApiKeyNotText)

@@ -3,8 +3,8 @@
 //! quote mantissas throughout (no float). Only division is average cost (roll_basis) when closing a
 //! partial position. Fills fold during their message, before the strategy sees on_fill.
 
-use crate::exposure::InstrumentExposure;
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
+use crate::runtime::exposure::InstrumentExposure;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct LedgerFill {

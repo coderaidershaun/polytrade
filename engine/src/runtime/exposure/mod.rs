@@ -6,10 +6,10 @@ mod writer;
 
 use std::path::{Path, PathBuf};
 
-use crate::config::{ExecutionMode, RunIdentity};
 use crate::msg::ids::{AssetId, InstrumentId, Qty};
 use crate::msg::time::TsUs;
-use crate::registry::Registry;
+use crate::runtime::config::{ExecutionMode, RunIdentity};
+use crate::runtime::registry::Registry;
 use crate::warn;
 
 pub use writer::{ExposureHandle, ExposureWriter, ExposureWriterConfig};

@@ -3,13 +3,15 @@
 //! arms only on a trailing average it can stand behind and never moves under an open bar; and the
 //! dispatch fan-out hands the strategy exactly the bars that closed, oldest first.
 
-use engine::config::{CandlesSpec, KlineInterval, TrackerSpec, VolumeBarsSpec, VolumeThreshold};
 use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
 use engine::hot::tracker::{MicroTracker, VolumeBar, VolumeBarSeries};
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, KlineEvent};
 use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::time::TsUs;
+use engine::runtime::config::{
+    CandlesSpec, KlineInterval, TrackerSpec, VolumeBarsSpec, VolumeThreshold,
+};
 use proptest::prelude::*;
 use rtrb::Consumer;
 

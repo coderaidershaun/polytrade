@@ -5,11 +5,11 @@
 //! both venue ticks (0.01 and the 0.001 endgame tick) pass, a drifted tick or absent min size
 //! refuses. `check_symbol_scale` and `check_poly_market` are pure.
 
-use engine::config::{BinanceEnv, BinanceMarket, VenueMarket};
 use engine::hot::exec::{MAX_ORDER_BUDGET_WINDOWS, OrderBudgetWindow};
 use engine::msg::ids::{AssetId, Price, Qty};
 use engine::msg::time::{DurationUs, TsUs};
-use engine::registry::{InstrumentRow, OrderRateLimit, RateInterval, Registry};
+use engine::runtime::config::{BinanceEnv, BinanceMarket, VenueMarket};
+use engine::runtime::registry::{InstrumentRow, OrderRateLimit, RateInterval, Registry};
 use engine::runtime::{EngineError, check_symbol_order_capacity};
 use engine::venues::binance::preflight::{
     ScaleError, check_order_rate_limits, check_symbol_scale, order_budget,
@@ -376,13 +376,13 @@ persistence:
 logging:
   dir: ./logs
 ";
-    let config: engine::config::Config =
-        engine::config::Config::from_yaml(yaml).expect("poly config parses and validates");
+    let config: engine::runtime::config::Config =
+        engine::runtime::config::Config::from_yaml(yaml).expect("poly config parses and validates");
     Registry::build(&config).expect("registry builds")
 }
 
 /// Both venue ticks pass and a drifted one refuses, then the accepted window's grid is stamped onto
-/// every slot — the same [`engine::registry::Registry::set_scales`] mechanism binance uses — so
+/// every slot — the same [`engine::runtime::registry::Registry::set_scales`] mechanism binance uses — so
 /// downstream code quantises poly prices against a real tick and lot.
 #[test]
 fn poly_preflight_accepts_the_venue_ticks_and_stamps_the_accepted_grid() {
@@ -478,8 +478,8 @@ logging:
   dir: ./logs
 "
     );
-    let config: engine::config::Config =
-        engine::config::Config::from_yaml(&yaml).expect("binance config parses and validates");
+    let config: engine::runtime::config::Config = engine::runtime::config::Config::from_yaml(&yaml)
+        .expect("binance config parses and validates");
     Registry::build(&config).expect("registry builds")
 }
 

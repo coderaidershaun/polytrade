@@ -48,7 +48,7 @@ pub fn decode(text: &str) -> Result<Vec<u8>, HexError> {
 }
 
 /// The offending character is deliberately absent: `decode` parses the wallet private key, and an
-/// error message is the one place a fragment of it would escape [`crate::secrets::Secret`].
+/// error message is the one place a fragment of it would escape [`crate::runtime::secrets::Secret`].
 #[derive(thiserror::Error, Debug)]
 pub enum HexError {
     #[error("hex string has odd length {length} — every byte needs two characters")]

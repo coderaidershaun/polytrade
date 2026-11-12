@@ -12,7 +12,7 @@ use crate::link::{
 };
 use crate::msg::time::{DurationUs, TsUs};
 use crate::msg::ui::{UiCatalog, UiInstrument};
-use crate::shutdown::RunAssertion;
+use crate::runtime::shutdown::RunAssertion;
 
 /// Silence past which a peer's feed reads as stale rather than merely quiet. The engine announces
 /// its lifecycle once a second, and this matches the far side's own subscription TTL — so "I have

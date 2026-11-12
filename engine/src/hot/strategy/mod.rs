@@ -8,7 +8,6 @@ mod declare;
 
 use std::collections::HashSet;
 
-use crate::config::{Instruments, StrategySpec};
 use crate::hot::book::Book;
 use crate::hot::exec::{DesiredBook, ExecEngine};
 use crate::hot::ledger::PositionLedger;
@@ -17,6 +16,7 @@ use crate::hot::tracker::MicroTracker;
 use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::{BookChunk, KlineEvent, MarketRotation, SpinTick, TradeEvent};
 use crate::msg::time::{DurationUs, TsUs};
+use crate::runtime::config::{Instruments, StrategySpec};
 
 pub use crate::hot::exec::{
     Balance, DesiredQuote, Fill, MAX_QUOTE_LEVELS, OrderReject, OrderUpdate, OrderView, QuoteLevel,
@@ -35,7 +35,7 @@ pub use crate::hot::book::BookState;
 pub use crate::hot::tracker::VolumeBar;
 pub use crate::link::{LinkFrame, TopicId};
 pub use crate::msg::persist::FeatureId;
-pub use crate::registry::InstrumentRow;
+pub use crate::runtime::registry::InstrumentRow;
 
 pub(crate) use actions::{Actions, ActionsSetup, DrainSinks};
 pub use actions::{ClientOrderId, LaneDrops};

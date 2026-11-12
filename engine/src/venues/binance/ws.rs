@@ -4,7 +4,7 @@
 use futures_util::SinkExt;
 use tokio_tungstenite::tungstenite::{Bytes, Error as ProtocolError, Message};
 
-use crate::config::{BinanceMarket, KlineInterval};
+use crate::runtime::config::{BinanceMarket, KlineInterval};
 
 use super::rest::BinanceEnv;
 

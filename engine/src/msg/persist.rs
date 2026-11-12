@@ -1,6 +1,5 @@
 //! Persistence records: POD Copy union (i64 mantissas, _ts_us stamps, no strings). Plus RotationRow (owned, strings, off hot path).
 
-use crate::config::{KlineInterval, TableKind};
 use crate::hot::exec::QuoteLevel;
 use crate::msg::exec::{Liquidity, OrderStyle, Provenance, RejectClass};
 use crate::msg::ids::{
@@ -9,6 +8,7 @@ use crate::msg::ids::{
 use crate::msg::inbound::BookChunkKind;
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::time::TsUs;
+use crate::runtime::config::{KlineInterval, TableKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FeatureId(pub u16);

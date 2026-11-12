@@ -14,7 +14,6 @@
 //! The gate is driven entirely by message stamps: the window comes from a `MarketRotation` and the
 //! instant from the spin tick, so a replay refuses and sweeps at exactly the same points.
 
-use engine::config::RecordedTables;
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
     DesiredQuote, ExecHalt, ExecSettings, HaltReason, MAX_ORDER_SLOTS, OrderSlot, OrderState,
@@ -28,6 +27,7 @@ use engine::msg::ids::{Price, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::UiEvent;
+use engine::runtime::config::RecordedTables;
 use rtrb::Consumer;
 
 use crate::engine_support::{ALL_TABLES, ONE, exec_event, local_refusals, pop, rotation};

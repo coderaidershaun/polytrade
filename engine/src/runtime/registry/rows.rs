@@ -1,11 +1,11 @@
 //! `SourceSpec` -> instrument rows: one venue's config block becomes the dense, frozen rows every
 //! later stage addresses by [`InstrumentId`]. Row order fixes those ids, so it is replay-visible.
 
-use crate::config::{
+use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId};
+use crate::runtime::config::{
     BinanceEnv, ConfigError, Instruments, KlineInterval, SourceSpec, Subscriptions, TrackerSpec,
     VenueMarket, validated_mantissa,
 };
-use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId};
 
 use super::InstrumentRow;
 use super::assets::{AssetDictionary, intern_assets};

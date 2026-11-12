@@ -3,9 +3,9 @@
 //! stamp clamp: gap-fill lands AFTER live close it repairs -> received_ts_us non-decreasing.
 //! Pure (fixtures replay without socket).
 
-use crate::config::KlineInterval;
 use crate::msg::inbound::{InboundMessage, KlineEvent};
 use crate::msg::time::{DurationUs, TsUs};
+use crate::runtime::config::KlineInterval;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KlineOutcome {

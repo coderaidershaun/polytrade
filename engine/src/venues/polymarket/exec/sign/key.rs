@@ -7,7 +7,7 @@ use std::fmt;
 
 use k256::ecdsa::SigningKey as EcdsaSigningKey;
 
-use crate::secrets::Secret;
+use crate::runtime::secrets::Secret;
 
 use super::address::Address;
 use super::eip712::{Word, keccak256};

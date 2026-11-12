@@ -2,7 +2,7 @@
 //! for when the back-off starts over is written once.
 
 use crate::link::RunState;
-use crate::shutdown::{FatalSignal, RunStateCell};
+use crate::runtime::shutdown::{FatalSignal, RunStateCell};
 use crate::venues::IDLE_POLL;
 use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::socket::{Socket, connect};

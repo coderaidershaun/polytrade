@@ -1,6 +1,5 @@
 //! The monitor scenes: fixed event streams, the same on every run.
 
-use engine::config::ExecutionMode;
 use engine::hot::exec::{
     CloseReason, ExecHalt, HaltReason, OrderState, RejectOrigin, RejectReason,
 };
@@ -8,6 +7,7 @@ use engine::msg::exec::RejectClass;
 use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::time::TsUs;
 use engine::msg::ui::{UiBookState, UiCatalog, UiInstrument};
+use engine::runtime::config::ExecutionMode;
 use engine::workstation::monitor::model::SystemNote;
 use engine::workstation::monitor::view::{Channel, MonitorDetail, MonitorUiState};
 

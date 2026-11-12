@@ -5,14 +5,14 @@
 //! `(x, X)` → `(ExecKind, VenueOrderStatus)` table, the error-code → [`RejectClass`] table, and the
 //! client-id → [`Provenance`] test that decides whether the engine may touch an order.
 
-use engine::config::RunIdentity;
 use engine::msg::exec::{
     AccountChunkKind, ExecEvent, ExecKind, Liquidity, OrderStyle, Provenance, RejectClass,
     VenueOrderStatus,
 };
 use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::time::TsUs;
-use engine::secrets::Secret;
+use engine::runtime::config::RunIdentity;
+use engine::runtime::secrets::Secret;
 use engine::venues::binance::exec::{
     CLIENT_ORDER_ID_LEN, ClockOffset, DecodedResponse, IgnoredReason, RecvWindow, RejectSubject,
     RequestSigner, ResponseContext, StreamEvent, WireError, classify_client_order_id,

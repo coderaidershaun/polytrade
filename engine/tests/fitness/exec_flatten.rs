@@ -6,7 +6,6 @@
 //! but crossed the spread has made a mistake. Both halves are pinned together to prevent
 //! convergence on the easiest path.
 
-use engine::config::{RecordedTables, TrackerSpec};
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
     BookTop, DesiredQuote, ExecLimits, ExecSettings, FeeModel, FlattenInput, FlattenOutcome,
@@ -17,7 +16,8 @@ use engine::msg::exec::{ExecCommand, ExecKind, ExecLaneItem, OrderStyle, VenueOr
 use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::time::DurationUs;
-use engine::registry::InstrumentRow;
+use engine::runtime::config::{RecordedTables, TrackerSpec};
+use engine::runtime::registry::InstrumentRow;
 use rtrb::Consumer;
 
 use crate::engine_support::{

@@ -3,12 +3,12 @@
 //! rather than by the caller, so the runtime hands over its inputs and never learns how the venue
 //! is put together.
 
-use crate::config::{SimConfig, validated_mantissa};
 use crate::hot::exec::MAX_ORDER_INSTRUMENTS;
 use crate::info;
 use crate::link::RunState;
 use crate::msg::time::DurationUs;
-use crate::registry::InstrumentRow;
+use crate::runtime::config::{SimConfig, validated_mantissa};
+use crate::runtime::registry::InstrumentRow;
 use crate::venues::binance::exec::SymbolTable;
 use crate::venues::edge::{EdgeInputs, VenueEdge};
 use crate::venues::exec::{ExecCore, ExecStop};

@@ -8,10 +8,10 @@ mod grouping;
 mod rows;
 mod validate;
 
-use crate::config::{
+use crate::msg::ids::{AssetId, InstrumentId, Price, Qty, QueueId};
+use crate::runtime::config::{
     BinanceEnv, Config, ConfigError, KlineInterval, Subscriptions, TrackerSpec, VenueMarket,
 };
-use crate::msg::ids::{AssetId, InstrumentId, Price, Qty, QueueId};
 
 pub use assets::AssetDictionary;
 pub use grouping::{ConnectionCategory, ProducerGroup};

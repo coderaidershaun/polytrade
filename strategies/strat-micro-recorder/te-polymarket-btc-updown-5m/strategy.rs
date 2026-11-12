@@ -7,7 +7,6 @@
 //! quotes lapse by not being redeclared — the seam is level-triggered — and that is what frees the
 //! side's single order budget for the flatten that follows.
 
-use engine::config::StrategySpec;
 use engine::hot::quant::intensity::{PacedIntensity, SideEstimate};
 use engine::hot::strategy::{
     BookState, DesiredQuote, EngineView, InstrumentRow, OrderStyle, QuoteLevel, Registration,
@@ -16,6 +15,7 @@ use engine::hot::strategy::{
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{MarketRotation, SpinTick, TradeEvent};
 use engine::msg::time::{DurationUs, TsUs};
+use engine::runtime::config::StrategySpec;
 use serde::Deserialize;
 
 #[path = "../link_schema.rs"]

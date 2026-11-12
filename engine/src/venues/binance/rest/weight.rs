@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::config::BinanceMarket;
+use crate::runtime::config::BinanceMarket;
 use crate::{info, warn};
 
 pub(super) const ORDER_COUNT_PREFIX: &str = "x-mbx-order-count-";

@@ -24,7 +24,6 @@ pub mod msg;
 pub mod hot;
 
 // async edge
-pub mod exposure;
 pub mod link;
 pub mod log;
 #[cfg(not(target_arch = "wasm32"))]
@@ -33,11 +32,7 @@ pub mod tape;
 pub mod venues;
 
 // assembly
-pub mod config;
-pub mod registry;
 pub mod runtime;
-pub mod secrets;
-pub mod shutdown;
 
 /// The painters and the socket exist only in the browser build, so a native build never links
 /// eframe.

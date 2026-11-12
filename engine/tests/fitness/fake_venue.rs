@@ -1,11 +1,11 @@
 //! Deterministic Binance Spot scenarios over the production simulator.
 
-use engine::config::RunIdentity;
 use engine::msg::exec::{ExecEvent, OrderStyle, VenueOrderStatus};
 use engine::msg::ids::{AssetId, ClientOrderId, Price, Qty, Side, TradeId, VenueOrderId};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::time::TsUs;
-use engine::registry::{AssetDictionary, Registry};
+use engine::runtime::config::RunIdentity;
+use engine::runtime::registry::{AssetDictionary, Registry};
 use engine::venues::binance::exec::{
     DecodeContext, EncodeContext, ResponseContext, SymbolTable, encode_request,
 };
@@ -433,7 +433,7 @@ persistence:
 logging:
   dir: ./logs
 ";
-    let config: engine::config::Config =
-        engine::config::Config::from_yaml(YAML).expect("the fake venue's config parses");
+    let config: engine::runtime::config::Config =
+        engine::runtime::config::Config::from_yaml(YAML).expect("the fake venue's config parses");
     Registry::build(&config).expect("the fake venue's registry builds")
 }

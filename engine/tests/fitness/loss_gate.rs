@@ -12,11 +12,11 @@
 //! residue — the ordinary state after any partial fill — would turn the kill switch into a
 //! permanent side restriction, and losses would keep growing on the side that was still admitted.
 
-use engine::config::{RecordedTables, TableKind, TrackerSpec};
-use engine::exposure::InstrumentExposure;
 use engine::hot::exec::{ExecSettings, LossVerdict, SessionPnl, assess_loss};
 use engine::msg::ids::{InstrumentId, Qty, Side};
 use engine::msg::inbound::InboundMessage;
+use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
+use engine::runtime::exposure::InstrumentExposure;
 
 use crate::engine_support::{FillPen, Idle, ONE, instrument_row, pop, rotation};
 use crate::exec_support::{

@@ -5,7 +5,7 @@
 use crate::msg::exec::{CancelReason, ExecEvent};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Side};
 use crate::msg::time::TsUs;
-use crate::shutdown::FatalSignal;
+use crate::runtime::shutdown::FatalSignal;
 use crate::{error, warn};
 
 use super::{

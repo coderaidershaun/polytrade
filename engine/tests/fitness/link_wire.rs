@@ -7,7 +7,6 @@
 
 use std::net::SocketAddr;
 
-use engine::config::ExecutionMode;
 use engine::hot::exec::{
     CloseReason, ExecHalt, HaltReason, OrderState, QuoteLevel, ReadinessGap, RejectOrigin,
     RejectReason,
@@ -29,6 +28,7 @@ use engine::msg::ui::{
     UiBookSnapshot, UiBookState, UiEvent, UiLatencyCell, UiLatencyRow, UiLatencySummary,
     UiWorkingOrder,
 };
+use engine::runtime::config::ExecutionMode;
 use proptest::prelude::*;
 
 const TOKEN: LinkHash = LinkHash::of_name("fitness-run-token");

@@ -11,7 +11,7 @@ use engine::msg::exec::{
 };
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::time::{DurationUs, TsUs};
-use engine::shutdown::FatalSignal;
+use engine::runtime::shutdown::FatalSignal;
 use engine::venues::exec::{
     ExecCore, ExecEffect, ExecRequest, ExecSession, InFlightRequest, MAX_RESYNC_ATTEMPTS,
     MirroredOrder, Outgoing, Phase, PlaceNotSentReason, REQUEST_TIMEOUT, ResyncPoll, SessionSetup,

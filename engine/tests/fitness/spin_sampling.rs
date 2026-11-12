@@ -4,7 +4,6 @@
 //! The last case carries the other half of the contract — a strategy derives its windows from the
 //! configured spin, so they must track a change to it.
 
-use engine::config::{SpinField, TableKind};
 use engine::hot::dispatch::HotEngine;
 use engine::hot::quant::micro;
 use engine::hot::series::FastQueue;
@@ -14,6 +13,7 @@ use engine::msg::ids::{InstrumentId, Price, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::time::DurationUs;
+use engine::runtime::config::{SpinField, TableKind};
 use rtrb::Consumer;
 
 use crate::engine_support::{

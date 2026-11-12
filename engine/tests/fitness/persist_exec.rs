@@ -13,7 +13,6 @@
 
 use std::path::{Path, PathBuf};
 
-use engine::config::{RecordedTables, TableKind};
 use engine::hot::exec::QuoteLevel;
 use engine::msg::exec::{Liquidity, OrderStyle, Provenance, RejectClass};
 use engine::msg::ids::{
@@ -21,6 +20,7 @@ use engine::msg::ids::{
 };
 use engine::msg::persist::{FillRow, OrderLifecycle, OrderRow, OrderTransition, PersistRecord};
 use engine::msg::time::TsUs;
+use engine::runtime::config::{RecordedTables, TableKind};
 
 use crate::parquet_readback::{
     BASE_TS_US, Cell, FileData, TempDir, drain_blocking, parquet_files, read_parquet_file, run_dir,

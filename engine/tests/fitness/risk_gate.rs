@@ -6,8 +6,6 @@
 //! the fills can see that. The engine's own ceiling and its consecutive-reject kill switch live here
 //! too, because they are the controls a strategy bug cannot bypass.
 
-use engine::config::RecordedTables;
-use engine::exposure::InstrumentExposure;
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
     ClientIdLayout, ExecHalt, ExposureCheck, HaltReason, QuotePermission, assess_exposure,
@@ -17,6 +15,8 @@ use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, RejectClass, VenueOrde
 use engine::msg::ids::{Price, Qty, Side};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::ui::UiEvent;
+use engine::runtime::config::RecordedTables;
+use engine::runtime::exposure::InstrumentExposure;
 use proptest::prelude::*;
 use rtrb::Consumer;
 

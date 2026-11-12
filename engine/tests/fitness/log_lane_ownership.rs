@@ -18,9 +18,9 @@ use crate::exec_no_clock::rust_sources;
 /// dedicated output threads. Everything else that runs concurrently here is a tokio task. The
 /// browser workstation runs on one thread with no log lane.
 const THREAD_LANE_OWNERS: [(&str, &str); 4] = [
-    ("src/exposure/writer.rs", "exposure"),
     ("src/hot/spawn.rs", "config.tag"),
     ("src/runtime/assembly/mod.rs", "main"),
+    ("src/runtime/exposure/writer.rs", "exposure"),
     ("src/tape/drain.rs", "persist"),
 ];
 

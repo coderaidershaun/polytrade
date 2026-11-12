@@ -15,7 +15,6 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine::config::{RecordedTables, TableKind, TrackerSpec};
 use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{ClientIdLayout, ExecSettings, MAX_ORDER_SLOTS, side_base};
 use engine::hot::metrics::MetricsSnapshot;
@@ -27,7 +26,8 @@ use engine::msg::exec::{
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::persist::PersistRecord;
-use engine::registry::InstrumentRow;
+use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
+use engine::runtime::registry::InstrumentRow;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{

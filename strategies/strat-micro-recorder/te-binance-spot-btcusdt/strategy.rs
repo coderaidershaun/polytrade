@@ -1,6 +1,5 @@
 //! Records microstructure columns + quotes Guéant levels each spin. Per-instrument state in models/features/params siblings.
 
-use engine::config::{Instruments, StrategySpec, TableKind};
 use engine::hot::quant::hawkes::HawkesChoice;
 use engine::hot::quant::liquidity::KylesLambdaSpec;
 use engine::hot::quant::micro::{PriceBand, ResilienceSample, banded_imbalance};
@@ -14,6 +13,7 @@ use engine::hot::strategy::{
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Side};
 use engine::msg::inbound::{BookChunk, KlineEvent, SpinTick, TradeEvent};
 use engine::msg::time::{DurationUs, TsUs};
+use engine::runtime::config::{Instruments, StrategySpec, TableKind};
 
 #[path = "features.rs"]
 pub(crate) mod features;

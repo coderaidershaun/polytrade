@@ -9,7 +9,6 @@ use std::time::Duration;
 use rtrb::RingBuffer;
 use tokio::sync::mpsc;
 
-use engine::config::{ExecutionMode, RecordedTables, StrategyId, TableKind, TradingEngineId};
 use engine::hot::ingress::IngressQueues;
 use engine::hot::metrics::{Category, MetricsSnapshot};
 use engine::hot::spawn::{HotThreadConfig, QueueProducer, spawn_hot_thread};
@@ -17,7 +16,10 @@ use engine::hot::strategy::StrategyConfig;
 use engine::msg::ids::{FIXED_SCALE, QueueId, SourceId};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::persist::RotationRow;
-use engine::shutdown::{DrainSignal, FatalSignal};
+use engine::runtime::config::{
+    ExecutionMode, RecordedTables, StrategyId, TableKind, TradingEngineId,
+};
+use engine::runtime::shutdown::{DrainSignal, FatalSignal};
 use engine::tape::{PersistConfig, PersistWriter, RunMeta};
 
 use crate::e2e_scenario::{HOUR_US, ROTATIONS, message_sequence};

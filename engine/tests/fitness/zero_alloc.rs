@@ -4,9 +4,6 @@
 
 use std::sync::atomic::Ordering;
 
-use engine::config::{
-    IntensitySpec, KlineInterval, RecordedTables, SpinField, TableKind, TrackerSpec,
-};
 use engine::hot::book::{Book, SnapshotOutcome};
 use engine::hot::dispatch::{HotEngine, HotEngineSetup, LinkWiring};
 use engine::hot::exec::{DesiredQuote, QuoteLevel};
@@ -25,7 +22,10 @@ use engine::msg::inbound::{InboundMessage, RunControl, SpinTick};
 use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
-use engine::shutdown::{RunAssertion, RunControlGate};
+use engine::runtime::config::{
+    IntensitySpec, KlineInterval, RecordedTables, SpinField, TableKind, TrackerSpec,
+};
+use engine::runtime::shutdown::{RunAssertion, RunControlGate};
 use rtrb::Consumer;
 
 use crate::engine_support::{

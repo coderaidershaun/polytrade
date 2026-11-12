@@ -6,10 +6,10 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use engine::config::{ExecutionMode, RecordedTables, TableKind};
 use engine::msg::ids::InstrumentId;
 use engine::msg::persist::{FeatureId, FeatureRow, PersistRecord};
 use engine::msg::time::TsUs;
+use engine::runtime::config::{ExecutionMode, RecordedTables, TableKind};
 use engine::tape::PersistConfig;
 
 use crate::parquet_readback::{

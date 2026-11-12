@@ -2,11 +2,11 @@
 //! confirm each quotes on a tick the engine accepts with a positive minimum size, and stamp that
 //! grid and the order limits onto every Polymarket row. Any failure refuses the start loudly.
 
-use crate::config::{MAX_QUOTE_LEVELS, PolySeries, VenueMarket};
 use crate::info;
 use crate::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty};
 use crate::msg::time::EngineClock;
-use crate::registry::{PolyLimits, Registry};
+use crate::runtime::config::{MAX_QUOTE_LEVELS, PolySeries, VenueMarket};
+use crate::runtime::registry::{PolyLimits, Registry};
 
 use super::rest::{GammaError, GammaMarket, PolyRest};
 

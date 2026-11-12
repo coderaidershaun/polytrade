@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use crate::config::{Config, RunIdentity};
 use crate::hot::strategy::{EngineView, Strategy, StrategyConfig};
+use crate::runtime::config::{Config, RunIdentity};
 
 use super::Engine;
 

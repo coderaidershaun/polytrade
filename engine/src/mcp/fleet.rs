@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::config::{ExecutionMode, RunIdentity};
+use crate::runtime::config::{ExecutionMode, RunIdentity};
 
 use super::catalog::{self, ConsoleLog, Engine, ProbedConfig};
 use super::child::{ChildSlot, Settled, SlotState, Stopping};

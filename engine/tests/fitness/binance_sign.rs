@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use engine::msg::time::{DurationUs, TsUs};
-use engine::secrets::{CredentialVariables, EnvFile, Secret, SecretError};
+use engine::runtime::secrets::{CredentialVariables, EnvFile, Secret, SecretError};
 use engine::venues::binance::exec::{
     ClockOffset, RecvWindow, RequestParams, RequestSigner, SignError,
 };

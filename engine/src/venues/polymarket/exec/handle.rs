@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use crate::hot::spawn::QueueProducer;
 use crate::msg::exec::ExecLaneItem;
 use crate::msg::time::DurationUs;
-use crate::registry::InstrumentRow;
+use crate::runtime::registry::InstrumentRow;
 use crate::venues::edge::{EdgeInputs, EdgeSettings, VenueEdge, run_edge};
 use crate::venues::exec::EdgeHandle;
 use crate::venues::polymarket::rotation::WindowAssignment;

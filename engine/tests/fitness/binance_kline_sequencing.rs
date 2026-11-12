@@ -1,10 +1,10 @@
 //! Binance kline sequencing goldens: the kline sequencer replayed over a recorded prod fixture
 //! (live WS closes) and REST backfill, plus the gap-repair receipt-stamp monotonicity edge.
 
-use engine::config::KlineInterval;
 use engine::msg::ids::{Price, Qty};
 use engine::msg::inbound::{InboundMessage, KlineEvent};
 use engine::msg::time::TsUs;
+use engine::runtime::config::KlineInterval;
 use engine::venues::binance::kline::{KlineOutcome, KlineSequencer};
 use engine::venues::binance::parse::{
     RestKlineTail, parse_combined_frame, parse_kline, parse_rest_klines,

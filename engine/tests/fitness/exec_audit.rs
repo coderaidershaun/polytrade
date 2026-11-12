@@ -10,9 +10,9 @@
 //!
 //! A separate test pins the round trip these rows take to Parquet. This one pins which rows exist.
 
-use engine::config::{RecordedTables, TableKind, TrackerSpec};
 use engine::msg::ids::Side;
 use engine::msg::persist::{OrderLifecycle, OrderTransition};
+use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
 
 use crate::engine_support::{
     FillPen, Idle, ONE, drain_orders_and_fills, engine_without_warmup, instrument_row,

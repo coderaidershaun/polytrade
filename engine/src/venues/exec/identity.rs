@@ -4,10 +4,10 @@
 
 use ring::digest::{SHA256, digest};
 
-use crate::config::RunIdentity;
 use crate::hot::exec::ClientIdLayout;
 use crate::msg::exec::Provenance;
 use crate::msg::ids::ClientOrderId;
+use crate::runtime::config::RunIdentity;
 
 /// Which trading engine minted an order id — a stable digest of the run identity, so two engines on
 /// one API key can each tell its own orders from the other's.

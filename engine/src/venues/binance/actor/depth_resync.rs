@@ -2,10 +2,10 @@
 
 use std::time::{Duration, Instant};
 
-use crate::config::BinanceMarket;
 use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::{InboundMessage, TappedMessage, VenueMeta};
 use crate::msg::time::TsUs;
+use crate::runtime::config::BinanceMarket;
 use crate::venues::binance::depth::{ChainRule, DepthSequencer, DiffOutcome};
 use crate::venues::binance::parse::{
     DepthSnapshot, ParseContext, parse_depth_snapshot, parse_perp_depth_diff, parse_spot_depth_diff,

@@ -24,7 +24,7 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::msg::exec::{AssetBalance, CancelReason, ExecLaneItem};
 use crate::msg::ids::{AssetId, InstrumentId};
 use crate::msg::time::{DurationUs, TsUs};
-use crate::registry::InstrumentRow;
+use crate::runtime::registry::InstrumentRow;
 use crate::venues::edge::socket::{Reader, Writer};
 use crate::venues::edge::{
     COMMAND_POLL, EdgeControl, EdgeDriver, EventFunnel, HOUSEKEEPING, OfflineStep, RECENT_TRADES,

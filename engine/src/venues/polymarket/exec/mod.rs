@@ -21,7 +21,7 @@ pub mod rest;
 pub mod sign;
 
 use crate::hot::exec::{FeeModel, OrderBudget};
-use crate::secrets::CredentialVariables;
+use crate::runtime::secrets::CredentialVariables;
 use crate::venues::exec::{LeaseNamespace, VenueCapabilities};
 
 /// A resting order moves nothing in the wallet, so funds stay committed until a trade settles. The

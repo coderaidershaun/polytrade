@@ -1,10 +1,10 @@
 //! The link's control and discovery frames: subscribe, lifecycle and catalog. The catalog travels
 //! one item per frame, so a receiver never has to reassemble it.
 
-use crate::config::ExecutionMode;
 use crate::msg::ids::{AssetId, InstrumentId, Price, Qty};
 use crate::msg::persist::FeatureId;
 use crate::msg::time::{DurationUs, TsUs};
+use crate::runtime::config::ExecutionMode;
 
 use super::envelope::{
     ByteReader, ByteWriter, ENVELOPE_LEN, LINK_MAX_DATAGRAM, LinkDecodeError, NAME_LEN, TopicId,

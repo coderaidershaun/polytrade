@@ -5,7 +5,7 @@ use std::io;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 
-use crate::config::{ConfigError, RunIdentity};
+use crate::runtime::config::{ConfigError, RunIdentity};
 
 #[derive(Debug, thiserror::Error)]
 pub enum FleetError {

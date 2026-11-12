@@ -6,12 +6,12 @@ use std::time::Duration;
 
 use rtrb::{Consumer, RingBuffer};
 
-use crate::config::{ExecutionMode, RunIdentity};
 use crate::hot::sink::ExposureSink;
 use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId};
 use crate::msg::time::boot_stamp_us;
-use crate::registry::Registry;
-use crate::shutdown::WriterThread;
+use crate::runtime::config::{ExecutionMode, RunIdentity};
+use crate::runtime::registry::Registry;
+use crate::runtime::shutdown::WriterThread;
 use crate::{error, info};
 
 use super::file::{self, AssetEntry, ExposureDocument, FORMAT_VERSION, InstrumentEntry};

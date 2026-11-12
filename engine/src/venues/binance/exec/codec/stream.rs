@@ -5,7 +5,7 @@ use crate::msg::exec::{
     AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind, Liquidity, RejectClass,
 };
 use crate::msg::ids::{AssetId, TradeId, VenueOrderId};
-use crate::registry::AssetDictionary;
+use crate::runtime::registry::AssetDictionary;
 use crate::venues::edge::decode::{
     DecimalFault, mantissa_field, order_side, price_field, qty_field, unknown_enum,
 };

@@ -4,7 +4,7 @@
 //! rejected order or gives up on a transient one. The live integration suite never runs in CI, so
 //! this is the only standing guard on the table.
 
-use engine::config::{BinanceMarket, KlineInterval};
+use engine::runtime::config::{BinanceMarket, KlineInterval};
 use engine::venues::binance::rest::{
     AccountInfo, BinanceEnv, FailureVerdict, HttpMethod, KlineQuery, OrderCountWindow, OrderRecord,
     RequestAuth, RestClient, RestError, RestRequest,

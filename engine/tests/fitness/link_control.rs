@@ -10,14 +10,14 @@
 //! transition, and a dropped slot costs one heartbeat instead of leaving the edge parked and the hot
 //! thread trading forever.
 
-use engine::config::{RecordedTables, TableKind};
 use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
 use engine::link::RunState;
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick, TradeEvent};
 use engine::msg::persist::{FeatureId, LinkRowKind, PersistRecord};
 use engine::msg::time::DurationUs;
-use engine::shutdown::RunAssertion;
+use engine::runtime::config::{RecordedTables, TableKind};
+use engine::runtime::shutdown::RunAssertion;
 
 use crate::engine_support::{
     LinkedEngine, LinkedSetup, ONE, call_codes, delta_chunk, drain_persist, engine_with_link,

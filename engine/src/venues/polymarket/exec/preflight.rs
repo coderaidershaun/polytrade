@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use crate::msg::time::DurationUs;
-use crate::secrets::{EnvFile, SecretError};
+use crate::runtime::secrets::{EnvFile, SecretError};
 use crate::venues::edge::http::TransportError;
 use crate::{info, warn};
 

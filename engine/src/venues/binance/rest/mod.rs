@@ -13,15 +13,15 @@ mod weight;
 
 use serde::de::DeserializeOwned;
 
-use crate::config::{BinanceMarket, KlineInterval};
 use crate::msg::time::TsUs;
-use crate::secrets::Secret;
+use crate::runtime::config::{BinanceMarket, KlineInterval};
+use crate::runtime::secrets::Secret;
 use crate::venues::edge::http::{self, Deadlines, HttpClient, TransportError};
 
 use weight::{OrderCountBudget, WeightBudget, weight_budget};
 
 /// Re-exported for adapter use (config owns deployment choice).
-pub use crate::config::BinanceEnv;
+pub use crate::runtime::config::BinanceEnv;
 
 pub use payload::{
     AccountInfo, AccountTrade, Balance, CommissionRates, ExchangeInfo, OrderRecord, RateLimit,

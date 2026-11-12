@@ -8,9 +8,6 @@ use std::time::Duration;
 use rtrb::RingBuffer;
 use tokio::sync::mpsc;
 
-use crate::config::{
-    DEFAULT_QUOTE_STOP_MARGIN_MS, ExecutionConfig, ExecutionMode, RunIdentity, validated_mantissa,
-};
 use crate::hot::dispatch::ExecWiring;
 use crate::hot::exec::{
     ExecLaneBudget, ExecLimits, ExecSettings, FeeModel, MAX_ORDER_INSTRUMENTS, exec_lane_capacity,
@@ -20,8 +17,11 @@ use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::info;
 use crate::msg::exec::ExecLaneItem;
 use crate::msg::time::{DurationUs, EngineClock};
-use crate::registry::Registry;
-use crate::shutdown::{FatalSignal, RunStateCell};
+use crate::runtime::config::{
+    DEFAULT_QUOTE_STOP_MARGIN_MS, ExecutionConfig, ExecutionMode, RunIdentity, validated_mantissa,
+};
+use crate::runtime::registry::Registry;
+use crate::runtime::shutdown::{FatalSignal, RunStateCell};
 use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::{EdgeInputs, EdgeSettings, EdgeSpawn, VenueEdge};
 use crate::venues::exec::{TeTag, VenueCapabilities};

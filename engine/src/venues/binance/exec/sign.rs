@@ -7,7 +7,7 @@ use std::fmt;
 use ring::hmac;
 
 use crate::msg::time::{DurationUs, TsUs};
-use crate::secrets::Secret;
+use crate::runtime::secrets::Secret;
 
 const TIMESTAMP_PARAM: &str = "timestamp";
 const SIGNATURE_PARAM: &str = "signature";

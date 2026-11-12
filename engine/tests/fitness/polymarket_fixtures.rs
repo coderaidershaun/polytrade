@@ -8,10 +8,10 @@
 
 use std::collections::HashMap;
 
-use engine::config::PolySeries;
 use engine::hot::book::{Book, BookState};
 use engine::msg::ids::{InstrumentId, Price};
 use engine::msg::time::TsUs;
+use engine::runtime::config::PolySeries;
 use engine::venues::polymarket::book::{BookNormaliser, ChunkStamps};
 use engine::venues::polymarket::parse::{
     PolyBook, PolyDelta, PolyFrame, is_frameless, parse_market_frame,

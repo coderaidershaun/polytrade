@@ -8,8 +8,8 @@ mod market;
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef};
 
-use crate::config::ExecutionMode;
 use crate::msg::time::TsUs;
+use crate::runtime::config::ExecutionMode;
 
 use self::column::Column;
 use super::RunMeta;

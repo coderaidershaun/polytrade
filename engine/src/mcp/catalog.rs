@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::config::{ExecutionMode, RunIdentity};
+use crate::runtime::config::{ExecutionMode, RunIdentity};
 
 use super::error::FleetError;
 

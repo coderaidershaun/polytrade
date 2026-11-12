@@ -10,7 +10,7 @@ use tokio::signal::unix::{SignalKind, signal};
 
 use crate::hot::spawn::SimTapGate;
 use crate::msg::ui::UiLifecycle;
-use crate::shutdown::{FatalSignal, TaskHandle, panic_text};
+use crate::runtime::shutdown::{FatalSignal, TaskHandle, panic_text};
 use crate::venues::exec::EdgeHandle;
 use crate::{error, info, warn};
 

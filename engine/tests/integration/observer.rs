@@ -6,7 +6,7 @@
 
 use engine::hot::book::{Book, BookState};
 use engine::msg::inbound::{BookChunkKind, InboundMessage, Level};
-use engine::registry::Registry;
+use engine::runtime::registry::Registry;
 
 use crate::US;
 

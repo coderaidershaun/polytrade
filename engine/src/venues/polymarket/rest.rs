@@ -5,9 +5,9 @@ use reqwest::Method;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use crate::config::PolySeries;
 use crate::msg::ids::{FIXED_SCALE, Price, Qty};
 use crate::msg::time::TsUs;
+use crate::runtime::config::PolySeries;
 use crate::venues::edge::http::{self, Deadlines, HttpClient, TransportError};
 
 const GAMMA_BASE: &str = "https://gamma-api.polymarket.com";

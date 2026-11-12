@@ -23,7 +23,7 @@ mod transition;
 mod view;
 mod window;
 
-pub use crate::config::MAX_QUOTE_LEVELS;
+pub use crate::runtime::config::MAX_QUOTE_LEVELS;
 
 pub use account::{AccountTable, AccountWatermark, Balance, ReleaseOutcome};
 pub use budget::{MAX_ORDER_BUDGET_WINDOWS, OrderBudget, OrderBudgetWindow};

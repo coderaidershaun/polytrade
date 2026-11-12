@@ -1,12 +1,12 @@
 //! Normalised inbound messages: fixed-size POD Copy (only currency into hot path).
 //! Book payloads chunk [Level; BOOK_CHUNK_LEVELS]. Every variant carries received_ts_us (uniform key).
 
-use crate::config::KlineInterval;
 use crate::link::InboundLink;
 use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{AggregateTradeId, InstrumentId, Price, Qty, RawTradeId, Side, StreamEpoch};
 use crate::msg::time::TsUs;
-use crate::shutdown::RunAssertion;
+use crate::runtime::config::KlineInterval;
+use crate::runtime::shutdown::RunAssertion;
 
 pub const BOOK_CHUNK_LEVELS: usize = 20;
 

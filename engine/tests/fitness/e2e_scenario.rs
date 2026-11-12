@@ -3,11 +3,11 @@
 //! definitions read on their own. Determinism makes this one sequence the whole basis of
 //! the read-back assertions.
 
-use engine::config::KlineInterval;
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::persist::RotationRow;
 use engine::msg::time::TsUs;
+use engine::runtime::config::KlineInterval;
 
 use crate::engine_support::{
     ONE, book_reset, delta_chunk, kline, rotation, snapshot_pair, spin, trade,

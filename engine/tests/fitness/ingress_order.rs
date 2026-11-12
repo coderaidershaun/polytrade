@@ -8,7 +8,7 @@ use engine::hot::spawn::QueueProducer;
 use engine::msg::ids::{QueueId, SourceId};
 use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::time::TsUs;
-use engine::shutdown::FatalSignal;
+use engine::runtime::shutdown::FatalSignal;
 use proptest::prelude::*;
 use rtrb::RingBuffer;
 

@@ -15,13 +15,13 @@ use tokio::sync::mpsc;
 use tokio::time::Interval;
 use tokio_tungstenite::tungstenite::{Error as ProtocolError, Message};
 
-use crate::config::PolySeries;
 use crate::hot::spawn::QueueProducer;
 use crate::link::RunState;
 use crate::msg::persist::RotationRow;
 use crate::msg::time::{EngineClock, TsUs};
-use crate::registry::{InstrumentRow, ProducerGroup};
-use crate::shutdown::{FatalSignal, RunStateCell, TaskHandle};
+use crate::runtime::config::PolySeries;
+use crate::runtime::registry::{InstrumentRow, ProducerGroup};
+use crate::runtime::shutdown::{FatalSignal, RunStateCell, TaskHandle};
 use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::lane::{Flow, Lane, LaneSpec, SessionEnd, run_lane};
 use crate::venues::edge::rest_quiet::RestQuiet;

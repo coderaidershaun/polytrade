@@ -8,7 +8,7 @@
 
 use crate::msg::exec::OrderStyle;
 use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
-use crate::secrets::Secret;
+use crate::runtime::secrets::Secret;
 use crate::venues::exec::ExecRequest;
 
 use super::super::sign::address::Address;

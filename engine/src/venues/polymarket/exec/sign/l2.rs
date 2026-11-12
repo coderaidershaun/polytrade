@@ -9,7 +9,7 @@ use std::fmt;
 
 use ring::hmac;
 
-use crate::secrets::Secret;
+use crate::runtime::secrets::Secret;
 
 use super::address::Address;
 use super::{ADDRESS_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER};

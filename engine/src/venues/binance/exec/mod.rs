@@ -6,9 +6,9 @@ mod codec;
 mod probe;
 mod sign;
 
-use crate::config::BinanceEnv;
 use crate::hot::exec::{FeeModel, OrderBudget};
-use crate::secrets::CredentialVariables;
+use crate::runtime::config::BinanceEnv;
+use crate::runtime::secrets::CredentialVariables;
 use crate::venues::exec::{LeaseNamespace, VenueCapabilities};
 
 pub(crate) use actor::handle::bring_up;

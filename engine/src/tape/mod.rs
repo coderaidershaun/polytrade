@@ -9,7 +9,7 @@ mod table;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::config::{ExecutionMode, RecordedTables, StrategyId, TradingEngineId};
+use crate::runtime::config::{ExecutionMode, RecordedTables, StrategyId, TradingEngineId};
 
 pub use drain::{PersistHandle, PersistWriter};
 

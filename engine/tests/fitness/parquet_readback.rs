@@ -17,9 +17,9 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use rtrb::RingBuffer;
 use tokio::sync::mpsc;
 
-use engine::config::{ExecutionMode, RecordedTables, StrategyId, TradingEngineId};
 use engine::msg::ids::FIXED_SCALE;
 use engine::msg::persist::PersistRecord;
+use engine::runtime::config::{ExecutionMode, RecordedTables, StrategyId, TradingEngineId};
 use engine::tape::{PersistConfig, PersistError, PersistHandle, PersistWriter, RunMeta};
 
 /// `f64` is stored as bits so cells compare exactly — deterministic replay is bit-for-bit equal.

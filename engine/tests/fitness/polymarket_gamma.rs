@@ -2,9 +2,9 @@
 //! window bounds taken from the slug's grid timestamp (never `startDate`/`end_date_iso`), and the
 //! no-chrono `end_date_min` ISO formatter pinned against a real capture value.
 
-use engine::config::PolySeries;
 use engine::msg::ids::{Price, Qty};
 use engine::msg::time::TsUs;
+use engine::runtime::config::PolySeries;
 use engine::venues::polymarket::rest::{
     GammaError, GammaMarket, fallback_url, parse_events, parse_fallback,
 };

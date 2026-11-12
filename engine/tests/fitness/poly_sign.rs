@@ -9,7 +9,7 @@
 //! pinned against an oracle we did not write.
 
 use engine::msg::ids::{Price, Qty};
-use engine::secrets::Secret;
+use engine::runtime::secrets::Secret;
 use engine::venues::polymarket::exec::sign::address::Address;
 use engine::venues::polymarket::exec::sign::amount::{AmountRequest, order_amounts};
 use engine::venues::polymarket::exec::sign::eip712::{word_from_decimal, word_from_uint};

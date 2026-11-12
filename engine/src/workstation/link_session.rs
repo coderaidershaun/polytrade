@@ -4,13 +4,13 @@
 
 use std::net::SocketAddr;
 
-use crate::config::StrategyId;
 use crate::link::{
     Envelope, FrameGuard, LINK_MAX_DATAGRAM, Lifecycle, LinkBody, LinkDatagram, LinkDecodeError,
     LinkHash, LinkIdentity, RunState, SequenceGate, Subscribe, TopicId, TopicSet,
 };
 use crate::msg::time::{DurationUs, TsUs};
 use crate::msg::ui::{UiBookSnapshot, UiCatalog, UiEvent};
+use crate::runtime::config::StrategyId;
 use crate::{info, warn, warn_repeating};
 
 use super::link_model::{

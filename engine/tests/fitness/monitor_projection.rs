@@ -10,7 +10,6 @@
 
 use proptest::prelude::*;
 
-use engine::config::ExecutionMode;
 use engine::hot::exec::{CloseReason, ExecHalt, HaltReason, OrderState, RejectOrigin};
 use engine::msg::exec::RejectClass;
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
@@ -19,6 +18,7 @@ use engine::msg::ui::{
     DomQuote, UI_ORDER_SNAPSHOT_CAPACITY, UiBookSnapshot, UiBookState, UiCatalog, UiEvent,
     UiInstrument, UiWorkingOrder,
 };
+use engine::runtime::config::ExecutionMode;
 use engine::workstation::format::{MISSING, write_bps_delta, write_opt_bps_delta};
 use engine::workstation::model::UiModel;
 use engine::workstation::monitor::model::{FeatureCell, OrderEvent, SystemEvent};

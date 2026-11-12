@@ -4,11 +4,11 @@
 
 use eframe::egui;
 
-use engine::config::ExecutionMode;
 use engine::hot::exec::{ExecHalt, HaltReason};
 use engine::msg::ids::{AssetId, InstrumentId};
 use engine::msg::time::TsUs;
 use engine::msg::ui::{UiCatalog, UiInstrument};
+use engine::runtime::config::ExecutionMode;
 use engine::workstation::browser::chrome::{ChromeAction, TopBarFrame};
 use engine::workstation::shell::{self, Arrangement, Navigation, Selection, SizeClass};
 

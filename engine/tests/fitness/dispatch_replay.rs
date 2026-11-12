@@ -2,7 +2,6 @@
 //! deterministic — identical emitted records and callback order across runs, warmup included —
 //! and a one-sided book (no microprice) must never fold a stale value into the persisted EwmaVol.
 
-use engine::config::{Instruments, KlineInterval, NoParams, StrategySpec, TableKind};
 use engine::hot::dispatch::HotEngine;
 use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
 use engine::log::LogRecord;
@@ -12,6 +11,7 @@ use engine::msg::inbound::{
 };
 use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::time::DurationUs;
+use engine::runtime::config::{Instruments, KlineInterval, NoParams, StrategySpec, TableKind};
 
 use rtrb::Consumer;
 

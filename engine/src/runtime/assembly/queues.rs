@@ -7,8 +7,8 @@ use crate::hot::ingress::IngressQueues;
 use crate::hot::spawn::{LinkQueueProducer, QueueProducer};
 use crate::msg::ids::{QueueId, SourceId};
 use crate::msg::inbound::InboundMessage;
-use crate::registry::Registry;
-use crate::shutdown::FatalSignal;
+use crate::runtime::registry::Registry;
+use crate::runtime::shutdown::FatalSignal;
 
 pub(super) struct InputQueues {
     pub ingress: IngressQueues,

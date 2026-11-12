@@ -1,8 +1,8 @@
 //! Slug + window-grid arithmetic: pure fns place 5-min windows on 300s grid, assign A/B slots,
 //! derive subscribe/prefetch/probe instants. No I/O or clock reads.
 
-use crate::config::PolySeries;
 use crate::msg::time::{DurationUs, TsUs};
+use crate::runtime::config::PolySeries;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Slot {

@@ -1,8 +1,6 @@
 //! Shared fixture for the engine-driven execution tests: a quoting engine on a two-sided book, the
 //! three readiness legs, and the helpers that read its command stream.
 
-use engine::config::{RecordedTables, TrackerSpec};
-use engine::exposure::InstrumentExposure;
 use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{
     DesiredQuote, ExecLimits, ExecSettings, FeeModel, OrderBudget, QuoteLevel,
@@ -14,7 +12,9 @@ use engine::msg::ids::{AssetId, InstrumentId, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::time::DurationUs;
 use engine::msg::ui::UiEvent;
-use engine::registry::InstrumentRow;
+use engine::runtime::config::{RecordedTables, TrackerSpec};
+use engine::runtime::exposure::InstrumentExposure;
+use engine::runtime::registry::InstrumentRow;
 use engine::venues::exec::open_orders_snapshot_end;
 use rtrb::{Consumer, RingBuffer};
 

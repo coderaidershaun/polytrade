@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use crate::info;
-use crate::secrets::{Credentials, EnvFile, SecretError};
+use crate::runtime::secrets::{Credentials, EnvFile, SecretError};
 use crate::venues::binance::rest::{
     AccountInfo, BinanceEnv, RestError, SignedRestClient, SignedRestConfig,
 };

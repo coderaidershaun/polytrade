@@ -4,14 +4,14 @@
 use tokio::net::UdpSocket;
 use tokio::runtime::Runtime;
 
-use crate::config::{Config, RunIdentity};
 use crate::hot::strategy::Strategy;
 use crate::info;
 use crate::link::{
     FrameGuard, LINK_NAME_LEN, LinkHash, LinkIdentity, PeerFeed, TopicId, schema_hash_of_fields,
 };
 use crate::msg::time::boot_stamp_us;
-use crate::registry::Registry;
+use crate::runtime::config::{Config, RunIdentity};
+use crate::runtime::registry::Registry;
 
 use super::EngineError;
 
@@ -31,7 +31,7 @@ pub(super) struct BoundLink {
 /// [`EngineError::LinkBind`] for a taken or unavailable address, and
 /// [`ConfigError`] via [`EngineError::Config`] for an unresolvable or over-long peer topic list.
 ///
-/// [`ConfigError`]: crate::config::ConfigError
+/// [`ConfigError`]: crate::runtime::config::ConfigError
 pub(super) fn link_bring_up<P>(
     config: &Config<P>,
     identity: &RunIdentity,

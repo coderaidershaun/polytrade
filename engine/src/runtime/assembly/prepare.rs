@@ -3,10 +3,10 @@
 
 use tokio::runtime::Runtime;
 
-use crate::config::{Config, ExecutionMode, RunIdentity, SourceSpec};
-use crate::exposure::{self, ExposureState};
 use crate::info;
-use crate::registry::{InstrumentRow, Registry};
+use crate::runtime::config::{Config, ExecutionMode, RunIdentity, SourceSpec};
+use crate::runtime::exposure::{self, ExposureState};
+use crate::runtime::registry::{InstrumentRow, Registry};
 use crate::venues::edge::rest_quiet::SharedRestQuiet;
 use crate::venues::venue::{self, ExecutionVenue};
 

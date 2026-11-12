@@ -2,14 +2,14 @@
 //! event folds through. Apply is ungated — a fill during warmup is money — and only the callback
 //! a strategy receives is gated.
 
-use crate::config::MAX_QUOTE_LEVELS;
 use crate::hot::ledger::PositionLedger;
 use crate::hot::strategy::Actions;
 use crate::msg::exec::{AccountChunk, CancelReason, ExecCommand, ExecEvent, ExecKind, Provenance};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Qty, Side};
 use crate::msg::persist::OrderTransition;
 use crate::msg::time::{DurationUs, TsUs};
-use crate::registry::InstrumentRow;
+use crate::runtime::config::MAX_QUOTE_LEVELS;
+use crate::runtime::registry::InstrumentRow;
 use crate::{error, warn};
 
 use super::account::{AccountTable, Balance};

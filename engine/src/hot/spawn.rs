@@ -11,7 +11,7 @@ use super::ingress::{IngressQueues, QueueSample};
 use crate::msg::ids::{QueueId, SourceId};
 use crate::msg::inbound::{InboundMessage, MarketTapItem, TappedMessage, VenueMeta};
 use crate::msg::time::TsUs;
-use crate::shutdown::{DrainSignal, FatalSignal};
+use crate::runtime::shutdown::{DrainSignal, FatalSignal};
 use crate::{error, warn};
 
 /// Keeps market taps open until the simulator finishes its final sweep.

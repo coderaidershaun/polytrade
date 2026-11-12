@@ -20,7 +20,7 @@ use tokio::task::JoinHandle;
 use crate::msg::exec::{CancelReason, ExecLaneItem};
 use crate::msg::ids::{ClientOrderId, InstrumentId, TradeId, VenueOrderId};
 use crate::msg::time::{DurationUs, TsUs};
-use crate::registry::AssetDictionary;
+use crate::runtime::registry::AssetDictionary;
 use crate::venues::binance::rest::BinanceEnv;
 use crate::venues::binance::ws;
 use crate::venues::edge::socket::{Reader, Writer};

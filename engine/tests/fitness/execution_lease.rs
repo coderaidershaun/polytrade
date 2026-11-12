@@ -3,7 +3,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use engine::config::{BinanceEnv, RunIdentity};
+use engine::runtime::config::{BinanceEnv, RunIdentity};
 use engine::runtime::{EngineError, ExecutionLease};
 use engine::venues::binance::exec as binance_exec;
 use engine::venues::exec::TeTag;

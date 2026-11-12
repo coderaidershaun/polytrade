@@ -1,7 +1,7 @@
 //! The words on the starting screen and in the top bar: the view names and the two safety badges.
 //! The starting screen shows no numbers, because there are none yet.
 
-use crate::config::ExecutionMode;
+use crate::runtime::config::ExecutionMode;
 use crate::workstation::shell::{Selection, View};
 
 use super::tone::Tone;

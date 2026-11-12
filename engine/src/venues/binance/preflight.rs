@@ -3,12 +3,14 @@
 //! read the account's ORDERS budget, which the hot side paces against without knowing whose buckets
 //! they are. Anything out of range, unlisted, absent or unreadable refuses the start loudly.
 
-use crate::config::{BinanceMarket, VenueMarket};
 use crate::hot::exec::{MAX_ORDER_BUDGET_WINDOWS, OrderBudget, OrderBudgetWindow};
 use crate::info;
 use crate::msg::ids::{DecimalError, InstrumentId, Price, Qty};
 use crate::msg::time::DurationUs;
-use crate::registry::{BinanceLimits, InstrumentRow, OrderRateLimit, RateInterval, Registry};
+use crate::runtime::config::{BinanceMarket, VenueMarket};
+use crate::runtime::registry::{
+    BinanceLimits, InstrumentRow, OrderRateLimit, RateInterval, Registry,
+};
 
 use super::rest::{BinanceEnv, ExchangeInfo, RestClient, RestError, SymbolFilter};
 
