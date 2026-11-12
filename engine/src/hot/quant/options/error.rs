@@ -41,6 +41,11 @@ pub(crate) fn require_not_negative(input: &'static str, value: f64) -> Result<f6
     if is_inside { Ok(value) } else { Err(OptionsError::OutsideDomain { input, value }) }
 }
 
+pub(crate) fn require_finite_input(input: &'static str, value: f64) -> Result<f64, OptionsError> {
+    let is_finite = value.abs() < f64::INFINITY;
+    if is_finite { Ok(value) } else { Err(OptionsError::OutsideDomain { input, value }) }
+}
+
 pub(crate) fn require_finite_output(output: &'static str, value: f64) -> Result<f64, OptionsError> {
     let is_finite = value.abs() < f64::INFINITY;
     if is_finite { Ok(value) } else { Err(OptionsError::NotFinite { output }) }

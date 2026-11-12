@@ -6,7 +6,7 @@ use super::error::{require_finite_output, require_not_negative, require_positive
 use super::{OptionsError, exp, ln};
 
 /// One point of volatility is 0.01.
-const POINTS_PER_UNIT: f64 = 100.0;
+pub(super) const POINTS_PER_UNIT: f64 = 100.0;
 
 const DAYS_PER_YEAR: f64 = 365.0;
 
@@ -190,7 +190,7 @@ impl Black76 {
         Ok(digital)
     }
 
-    fn check_market(&self) -> Result<(), OptionsError> {
+    pub(super) fn check_market(&self) -> Result<(), OptionsError> {
         require_positive("forward", self.forward)?;
         require_positive("strike", self.strike)?;
         require_not_negative("years", self.years)?;
