@@ -16,6 +16,10 @@ comply. IF one cannot comply, THEN surface conflict explicitly. Amendments: §15
 | gate G              | the six gate steps of §14                                                    |
 | live policy         | rules of the owner for keys and live runs. Git does not track them (§12)     |
 | `live-runner`       | the one role of a job that starts a live run, by the live policy (§12)       |
+| failure class       | the reaction to an error: HALT, RESET, RETRY, or REJECT (§6)                 |
+| quoting halt        | quoting stops, and the process stays up: `HaltReason` (§6)                   |
+| engine halt         | fatal latch, bounded drain, exit code not 0: `FatalReason` (§6)              |
+| ring-pressure halt  | a quoting halt that follows ring space, not messages (§6)                    |
 | polysim             | the repo that this workspace came from. In a clause: the code of this repo   |
 | Amended `<date>`    | amendment of that date, with its WHY (§15)                                   |
 | Replaced, WITHDRAWN | record of earlier law, not in force                                          |
@@ -122,12 +126,14 @@ civil strings, and every internal field stays `TsUs`/`_ts_us`.
 
 ## 6. Errors & Failure
 
-- [ ] Two failure classes. Never confuse them.
+- [ ] Two kinds of failure. Never confuse them.
   - **External, expected** (disconnect, malformed frame, HTTP fail, full queue, full disk): typed
     `thiserror` per concept. Variant = what failed + values seen. Handle by policy: reconnect,
     backoff, resync, drop + count.
   - **Internal invariant violation** (bug: corrupt book, impossible index, broken sequence logic):
     assert + panic immediately. Fail fast, fail loud.
+  - Replaced 2026-11-13: "Two failure classes." WHY: "failure class" now names the reaction to an
+    error (2026-11-13 section on failure classes, below).
 - [ ] Queue-full policy = asymmetric by design.
   - IF INPUT queue is full, THEN fatal drain (engine cannot keep up). Exception: untrusted remote
     producer, amended 2026-07-25.
@@ -181,8 +187,11 @@ WHY: execution command ring carries EVENTS, not state. Thus the precondition of 
 - [ ] Thus ring pressure delays the WIRE, never the STATE.
 - [ ] Two consequences bind:
   - Sink still counts drops. §6's letter holds, and in steady state the count is unreachable.
-  - Reachable failure becomes the bank's own high-water mark. It is a message-driven count, not a
-    ring occupancy. Thus §2 replay determinism survives.
+  - Reachable failure becomes the bank's own high-water mark: a full bank is a quoting halt. It is
+    one of the two ring-pressure halts (2026-11-13 section on failure classes, below).
+    - Replaced 2026-11-13: "It is a message-driven count, not a ring occupancy. Thus §2 replay
+      determinism survives." WHY: a bank fills only while the ring refuses its commands, so its
+      halt follows ring space.
 - IF hot pass gates on ring space instead, THEN hot state becomes a function of how fast the
   ASYNC consumer drained. That is a function of wall time. Replay diverges.
 
@@ -225,6 +234,68 @@ and `panic = "abort"` skips both.
   and the safety of funds rank above low latency (the ranking of §8).
 - [ ] IF a change wants `abort`, THEN it amends this clause first, with a drain that needs no
   unwind.
+
+### Amended 2026-11-13: failure classes, two kinds of halt, and the end of the process
+
+WHY: one error gets one reaction, decided once in code. "Halt" named two different stops. The lib
+ended the process itself, so no test could drive the drain deadline.
+
+Failure classes:
+
+- [ ] One enum `FailureClass` for the crate, in `engine/src/msg/`: HALT, RESET, RETRY, REJECT. A
+  HALT names its kind: quoting, engine, or start refused.
+- [ ] Each error enum that reaches a supervisor has `failure_class()`. Its `match` has no catch-all
+  arm, so a new variant does not compile until it has a class.
+- [ ] An error that wraps another error gives the class of the inner error, or a higher class.
+  Never a lower one.
+- [ ] One supervisor acts on the class at each thread root: the driver of the hot thread, the
+  session chassis of a venue edge, the root of each writer thread, and the start code. Lower code
+  returns the error.
+- [ ] An internal invariant violation has no failure class. It is a bug, and it panics (top of §6).
+
+Lanes:
+
+- [ ] Each lane type names its failure class in code, beside the type:
+
+| Lane | When the ring is full | Class |
+| --- | --- | --- |
+| Engine-fed input queue: market data, timer, execution events | fatal latch, bounded drain | HALT (engine) |
+| Market tap ring of the simulator | fatal latch, bounded drain | HALT (engine) |
+| Link input queue | drop the frame, count it (2026-07-25) | REJECT |
+| State lanes: UI books and events, outbound link, strategy log, latency samples | drop the record, count it | REJECT |
+| Exposure lane | keep the newest snapshot | REJECT (of the older snapshot) |
+| Command lane | commands stay in the bank, in order, with their bank stamps (2026-07-27) | RETRY |
+| Command bank | quoting halt `HaltReason::CommandBankOverflow` | HALT (quoting) |
+| Persistence seal | try at the request and at each spin, up to a cap from config, then quoting halt `HaltReason::SealNotAccepted` | RETRY, then HALT (quoting) |
+
+Two kinds of halt:
+
+- [ ] Quoting halt (`HaltReason`): quoting stops, and the engine sweeps its own orders. State stays,
+  and the process stays up. Only a person starts quoting again.
+- [ ] Engine halt (`FatalReason`): the fatal latch trips with a typed reason, and the first reason
+  stays. The drain runs inside its deadline, and the exit code is not 0.
+- [ ] A refused start is a HALT. The start returns a typed error before an edge can send an order,
+  and the exit code is not 0. Only a person starts the engine again.
+
+Two ring-pressure halts:
+
+- [ ] Two halts follow ring space, not messages: the bank halt (`CommandBankOverflow`) and the seal
+  halt (`SealNotAccepted`). Each is a designed capacity event: a consumer that stalls for a whole
+  bank, or for a whole cap of tries.
+- [ ] A replay of a tape gives the same state up to the first ring-pressure halt. A comparison of
+  two runs ends at the message where one of them shows such a halt.
+- [ ] The state digest leaves out each field that reads ring space: the commands that the bank
+  holds, a pending seal and its count of tries, and the drop counters.
+- [ ] No other state follows ring space (2026-07-27).
+
+The end of the process:
+
+- [ ] The lib never ends the process: no `std::process::exit` below `engine/src/`, outside
+  `engine/src/bin/`.
+- [ ] The lib returns `Exit` to the binary, and the binary sets the exit code. Only a graceful exit
+  gives code 0.
+- [ ] IF the drain passes `engine.drain_deadline_ms`, THEN the watchdog calls the forced-exit
+  function that the binary gives, one time.
 
 ## 7. Logging
 
@@ -677,6 +748,36 @@ the same path. A flatter tree gives each venue its own shape.
 - [ ] The simulator core has the same depth: `venues/sim/core/schedule/`.
 - [ ] Four levels is the limit, and it holds only below `engine/src/venues/`. Here this clause wins
   over the folder rule of `rex-code-folder-management` (max three levels below `<package>/src/`).
+
+### Amended 2026-11-13: the fold, start, and exit seams are `pub` on merit
+
+WHY: §12 (2026-07-28) forbids `pub` for a test's sake. Each item below has a caller that is not a
+test, or sits in a module that is a concept in its own right, and each clause names it.
+
+- [ ] `HotEngine::state_digest` (`engine::hot::dispatch`) is `pub`: the fold's own statement of its
+  state, the subject of the first Never line. `dispatch` never calls it. Merit: the fold is a
+  concept in its own right, and the timing harness builds a `HotEngine` outside the crate
+  (`tools/latency-probe/rig.rs`).
+- [ ] `select_oldest` (`engine::hot::ingress`) is `pub`: the pure rule that picks the next message
+  from the queue heads. It is the one place that decides the order across queues. Merit: the
+  module is a concept in its own right, and the timing harness builds `IngressQueues`
+  (`tools/latency-probe/idle.rs`, `tools/latency-probe/step.rs`).
+- [ ] `SpinSchedule` (`engine::msg::time`) is `pub`: the slot and the stamp of each spin tick.
+  Merit: it is vocabulary of `msg`, the data that crosses domains (root comment of
+  `engine/src/lib.rs`). It states the stamp that each `SpinTick` carries. The timing harness names
+  `engine::msg::time` (`tools/latency-probe/clock.rs`, `tools/latency-probe/rig.rs`).
+- [ ] `Preflight`, `StartPlan`, `Engine::start`, the pin parameter of `Engine::start`, and the venue
+  port trait that `Preflight::run_with` takes are `pub`. Merit: the engine binaries of package
+  `strat-micro-recorder`, another compile root, start the engine through them
+  (`strategies/strat-micro-recorder/te-binance-spot-btcusdt/main.rs`,
+  `strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/main.rs`).
+- [ ] `Exit`, the decision that gives it, the forced-exit parameter, and `FatalReason` are `pub`.
+  Merit: the same binaries give the forced-exit function and map `Exit` to the exit code.
+  `FatalReason` is the value of an `Exit` that halted.
+- [ ] Each other item of these modules keeps its visibility. Two seams have no caller outside the
+  tests: the drain watchdog and the exit outcome of the session chassis. §12 rules on them
+  (2026-11-13 ruling in the section on seams that change).
+- [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
 
 ## 9. Naming & API Ergonomics
 
@@ -1272,6 +1373,22 @@ drives both. A seam that a change reshapes and that no test drives can break wit
   changes, and `log::init` runs once in a process, so no test can drive it more than one time.
 - [ ] This ruling makes no other item `pub`. A further item needs its own ruling in this section.
   The ban of 2026-07-28 on `pub(crate) -> pub` for a test holds for each other item.
+- [ ] Ruling, 2026-11-13: two more seams have no caller outside the tests, and they are `pub` by
+  this ruling.
+  - The drain watchdog of the engine: its deadline and the forced-exit function passed in, and the
+    one call that it makes when the drain passes the deadline. Test:
+    `drain_past_deadline_calls_the_forced_exit_once`.
+  - The exit outcome of the session chassis of a venue edge (`engine/src/venues/edge/mod.rs`,
+    `engine/src/venues/exec/exit.rs`): what a session reports when its exit sweep ends, with the
+    client ids of the orders that stay, and the decision that gives it from the exit plan, the
+    time, and the mirror. Test: `sweep_past_deadline_is_not_swept`.
+  - WHY: each is a seam that changes. In a run the watchdog ends the process, so no test can drive
+    it with the real forced exit. The chassis runs only inside a live venue edge, and a test cannot
+    start one with no key.
+- [ ] Each other item of 2026-11-13 that a contract test reaches has a caller outside the tests,
+  and §8 names it (2026-11-13 section on the fold, start, and exit seams).
+- [ ] This ruling makes no other item `pub`. The ban of 2026-07-28 on `pub(crate) -> pub` for a
+  test holds for each other item.
 
 ## 13. Performance
 
