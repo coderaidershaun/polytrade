@@ -16,8 +16,8 @@
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
-    DesiredQuote, ExecCapacity, ExecSettings, HaltReason, OrderSlot, OrderState, QuoteLevel,
-    RejectReason,
+    DesiredQuote, ExecCapacity, ExecSettings, HaltReason, OrderClaim, OrderState, OrderTable,
+    QuoteLevel, RejectReason,
 };
 use engine::hot::strategy::{Strategy, StrategyCtx, WindowInfo};
 use engine::msg::exec::{
@@ -30,7 +30,9 @@ use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::RecordedTables;
 use rtrb::Consumer;
 
-use crate::engine_support::{ALL_TABLES, ONE, exec_event, local_refusals, rotation, ts};
+use crate::engine_support::{
+    ALL_TABLES, ONE, exec_capacity, exec_event, local_refusals, rotation, ts,
+};
 use crate::exec_support::{
     ASK, BID, CEILING, INSTRUMENT, QUOTE_QTY, QuotingSetup, TwoSidedQuoter, built_quoting_engine,
     drain_commands, exec_settings, make_ready, reseat_book, row_with_ceiling, spin_at,
@@ -223,28 +225,55 @@ fn the_quote_stop_pulls_the_whole_ladder_and_an_unwindowed_instrument_never_stop
 
 #[test]
 fn a_sweep_pulls_resting_quotes_and_never_a_marketable_order() {
-    let quote = |state: OrderState| OrderSlot {
-        state,
-        style: Some(OrderStyle::PostOnly),
-        ..OrderSlot::EMPTY
+    let is_resting = |style: OrderStyle, state: OrderState| {
+        let mut orders = OrderTable::new(&exec_capacity(1), 0);
+        let (index, client_id) = orders
+            .claim(OrderClaim {
+                instrument: INSTRUMENT,
+                side: Side::Buy,
+                level: QuoteLevel::ZERO,
+                price: Price::from_mantissa(BID),
+                qty: QUOTE_QTY,
+                style,
+                claimed_ts_us: ts(0),
+                recon_seq: 0,
+            })
+            .expect("a fresh table has a free slot");
+        let placed = ExecEvent {
+            kind: ExecKind::AckPlaced,
+            ..exec_event(INSTRUMENT, client_id, Side::Buy, BID, 0)
+        };
+        match state {
+            OrderState::PendingNew => {}
+            OrderState::Unknown => {
+                orders.mark_timed_out(index, ts(0));
+            }
+            _ => {
+                orders.apply(index, &placed, ts(0));
+            }
+        }
+        match state {
+            OrderState::CancelInFlight => {
+                orders.mark_cancel_sent(index);
+            }
+            OrderState::AmendInFlight => {
+                orders.mark_amend_sent(index);
+            }
+            _ => {}
+        }
+        assert_eq!(orders.slot(index).state(), state);
+        orders.slot(index).is_resting_quote()
     };
-    assert!(quote(OrderState::Live).is_resting_quote());
+    assert!(is_resting(OrderStyle::PostOnly, OrderState::Live));
     for unanswered in [
         OrderState::PendingNew,
         OrderState::CancelInFlight,
         OrderState::AmendInFlight,
         OrderState::Unknown,
     ] {
-        assert!(!quote(unanswered).is_resting_quote());
+        assert!(!is_resting(OrderStyle::PostOnly, unanswered));
     }
-    assert!(
-        !OrderSlot {
-            state: OrderState::Live,
-            style: Some(OrderStyle::Immediate),
-            ..OrderSlot::EMPTY
-        }
-        .is_resting_quote()
-    );
+    assert!(!is_resting(OrderStyle::Immediate, OrderState::Live));
 }
 
 /// CONTRACT: a bank that holds its whole capacity refuses the next command and halts quoting, and a

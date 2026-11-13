@@ -16,9 +16,9 @@
 //! belongs to neither alone.
 
 use engine::hot::exec::{
-    BookTop, CloseReason, DesiredQuote, ExecLimits, OrderSlot, OrderState, PlaceIntent,
-    ReconcileInput, ReconcileOutcome, RejectReason, RestingOrder, TickGrid, apply_exec_event,
-    reconcile_side,
+    BookTop, CloseReason, DesiredQuote, ExecLimits, OrderClaim, OrderSlot, OrderState, OrderTable,
+    PlaceIntent, QuoteLevel, ReconcileInput, ReconcileOutcome, RejectReason, RestingOrder,
+    TickGrid, reconcile_side,
 };
 use engine::msg::exec::{
     ExecEvent, ExecKind, OrderStyle, Provenance, RejectClass, VenueOrderStatus,
@@ -29,7 +29,7 @@ use engine::msg::ids::{
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use proptest::prelude::*;
 
-use crate::engine_support::{rich, top};
+use crate::engine_support::{exec_capacity, rich, top};
 
 /// A whole price unit in mantissas, matching the rest of the suite.
 const ONE: i64 = 100_000_000;
@@ -77,16 +77,30 @@ fn live(price: i64, qty: i64) -> Option<RestingOrder> {
     })
 }
 
-/// A buy order mid-amend, sized `qty` before the venue answers.
-fn amending_slot(qty: i64) -> OrderSlot {
-    OrderSlot {
-        client_id: ClientOrderId(1),
-        state: OrderState::AmendInFlight,
-        side: Side::Buy,
-        price: Price::from_mantissa(passive(Side::Buy)),
-        qty: Qty::from_mantissa(qty),
-        ..OrderSlot::EMPTY
-    }
+/// A buy order mid-amend, sized `qty` before the venue answers, in a table of its own.
+fn amending_order(qty: i64) -> (OrderTable, usize) {
+    let (mut orders, index) = live_order(qty);
+    orders.mark_amend_sent(index);
+    (orders, index)
+}
+
+/// A buy order resting at `qty`, in a table of its own.
+fn live_order(qty: i64) -> (OrderTable, usize) {
+    let mut orders = OrderTable::new(&exec_capacity(1), 0);
+    let (index, _) = orders
+        .claim(OrderClaim {
+            instrument: InstrumentId(0),
+            side: Side::Buy,
+            level: QuoteLevel::ZERO,
+            price: Price::from_mantissa(passive(Side::Buy)),
+            qty: Qty::from_mantissa(qty),
+            style: OrderStyle::PostOnly,
+            claimed_ts_us: RECEIVED,
+            recon_seq: 0,
+        })
+        .expect("a fresh table has a free slot");
+    orders.apply(index, &amend_answer(ExecKind::AckPlaced, 0), RECEIVED);
+    (orders, index)
 }
 
 /// One venue answer about that order.
@@ -142,10 +156,10 @@ fn amend_refused(amends_remaining: u8) -> ExecEvent {
 /// crate-internal, so the shape is restated rather than reached for.
 fn resting_of(slot: &OrderSlot) -> Option<RestingOrder> {
     Some(RestingOrder {
-        price: slot.price,
-        qty: slot.qty,
-        filled: slot.filled_base,
-        amends_used: slot.amends_used,
+        price: slot.price(),
+        qty: slot.qty(),
+        filled: slot.filled_base(),
+        amends_used: slot.amends_used(),
     })
 }
 
@@ -496,37 +510,40 @@ fn an_amend_answer_lands_the_size_once_and_spends_exactly_one_amend_per_command(
         ],
     ];
     for answers in deliveries {
-        let mut slot = amending_slot(10 * STEP);
+        let (mut orders, index) = amending_order(10 * STEP);
         for kind in answers {
-            apply_exec_event(&mut slot, &amend_answer(*kind, 4 * STEP), RECEIVED);
+            orders.apply(index, &amend_answer(*kind, 4 * STEP), RECEIVED);
         }
+        let slot = orders.slot(index);
         assert_eq!(
-            slot.qty,
+            slot.qty(),
             Qty::from_mantissa(4 * STEP),
             "the slot did not settle on the venue's size after {answers:?}"
         );
         assert_eq!(
-            slot.amends_used, 1,
+            slot.amends_used(),
+            1,
             "one amend command spent {} amends against {answers:?}",
-            slot.amends_used
+            slot.amends_used()
         );
         let desired = want(passive(Side::Buy), 4 * STEP);
         assert_eq!(
-            reconcile_side(input(Side::Buy, desired, resting_of(&slot))),
+            reconcile_side(input(Side::Buy, desired, resting_of(slot))),
             ReconcileOutcome::Nothing,
             "the shrink was decided a second time after {answers:?}"
         );
 
         // The SECOND command counts too — a slot re-entering `AmendInFlight` is the engine sending
         // another amend, which is exactly what the budget is counting.
-        slot.state = OrderState::AmendInFlight;
+        orders.mark_amend_sent(index);
         for kind in answers {
-            apply_exec_event(&mut slot, &amend_answer(*kind, 3 * STEP), RECEIVED);
+            orders.apply(index, &amend_answer(*kind, 3 * STEP), RECEIVED);
         }
         assert_eq!(
-            slot.amends_used, 2,
+            orders.slot(index).amends_used(),
+            2,
             "a second amend command left the count at {} against {answers:?}",
-            slot.amends_used
+            orders.slot(index).amends_used()
         );
     }
 }
@@ -540,29 +557,19 @@ fn an_amend_answer_lands_the_size_once_and_spends_exactly_one_amend_per_command(
 fn a_definitive_zero_retires_the_amend_and_an_unknown_leaves_it_alone() {
     let shrink = want(passive(Side::Buy), 4 * STEP);
 
-    let mut spent = OrderSlot {
-        state: OrderState::Live,
-        ..amending_slot(10 * STEP)
-    };
-    apply_exec_event(&mut spent, &amend_refused(0), RECEIVED);
-    let outcome = reconcile_side(input(Side::Buy, shrink, resting_of(&spent)));
+    let (mut spent, index) = live_order(10 * STEP);
+    spent.apply(index, &amend_refused(0), RECEIVED);
+    let outcome = reconcile_side(input(Side::Buy, shrink, resting_of(spent.slot(index))));
     assert_eq!(
         outcome,
         ReconcileOutcome::Cancel,
         "the venue said this order gets no more amends, yet the engine answered {outcome:?}"
     );
 
-    let mut unclaimed = OrderSlot {
-        state: OrderState::Live,
-        ..amending_slot(10 * STEP)
-    };
-    apply_exec_event(
-        &mut unclaimed,
-        &amend_refused(ExecEvent::AMENDS_UNKNOWN),
-        RECEIVED,
-    );
+    let (mut unclaimed, index) = live_order(10 * STEP);
+    unclaimed.apply(index, &amend_refused(ExecEvent::AMENDS_UNKNOWN), RECEIVED);
     assert_eq!(
-        reconcile_side(input(Side::Buy, shrink, resting_of(&unclaimed))),
+        reconcile_side(input(Side::Buy, shrink, resting_of(unclaimed.slot(index)))),
         ReconcileOutcome::AmendQty(Qty::from_mantissa(4 * STEP)),
         "an event claiming nothing about the budget spent it anyway"
     );
@@ -574,24 +581,24 @@ fn a_definitive_zero_retires_the_amend_and_an_unknown_leaves_it_alone() {
 /// already holds, which the venue refuses outright.
 #[test]
 fn a_late_amend_answer_never_restores_a_larger_size() {
-    let mut slot = amending_slot(10 * STEP);
-    apply_exec_event(
-        &mut slot,
+    let (mut orders, index) = amending_order(10 * STEP);
+    orders.apply(
+        index,
         &amend_answer(ExecKind::AckAmended, 6 * STEP),
         RECEIVED,
     );
-    apply_exec_event(
-        &mut slot,
+    orders.apply(
+        index,
         &amend_answer(ExecKind::AckAmended, 3 * STEP),
         RECEIVED,
     );
-    apply_exec_event(
-        &mut slot,
+    orders.apply(
+        index,
         &amend_answer(ExecKind::ReportAmended, 6 * STEP),
         RECEIVED,
     );
     assert_eq!(
-        slot.qty,
+        orders.slot(index).qty(),
         Qty::from_mantissa(3 * STEP),
         "a stale amend answer restored a size the venue has left"
     );
@@ -610,41 +617,43 @@ fn a_late_amend_answer_never_restores_a_larger_size() {
 /// wrong, because the next decision is taken against exactly that size.
 #[test]
 fn an_amend_that_never_left_releases_the_slot_and_the_shrink_is_decided_again() {
-    let mut slot = amending_slot(10 * STEP);
-    apply_exec_event(&mut slot, &amend_not_sent(), RECEIVED);
+    let (mut orders, index) = amending_order(10 * STEP);
+    orders.apply(index, &amend_not_sent(), RECEIVED);
+    let slot = orders.slot(index);
     assert_eq!(
-        slot.state,
+        slot.state(),
         OrderState::Live,
         "the slot is still waiting on an amend the venue was never asked for"
     );
     assert_eq!(
-        slot.qty,
+        slot.qty(),
         Qty::from_mantissa(10 * STEP),
         "an amend that never left moved the resting size anyway"
     );
     assert_eq!(
-        slot.amends_used, 0,
+        slot.amends_used(),
+        0,
         "an amend that never left spent one of the order's amends"
     );
 
     let shrink = want(passive(Side::Buy), 4 * STEP);
     assert_eq!(
-        reconcile_side(input(Side::Buy, shrink, resting_of(&slot))),
+        reconcile_side(input(Side::Buy, shrink, resting_of(slot))),
         ReconcileOutcome::AmendQty(Qty::from_mantissa(4 * STEP)),
         "the shrink was abandoned with the order still resting at its original size"
     );
 
     // An amend not leaving says nothing about whether the order survived, so a terminal answer that
     // raced it keeps the last word.
-    let mut retired = amending_slot(10 * STEP);
-    apply_exec_event(
-        &mut retired,
+    let (mut retired, index) = amending_order(10 * STEP);
+    retired.apply(
+        index,
         &amend_answer(ExecKind::ReportCanceled, 10 * STEP),
         RECEIVED,
     );
-    apply_exec_event(&mut retired, &amend_not_sent(), RECEIVED);
+    retired.apply(index, &amend_not_sent(), RECEIVED);
     assert_eq!(
-        retired.state,
+        retired.slot(index).state(),
         OrderState::Closed(CloseReason::Canceled),
         "a refused amend resurrected an order the venue had already retired"
     );

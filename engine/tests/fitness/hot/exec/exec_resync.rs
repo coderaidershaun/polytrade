@@ -163,7 +163,7 @@ fn the_resync_marker_can_retire_no_slot() {
     );
 
     assert_eq!(closed, 0, "the resync marker swept a working order");
-    assert!(orders.slot(index).state.is_working());
+    assert!(orders.slot(index).state().is_working());
 }
 
 /// FITNESS: balances are re-stated on every spin, not only when they change.

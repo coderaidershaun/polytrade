@@ -61,7 +61,7 @@ impl ExecEngine {
     pub(super) fn retry_reservation_releases(&mut self) {
         for index in self.orders.slot_indices() {
             let slot = self.orders.slot(index);
-            if slot.reserved_amount.is_none() || slot.state == OrderState::PendingNew {
+            if slot.reserved_amount().is_none() || slot.state() == OrderState::PendingNew {
                 continue;
             }
             self.release_reservation(index);
@@ -77,7 +77,7 @@ impl ExecEngine {
         bank: &mut Actions,
     ) -> ExecCallback {
         let (now, received) = (stamps.fold, stamps.received);
-        let previous_state = OrderLifecycle::from(self.orders.slot(index).state);
+        let previous_state = OrderLifecycle::from(self.orders.slot(index).state());
         let applied = self.orders.apply(index, event, now);
         if applied.is_resurrection {
             self.resurrection_error(event);
@@ -95,10 +95,10 @@ impl ExecEngine {
 
         if !applied.fill.is_empty() {
             return ExecCallback::Fill(Fill {
-                instrument: slot.instrument,
-                client_id: slot.client_id,
-                side: slot.side,
-                level: slot.level,
+                instrument: slot.instrument(),
+                client_id: slot.client_id(),
+                side: slot.side(),
+                level: slot.level(),
                 price: event.last_price,
                 qty: applied.fill.base,
                 notional: applied.fill.quote,
@@ -112,10 +112,10 @@ impl ExecEngine {
         }
         if let Some(class) = event.reject {
             return ExecCallback::Reject(OrderReject {
-                instrument: slot.instrument,
-                client_id: Some(slot.client_id),
-                side: slot.side,
-                level: Some(slot.level),
+                instrument: slot.instrument(),
+                client_id: Some(slot.client_id()),
+                side: slot.side(),
+                level: Some(slot.level()),
                 origin: RejectOrigin::Venue {
                     class,
                     code: event.reject_code,
@@ -144,7 +144,7 @@ impl ExecEngine {
             Err(Unseated::TableFull) => return self.prior_run_overflow_error(event),
             Err(Unseated::NoInstrument) => return self.prior_run_without_instrument_error(event),
         };
-        let previous_state = OrderLifecycle::from(self.prior_orders.slot(index).state);
+        let previous_state = OrderLifecycle::from(self.prior_orders.slot(index).state());
         let applied = self.prior_orders.apply(index, event, now);
         let slot = *self.prior_orders.slot(index);
         self.book_fill(&slot, event, applied.fill, ledger);
@@ -170,13 +170,13 @@ impl ExecEngine {
             return;
         }
         // Only commission in own quote_asset counts (foreign asset = wrong PnL forever).
-        let quote_asset = self.instruments[usize::from(slot.instrument.0)].quote_asset;
+        let quote_asset = self.instruments[usize::from(slot.instrument().0)].quote_asset;
         let commission_quote =
             if event.commission_asset == quote_asset { event.commission } else { 0 };
         let commission_quote = Notional::from_mantissa(commission_quote);
         ledger.apply_fill(&LedgerFill {
-            instrument: slot.instrument,
-            side: slot.side,
+            instrument: slot.instrument(),
+            side: slot.side(),
             base: fill.base,
             notional_quote: fill.quote,
             commission_quote,
@@ -222,20 +222,20 @@ impl ExecEngine {
     /// drops `free` and releasing before it lands would double-spend.
     fn release_reservation(&mut self, index: usize) {
         let slot = self.orders.slot(index);
-        if slot.reserved_amount.is_none() {
+        if slot.reserved_amount().is_none() {
             return;
         }
-        let asset = self.instruments[usize::from(slot.instrument.0)].spend_asset(slot.side);
+        let asset = self.instruments[usize::from(slot.instrument().0)].spend_asset(slot.side());
         if self.settings.holds_reservations_until_settled {
-            if slot.state != OrderState::PendingNew {
+            if slot.state() != OrderState::PendingNew {
                 self.gated_release(index, asset);
             }
             return;
         }
-        if slot.state.is_working() {
+        if slot.state().is_working() {
             return;
         }
-        if slot.filled_base.mantissa() == 0 {
+        if slot.filled_base().mantissa() == 0 {
             self.release_unsent_reservation(index);
             return;
         }
@@ -246,10 +246,10 @@ impl ExecEngine {
     /// held for the next spin to retry.
     fn gated_release(&mut self, index: usize, asset: AssetId) {
         let slot = self.orders.slot(index);
-        let Some(amount) = slot.reserved_amount else {
+        let Some(amount) = slot.reserved_amount() else {
             return;
         };
-        let outcome = self.account.release(asset, amount, slot.reserved_at);
+        let outcome = self.account.release(asset, amount, slot.reserved_at());
         if outcome == ReleaseOutcome::Released {
             self.orders.clear_reservation(index);
         }
@@ -257,10 +257,10 @@ impl ExecEngine {
 
     pub(super) fn release_unsent_reservation(&mut self, index: usize) {
         let slot = self.orders.slot(index);
-        let Some(amount) = slot.reserved_amount else {
+        let Some(amount) = slot.reserved_amount() else {
             return;
         };
-        let asset = self.instruments[usize::from(slot.instrument.0)].spend_asset(slot.side);
+        let asset = self.instruments[usize::from(slot.instrument().0)].spend_asset(slot.side());
         self.account.release_unsent(asset, amount);
         self.orders.clear_reservation(index);
     }
@@ -328,7 +328,7 @@ fn swept_warning(slot: &OrderSlot, recon_seq: u64) {
     hot_warn!(
         "reconciliation pass {} did not name order {:x} on instrument {} — closing it as gone",
         recon_seq,
-        slot.client_id.0,
-        slot.instrument.0
+        slot.client_id().0,
+        slot.instrument().0
     );
 }

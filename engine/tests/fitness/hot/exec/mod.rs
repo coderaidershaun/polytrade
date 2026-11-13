@@ -10,7 +10,6 @@ mod exec_order;
 mod exec_prior_run;
 mod exec_reconcile;
 mod exec_resync;
-mod exec_sweep;
 mod exec_window;
 mod loss_gate;
 mod order_table;

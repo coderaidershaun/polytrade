@@ -70,7 +70,7 @@ impl ExecEngine {
             bank,
         );
         let slot = self.orders.slot(index);
-        let (instrument, client_id) = (slot.instrument, slot.client_id);
+        let (instrument, client_id) = (slot.instrument(), slot.client_id());
         self.recon_seq += 1;
         let command = ExecCommand::ReconcileOrder {
             instrument,
@@ -86,7 +86,7 @@ impl ExecEngine {
         let has_working = self
             .orders
             .slot_indices()
-            .any(|index| self.orders.slot(index).state.is_working());
+            .any(|index| self.orders.slot(index).state().is_working());
         if is_silent && has_working {
             self.request_open_orders(now);
         }
@@ -270,7 +270,7 @@ impl ExecEngine {
                 resting: self
                     .orders
                     .resting(instrument, side, level)
-                    .filter(|slot| slot.state == OrderState::Live)
+                    .filter(|slot| slot.state() == OrderState::Live)
                     .map(resting_of),
                 grid,
                 top,

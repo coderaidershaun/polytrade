@@ -40,7 +40,7 @@ impl ExecEngine {
                 let Some(index) = self.resting_index(instrument, side, level) else {
                     return;
                 };
-                let client_id = self.orders.slot(index).client_id;
+                let client_id = self.orders.slot(index).client_id();
                 let command = ExecCommand::AmendQty {
                     instrument,
                     client_id,
@@ -62,7 +62,7 @@ impl ExecEngine {
         side: Side,
         level: QuoteLevel,
     ) -> Option<usize> {
-        let client_id = self.orders.resting(instrument, side, level)?.client_id;
+        let client_id = self.orders.resting(instrument, side, level)?.client_id();
         self.orders.find(client_id)
     }
 
@@ -77,8 +77,8 @@ impl ExecEngine {
         let at = stamps.fold;
         let slot = self.orders.slot(index);
         let command = ExecCommand::Cancel {
-            instrument: slot.instrument,
-            client_id: slot.client_id,
+            instrument: slot.instrument(),
+            client_id: slot.client_id(),
         };
         let is_sent = self.bank_or_halt(command, at);
         if is_sent {

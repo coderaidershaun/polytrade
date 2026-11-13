@@ -22,7 +22,8 @@ use super::desired::QuoteLevel;
 
 pub(super) use prior_run::{PriorRunOrders, Unseated};
 pub use slot::{CloseReason, FillDelta, OrderSlot, OrderState};
-pub use transition::{Applied, apply_exec_event};
+pub use transition::Applied;
+use transition::apply_exec_event;
 
 const SLOTS_PER_LEVEL: usize = 4;
 const SLOTS_PER_SIDE: usize = MAX_QUOTE_LEVELS * SLOTS_PER_LEVEL;
@@ -341,11 +342,6 @@ impl OrderTable {
         let previous = slot.state;
         slot.state = next;
         previous
-    }
-
-    #[inline]
-    pub fn slot_mut(&mut self, index: usize) -> &mut OrderSlot {
-        &mut self.slots[index]
     }
 
     pub fn reap(&mut self, now: LocalTs, window: DurationUs) {

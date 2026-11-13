@@ -48,20 +48,20 @@ pub(super) fn bank_engine_driven(
 fn bank_order(bank: &mut Actions, audit: OrderAudit<'_>) {
     let slot = audit.slot;
     bank.push_persist(PersistRecord::Order(OrderRow {
-        instrument: slot.instrument,
-        client_id: slot.client_id,
-        venue_order_id: slot.venue_order_id,
+        instrument: slot.instrument(),
+        client_id: slot.client_id(),
+        venue_order_id: slot.venue_order_id(),
         transition: audit.transition,
-        state: slot.state.into(),
+        state: slot.state().into(),
         previous_state: audit.previous_state,
         provenance: audit.provenance,
-        side: slot.side,
-        quote_level: (audit.provenance == Provenance::Mine).then_some(slot.level),
-        style: slot.style,
-        price: slot.price,
-        qty: slot.qty,
-        filled_qty: slot.filled_base,
-        filled_quote: slot.filled_quote.mantissa(),
+        side: slot.side(),
+        quote_level: (audit.provenance == Provenance::Mine).then_some(slot.level()),
+        style: slot.style(),
+        price: slot.price(),
+        qty: slot.qty(),
+        filled_qty: slot.filled_base(),
+        filled_quote: slot.filled_quote().mantissa(),
         reject: audit.reject,
         reject_code: audit.reject_code,
         exchange_ts_us: audit.exchange_ts_us,
@@ -78,13 +78,13 @@ pub(super) fn bank_fill(
     received_ts_us: LocalTs,
 ) {
     bank.push_persist(PersistRecord::Fill(FillRow {
-        instrument: slot.instrument,
+        instrument: slot.instrument(),
         trade_id: event.trade_id,
-        venue_order_id: slot.venue_order_id,
-        client_id: slot.client_id,
+        venue_order_id: slot.venue_order_id(),
+        client_id: slot.client_id(),
         provenance: event.provenance,
-        side: slot.side,
-        quote_level: (event.provenance == Provenance::Mine).then_some(slot.level),
+        side: slot.side(),
+        quote_level: (event.provenance == Provenance::Mine).then_some(slot.level()),
         liquidity: event.liquidity,
         last_price: event.last_price,
         last_qty: event.last_qty,
@@ -154,5 +154,5 @@ fn transition_of(kind: ExecKind) -> Option<OrderTransition> {
 /// State or fill moved (duplicates already absorbed).
 #[inline]
 fn is_worth_recording(previous_state: OrderLifecycle, slot: &OrderSlot, fill: FillDelta) -> bool {
-    OrderLifecycle::from(slot.state) != previous_state || !fill.is_empty()
+    OrderLifecycle::from(slot.state()) != previous_state || !fill.is_empty()
 }

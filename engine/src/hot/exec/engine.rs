@@ -267,8 +267,8 @@ impl ExecEngine {
             .orders
             .side_slots(instrument, side)
             .iter()
-            .filter(|slot| slot.state.is_working())
-            .map(|slot| working_view_of(slot, Some(slot.level)));
+            .filter(|slot| slot.state().is_working())
+            .map(|slot| working_view_of(slot, Some(slot.level())));
         let prior = self
             .prior_orders
             .working(instrument, side)
@@ -421,38 +421,38 @@ fn unswept_error(instrument: InstrumentId) {
 #[inline]
 pub(super) fn view_of(slot: &OrderSlot) -> OrderView {
     OrderView {
-        client_id: slot.client_id,
-        venue_order_id: slot.venue_order_id,
-        instrument: slot.instrument,
-        side: slot.side,
-        level: slot.level,
-        state: slot.state,
-        price: slot.price,
-        qty: slot.qty,
-        filled: slot.filled_base,
+        client_id: slot.client_id(),
+        venue_order_id: slot.venue_order_id(),
+        instrument: slot.instrument(),
+        side: slot.side(),
+        level: slot.level(),
+        state: slot.state(),
+        price: slot.price(),
+        qty: slot.qty(),
+        filled: slot.filled_base(),
     }
 }
 
 #[inline]
 fn working_view_of(slot: &OrderSlot, level: Option<QuoteLevel>) -> WorkingOrderView {
     WorkingOrderView {
-        client_id: slot.client_id,
-        instrument: slot.instrument,
-        side: slot.side,
+        client_id: slot.client_id(),
+        instrument: slot.instrument(),
+        side: slot.side(),
         level,
-        state: slot.state,
-        price: slot.price,
-        qty: slot.qty,
-        filled: slot.filled_base,
+        state: slot.state(),
+        price: slot.price(),
+        qty: slot.qty(),
+        filled: slot.filled_base(),
     }
 }
 
 #[inline]
 pub(super) fn resting_of(slot: &OrderSlot) -> RestingOrder {
     RestingOrder {
-        price: slot.price,
-        qty: slot.qty,
-        filled: slot.filled_base,
-        amends_used: slot.amends_used,
+        price: slot.price(),
+        qty: slot.qty(),
+        filled: slot.filled_base(),
+        amends_used: slot.amends_used(),
     }
 }

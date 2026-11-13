@@ -71,26 +71,26 @@ impl From<OrderState> for OrderLifecycle {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OrderSlot {
-    pub client_id: ClientOrderId,
-    pub venue_order_id: Option<VenueOrderId>,
-    pub state: OrderState,
-    pub side: Side,
-    pub level: QuoteLevel,
-    pub style: Option<OrderStyle>,
-    pub instrument: InstrumentId,
-    pub price: Price,
-    pub qty: Qty,
-    pub filled_base: Qty,
-    pub filled_quote: Notional,
-    pub amends_used: u8,
-    pub generation: u16,
+    pub(super) client_id: ClientOrderId,
+    pub(super) venue_order_id: Option<VenueOrderId>,
+    pub(super) state: OrderState,
+    pub(super) side: Side,
+    pub(super) level: QuoteLevel,
+    pub(super) style: Option<OrderStyle>,
+    pub(super) instrument: InstrumentId,
+    pub(super) price: Price,
+    pub(super) qty: Qty,
+    pub(super) filled_base: Qty,
+    pub(super) filled_quote: Notional,
+    pub(super) amends_used: u8,
+    pub(super) generation: u16,
     /// `None` while nothing is held for the order, a zero amount included.
-    pub reserved_amount: Option<Spend>,
-    pub reserved_at: AccountWatermark,
-    pub placed_recon_seq: u64,
-    pub seen_recon_seq: u64,
-    pub last_event_ts_us: LocalTs,
-    pub closed_ts_us: LocalTs,
+    pub(super) reserved_amount: Option<Spend>,
+    pub(super) reserved_at: AccountWatermark,
+    pub(super) placed_recon_seq: u64,
+    pub(super) seen_recon_seq: u64,
+    pub(super) last_event_ts_us: LocalTs,
+    pub(super) closed_ts_us: LocalTs,
 }
 
 /// What a reader outside the order table sees of a slot. Only a named transition of the table writes
@@ -174,7 +174,7 @@ impl OrderSlot {
 }
 
 impl OrderSlot {
-    pub const EMPTY: OrderSlot = OrderSlot {
+    pub(super) const EMPTY: OrderSlot = OrderSlot {
         client_id: ClientOrderId(0),
         venue_order_id: None,
         state: OrderState::Free,
@@ -207,7 +207,7 @@ impl OrderSlot {
     }
 
     #[inline]
-    pub fn fold_fill(&mut self, event: &ExecEvent) -> FillDelta {
+    pub(super) fn fold_fill(&mut self, event: &ExecEvent) -> FillDelta {
         let delta_base = event.cumulative_qty.mantissa() - self.filled_base.mantissa();
         let delta_quote = event.cumulative_quote - self.filled_quote;
         if delta_base <= 0 {

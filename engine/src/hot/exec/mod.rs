@@ -36,7 +36,7 @@ pub use gates::{
 };
 pub use order::{
     Applied, ClientIdLayout, CloseReason, FillDelta, MAX_ORDER_SLOTS, OrderClaim, OrderSlot,
-    OrderState, OrderTable, ReconcilePass, apply_exec_event, level_of_slot, side_base,
+    OrderState, OrderTable, ReconcilePass, level_of_slot, side_base,
 };
 pub use reconcile::{
     BookTop, ExecLimits, FundsView, PlaceIntent, ReconcileInput, ReconcileOutcome, RejectReason,

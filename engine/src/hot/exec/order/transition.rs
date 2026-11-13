@@ -23,7 +23,7 @@ pub struct Applied {
     pub is_resurrection: bool,
 }
 
-pub fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent, now: LocalTs) -> Applied {
+pub(super) fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent, now: LocalTs) -> Applied {
     if slot.state == OrderState::Free {
         return Applied {
             fill: FillDelta::NONE,
@@ -66,13 +66,13 @@ pub fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent, now: LocalTs) -
             },
             Some(RejectClass::Refused) => close_or_keep(previous_state, CloseReason::Rejected),
             Some(RejectClass::Gone) => close_or_keep(previous_state, CloseReason::ReconciledGone),
-            // SMELL: this catch-all arm takes `Ambiguous`, `Fatal`, a missing class, and any class
-            // added later, so a new reject class compiles and lands here with no decision. Each
-            // class needs its own arm.
-            _ => match previous_state {
-                OrderState::Closed(reason) => OrderState::Closed(reason),
-                _ => OrderState::Unknown,
-            },
+            // The venue cannot say whether the order rests: Binance's "unknown order" is also what
+            // a filled order returns.
+            Some(RejectClass::Ambiguous) => unknown_unless_closed(previous_state),
+            // The fold halts quoting on this class, and the order it refused may still rest.
+            Some(RejectClass::Fatal) => unknown_unless_closed(previous_state),
+            // A refusal that names no class says nothing about the order.
+            None => unknown_unless_closed(previous_state),
         },
 
         ExecKind::ReportTrade => {
@@ -173,6 +173,15 @@ fn close_or_keep(state: OrderState, reason: CloseReason) -> OrderState {
     match state {
         OrderState::Closed(existing) => OrderState::Closed(existing),
         _ => OrderState::Closed(reason),
+    }
+}
+
+/// A closed order keeps its first answer, and any other is unknown until the venue is asked.
+#[inline]
+fn unknown_unless_closed(state: OrderState) -> OrderState {
+    match state {
+        OrderState::Closed(reason) => OrderState::Closed(reason),
+        _ => OrderState::Unknown,
     }
 }
 
