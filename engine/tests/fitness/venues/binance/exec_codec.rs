@@ -23,7 +23,7 @@ use engine::venues::binance::exec::{
 };
 use engine::venues::binance::rest::OrderRecord;
 use engine::venues::edge::decode::DecimalFault;
-use engine::venues::exec::{EngineIdentity, ExecRequest, TeTag, TimeoutFallout};
+use engine::venues::exec::{EngineIdentity, ExecRequest, OrderOwnership, TeTag, TimeoutFallout};
 use proptest::prelude::*;
 
 use crate::venues::binance::fake_venue::{Delivery, FakeVenue, exec_events};
@@ -294,15 +294,15 @@ fn malformed_ids_are_foreign_rather_than_a_near_match() {
     ];
     for case in cases {
         assert_eq!(
-            classify_client_order_id(case, identity).provenance,
-            Provenance::Foreign,
+            classify_client_order_id(case, identity),
+            OrderOwnership::Foreign,
             "{case:?} must not be read as this engine's order"
         );
     }
-    assert_eq!(
-        classify_client_order_id(&ours, identity).provenance,
-        Provenance::Mine
-    );
+    assert!(matches!(
+        classify_client_order_id(&ours, identity),
+        OrderOwnership::Mine(_)
+    ));
 }
 
 proptest! {
@@ -1066,9 +1066,13 @@ proptest! {
         )
         .expect("decodes")
         .expect("configured");
-        let direct = classify_client_order_id(&text, identity);
-        prop_assert_eq!(rest.provenance, direct.provenance);
-        prop_assert_eq!(rest.client_id, direct.client_id);
+        let direct = match classify_client_order_id(&text, identity) {
+            OrderOwnership::Mine(client_id) => (Provenance::Mine, client_id),
+            OrderOwnership::PriorRun(client_id) => (Provenance::PriorRun, client_id),
+            OrderOwnership::Foreign => (Provenance::Foreign, ClientOrderId(0)),
+        };
+        prop_assert_eq!(rest.provenance, direct.0);
+        prop_assert_eq!(rest.client_id, direct.1);
     }
 }
 

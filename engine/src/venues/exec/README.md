@@ -125,8 +125,10 @@ the exit is not graceful.
 ## Identity and ownership
 
 The engine's `ClientOrderId` is a bit-packed u64 — run nonce, slot index, generation — an
-address, not a name. `TeTag` digests the (strategy, te) identity. Every order is Mine,
-PriorRun or Foreign; foreign orders are never mirrored and never cancelled.
+address, not a name. `TeTag` digests the (strategy, te) identity. The codec's verdict on
+an order is the enum `OrderOwnership`: `Mine(id)`, `PriorRun(id)` or `Foreign`. `Foreign`
+holds no client id, so no code can address a foreign order: it is never mirrored and never
+cancelled.
 
 Two identity patterns exist, chosen by whether the venue echoes a client id:
 
@@ -142,7 +144,11 @@ Two identity patterns exist, chosen by whether the venue echoes a client id:
 Every venue declares a `LeaseNamespace` beside its capabilities. The execution lease locks
 one live process per engine identity per host and advances a durable run nonce per
 (venue, account). The nonce-file names are pinned byte-for-byte by fitness: renaming one
-orphans real nonce history and could re-mint client ids a venue has already seen.
+orphans real nonce history and could re-mint client ids a venue has already seen. Each new
+nonce replaces the file through the durable-file writer (temporary file, sync, rename), so a
+stop in the middle leaves the old nonce or the new one. A missing file is a first run. An
+empty file or one that cannot be read refuses the start: its last nonce is unknown, and a
+guess could re-mint client ids a venue has already seen.
 
 ## VenueCapabilities
 

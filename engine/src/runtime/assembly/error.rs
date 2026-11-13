@@ -68,6 +68,10 @@ pub enum StartError {
     ExecutionIdentityState { path: PathBuf, value: Box<str> },
     #[error("execution identity at {path} exhausted its 32-bit run nonce")]
     ExecutionIdentityExhausted { path: PathBuf },
+    #[error(
+        "the run nonce file at {path} is empty — a run stopped while it wrote the file; do not delete it, write the highest run nonce that the venue's order history shows into it, then start again"
+    )]
+    ExecutionNonceEmpty { path: PathBuf },
     #[error("tokio runtime build failed")]
     Runtime(#[source] std::io::Error),
     #[error("hot_core_id {core_id} is not an available core (found {available})")]
@@ -121,6 +125,7 @@ impl StartError {
             | StartError::ExecutionIdentityIo { .. }
             | StartError::ExecutionIdentityState { .. }
             | StartError::ExecutionIdentityExhausted { .. }
+            | StartError::ExecutionNonceEmpty { .. }
             | StartError::Runtime(_)
             | StartError::CoreId { .. }
             | StartError::HotPin { .. }

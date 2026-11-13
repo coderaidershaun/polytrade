@@ -164,15 +164,6 @@ pub enum ExposureError {
     DrainInterrupted,
 }
 
-impl ExposureError {
-    fn write_at(path: &Path) -> impl FnOnce(std::io::Error) -> Self + '_ {
-        move |source| Self::Write {
-            path: path.to_path_buf(),
-            source,
-        }
-    }
-}
-
 /// Adds `-sim` to simulated exposure filenames.
 pub fn file_path(dir: &Path, identity: &RunIdentity, mode: Option<ExecutionMode>) -> PathBuf {
     dir.join(format!(
