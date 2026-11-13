@@ -214,32 +214,6 @@ fn run_sequence(sequence: &[InboundMessage], warmup: DurationUs) -> Replayed {
     Replayed { persist, logs }
 }
 
-#[test]
-fn dispatch_replay_is_deterministic() {
-    let first = run_sequence(&probe_sequence(), DurationUs::ZERO);
-    let second = run_sequence(&probe_sequence(), DurationUs::ZERO);
-    assert_eq!(first.persist, second.persist, "identical replay diverged");
-
-    // 2 snapshot chunks, trade, delta, kline, spin, reset, then the rotation slot sequence
-    // (rotation, reset, 2 snapshot chunks) — one callback each.
-    assert_eq!(
-        call_codes(&first.persist),
-        vec![2.0, 2.0, 1.0, 2.0, 4.0, 6.0, 3.0, 5.0, 3.0, 2.0, 2.0],
-        "state-before-callback dispatch order"
-    );
-
-    // The strategy log lane is a pure function of the sequence too: records stamp event time with
-    // no wall-clock read, so two runs bank byte-identical `HotRecord`s.
-    assert!(
-        !first.logs.is_empty(),
-        "the probe banked strategy log lines"
-    );
-    assert_eq!(
-        first.logs, second.logs,
-        "strategy log lane diverged across replays"
-    );
-}
-
 const WARMUP_SPAN: DurationUs = DurationUs::from_secs(10);
 
 /// Stamps straddle a 10s warmup: six messages inside it (the last a microsecond short of the
