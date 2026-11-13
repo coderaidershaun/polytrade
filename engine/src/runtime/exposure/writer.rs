@@ -18,7 +18,7 @@ use crate::{error, info};
 use super::file::{self, AssetEntry, ExposureDocument, FORMAT_VERSION, InstrumentEntry};
 use super::{
     ExposureError, ExposureSnapshot, ExposureState, MAX_EXPOSURE_INSTRUMENTS, add_amount,
-    asset_amounts, file_path,
+    asset_amounts, file_path, venue_of,
 };
 
 /// Ring capacity: absorb burst between polls (absolute state, sink keeps newest).
@@ -51,6 +51,7 @@ impl ExposureWriterConfig {
                 .instruments()
                 .iter()
                 .map(|row| InstrumentFacts {
+                    venue: venue_of(row.market),
                     symbol: row.venue_symbol.clone(),
                     base_asset: row.base_asset,
                     quote_asset: row.quote_asset,
@@ -62,6 +63,7 @@ impl ExposureWriterConfig {
 }
 
 struct InstrumentFacts {
+    venue: &'static str,
     symbol: Box<str>,
     base_asset: AssetId,
     quote_asset: AssetId,
@@ -201,6 +203,7 @@ impl WriterState {
             .filter_map(|exposure| {
                 let facts = self.facts(exposure.instrument)?;
                 Some(InstrumentEntry {
+                    venue: facts.venue.to_owned(),
                     symbol: facts.symbol.as_ref().to_owned(),
                     position_base: exposure.position_base.mantissa(),
                     cash_quote: exposure.cash_quote,

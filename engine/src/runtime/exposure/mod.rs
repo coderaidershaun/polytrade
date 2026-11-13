@@ -1,5 +1,5 @@
 //! The durable cost basis, one JSON file for each engine, written off the hot path. Position is
-//! keyed by venue symbol, because an instrument id can change between runs.
+//! keyed by venue and venue symbol, because an instrument id can change between runs.
 
 mod file;
 mod writer;
@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::msg::ids::{AssetId, InstrumentId, Qty};
 use crate::msg::time::LocalTs;
-use crate::runtime::config::{ExecutionMode, RunIdentity};
+use crate::runtime::config::{ExecutionMode, RunIdentity, VenueMarket};
 use crate::runtime::registry::Registry;
 use crate::warn;
 
@@ -143,11 +143,12 @@ pub enum ExposureError {
         expected: i64,
     },
     #[error(
-        "exposure file at {} holds {symbol} with position {position_base} and cash {cash_quote}, and this config names no such instrument — the next write would erase it",
+        "exposure file at {} holds {symbol} of {venue} with position {position_base} and cash {cash_quote}, and this config names no such instrument — the next write would erase it",
         .path.display()
     )]
     UnknownInstrument {
         path: PathBuf,
+        venue: Box<str>,
         symbol: Box<str>,
         position_base: i64,
         cash_quote: i64,
@@ -191,16 +192,15 @@ pub fn load(
 
     let mut instruments = Vec::with_capacity(document.instruments.len());
     for entry in &document.instruments {
-        let Some(row) = registry
-            .instruments()
-            .iter()
-            .find(|row| row.venue_symbol.as_ref() == entry.symbol.as_str())
-        else {
+        let Some(row) = registry.instruments().iter().find(|row| {
+            venue_of(row.market) == entry.venue && row.venue_symbol.as_ref() == entry.symbol
+        }) else {
             if entry.is_zero() {
                 continue;
             }
             return Err(ExposureError::UnknownInstrument {
                 path,
+                venue: entry.venue.as_str().into(),
                 symbol: entry.symbol.as_str().into(),
                 position_base: entry.position_base,
                 cash_quote: entry.cash_quote,
@@ -225,6 +225,14 @@ pub fn load(
         instruments,
         assets,
     })
+}
+
+/// The venue half of the key of a row: a symbol names an instrument only within its venue.
+pub(super) fn venue_of(market: VenueMarket) -> &'static str {
+    match market {
+        VenueMarket::Binance(_) => "binance",
+        VenueMarket::Polymarket(_) => "polymarket",
+    }
 }
 
 /// Fold cost basis into per-asset amounts: position = BASE amount, cash = signed QUOTE amount. Exact even with shared assets.

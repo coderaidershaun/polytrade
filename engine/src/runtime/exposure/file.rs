@@ -12,9 +12,10 @@ use crate::warn;
 
 use super::ExposureError;
 
-/// Version 2 added `basis_quote`. A file of version 1 is not migrated: it has no basis, and a
-/// guessed basis would bring back a defect that nothing reports.
-pub(super) const FORMAT_VERSION: u32 = 2;
+/// Version 3 names each row by its venue and its symbol, and version 2 added `basis_quote`. An older
+/// file is not migrated: a symbol alone names an instrument only within one venue, and a guessed
+/// basis would bring back a defect that nothing reports.
+pub(super) const FORMAT_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -37,7 +38,10 @@ pub(super) struct ExposureDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct InstrumentEntry {
-    /// The venue symbol, because an instrument id can change between runs.
+    /// The venue and its symbol name the instrument, because an instrument id can change between
+    /// runs. Defaulted, so that a file of an older version parses and the version check refuses it.
+    #[serde(default)]
+    pub(super) venue: String,
     pub(super) symbol: String,
     pub(super) position_base: i64,
     pub(super) cash_quote: i64,
