@@ -9,10 +9,10 @@ use tokio_tungstenite::tungstenite::{Error as ProtocolError, Message};
 
 use crate::msg::exec::{ExecEvent, Liquidity};
 use crate::msg::time::LocalTs;
-use crate::runtime::shutdown::{AnswerPart, FatalReason};
+use crate::runtime::shutdown::AnswerPart;
 use crate::venues::edge::EdgeDriver;
 use crate::venues::edge::RECENT_TRADES;
-use crate::venues::exec::{Outgoing, SessionOutcome};
+use crate::venues::exec::{ExecSessionError, Outgoing, SessionOutcome};
 use crate::{error, warn};
 
 use super::super::codec::{
@@ -84,7 +84,7 @@ impl Actor {
             }
             Err(error) if error.is_fatal() => {
                 error!("polymarket execution fatal stream decode: {error}");
-                self.control.fatal.trip(FatalReason::UndecodableAnswer {
+                self.control.fail(ExecSessionError::UndecodableAnswer {
                     venue: self.venue(),
                     part: AnswerPart::Stream,
                 });
@@ -108,7 +108,9 @@ impl Actor {
             self.orders.forget(event.client_id);
             self.delayed.forget(event.client_id);
         }
-        self.session.fold(&event, 0, outgoing);
+        if let Err(error) = self.session.fold(&event, 0, outgoing) {
+            self.control.fail(error);
+        }
         self.forward_exec(received_ts_us, event);
     }
 
@@ -190,7 +192,7 @@ impl Actor {
             lineage.venue_trade_id, lineage.instrument.0, self.counts.settlement_failures
         );
         self.session.core.stop_quoting();
-        self.control.fatal.trip(FatalReason::SettlementFailed {
+        self.control.fail(ExecSessionError::SettlementFailed {
             venue: self.venue(),
             trade: lineage.trade_id,
         });

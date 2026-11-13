@@ -6,12 +6,11 @@ use crate::msg::exec::{
 };
 use crate::msg::ids::{ClientOrderId, InstrumentId, Qty};
 use crate::msg::time::LocalTs;
-use crate::runtime::shutdown::FatalReason;
 use crate::venues::binance::rest::{
     AccountInfo, AccountTrade, FailureVerdict, OrderRecord, RestError,
 };
 use crate::venues::edge::EdgeDriver;
-use crate::venues::exec::{EventSink, Outgoing, SessionOutcome};
+use crate::venues::exec::{EventSink, ExecSessionError, Outgoing, SessionOutcome};
 use crate::{error, warn};
 
 use super::super::{
@@ -29,7 +28,7 @@ impl Actor {
         let Some(outcome) = outcome else {
             error!("binance execution lost its rest worker — the reconcilers are gone");
             self.is_rest_gone = true;
-            self.control.fatal.trip(FatalReason::RestWorkerGone {
+            self.control.fail(ExecSessionError::RestWorkerGone {
                 venue: self.venue(),
             });
             return None;
@@ -197,6 +196,7 @@ impl Actor {
             return;
         };
         if event.provenance == Provenance::Foreign {
+            self.session.core.count_foreign_order();
             warn!(
                 "binance execution: order {venue_order_id} on {} is not this engine's — its fills are somebody else's and are left alone",
                 event

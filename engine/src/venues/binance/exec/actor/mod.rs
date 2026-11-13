@@ -145,7 +145,6 @@ impl Actor {
                 core: ExecCore::with_limits(edge.max_orders_per_side, mirror_capacity),
                 instruments: instruments.iter().map(|row| row.instrument_id).collect(),
                 events: EventFunnel::new(producer, edge.clock.clone()),
-                fatal: edge.fatal.clone(),
                 inflight_timeout: edge.inflight_timeout,
             }),
             symbols,
@@ -384,6 +383,10 @@ impl EdgeDriver for Actor {
         warn!("binance execution pulling every order this run owns: {reason:?}");
         let outgoing = self.session.sweep(reason, None);
         self.dispatch(outgoing, writer).await;
+    }
+
+    fn foreign_orders(&self) -> u64 {
+        self.session.core.foreign_orders()
     }
 
     fn report_stop(&self) {

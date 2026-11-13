@@ -187,8 +187,17 @@ pub struct RestClient {
     http: HttpClient,
     market: BinanceMarket,
     env: BinanceEnv,
+    host: Host,
     weight: WeightBudget,
     order_counts: OrderCountBudget,
+}
+
+/// Where the requests go. A loopback port is the only other place than the venue, so a client
+/// that a test builds can reach nothing beyond this host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Host {
+    Venue,
+    Loopback(u16),
 }
 
 impl RestClient {
@@ -208,6 +217,7 @@ impl RestClient {
             http,
             market,
             env,
+            host: Host::Venue,
             weight: WeightBudget::new(weight_budget(market)),
             order_counts: OrderCountBudget::default(),
         })
@@ -260,7 +270,10 @@ impl RestClient {
     async fn send(&mut self, prepared: Prepared<'_>) -> Result<Fetched, RestError> {
         let plan = prepared.plan;
         self.weight.charge(plan.weight, plan.endpoint);
-        let base = format!("{}{}", base_url(self.market, self.env), plan.path);
+        let base = match self.host {
+            Host::Venue => format!("{}{}", base_url(self.market, self.env), plan.path),
+            Host::Loopback(port) => format!("http://127.0.0.1:{port}{}", plan.path),
+        };
         let url = match prepared.signed_query {
             Some(signed_query) => format!("{base}?{signed_query}"),
             None => base,

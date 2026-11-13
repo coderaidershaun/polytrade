@@ -3,10 +3,11 @@
 
 use crate::msg::exec::ExecEvent;
 use crate::msg::time::LocalTs;
-use crate::runtime::shutdown::FatalReason;
 use crate::venues::edge::EdgeDriver;
 use crate::venues::edge::http::TransportError;
-use crate::venues::exec::{ExecRequest, Outgoing, PlaceNotSentReason, SessionOutcome};
+use crate::venues::exec::{
+    ExecRequest, ExecSessionError, Outgoing, PlaceNotSentReason, SessionOutcome,
+};
 use crate::{error, info, warn};
 
 use super::super::binding::BindingStep;
@@ -153,7 +154,9 @@ impl Actor {
                 request_sent_ts_us: Some(entry.sent_at),
                 ..event
             };
-            self.session.fold(&event, recon_seq, &mut outgoing);
+            if let Err(error) = self.session.fold(&event, recon_seq, &mut outgoing) {
+                self.control.fail(error);
+            }
             // Finding the order still alive on a status probe is what settles an ambiguous cancel here.
             if matches!(request, ExecRequest::OrderStatus { client_id, .. } if client_id == event.client_id)
                 && event.status.is_some_and(|status| !status.is_terminal())
@@ -251,11 +254,13 @@ impl Actor {
                 self.on_unavailable(availability);
                 // The venue is unavailable, so the hot side's pending slot must be released
                 // here or it hangs waiting forever.
-                self.session.refuse(
+                if let Err(error) = self.session.refuse(
                     request,
                     PlaceNotSentReason::NoTransport,
                     self.control.clock.now(),
-                );
+                ) {
+                    self.control.fail(error);
+                }
                 return Vec::new();
             }
             Err(error) => {
@@ -305,7 +310,7 @@ impl Actor {
             error!(
                 "polymarket execution cannot record venue order {venue_order_id} ({error}) — it can never be cancelled"
             );
-            self.control.fatal.trip(FatalReason::OrderIndexFull {
+            self.control.fail(ExecSessionError::OrderIndexFull {
                 venue: self.venue(),
             });
         }

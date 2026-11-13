@@ -12,13 +12,13 @@ use crate::venues::binance::exec::{
     ClockOffset, ORDER_REQUEST_TIMEOUT, RecvWindow, RequestParams, RequestSigner,
 };
 use crate::venues::edge::backoff::BackoffCaps;
-use crate::venues::edge::http::Deadlines;
+use crate::venues::edge::http::{Deadlines, TransportError};
 use crate::venues::edge::rest_quiet::SharedRestQuiet;
 use crate::warn;
 
 use super::{
-    AccountInfo, AccountTrade, BinanceEnv, FailureVerdict, Fetched, OrderRecord, Prepared,
-    RestClient, RestError, RestRequest, decode,
+    AccountInfo, AccountTrade, BinanceEnv, FailureVerdict, Fetched, Host, HttpMethod, OrderRecord,
+    Prepared, RestClient, RestError, RestRequest, decode,
 };
 
 // The venue's code for a stale timestamp. Each retry resyncs the clock at most once, because more
@@ -89,6 +89,22 @@ impl SignedRestClient {
             config,
             quiet,
         })
+    }
+
+    /// A client that sends each request to a stand-in on this host at `port`, signed with a key
+    /// that is no key, so that a test can watch what the client sends. It reaches no other host,
+    /// and the engine never builds one.
+    ///
+    /// # Errors
+    /// [`RestError::Transport`] if the TLS backend fails to initialise.
+    pub fn on_loopback(
+        port: u16,
+        config: SignedRestConfig,
+        quiet: SharedRestQuiet,
+    ) -> Result<Self, RestError> {
+        let mut client = Self::new(Credentials::loopback(), config, quiet)?;
+        client.rest.host = Host::Loopback(port);
+        Ok(client)
     }
 
     /// # Errors
@@ -234,7 +250,19 @@ impl SignedRestClient {
                 return outcome;
             };
             attempt += 1;
-            if failure.verdict() != FailureVerdict::Retry || attempt >= self.config.max_attempts {
+            // A request that acts on an order may have run at the venue when its answer was lost,
+            // so it is never sent again: only a read is safe to repeat. The caller reads it back.
+            let may_have_run = !matches!(plan.method, HttpMethod::Get)
+                && matches!(
+                    failure,
+                    RestError::Transport(
+                        TransportError::Request { .. } | TransportError::Timeout { .. }
+                    )
+                );
+            if may_have_run
+                || failure.verdict() != FailureVerdict::Retry
+                || attempt >= self.config.max_attempts
+            {
                 return Err(failure);
             }
             self.wait_before_retry(&failure, plan.endpoint, attempt)

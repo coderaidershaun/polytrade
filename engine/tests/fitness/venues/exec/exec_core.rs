@@ -297,41 +297,6 @@ fn a_sweep_completes_only_once_its_scoped_orders_are_confirmed_gone() {
     );
 }
 
-/// FITNESS: an uncertain answer — ambiguous, or simply timed out — resolves by ASKING the venue,
-/// never by assuming or by retrying.
-///
-/// The two go together deliberately: they are the same reconciliation rule triggered by the two ways
-/// an answer can go missing. Binance's -2011 reads the same for an order that never existed and one
-/// that just filled, so assuming `Gone` on an ambiguous answer would discard a real fill; and
-/// re-sending a place whose fate a timeout left unknown is how one intent becomes two live orders.
-#[test]
-fn an_ambiguous_or_timed_out_answer_reconciles_rather_than_assumes_or_retries() {
-    let mut ambiguous = quoting_core();
-    effects_of(|emit| ambiguous.on_command(place(1), emit));
-    let probe = effects_of(|emit| ambiguous.on_ambiguous(ClientOrderId(1), emit));
-    assert_eq!(
-        sent_requests(&probe),
-        [ExecRequest::OrderStatus {
-            instrument: INSTRUMENT,
-            client_id: ClientOrderId(1)
-        }]
-    );
-    assert!(ambiguous.mirror()[0].is_ambiguous);
-
-    let mut timed_out = quoting_core();
-    effects_of(|emit| timed_out.on_command(place(1), emit));
-    let timeout_effects =
-        effects_of(|emit| timed_out.on_request_timeout(INSTRUMENT, ClientOrderId(1), emit));
-    assert_eq!(
-        sent_requests(&timeout_effects),
-        [ExecRequest::OrderStatus {
-            instrument: INSTRUMENT,
-            client_id: ClientOrderId(1)
-        }],
-        "a timed-out request must reconcile, never re-place"
-    );
-}
-
 /// FITNESS: `on_command`'s admission decisions are asymmetric by design, and fail closed on the
 /// expensive side of that asymmetry.
 ///

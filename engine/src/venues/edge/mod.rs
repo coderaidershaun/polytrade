@@ -41,8 +41,8 @@ use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::sender::{SendWait, Sender, SenderSetup};
 use crate::venues::edge::socket::{Reader, Writer, connect};
 use crate::venues::exec::{
-    EdgeHandle, EngineIdentity, EventSink, ExecStop, ExitPlan, MirroredOrder, SessionOutcome,
-    SweepFailure,
+    EdgeHandle, EngineIdentity, EventSink, ExecSessionError, ExecStop, ExitPlan, MirroredOrder,
+    SessionOutcome, SweepFailure, halt_on_session_error,
 };
 use crate::{info, warn};
 
@@ -180,6 +180,11 @@ impl EdgeControl {
             is_swept: false,
             sweep_failure: None,
         }
+    }
+
+    /// The one reader of a fault of the session: the run halts with the fault's own reason.
+    pub(crate) fn fail(&self, error: ExecSessionError) {
+        halt_on_session_error(&error, &self.fatal);
     }
 
     /// A terminal exit was planned and its sweep finished, so there is nothing left to reconnect
@@ -359,6 +364,9 @@ pub(crate) trait EdgeDriver {
     /// What this edge leaves in the log once its loop ends.
     fn report_stop(&self);
 
+    /// The orders of another trader that a read or the stream showed, each left alone.
+    fn foreign_orders(&self) -> u64;
+
     /// Stop whatever the driver spawned beside itself.
     fn abort_workers(&self);
 }
@@ -420,6 +428,11 @@ pub(crate) async fn run_edge<D: EdgeDriver>(mut driver: D, lane: EdgeLane) {
     }
 
     driver.report_stop();
+    info!(
+        "{} execution stopped — {} orders of another trader seen and left alone",
+        driver.venue(),
+        driver.foreign_orders()
+    );
     let control = driver.control();
     control.stop.settle(control.sweep_failure.take());
     driver.abort_workers();
