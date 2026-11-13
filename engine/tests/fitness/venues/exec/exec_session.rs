@@ -16,15 +16,15 @@ use engine::venues::exec::{
 
 use crate::exec_support::SentEvents;
 
-type Session = ExecSession<SentEvents>;
+pub(super) type Session = ExecSession<SentEvents>;
 
 const VENUE: &str = "test-venue";
-const INSTRUMENT: InstrumentId = InstrumentId(0);
+pub(super) const INSTRUMENT: InstrumentId = InstrumentId(0);
 const OTHER_INSTRUMENT: InstrumentId = InstrumentId(1);
-const NOW: LocalTs = LocalTs::from_micros(1_785_000_000_000_000);
+pub(super) const NOW: LocalTs = LocalTs::from_micros(1_785_000_000_000_000);
 const PRICE: Price = Price::from_mantissa(11_800_000_000_000);
 
-fn new_session() -> (Session, FatalSignal) {
+pub(super) fn new_session() -> (Session, FatalSignal) {
     let fatal = FatalSignal::new();
     let session = ExecSession::new(SessionSetup {
         venue: VENUE,
@@ -52,7 +52,11 @@ fn quoting_session() -> (Session, FatalSignal) {
 
 /// What a venue's dispatch does with the core's decision: every request it sends is recorded as in
 /// flight under the hot sequence it answers.
-fn send(session: &mut Session, command: ExecCommand, sent_at: LocalTs) -> Vec<ExecRequest> {
+pub(super) fn send(
+    session: &mut Session,
+    command: ExecCommand,
+    sent_at: LocalTs,
+) -> Vec<ExecRequest> {
     let mut outgoing = Vec::new();
     session.core.on_command(
         command,
@@ -61,7 +65,11 @@ fn send(session: &mut Session, command: ExecCommand, sent_at: LocalTs) -> Vec<Ex
     record(session, outgoing, sent_at)
 }
 
-fn record(session: &mut Session, outgoing: Vec<Outgoing>, sent_at: LocalTs) -> Vec<ExecRequest> {
+pub(super) fn record(
+    session: &mut Session,
+    outgoing: Vec<Outgoing>,
+    sent_at: LocalTs,
+) -> Vec<ExecRequest> {
     let mut sent = Vec::new();
     for Outgoing { effect, recon_seq } in outgoing {
         if let ExecEffect::Send {
@@ -81,7 +89,7 @@ fn record(session: &mut Session, outgoing: Vec<Outgoing>, sent_at: LocalTs) -> V
     sent
 }
 
-fn place(client_id: u64, side: Side) -> ExecCommand {
+pub(super) fn place(client_id: u64, side: Side) -> ExecCommand {
     ExecCommand::Place {
         instrument: INSTRUMENT,
         client_id: ClientOrderId(client_id),
@@ -152,7 +160,7 @@ fn resting_report(client_id: u64) -> ExecEvent {
     }
 }
 
-fn kinds(events: &[ExecEvent]) -> Vec<ExecKind> {
+pub(super) fn kinds(events: &[ExecEvent]) -> Vec<ExecKind> {
     events.iter().map(|event| event.kind).collect()
 }
 
@@ -163,7 +171,7 @@ fn provenance_of(session: &Session, client_id: u64) -> Option<Provenance> {
         .map(|order| order.provenance)
 }
 
-fn sent(outgoing: &[Outgoing]) -> Vec<(ExecRequest, u64)> {
+pub(super) fn sent(outgoing: &[Outgoing]) -> Vec<(ExecRequest, u64)> {
     outgoing
         .iter()
         .filter_map(|sent| match sent.effect {
@@ -180,7 +188,7 @@ fn cancel_request(client_id: u64) -> ExecRequest {
     }
 }
 
-fn status_request(client_id: u64) -> ExecRequest {
+pub(super) fn status_request(client_id: u64) -> ExecRequest {
     ExecRequest::OrderStatus {
         instrument: INSTRUMENT,
         client_id: ClientOrderId(client_id),
