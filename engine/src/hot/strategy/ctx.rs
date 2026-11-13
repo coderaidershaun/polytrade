@@ -10,7 +10,7 @@ use crate::msg::ids::{AssetId, InstrumentId, Notional, Qty, Side};
 use crate::msg::persist::{BookEventRow, FeatureId, FeatureRow, KlineRow, PersistRecord, TradeRow};
 use crate::msg::time::{FoldTime, LocalTs};
 
-use super::{StrategyCtx, WindowInfo};
+use super::{StrategyCtx, StrategyGate, WindowInfo};
 
 impl StrategyCtx<'_> {
     /// Declare resting quote this side SHOULD have; `None` withdraws. Declare every spin: absent = expire.
@@ -75,6 +75,13 @@ impl StrategyCtx<'_> {
         self.ewma[usize::from(instrument.0)]
             .as_ref()
             .and_then(EwmaVol::volatility)
+    }
+
+    /// Whether the engine calls this market back and lets its quotes out yet. While it warms, a
+    /// quote declared for it is held, and the spin callback still runs for the markets that are live.
+    #[inline]
+    pub fn gate(&self, instrument: InstrumentId) -> StrategyGate {
+        self.gates[usize::from(instrument.0)]
     }
 
     /// Current window. `None` until first MarketRotation.

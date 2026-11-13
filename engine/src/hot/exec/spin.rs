@@ -6,6 +6,7 @@
 //! pass reaches too — deciding and committing have different callers.
 
 use crate::hot::book::{Book, BookState};
+use crate::hot::dispatch::StrategyGate;
 use crate::hot::ledger::PositionLedger;
 use crate::hot::strategy::{Actions, WindowInfo};
 use crate::msg::exec::ExecCommand;
@@ -136,7 +137,10 @@ impl ExecEngine {
             .quote(instrument, side, level, input.tick.seq)
             .ok_or(RejectReason::NoQuoteDeclared)?;
         // Checked against the declaration, not ahead of it: an instrument with no quote
-        // declared at all reports NoQuoteDeclared, not a calendar refusal.
+        // declared at all reports NoQuoteDeclared, not a warmup or calendar refusal.
+        if !input.gates[usize::from(instrument.0)].is_live() {
+            return Err(RejectReason::Warming);
+        }
         if !self.admits_window(instrument, input) {
             return Err(RejectReason::OutsideWindow);
         }
@@ -346,6 +350,9 @@ pub struct SpinInput<'a> {
     /// Per instrument, the window the venue last rotated it into. `None` where the venue does not
     /// rotate, which is what makes the quote-window gate inert everywhere it does not belong.
     pub windows: &'a [Option<WindowInfo>],
+    /// Per instrument, whether its market is live. A market that warms has the quote permission
+    /// `Neither`, joined after the session permission, so a warming market never halts the session.
+    pub(crate) gates: &'a [StrategyGate],
     pub(crate) ledger: &'a PositionLedger,
     pub(crate) bank: &'a mut Actions,
 }

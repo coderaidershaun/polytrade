@@ -10,7 +10,7 @@ mod telemetry;
 mod ui_emit;
 
 use exposure::{moves_position, restored_snapshot, warn_uncovered_instruments};
-use gate::Warmup;
+use gate::MarketGates;
 
 use crate::hot::book::Book;
 use crate::hot::dispatch::ui_emit::UiEmitter;
@@ -32,7 +32,7 @@ use crate::runtime::shutdown::RunStateCell;
 
 pub use digest::StateDigest;
 pub use exposure::ExposureWiring;
-pub use gate::LinkWiring;
+pub use gate::{LinkWiring, StrategyGate};
 pub use setup::{ExecWiring, HotEngineSetup, PersistWiring};
 
 use setup::{Declarations, per_instrument_state};
@@ -52,6 +52,7 @@ struct HotState {
     spin_seq: u64,
     /// The latest received stamp folded so far: the time that deadlines and the strategy read.
     fold_time: FoldTime,
+    gates: MarketGates,
     /// Beside ledger not inside (fill moves both, one owner per state).
     exec: ExecEngine,
     /// Outside exec (callback &mut desired + & exec, can't coexist in same struct).
@@ -86,6 +87,7 @@ impl HotState {
             actions: &mut self.actions,
             event_ts,
             fold_time: self.fold_time,
+            gates: self.gates.as_slice(),
             spin_seq: self.spin_seq,
             declared_link_topics: self.declared_link_topics,
         }
@@ -100,7 +102,6 @@ pub struct HotEngine {
     run: RunAssertion,
     run_report: Option<RunStateCell>,
     unretained_volume_bars: u64,
-    warmup: Warmup,
     feature_names: Vec<&'static str>,
     ui: UiEmitter,
 }
@@ -143,6 +144,7 @@ impl HotEngine {
                 published_exposure: restored_snapshot(exposure.restored),
                 spin_seq: 0,
                 fold_time: FoldTime::BEFORE_FIRST,
+                gates: MarketGates::new(warmup, instruments.len()),
                 exec: ExecEngine::new(ExecWiring::engine_setup(exec, instruments)),
                 desired: DesiredBook::new(instruments.len()),
                 actions: Actions::new(ActionsSetup {
@@ -158,7 +160,6 @@ impl HotEngine {
             run: RunAssertion::INITIAL,
             run_report,
             unretained_volume_bars: 0,
-            warmup: Warmup::new(warmup),
             feature_names: declarations.feature_names,
             ui: UiEmitter::new(ui_book_sink, ui_event_sink, instruments.len()),
         }
@@ -174,9 +175,9 @@ impl HotEngine {
         let received_ts_us = message.header.received_ts_us;
         self.state.fold_time = self.state.fold_time.advanced_to(received_ts_us);
         crate::log::set_message_time(received_ts_us);
-        if self.warmup.observe(self.state.fold_time) {
-            self.log_warmup_complete();
-        }
+        self.state
+            .gates
+            .observe(&message.body, self.state.fold_time);
         self.fold_message(message, received_ts_us);
     }
 
@@ -243,7 +244,8 @@ impl HotEngine {
         });
     }
 
-    /// Apply ungated (fills during warmup = money). Callback gated only.
+    /// Apply ungated (fills during warmup = money). The callback waits for the gate of the market of
+    /// the order.
     fn on_exec(&mut self, event: &ExecEvent, received_ts_us: LocalTs) {
         let HotState {
             exec,
@@ -267,7 +269,7 @@ impl HotEngine {
             ExecCallback::Update(update) => self.ui.emit_order_update(&update),
             ExecCallback::Reject(reject) => self.ui.emit_reject(&reject),
         }
-        if !self.is_strategy_live() {
+        if !callback_market(&callback).is_some_and(|market| self.state.gates.is_live(market)) {
             return;
         }
         let mut ctx = self.state.ctx(received_ts_us);
@@ -298,7 +300,7 @@ impl HotEngine {
     }
 
     fn spin_strategy(&mut self, tick: &SpinTick, received_ts_us: LocalTs) {
-        if !self.is_strategy_live() {
+        if !self.state.gates.is_any_live() {
             return;
         }
         let mut ctx = self.state.ctx(received_ts_us);
@@ -315,6 +317,7 @@ impl HotEngine {
             exec,
             actions,
             fold_time,
+            gates,
             ..
         } = &mut self.state;
         exec.on_spin(SpinInput {
@@ -323,6 +326,7 @@ impl HotEngine {
             books,
             desired,
             windows,
+            gates: gates.as_slice(),
             ledger,
             bank: actions,
         });
@@ -381,6 +385,15 @@ impl HotEngine {
                 .quote(instrument, side, level, spin_seq)
                 .map(|desired| (desired.price, desired.qty))
         })
+    }
+}
+
+fn callback_market(callback: &ExecCallback) -> Option<InstrumentId> {
+    match callback {
+        ExecCallback::None => None,
+        ExecCallback::Fill(fill) => Some(fill.instrument),
+        ExecCallback::Update(update) => Some(update.instrument),
+        ExecCallback::Reject(reject) => Some(reject.instrument),
     }
 }
 

@@ -1,12 +1,14 @@
-//! When the strategy may be called back: warmup and run state follow the message sequence, never
-//! the clock, so a replay calls back at the same points. Peer link frames are recorded here rather
-//! than at the link actor, so a frame dropped on a full ring never reaches the tape.
+//! When the strategy hears a market: each market warms for its own span of message time from its
+//! own first message, never by the clock, so a replay calls back at the same points and a market
+//! that connects late quotes from no cold estimator. Peer link frames are recorded here rather than
+//! at the link actor, so a frame dropped on a full ring never reaches the tape.
 
-use crate::hot::digest::digest_fields;
+use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::hot::sink::LinkSink;
 use crate::link::{LinkFrame, TopicId};
 use crate::log::hot_info;
-use crate::msg::inbound::RunControl;
+use crate::msg::ids::InstrumentId;
+use crate::msg::inbound::{MessageBody, RunControl};
 use crate::msg::persist::{LinkFrameRow, LinkRowKind, PersistRecord};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::run_state::RunState;
@@ -15,43 +17,146 @@ use crate::runtime::shutdown::RunStateCell;
 
 use super::HotEngine;
 
-/// Warmup suppression (message-time only, not wall clock; replay needs same prefix).
-pub(super) struct Warmup {
-    span: DurationUs,
-    first_message_ts: Option<LocalTs>,
-    is_complete: bool,
+/// Whether the engine calls the strategy back for one market and lets its quotes out. Only `Live`
+/// does both. A market that is not `Live` has the quote permission `Neither`, and each quote that the
+/// strategy declares for it is held and reported as a refusal of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StrategyGate {
+    /// `since` is the fold time of the first message of the market since the start or the last
+    /// resume, and `None` until that message comes.
+    Warming {
+        since: Option<FoldTime>,
+    },
+    Live,
+    /// The run is idle.
+    Parked,
 }
 
-impl Warmup {
-    pub(super) fn new(span: DurationUs) -> Self {
+impl StrategyGate {
+    #[inline]
+    pub fn is_live(self) -> bool {
+        self == StrategyGate::Live
+    }
+}
+
+/// One gate for each market, indexed by instrument.
+pub(super) struct MarketGates {
+    span: DurationUs,
+    gates: Vec<StrategyGate>,
+}
+
+digest_by_hash!(StrategyGate);
+digest_fields! { MarketGates { span, gates } }
+
+impl MarketGates {
+    pub(super) fn new(span: DurationUs, markets: usize) -> Self {
         Self {
             span,
-            first_message_ts: None,
-            is_complete: span <= DurationUs::ZERO,
+            gates: vec![armed(span); markets],
         }
     }
 
-    /// True on message ending warmup (same message delivered, logs once).
+    /// The first message that names a market opens its gate. Then each gate whose span has passed
+    /// by `now` turns `Live`, on any message, so a spin past the span is the first live callback.
     #[inline]
-    pub(super) fn observe(&mut self, now: FoldTime) -> bool {
-        if self.is_complete {
-            return false;
+    pub(super) fn observe(&mut self, body: &MessageBody, now: FoldTime) {
+        if let Some(market) = opened_market(body) {
+            let gate = &mut self.gates[usize::from(market.0)];
+            if *gate == (StrategyGate::Warming { since: None }) {
+                *gate = StrategyGate::Warming { since: Some(now) };
+            }
         }
-        let now = now.as_local();
-        let first = *self.first_message_ts.get_or_insert(now);
-        self.is_complete = now.diff(first) >= self.span;
-        self.is_complete
+        for index in 0..self.gates.len() {
+            let StrategyGate::Warming { since: Some(since) } = self.gates[index] else {
+                continue;
+            };
+            if now.as_local().diff(since.as_local()) >= self.span {
+                self.turn_live(index);
+            }
+        }
     }
 
-    /// Re-armed on resume (derived state wiped, estimators need unobserved run-up).
+    #[cold]
+    fn turn_live(&mut self, index: usize) {
+        let is_first_live = !self.is_any_live();
+        self.gates[index] = StrategyGate::Live;
+        self.log_market_live(InstrumentId(index as u16));
+        if is_first_live {
+            self.log_callbacks_live();
+        }
+    }
+
+    #[inline]
+    pub(super) fn is_live(&self, market: InstrumentId) -> bool {
+        self.gates[usize::from(market.0)].is_live()
+    }
+
+    /// The callbacks that belong to no market run while one market or more is live.
+    #[inline]
+    pub(super) fn is_any_live(&self) -> bool {
+        self.gates.iter().any(|gate| gate.is_live())
+    }
+
+    pub(super) fn as_slice(&self) -> &[StrategyGate] {
+        &self.gates
+    }
+
+    #[cold]
+    fn park(&mut self) {
+        self.gates.fill(StrategyGate::Parked);
+    }
+
+    /// Each market warms again from its own first message after the resume: the derived state
+    /// was wiped, and a market that stays silent must not go live on cold estimators.
     #[cold]
     fn rearm(&mut self) {
-        self.first_message_ts = None;
-        self.is_complete = self.span <= DurationUs::ZERO;
+        self.gates.fill(armed(self.span));
+    }
+
+    #[cold]
+    fn log_market_live(&self, market: InstrumentId) {
+        hot_info!(
+            "warmup of instrument {} complete after {:.0}s of message time — its callbacks and quotes now live",
+            market.0,
+            self.span.to_secs()
+        );
+    }
+
+    /// The operator's marker that the strategy hears the run: the first market is live.
+    #[cold]
+    fn log_callbacks_live(&self) {
+        hot_info!(
+            "warmup complete after {:.0}s of message time — strategy callbacks now live",
+            self.span.to_secs()
+        );
     }
 }
 
-digest_fields! { Warmup { span, first_message_ts, is_complete } }
+/// A span of zero means no warmup, so each gate is live at once.
+fn armed(span: DurationUs) -> StrategyGate {
+    if span <= DurationUs::ZERO {
+        StrategyGate::Live
+    } else {
+        StrategyGate::Warming { since: None }
+    }
+}
+
+/// The market whose gate a message opens. Market data names its market. Execution and account
+/// events open no gate: the venue answers for an account, not for the data of a market.
+fn opened_market(body: &MessageBody) -> Option<InstrumentId> {
+    match body {
+        MessageBody::Trade(event) => Some(event.instrument),
+        MessageBody::Book(chunk) => Some(chunk.instrument),
+        MessageBody::BookReset(reset) => Some(reset.instrument),
+        MessageBody::Kline(event) => Some(event.instrument),
+        MessageBody::MarketRotation(rotation) => Some(rotation.instrument),
+        MessageBody::SpinTick(_)
+        | MessageBody::Link(_)
+        | MessageBody::RunControl(_)
+        | MessageBody::Exec(_)
+        | MessageBody::Account(_) => None,
+    }
+}
 
 /// Link wiring (paired facts: engine without link has no outbound ring or run-state reporter).
 pub struct LinkWiring {
@@ -61,26 +166,11 @@ pub struct LinkWiring {
 }
 
 impl HotEngine {
-    /// Log warmup completion (once per run, operator's recording marker).
-    #[cold]
-    pub(super) fn log_warmup_complete(&self) {
-        hot_info!(
-            "warmup complete after {:.0}s of message time — strategy callbacks now live",
-            self.warmup.span.to_secs()
-        );
-    }
-
-    /// Callback gate predicate (derived from message sequence, replay suppresses same callbacks).
-    #[inline]
-    pub(super) fn is_strategy_live(&self) -> bool {
-        self.warmup.is_complete && self.run.state == RunState::Running
-    }
-
     /// The frame is recorded before the strategy sees it, so on the tape it comes ahead of anything
     /// the strategy writes in reply.
     pub(super) fn on_link(&mut self, frame: &LinkFrame, received_ts_us: LocalTs) {
         self.record_link_payload(frame, received_ts_us);
-        if !self.is_strategy_live() {
+        if !self.state.gates.is_any_live() {
             return;
         }
         let mut ctx = self.state.ctx(received_ts_us);
@@ -163,6 +253,7 @@ impl HotEngine {
             self.run.epoch
         );
         self.drain_actions();
+        self.state.gates.park();
         if let Some(sink) = self.state.sink.as_mut() {
             sink.request_seal();
         }
@@ -183,6 +274,6 @@ impl HotEngine {
         }
         let mut ctx = self.state.ctx(received_ts);
         self.strategy.on_resume(&mut ctx);
-        self.warmup.rearm();
+        self.state.gates.rearm();
     }
 }

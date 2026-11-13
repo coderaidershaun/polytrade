@@ -284,7 +284,7 @@ fn arb_liquidity() -> impl Strategy<Value = Option<Liquidity>> {
     ]
 }
 
-const REJECT_REASONS: [RejectReason; 19] = [
+const REJECT_REASONS: [RejectReason; 20] = [
     RejectReason::QtyBelowMin,
     RejectReason::NotionalBelowMin,
     RejectReason::NotionalAboveMax,
@@ -304,6 +304,7 @@ const REJECT_REASONS: [RejectReason; 19] = [
     RejectReason::OrderLimit,
     RejectReason::OutsideWindow,
     RejectReason::RateBudget,
+    RejectReason::Warming,
 ];
 
 /// The slot each refusal claims in [`REJECT_REASONS`], which is what stops that list rotting into a
@@ -334,6 +335,7 @@ fn listed_as(reason: RejectReason) -> RejectReason {
         RejectReason::OrderLimit => const { REJECT_REASONS[16] },
         RejectReason::OutsideWindow => const { REJECT_REASONS[17] },
         RejectReason::RateBudget => const { REJECT_REASONS[18] },
+        RejectReason::Warming => const { REJECT_REASONS[19] },
     }
 }
 

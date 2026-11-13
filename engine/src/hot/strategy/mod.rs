@@ -33,6 +33,7 @@ pub use crate::msg::ui::DomQuote;
 /// declared column's id, what a book read reports — each homed in engine plumbing rather than in
 /// strategy vocabulary; re-exported for the reason above.
 pub use crate::hot::book::BookState;
+pub use crate::hot::dispatch::StrategyGate;
 pub use crate::hot::quant::toxicity::VolumeBar;
 pub use crate::link::{LinkFrame, TopicId};
 pub use crate::msg::persist::FeatureId;
@@ -175,6 +176,7 @@ pub struct StrategyCtx<'a> {
     pub(crate) actions: &'a mut Actions,
     pub(crate) event_ts: LocalTs,
     pub(crate) fold_time: FoldTime,
+    pub(crate) gates: &'a [StrategyGate],
     /// Declaration's current spin (see quote).
     pub(crate) spin_seq: u64,
     /// How many topics [`Strategy::link_topics`] declared — the range `link_send` accepts.

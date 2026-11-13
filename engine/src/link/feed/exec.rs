@@ -64,6 +64,7 @@ wire_enum! {
     (RejectReason::OrderLimit) = 17,
     (RejectReason::OutsideWindow) = 18,
     (RejectReason::RateBudget) = 19,
+    (RejectReason::Warming) = 20,
 }
 
 // `Refused` is appended rather than slotted beside `Gone`, so splitting the class renumbered nothing

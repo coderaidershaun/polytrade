@@ -1,20 +1,30 @@
 //! A market's warmup holds the callbacks of that market by message time, never by the clock, so a
 //! replay calls back at the same points. Only callbacks wait: state, the tracker, the ledger and the
-//! feed of the workstation fold from the first message.
+//! feed of the workstation fold from the first message. A market that starts late waits for its own
+//! span, and no order of it goes out before.
 
-use engine::hot::dispatch::HotEngine;
-use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
-use engine::msg::ids::{InstrumentId, Price, Qty, Side};
+use std::sync::{Arc, Mutex};
+
+use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
+use engine::hot::exec::{DesiredQuote, QuoteLevel, RejectReason};
+use engine::hot::sink::ExecSink;
+use engine::hot::strategy::{Registration, Strategy, StrategyCtx, StrategyGate};
+use engine::msg::exec::{ExecCommand, ExecLaneItem, OrderStyle};
+use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BookChunk, InboundMessage, MessageBody, SpinTick, TradeEvent};
 use engine::msg::persist::{FeatureId, PersistRecord};
-use engine::msg::time::DurationUs;
+use engine::msg::time::{DurationUs, Stamper};
 use engine::msg::ui::UiEvent;
-use rtrb::Consumer;
+use engine::runtime::registry::InstrumentRow;
+use engine::venues::exec::open_orders_snapshot_end;
+use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
-    FillPen, Idle, ONE, call_codes, delta_chunk, engine_with_ui, instrument_row, persist_ring,
-    rotation, snapshot_pair, spin, strategy_log_ring, tracker_spec_all, trade, ts, venue_ts,
+    FillPen, Idle, ONE, account_chunk, call_codes, delta_chunk, detached_setup, engine_with_ui,
+    instrument_row, local_refusals, persist_ring, rotation, snapshot_pair, spin, strategy_log_ring,
+    stream_ready, tracker_spec_all, trade, ts, ui_event_ring, venue_ts,
 };
+use crate::exec_support::{QUOTE_QTY, drain_commands, exec_settings};
 
 const WARMUP_SPAN: DurationUs = DurationUs::from_secs(10);
 
@@ -210,5 +220,257 @@ fn warmup_holds_callbacks_by_message_time() {
             event_ts_us: venue_ts(30),
         }],
         "a rotation inside the warmup tees one Rotation event with its values"
+    );
+}
+
+const LATE_SPAN: DurationUs = DurationUs::from_secs(10);
+const MARKET_0: InstrumentId = InstrumentId(0);
+const MARKET_1: InstrumentId = InstrumentId(1);
+const MARKETS: [InstrumentId; 2] = [MARKET_0, MARKET_1];
+
+/// The gate of each market as a callback read it through its context, with the stamp of the
+/// message under fold.
+type GateReads = Arc<Mutex<Vec<(i64, [StrategyGate; 2])>>>;
+
+/// One `call` row for each callback of a market, its value a code (1 trade, 2 book) and its
+/// instrument the market. Each spin writes one `spin` row and declares a bid at the touch of each
+/// market. Each callback reads the gate of each market.
+#[derive(Default)]
+struct LateProbe {
+    call: Option<FeatureId>,
+    spin: Option<FeatureId>,
+    reads: GateReads,
+}
+
+impl LateProbe {
+    fn read_gates(&self, ctx: &StrategyCtx<'_>) {
+        let gates = MARKETS.map(|market| ctx.gate(market));
+        let mut reads = self.reads.lock().expect("one thread folds");
+        reads.push((ctx.event_ts().micros(), gates));
+    }
+}
+
+impl Strategy for LateProbe {
+    fn features(&self) -> &'static [&'static str] {
+        &["call", "spin"]
+    }
+
+    fn register(&mut self, registration: Registration<'_>) {
+        [self.call, self.spin] = registration.feature_ids_of(&["call", "spin"]).map(Some);
+    }
+
+    fn on_trade(&mut self, ctx: &mut StrategyCtx<'_>, event: &TradeEvent) {
+        self.read_gates(ctx);
+        ctx.emit(self.call.expect("registered"), event.instrument, 1.0);
+    }
+
+    fn on_book_update(&mut self, ctx: &mut StrategyCtx<'_>, chunk: &BookChunk) {
+        self.read_gates(ctx);
+        ctx.emit(self.call.expect("registered"), chunk.instrument, 2.0);
+    }
+
+    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
+        self.read_gates(ctx);
+        ctx.emit(self.spin.expect("registered"), MARKET_0, 6.0);
+        for market in MARKETS {
+            let Some(bid) = ctx.book(market).best_bid() else {
+                continue;
+            };
+            let quote = DesiredQuote {
+                price: bid.price,
+                qty: QUOTE_QTY,
+                style: OrderStyle::PostOnly,
+            };
+            ctx.quote(market, Side::Buy, QuoteLevel::ZERO, Some(quote));
+        }
+    }
+}
+
+/// Two markets with a 10 s warmup and a venue that answers nothing, ready to quote: the account
+/// stream is up, balances are known and the open orders have landed, all at 0.
+struct LateEngine {
+    engine: HotEngine,
+    persist: Consumer<PersistRecord>,
+    commands: Consumer<ExecLaneItem>,
+    ui_events: Consumer<UiEvent>,
+    reads: GateReads,
+}
+
+fn late_engine() -> LateEngine {
+    let rows: Vec<InstrumentRow> = MARKETS
+        .iter()
+        .map(|market| InstrumentRow {
+            venue_symbol: format!("btcusdt-{}", market.0).into(),
+            ..instrument_row(market.0, tracker_spec_all(1), 64)
+        })
+        .collect();
+    let (persistence, persist) = persist_ring(256);
+    let (ui_event_sink, ui_events) = ui_event_ring(1_024);
+    let (producer, commands) = RingBuffer::<ExecLaneItem>::new(256);
+    let reads = GateReads::default();
+    let probe = LateProbe {
+        reads: Arc::clone(&reads),
+        ..LateProbe::default()
+    };
+    let mut engine = HotEngine::new(HotEngineSetup {
+        persistence: Some(persistence),
+        ui_event_sink,
+        warmup: LATE_SPAN,
+        exec: Some(ExecWiring {
+            sink: ExecSink::new(producer, Stamper::Off),
+            settings: exec_settings(),
+            run_nonce: 0,
+        }),
+        ..detached_setup(&rows, Box::new(probe))
+    });
+    engine.dispatch(&stream_ready(MARKET_0, 0));
+    engine.dispatch(&InboundMessage::new(
+        ts(0),
+        MessageBody::Account(account_chunk(
+            &[(AssetId(0), 10 * ONE), (AssetId(1), 1_000_000 * ONE)],
+            0,
+        )),
+    ));
+    engine.dispatch(&InboundMessage::new(
+        ts(0),
+        MessageBody::Exec(open_orders_snapshot_end(MARKET_0, ts(0))),
+    ));
+    LateEngine {
+        engine,
+        persist,
+        commands,
+        ui_events,
+        reads,
+    }
+}
+
+fn market_book(market: InstrumentId, when: i64) -> [InboundMessage; 2] {
+    let (bids, asks) = snapshot_pair(market.0, &[(99 * ONE, ONE)], &[(101 * ONE, ONE)], when);
+    [
+        InboundMessage::new(ts(when), MessageBody::Book(bids)),
+        InboundMessage::new(ts(when), MessageBody::Book(asks)),
+    ]
+}
+
+fn market_delta(market: InstrumentId, when: i64) -> InboundMessage {
+    let chunk = delta_chunk(market.0, Side::Buy, &[(99 * ONE, 2 * ONE)], when);
+    InboundMessage::new(ts(when), MessageBody::Book(chunk))
+}
+
+/// The markets that each `Place` names, in order.
+fn placed_markets(commands: &mut Consumer<ExecLaneItem>) -> Vec<InstrumentId> {
+    drain_commands(commands)
+        .into_iter()
+        .filter_map(|command| match command {
+            ExecCommand::Place { instrument, .. } => Some(instrument),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The gates that the callbacks of the message at `when` read.
+fn gates_read_at(reads: &GateReads, when: i64) -> Vec<[StrategyGate; 2]> {
+    let reads = reads.lock().expect("the fold is done");
+    reads
+        .iter()
+        .filter(|(stamp, _)| *stamp == when)
+        .map(|(_, gates)| *gates)
+        .collect()
+}
+
+fn is_warming_since(gate: StrategyGate, when: i64) -> bool {
+    matches!(gate, StrategyGate::Warming { since: Some(since) } if since.as_local() == ts(when))
+}
+
+/// The callbacks of one market, each as its code and the stamp of its message.
+fn market_calls(records: &[PersistRecord], market: InstrumentId) -> Vec<(f64, i64)> {
+    records
+        .iter()
+        .filter_map(|record| match record {
+            PersistRecord::Feature(row)
+                if row.feature == FeatureId(0) && row.instrument == market =>
+            {
+                Some((row.value, row.event_ts_us.micros()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// FITNESS: a market that starts late waits for its own span, and no order of it goes out before.
+/// With a span of 10 s, market 0 first speaks at 0 and market 1 at 60 s. Market 0 calls back from
+/// 10 s on. At the spin of 65 s the strategy runs, because market 0 is live, and declares a bid on
+/// each market: the engine places the bid of market 0 and holds the bid of market 1, which warms.
+/// The first message of market 1 at or past 70 s makes it live, and the next spin places its bid.
+/// The context gives the gate of each market, and the held bid counts under its own refusal.
+#[test]
+fn late_market_waits_for_its_own_span() {
+    let mut late = late_engine();
+    let mut fold = |messages: &[InboundMessage]| {
+        for message in messages {
+            late.engine.dispatch(message);
+        }
+    };
+    fold(&market_book(MARKET_0, 0));
+    fold(&[market_delta(MARKET_0, 10_000_000)]);
+    fold(&market_book(MARKET_1, 60_000_000));
+    fold(&[InboundMessage::new(
+        ts(62_000_000),
+        MessageBody::Trade(trade(0, 99 * ONE, ONE, Side::Sell, 62_000_000)),
+    )]);
+    assert!(
+        drain_commands(&mut late.commands).is_empty(),
+        "no command goes out before the first spin"
+    );
+    local_refusals(&mut late.ui_events);
+
+    late.engine.dispatch(&spin(1, 65_000_000));
+    assert_eq!(
+        placed_markets(&mut late.commands),
+        vec![MARKET_0],
+        "at 65 s only the live market places its bid: market 1 warms until 70 s"
+    );
+    let held = local_refusals(&mut late.ui_events)
+        .into_iter()
+        .filter(|reason| *reason == RejectReason::Warming)
+        .count();
+    assert_eq!(held, 1, "the bid of market 1 is held for its warmup");
+
+    late.engine.dispatch(&market_delta(MARKET_1, 70_000_000));
+    late.engine.dispatch(&spin(2, 71_000_000));
+    assert_eq!(
+        placed_markets(&mut late.commands),
+        vec![MARKET_1],
+        "the spin after market 1 turns live places its bid, and market 0 still waits for its answer"
+    );
+
+    assert_eq!(
+        gates_read_at(&late.reads, 10_000_000),
+        vec![[StrategyGate::Live, StrategyGate::Warming { since: None }]],
+        "market 0 is live at the border of its span, and market 1 has sent nothing yet"
+    );
+    let at_spin = gates_read_at(&late.reads, 65_000_000);
+    assert!(
+        at_spin.len() == 1
+            && at_spin[0][0] == StrategyGate::Live
+            && is_warming_since(at_spin[0][1], 60_000_000),
+        "the spin of 65 s reads market 0 live and market 1 warming since 60 s, got {at_spin:?}"
+    );
+    assert_eq!(
+        gates_read_at(&late.reads, 71_000_000),
+        vec![[StrategyGate::Live, StrategyGate::Live]],
+        "the spin after 70 s reads both markets live"
+    );
+
+    let records: Vec<PersistRecord> = std::iter::from_fn(|| late.persist.pop().ok()).collect();
+    assert_eq!(
+        market_calls(&records, MARKET_0),
+        vec![(2.0, 10_000_000), (1.0, 62_000_000)],
+        "market 0 calls back from the border of its own span on"
+    );
+    assert_eq!(
+        market_calls(&records, MARKET_1),
+        vec![(2.0, 70_000_000)],
+        "market 1 calls back only from 70 s, ten seconds after its own first message"
     );
 }
