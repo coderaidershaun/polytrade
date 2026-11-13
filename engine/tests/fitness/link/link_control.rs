@@ -275,6 +275,12 @@ fn resuming_resets_derived_state_and_rearms_warmup() {
         "warmup re-armed on the resume, so the spin 5us later reaches no callback"
     );
 
+    // A market warms again from its own first message after the resume, never from a spin, so a
+    // market that stays silent after a park does not go live on cold estimators.
+    linked.engine.dispatch(&InboundMessage::new(
+        ts(50),
+        MessageBody::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 7 * ONE)], 50)),
+    ));
     linked.engine.dispatch(&spin(3, 60));
     let past_warmup = drain_persist(&mut linked);
     assert_eq!(

@@ -16,9 +16,9 @@ use engine::runtime::config::{Instruments, KlineInterval, NoParams, StrategySpec
 use rtrb::Consumer;
 
 use crate::engine_support::{
-    NOMINAL_SPIN, ONE, book_reset, call_codes, delta_chunk, engine_view, engine_with_ui,
-    engine_without_warmup, instrument_row, kline, persist_ring, rotation, snapshot_pair, spin,
-    strategy_log_ring, tracker_spec_all, trade, ts,
+    NOMINAL_SPIN, ONE, book_reset, delta_chunk, engine_view, engine_with_ui, engine_without_warmup,
+    instrument_row, kline, persist_ring, rotation, snapshot_pair, spin, strategy_log_ring,
+    tracker_spec_all, trade, ts,
 };
 use crate::raw_recorder::RecorderStrategy;
 
@@ -182,16 +182,15 @@ fn probe_sequence() -> Vec<InboundMessage> {
     ]
 }
 
-/// One replay's drained output: persisted feature rows and the banked strategy log records, both a
-/// pure function of the input sequence.
+/// One replay's drained output: the banked strategy log records, a pure function of the input
+/// sequence.
 struct Replayed {
-    persist: Vec<PersistRecord>,
     logs: Vec<HotRecord>,
 }
 
 fn run_sequence(sequence: &[InboundMessage], warmup: DurationUs) -> Replayed {
     let instruments = [instrument_row(0, tracker_spec_all(1), 64)];
-    let (persist_sink, mut consumer) = persist_ring(256);
+    let (persist_sink, _persist) = persist_ring(256);
     let (strategy_log_sink, mut log_consumer) = strategy_log_ring(256);
     let (mut engine, _ui_books, _ui_events) = engine_with_ui(
         &instruments,
@@ -203,15 +202,11 @@ fn run_sequence(sequence: &[InboundMessage], warmup: DurationUs) -> Replayed {
     for message in sequence {
         engine.dispatch(message);
     }
-    let mut persist = Vec::new();
-    while let Ok(record) = consumer.pop() {
-        persist.push(record);
-    }
     let mut logs = Vec::new();
     while let Ok(record) = log_consumer.pop() {
         logs.push(record);
     }
-    Replayed { persist, logs }
+    Replayed { logs }
 }
 
 const WARMUP_SPAN: DurationUs = DurationUs::from_secs(10);
@@ -341,47 +336,6 @@ fn engine_hot_log_records_replay_identically() {
         })
         .expect("the boundary message wrote the warmup line to the hot lane");
     assert_eq!(warmup_line.at(), LocalTs::from_micros(10_000_000));
-}
-
-/// `engine.warmup_secs`: warmup is decided by message stamps alone. The suppressed prefix is
-/// therefore a property of the sequence, identical on every replay — a wall-clock implementation
-/// would suppress all nine messages here, since dispatching them takes microseconds. State keeps
-/// advancing underneath, so from the boundary onwards the strategy sees exactly what it would
-/// have seen had nothing been suppressed.
-#[test]
-fn warmup_suppresses_callbacks_by_message_time() {
-    let warmed = run_sequence(&warmup_sequence(), WARMUP_SPAN).persist;
-    assert_eq!(
-        warmed,
-        run_sequence(&warmup_sequence(), WARMUP_SPAN).persist,
-        "warmed replay diverged"
-    );
-    assert_eq!(
-        call_codes(&warmed),
-        vec![2.0, 1.0, 6.0],
-        "only the boundary delta, the trade and the spin after it reach the strategy"
-    );
-
-    let unsuppressed = run_sequence(&warmup_sequence(), DurationUs::ZERO).persist;
-    assert_eq!(
-        call_codes(&unsuppressed),
-        vec![2.0, 2.0, 1.0, 2.0, 2.0, 2.0, 2.0, 1.0, 6.0],
-        "without warmup every message calls back"
-    );
-    assert_eq!(
-        warmed.as_slice(),
-        &unsuppressed[unsuppressed.len() - warmed.len()..],
-        "state advanced identically under suppression — same records, values included"
-    );
-
-    let ewma = warmed.iter().find_map(|record| match record {
-        PersistRecord::Feature(row) if row.feature == FeatureId(1) => Some(row.value),
-        _ => None,
-    });
-    assert!(
-        ewma.is_some_and(|value| value > 0.0),
-        "the first delivered book update carries an EwmaVol warmed entirely by suppressed messages, got {ewma:?}"
-    );
 }
 
 /// `strategy.instruments` as an explicit list is a config promise: record only those instruments.

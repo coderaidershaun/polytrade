@@ -20,7 +20,7 @@ impl HotEngine {
 }
 
 digest_fields! {
-    HotEngine { state, run, unretained_volume_bars, warmup, feature_names, ui }
+    HotEngine { state, run, unretained_volume_bars, feature_names, ui }
     not_state {
         // Its own state shows in the rows that it writes, and the replay tests compare those.
         strategy,
@@ -34,8 +34,8 @@ digest_fields! {
 
 digest_fields! {
     HotState {
-        books, trackers, ewma, windows, ledger, published_exposure, spin_seq, fold_time, exec,
-        desired, actions, declared_link_topics,
+        books, trackers, ewma, windows, ledger, published_exposure, spin_seq, fold_time, gates,
+        exec, desired, actions, declared_link_topics,
     }
     not_state {
         // Its pending snapshot and its count of superseded ones depend on how fast the writer

@@ -17,7 +17,7 @@ impl HotEngine {
         let closed = self.state.trackers[index].on_trade(event, received_ts_us);
         // Tape ahead of warmup (operators see prints).
         self.ui.emit_trade(event, received_ts_us);
-        if !self.is_strategy_live() {
+        if !self.state.gates.is_live(event.instrument) {
             return;
         }
         let mut ctx = self.state.ctx(received_ts_us);
@@ -91,7 +91,7 @@ impl HotEngine {
             self.ui
                 .emit_book(chunk.instrument, &self.state.books, received_ts_us);
         }
-        if !self.is_strategy_live() {
+        if !self.state.gates.is_live(chunk.instrument) {
             return;
         }
         let mut ctx = self.state.ctx(received_ts_us);
@@ -120,7 +120,7 @@ impl HotEngine {
         // Dims UI (dropped levels not live). Ahead of warmup.
         self.ui
             .emit_book(reset.instrument, &self.state.books, received_ts_us);
-        if !self.is_strategy_live() {
+        if !self.state.gates.is_live(reset.instrument) {
             return;
         }
         let mut ctx = self.state.ctx(received_ts_us);
@@ -161,7 +161,7 @@ impl HotEngine {
         self.ui
             .emit_book(rotation.instrument, &self.state.books, received_ts_us);
         self.ui.emit_rotation(rotation, received_ts_us);
-        if !self.is_strategy_live() {
+        if !self.state.gates.is_live(rotation.instrument) {
             return;
         }
         let mut ctx = self.state.ctx(received_ts_us);
@@ -171,7 +171,7 @@ impl HotEngine {
     pub(super) fn on_kline(&mut self, event: &KlineEvent, received_ts_us: LocalTs) {
         let index = usize::from(event.instrument.0);
         self.state.trackers[index].on_kline(event);
-        if !self.is_strategy_live() {
+        if !self.state.gates.is_live(event.instrument) {
             return;
         }
         let mut ctx = self.state.ctx(received_ts_us);
