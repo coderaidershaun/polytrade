@@ -10,25 +10,33 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use engine::log::{self, LogConfig, LogHandle};
 use engine::msg::failure::FailureClass;
-use engine::msg::time::LocalTs;
+use engine::msg::time::{EngineClock, LocalTs};
 use engine::runtime::config::{Config, ExecutionMode, NoParams, RunIdentity};
 use engine::runtime::metrics::{DropRow, RollupRow, RollupSink, SinkKind};
 use engine::runtime::otlp::{OtlpPlan, OtlpReport, OtlpRows};
-use serde_json::Value;
+use engine::runtime::{DrainDeadline, DrainOutcome, DrainWatchdog, Exit, Trigger, pin_to_core};
+use serde_json::{Value, json};
 
 use super::config_guards::{
     BINANCE_SPOT_SOURCE, SIM_BLOCK, config_with_execution_on, execution_block_with,
 };
 use super::metrics::{Harness, spin_counters};
+use crate::parquet_readback::TempDir;
 
 const STRATEGY: &str = "strat-otlp";
 const ENGINE: &str = "te-contract";
+
+/// Set in the process that runs one case that starts the log. A process starts the log only once,
+/// and the log then reaches each thread of that process, so no other test may share it.
+const CASES_PROCESS: &str = "POLYSIM_OTLP_CASES";
 
 /// How the stand-in answers one request.
 #[derive(Debug, Clone)]
@@ -656,4 +664,278 @@ fn a_failed_send_is_dropped_counted_and_never_sent_again() {
         (1, 1, 0),
         "a redirect is a refusal: {report}"
     );
+}
+
+/// Runs `case` in a process of its own: this binary again, with this one test, in the working
+/// folder of this process.
+fn in_own_process(test: &str, case: fn()) {
+    if std::env::var_os(CASES_PROCESS).is_some() {
+        return case();
+    }
+    let suite = std::env::current_exe().expect("the suite knows the path of its own binary");
+    let run = Command::new(suite)
+        .args(["--exact", test, "--test-threads=1", "--nocapture"])
+        .env(CASES_PROCESS, "1")
+        .output()
+        .expect("the suite starts its own binary again");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        run.status.success() && stdout.contains("test result: ok. 1 passed"),
+        "the case failed in its own process:\n{stdout}\n{stderr}"
+    );
+}
+
+/// Starts the log of this process, with a drain deadline of 500 ms.
+fn started_log(folder: &Path) -> (LogHandle, EngineClock) {
+    let clock = EngineClock::start();
+    let config = LogConfig {
+        dir: folder.join("logs"),
+        drain_deadline: Duration::from_millis(500),
+        ..LogConfig::default()
+    };
+    let handle = log::init(&config, &clock, pin_to_core).expect("the log drain asks for no core");
+    (handle, clock)
+}
+
+/// One log record as a collector reads it.
+#[derive(Debug, Clone, PartialEq)]
+struct Record {
+    time_unix_nano: u64,
+    severity_number: u64,
+    severity_text: String,
+    body: String,
+    attributes: BTreeMap<String, Value>,
+}
+
+fn records(body: &Value) -> Vec<Record> {
+    let mut records = Vec::new();
+    for resource in each(&body["resourceLogs"]) {
+        for scope in each(&resource["scopeLogs"]) {
+            records.extend(each(&scope["logRecords"]).map(|record| {
+                Record {
+                    time_unix_nano: text(&record["timeUnixNano"])
+                        .parse()
+                        .expect("a time is a decimal string"),
+                    severity_number: record["severityNumber"]
+                        .as_u64()
+                        .expect("a record holds a severity number"),
+                    severity_text: text(&record["severityText"]),
+                    body: text(&record["body"]["stringValue"]),
+                    attributes: each(&record["attributes"])
+                        .map(|pair| (text(&pair["key"]), pair["value"].clone()))
+                        .collect(),
+                }
+            }));
+        }
+    }
+    records
+}
+
+fn logs_requests(requests: &[Received]) -> Vec<&Received> {
+    requests
+        .iter()
+        .filter(|request| request.path == "/v1/logs")
+        .collect()
+}
+
+/// The records of all logs requests, in the order they were sent, whose tag is `tag`.
+fn tagged(requests: &[Received], tag: &str) -> Vec<Record> {
+    logs_requests(requests)
+        .into_iter()
+        .flat_map(|request| records(&request.body))
+        .filter(|record| {
+            record.attributes.get("polysim.tag") == Some(&json!({ "stringValue": tag }))
+        })
+        .collect()
+}
+
+fn nanos(at: LocalTs) -> u64 {
+    u64::try_from(at.micros()).expect("a time after 1970") * 1_000
+}
+
+/// CONTRACT: each line that the log drain writes reaches the collector as an OTLP log record in
+/// the official form, with its time, level, text, tag, module, file and line, one time each. The
+/// case starts the log, so it runs in a process of its own.
+#[test]
+fn log_lines_reach_the_collector_as_otlp_log_records() {
+    in_own_process(
+        "runtime::otlp::log_lines_reach_the_collector_as_otlp_log_records",
+        log_lines_case,
+    );
+}
+
+fn log_lines_case() {
+    let collector = Collector::answering(&[Answer::Accepted]);
+    let folder = TempDir::new("otlp-log-lines");
+    let (log, clock) = started_log(folder.path());
+    let (_rows, lanes) = plan_for(collector.address()).open();
+    log::register_thread("otlp-contract");
+    let before = clock.now();
+    let (line_one, ()) = (line!(), engine::info!("otlp contract line {}", 1));
+    let (line_two, ()) = (line!(), engine::warn!("otlp contract line {}", 2));
+    let after = clock.now();
+    let exporter = lanes.start().expect("the OS starts the exporter thread");
+    let arrived = collector.requests_once(Duration::from_secs(3), |requests| {
+        tagged(requests, "otlp-contract").len() >= 2
+    });
+    let contract = tagged(&arrived, "otlp-contract");
+    assert!(
+        !contract.is_empty(),
+        "the collector got no log record of tag otlp-contract within 3 s: {contract:?}"
+    );
+    let stop_called = Instant::now();
+    let report = exporter.stop();
+    let stop_took = stop_called.elapsed();
+    log.drain();
+
+    let requests = collector.requests();
+    for request in logs_requests(&requests) {
+        assert_official_form(request, "/v1/logs", "logs.json");
+        assert_eq!(
+            request.body["resourceLogs"][0]["resource"]["attributes"],
+            json!([{ "key": "service.name", "value": { "stringValue": "strat-otlp-te-contract-sim" } }]),
+            "the service is the artifact stem of the run, with -sim for a simulated run"
+        );
+    }
+    let contract = tagged(&requests, "otlp-contract");
+    let expected = [
+        (9, "INFO", "otlp contract line 1", line_one),
+        (13, "WARN", "otlp contract line 2", line_two),
+    ];
+    assert_eq!(contract.len(), expected.len(), "{contract:#?}");
+    for (record, (number, level, body, line)) in contract.iter().zip(expected) {
+        assert_eq!(
+            (record.severity_number, record.severity_text.as_str()),
+            (number, level)
+        );
+        assert_eq!(record.body, body);
+        assert_eq!(
+            record.attributes["code.line.number"],
+            json!({ "intValue": line.to_string() })
+        );
+        assert_eq!(
+            record.attributes["code.file.path"],
+            json!({ "stringValue": file!() })
+        );
+        assert_eq!(
+            record.attributes["polysim.module"],
+            json!({ "stringValue": module_path!() })
+        );
+        assert!(
+            (nanos(before)..=nanos(after)).contains(&record.time_unix_nano),
+            "a record carries the time of its line, in nanoseconds: {record:?}"
+        );
+    }
+    let mut sent: Vec<String> = logs_requests(&requests)
+        .into_iter()
+        .flat_map(|request| records(&request.body))
+        .map(|record| format!("{record:?}"))
+        .collect();
+    let count = sent.len();
+    sent.sort();
+    sent.dedup();
+    assert_eq!(sent.len(), count, "no record reaches the collector twice");
+    assert!(
+        stop_took <= Duration::from_millis(1_000),
+        "the stop took {stop_took:?}"
+    );
+    assert_eq!(failed_requests(&report), 0, "{report}");
+}
+
+static FORCED_EXITS: Mutex<Vec<i32>> = Mutex::new(Vec::new());
+
+/// The forced exit as this test sees it: it notes the code and returns.
+fn record_forced_exit(code: i32) {
+    FORCED_EXITS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(code);
+}
+
+/// CONTRACT: with a collector that never answers, the stop of the exporter ends the pass in
+/// flight and one last pass, both requests of each pass at the same time, inside the drain: the
+/// watchdog keeps its deadline and the exit is graceful. The case starts the log, so it runs in a
+/// process of its own.
+#[test]
+fn the_exporter_stops_inside_the_drain_when_the_collector_never_answers() {
+    in_own_process(
+        "runtime::otlp::the_exporter_stops_inside_the_drain_when_the_collector_never_answers",
+        stop_case,
+    );
+}
+
+fn stop_case() {
+    let collector = Collector::answering(&[Answer::Silent]);
+    let folder = TempDir::new("otlp-stop");
+    let (log, _clock) = started_log(folder.path());
+    let (mut rows, lanes) = plan_for(collector.address()).open();
+    log::register_thread("otlp-end");
+    engine::info!("otlp end line {}", 1);
+    let first = drop_row(SinkKind::StageSamples, 1);
+    rows.write(first);
+    let exporter = lanes.start().expect("the OS starts the exporter thread");
+    let in_flight =
+        collector.requests_once(Duration::from_secs(3), |requests| !requests.is_empty());
+    assert!(
+        !in_flight.is_empty(),
+        "the first pass sent nothing within 3 s"
+    );
+    engine::info!("otlp end line {}", 2);
+    let last = drop_row(SinkKind::CounterSamples, 2);
+    rows.write(last);
+
+    let watchdog = DrainWatchdog::arm(Duration::from_millis(1_500), record_forced_exit);
+    let stop_called = Instant::now();
+    let report = exporter.stop();
+    let stop_took = stop_called.elapsed();
+    let deadline = watchdog.deadline();
+    watchdog.disarm();
+    log.drain();
+
+    assert_eq!(deadline, DrainDeadline::Kept, "the stop took {stop_took:?}");
+    assert!(
+        FORCED_EXITS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty(),
+        "the watchdog forced no exit"
+    );
+    let exit = Exit::decide(DrainOutcome {
+        trigger: Trigger::Request("SIGTERM"),
+        fatal: None,
+        failures: Vec::new(),
+        deadline,
+    });
+    assert_eq!(exit, Exit::Graceful { trigger: "SIGTERM" });
+
+    let requests = collector.requests();
+    let logs: Vec<Vec<String>> = logs_requests(&requests)
+        .into_iter()
+        .map(|request| {
+            records(&request.body)
+                .into_iter()
+                .filter(|record| {
+                    record.attributes.get("polysim.tag")
+                        == Some(&json!({ "stringValue": "otlp-end" }))
+                })
+                .map(|record| record.body)
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        logs,
+        [["otlp end line 1"], ["otlp end line 2"]],
+        "the pass in flight and the last pass each sent one logs request"
+    );
+    let metrics: Vec<Vec<Point>> = metrics_requests(&requests)
+        .into_iter()
+        .map(|request| points(&request.body))
+        .collect();
+    assert_eq!(
+        metrics,
+        [points_of_rows(&[first]), points_of_rows(&[last])],
+        "the pass in flight and the last pass each sent one metrics request"
+    );
+    assert_eq!(report.unanswered, 4, "{report}");
 }

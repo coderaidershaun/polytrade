@@ -12,6 +12,8 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use super::record::{Callsite, HotRecord, Level, TextRecord, WORDS_PER_RECORD, message_time};
 use super::render::LogArgs;
+#[cfg(feature = "otlp")]
+use crate::msg::failure::FailureClass;
 use crate::msg::time::{EngineClock, LocalTs, wall_clock_now};
 
 const UNREGISTERED_TAG: &str = "unregistered";
@@ -23,6 +25,8 @@ static MARKER: Callsite = Callsite::new(Level::Info, module_path!(), file!(), li
 struct Globals {
     registrations: Sender<Registration>,
     backtraces: Sender<BacktraceMessage>,
+    #[cfg(feature = "otlp")]
+    copies: Sender<LaneWriter<CopiedLine>>,
     clock: EngineClock,
     ring_capacity: usize,
 }
@@ -53,6 +57,27 @@ pub(super) struct BacktraceMessage {
 pub(super) struct DrainChannels {
     pub(super) registrations: Receiver<Registration>,
     pub(super) backtraces: Receiver<BacktraceMessage>,
+    /// Hands the drain the write end of the copy lane of the OTLP export.
+    #[cfg(feature = "otlp")]
+    pub(super) copies: Receiver<LaneWriter<CopiedLine>>,
+}
+
+/// A copy of one line that the drain wrote, with the tag of its lane, for the OTLP export.
+#[cfg(feature = "otlp")]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CopiedLine {
+    pub(crate) tag: &'static str,
+    pub(crate) record: TextRecord,
+}
+
+#[cfg(feature = "otlp")]
+impl CopiedLine {
+    /// A full copy lane drops the copy and counts it, so the drain never waits for the exporter.
+    #[expect(
+        dead_code,
+        reason = "the class is named beside the type, and the drop of a copy is its one reaction"
+    )]
+    pub(crate) const WHEN_FULL: FailureClass = FailureClass::Reject;
 }
 
 /// The read end of one lane, with the count of the records its producer had to drop.
@@ -100,14 +125,14 @@ impl<T> LaneReader<T> {
 
 /// The write end of one lane. Only its own thread or task pushes, so its drop counter has one
 /// writer and needs no locked instruction.
-struct LaneWriter<T> {
+pub(super) struct LaneWriter<T> {
     producer: Producer<T>,
     drops: Arc<AtomicU64>,
 }
 
 impl<T> LaneWriter<T> {
     #[inline]
-    fn push(&mut self, record: T) {
+    pub(super) fn push(&mut self, record: T) {
         if self.producer.push(record).is_err() {
             count_drop(&self.drops);
         }
@@ -171,9 +196,13 @@ tokio::task_local! {
 pub(super) fn install(clock: &EngineClock, ring_capacity: usize) -> DrainChannels {
     let (registration_tx, registration_rx) = mpsc::channel();
     let (backtrace_tx, backtrace_rx) = mpsc::channel();
+    #[cfg(feature = "otlp")]
+    let (copies_tx, copies_rx) = mpsc::channel();
     let globals = Globals {
         registrations: registration_tx,
         backtraces: backtrace_tx,
+        #[cfg(feature = "otlp")]
+        copies: copies_tx,
         clock: clock.clone(),
         ring_capacity,
     };
@@ -183,7 +212,24 @@ pub(super) fn install(clock: &EngineClock, ring_capacity: usize) -> DrainChannel
     DrainChannels {
         registrations: registration_rx,
         backtraces: backtrace_rx,
+        #[cfg(feature = "otlp")]
+        copies: copies_rx,
     }
+}
+
+/// The read end of a new copy lane: from its next pass, the drain copies each line that it writes
+/// into it. Before `init`, and after the drain has ended, no writer is left, so it stays empty.
+#[cfg(feature = "otlp")]
+pub(crate) fn copy_lines(capacity: usize) -> LaneReader<CopiedLine> {
+    let marker = CopiedLine {
+        tag: UNREGISTERED_TAG,
+        record: TextRecord::formatted(&MARKER, LocalTs::from_micros(0), format_args!("")),
+    };
+    let (writer, reader) = lane(capacity, marker);
+    if let Some(globals) = GLOBALS.get() {
+        globals.copies.send(writer).ok();
+    }
+    reader
 }
 
 /// Tags the calling OS thread's lane. A tokio task must use [`tag_task`] instead: tasks share the

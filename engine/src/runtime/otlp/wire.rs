@@ -1,14 +1,46 @@
-//! The OTLP/JSON bodies that the exporter posts, and how each row becomes them. Field names are
+//! The OTLP/JSON bodies that the exporter posts, and how each line and each row becomes them. Field names are
 //! lowerCamelCase, and times and 64-bit integers are decimal strings, as in the official examples.
 
 use serde::Serialize;
 
+use crate::log::{CopiedLine, Level};
 use crate::msg::time::LocalTs;
 use crate::runtime::metrics::{LatencyRow, RollupRow};
 
 const SCOPE: &str = "polysim";
 const NANOS: &str = "ns";
 const SAMPLES: &str = "{sample}";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct LogsRequest {
+    resource_logs: [ResourceLogs; 1],
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ResourceLogs {
+    resource: Resource,
+    scope_logs: [ScopeLogs; 1],
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScopeLogs {
+    scope: Scope,
+    log_records: Vec<LogRecord>,
+}
+
+/// No observed time: it would need a clock read, and a collector takes the time of the line.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogRecord {
+    time_unix_nano: String,
+    severity_number: u8,
+    severity_text: &'static str,
+    body: AnyValue,
+    attributes: [KeyValue; 4],
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -71,6 +103,47 @@ struct KeyValue {
 #[serde(rename_all = "camelCase")]
 enum AnyValue {
     StringValue(String),
+    IntValue(String),
+}
+
+impl LogsRequest {
+    pub(super) fn of(service: &str, lines: &[CopiedLine]) -> LogsRequest {
+        LogsRequest {
+            resource_logs: [ResourceLogs {
+                resource: Resource::of(service),
+                scope_logs: [ScopeLogs {
+                    scope: Scope { name: SCOPE },
+                    log_records: lines.iter().map(LogRecord::of).collect(),
+                }],
+            }],
+        }
+    }
+}
+
+impl LogRecord {
+    fn of(line: &CopiedLine) -> LogRecord {
+        let callsite = line.record.callsite();
+        let (severity_number, severity_text) = match callsite.level() {
+            Level::Info => (9, "INFO"),
+            Level::Warn => (13, "WARN"),
+            Level::Error => (17, "ERROR"),
+        };
+        LogRecord {
+            time_unix_nano: unix_nano(line.record.at()),
+            severity_number,
+            severity_text,
+            body: AnyValue::StringValue(line.record.text().to_owned()),
+            attributes: [
+                text("polysim.tag", line.tag),
+                text("polysim.module", callsite.module()),
+                text("code.file.path", callsite.file()),
+                KeyValue {
+                    key: "code.line.number",
+                    value: AnyValue::IntValue(callsite.line().to_string()),
+                },
+            ],
+        }
+    }
 }
 
 impl MetricsRequest {

@@ -1,5 +1,5 @@
-//! The exporter thread: each second it takes what waits in the lanes and posts it, one time. A
-//! request that fails is dropped and counted, never sent again.
+//! The exporter thread: each second it takes what waits in both lanes and posts the logs body and
+//! the metrics body at the same time, one time each. A request that fails is dropped and counted.
 
 use std::fmt;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -9,12 +9,13 @@ use reqwest::Client;
 use reqwest::header::CONTENT_TYPE;
 use tokio::runtime::Runtime;
 
+use crate::log::CopiedLine;
 use crate::msg::failure::FailureClass;
 use crate::runtime::metrics::RollupRow;
 use crate::{error, info, warn_repeating};
 
 use super::lanes::OtlpLanes;
-use super::wire::MetricsRequest;
+use super::wire::{LogsRequest, MetricsRequest};
 use super::{REQUEST_TIMEOUT, SEND_INTERVAL};
 
 /// The running exporter. Its stop ends the thread and returns what it did.
@@ -90,6 +91,7 @@ pub(super) fn run(mut lanes: OtlpLanes, stopped: &Receiver<()>) -> OtlpReport {
     let mut poster = Poster {
         runtime,
         client,
+        logs_url: format!("http://{collector}/v1/logs"),
         metrics_url: format!("http://{collector}/v1/metrics"),
         service: lanes.plan.service.clone(),
         report: OtlpReport::default(),
@@ -106,6 +108,7 @@ pub(super) fn run(mut lanes: OtlpLanes, stopped: &Receiver<()>) -> OtlpReport {
             break;
         }
     }
+    poster.report.lines_dropped = lanes.lines.dropped();
     poster.report.rows_dropped = lanes.rows.dropped();
     poster.report
 }
@@ -156,39 +159,65 @@ impl SendFailure {
 struct Poster {
     runtime: Runtime,
     client: Client,
+    logs_url: String,
     metrics_url: String,
     service: Box<str>,
     report: OtlpReport,
     failed_requests: u64,
 }
 
+/// What one request of a pass carries.
+#[derive(Debug, Clone, Copy)]
+enum Records {
+    Lines,
+    Rows,
+}
+
 impl Poster {
     fn pass(&mut self, lanes: &mut OtlpLanes) {
+        let lines: Vec<CopiedLine> = std::iter::from_fn(|| lanes.lines.pop()).collect();
         let rows: Vec<RollupRow> = std::iter::from_fn(|| lanes.rows.pop()).collect();
-        if rows.is_empty() {
-            return;
-        }
-        let count = rows.len() as u64;
-        let outcome = match serde_json::to_vec(&MetricsRequest::of(&self.service, &rows)) {
-            Ok(body) => self
-                .runtime
-                .block_on(post(&self.client, &self.metrics_url, body)),
-            Err(_) => Err(SendFailure::Unwritten),
-        };
-        match outcome {
-            Ok(()) => self.report.rows_sent += count,
-            Err(failure) => self.reject(count, failure),
+        let logs = (!lines.is_empty()).then(|| body(&LogsRequest::of(&self.service, &lines)));
+        let metrics = (!rows.is_empty()).then(|| body(&MetricsRequest::of(&self.service, &rows)));
+        // Both requests at the same time, so a pass ends within one request limit, and so does the
+        // stop that waits for the pass in flight and one last pass.
+        let (logs, metrics) = self.runtime.block_on(async {
+            tokio::join!(
+                post_some(&self.client, &self.logs_url, logs),
+                post_some(&self.client, &self.metrics_url, metrics),
+            )
+        });
+        self.count(Records::Lines, lines.len(), logs);
+        self.count(Records::Rows, rows.len(), metrics);
+    }
+
+    fn count(&mut self, records: Records, count: usize, outcome: Option<Result<(), SendFailure>>) {
+        let count = count as u64;
+        match (records, outcome) {
+            (_, None) => {}
+            (Records::Lines, Some(Ok(()))) => self.report.lines_sent += count,
+            (Records::Rows, Some(Ok(()))) => self.report.rows_sent += count,
+            (records, Some(Err(failure))) => self.reject(records, count, failure),
         }
     }
 
-    fn reject(&mut self, rows: u64, failure: SendFailure) {
+    fn reject(&mut self, records: Records, count: u64, failure: SendFailure) {
         match failure.failure_class() {
             FailureClass::Reject => {}
             FailureClass::Halt(_) | FailureClass::Reset | FailureClass::Retry => {
                 unreachable!("each failure of the export is a reject, never {failure:?}")
             }
         }
-        self.report.rows_failed += rows;
+        let (url, noun) = match records {
+            Records::Lines => {
+                self.report.lines_failed += count;
+                (&self.logs_url, "line(s)")
+            }
+            Records::Rows => {
+                self.report.rows_failed += count;
+                (&self.metrics_url, "row(s)")
+            }
+        };
         match failure {
             SendFailure::Refused { .. } => self.report.refused += 1,
             SendFailure::Unreached => self.report.unreached += 1,
@@ -197,9 +226,24 @@ impl Poster {
         }
         warn_repeating!(
             self.failed_requests,
-            "otlp export dropped {rows} row(s) for {}: {failure}; the request is not sent again",
-            self.metrics_url
+            "otlp export dropped {count} {noun} for {url}: {failure}; the request is not sent again"
         );
+    }
+}
+
+fn body(request: &impl serde::Serialize) -> Result<Vec<u8>, SendFailure> {
+    serde_json::to_vec(request).map_err(|_| SendFailure::Unwritten)
+}
+
+/// `None` when the pass has nothing of this kind to send.
+async fn post_some(
+    client: &Client,
+    url: &str,
+    body: Option<Result<Vec<u8>, SendFailure>>,
+) -> Option<Result<(), SendFailure>> {
+    match body? {
+        Ok(body) => Some(post(client, url, body).await),
+        Err(failure) => Some(Err(failure)),
     }
 }
 

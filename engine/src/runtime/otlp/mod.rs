@@ -22,15 +22,18 @@ const REQUEST_TIMEOUT: Duration = Duration::from_millis(REQUEST_TIMEOUT_MS);
 /// The pass in flight, then one last pass. Each pass ends within one request limit, because its
 /// two requests run at the same time.
 const STOP_LIMIT_MS: u64 = 2 * REQUEST_TIMEOUT_MS;
+const COPY_LANE_CAPACITY: usize = 8_192;
 const ROWS_LANE_CAPACITY: usize = 1_024;
 
 impl OtlpPlan {
-    /// Opens the lanes into the exporter. The metrics thread writes its rows into the returned
-    /// `OtlpRows`.
+    /// Opens both lanes into the exporter, before the first line of the run: the log drain copies
+    /// each line that it writes from its next pass, and the metrics thread writes its rows into the
+    /// returned `OtlpRows`.
     pub fn open(&self) -> (OtlpRows, OtlpLanes) {
         let (rows, row_reader) = lanes::rows_lane(ROWS_LANE_CAPACITY);
         let lanes = OtlpLanes {
             plan: self.clone(),
+            lines: crate::log::copy_lines(COPY_LANE_CAPACITY),
             rows: row_reader,
         };
         (rows, lanes)

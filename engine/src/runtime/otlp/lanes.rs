@@ -1,12 +1,12 @@
-//! The lanes into the exporter. A full lane drops and counts, so no producer ever waits for a
-//! collector.
+//! The two lanes into the exporter: a copy of each line that the log drain writes, and each row
+//! of the metrics thread. A full lane drops and counts, so no producer ever waits for a collector.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rtrb::{Producer, RingBuffer};
 
-use crate::log::LaneReader;
+use crate::log::{CopiedLine, LaneReader};
 use crate::msg::failure::FailureClass;
 use crate::runtime::metrics::{RollupRow, RollupSink};
 
@@ -36,6 +36,7 @@ impl RollupSink for OtlpRows {
 /// The read ends of the lanes, and where the exporter sends what it reads there.
 pub struct OtlpLanes {
     pub(super) plan: OtlpPlan,
+    pub(super) lines: LaneReader<CopiedLine>,
     pub(super) rows: LaneReader<RollupRow>,
 }
 
