@@ -10,12 +10,14 @@ use std::time::Duration;
 use tokio::signal::unix::{SignalKind, signal};
 
 use crate::hot::spawn::SimTapGate;
+use crate::log::LogHandle;
 use crate::msg::ui::channel::UiLifecycle;
 use crate::runtime::shutdown::{FatalReason, FatalSignal, TaskHandle, panic_text};
 use crate::venues::exec::{EdgeHandle, SweepFailure};
 use crate::{error, info, warn};
 
 use super::Engine;
+use super::StartError;
 use super::exit::{DrainDeadline, DrainFailure, DrainOutcome, Exit, Trigger};
 
 /// How often the fatal latch is polled, since it cannot be awaited directly.
@@ -282,4 +284,18 @@ fn report_drain_failure<E: core::fmt::Display>(what: &str, result: Result<(), E>
     let Err(error) = result else { return None };
     error!("{what} drain failed: {error}");
     Some(error)
+}
+
+/// A refusal after the log started: each thread that started before it stops first, so the log
+/// waits for no lane of a running thread, then the log drains.
+#[cold]
+pub(super) fn refuse(
+    error: StartError,
+    log_handle: LogHandle,
+    stop_started: impl FnOnce(),
+) -> StartError {
+    error!("startup failed after the hot thread pinned: {error}");
+    stop_started();
+    log_handle.drain();
+    error
 }
