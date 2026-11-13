@@ -10,4 +10,4 @@ mod exec_codec;
 /// post-only rejection and ack/report race is exercised, because production is the only other
 /// venue this engine will ever reach.
 mod fake_venue;
-mod obligations;
+pub(crate) mod obligations;

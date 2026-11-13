@@ -83,6 +83,18 @@ engine branches solely on the normalised enums.
    the clock lint of `clippy.toml`, which permits no site there — deadlines there take `now`
    as a parameter.
 
+   A fault of the session itself is an `ExecSessionError`: the mirror cannot hold an order, a
+   placement failed closed on corrupt state, an open order or a frame cannot be decoded, the
+   subscribe is refused or cannot be built, a worker stops, an index is full, a settlement
+   fails. The session and the venue code return it and never trip the fatal latch. The
+   chassis reads it in one place, `EdgeControl::fail`, which calls `halt_on_session_error`:
+   it reads `failure_class()` (each variant is HALT, engine), writes one ERROR line, and
+   trips the latch with `fatal_reason()`. A venue error code with no mapping is not a session
+   fault: the codec classifies it `Fatal`, and the fold halts quoting (`FatalReject`) while
+   the process stays up. The chassis also counts each order that a read or the stream shows
+   and this engine did not place (`ExecCore::foreign_orders`); it is never mirrored and never
+   cancelled.
+
 4. **Written obligations** — the rules no signature can carry:
    - Every command is eventually answered. A refusal, a timeout, a disconnect — each
      synthesises an event; no hot slot ever waits forever.
@@ -210,10 +222,13 @@ variant there, and a dependency-allowlist amendment if signing needs a new crate
    returns them in `VenueScales`, through the venue port (`VenuePort::read_scales`); preflight
    stamps them onto the registry, so a stand-in port can give them in a test.
 
-The simulator is Binance-shaped and stays that way; a new venue's determinism evidence is
-its codec goldens plus a test double driven through its real codec, delivery-permutation
-style (ack-first, report-first, ack-only, report-only, ambiguous, duplicated, reordered —
-the seven ways two answers to one request arrive).
+Each venue gets a simulator behind the same contract. The seam suite of the fitness target
+holds one test body for each written obligation above, over a harness: a venue stand-in
+behind the venue's real codec. A venue passes the contract when its harness runs every body
+(`venue_edge_keeps_each_written_obligation!`); Binance runs it today. A new venue's
+determinism evidence is that run, its codec goldens, and a test double driven through its
+real codec, delivery-permutation style (ack-first, report-first, ack-only, report-only,
+ambiguous, duplicated, reordered — the seven ways two answers to one request arrive).
 
 ## What not to do
 

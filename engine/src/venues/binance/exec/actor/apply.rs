@@ -88,13 +88,20 @@ impl Actor {
                     Transport::Rest => self.submit_over_rest(request, recon_seq),
                     Transport::Refused => {
                         let now = self.control.clock.now();
-                        self.session
-                            .refuse(request, PlaceNotSentReason::NoTransport, now);
+                        let refused =
+                            self.session
+                                .refuse(request, PlaceNotSentReason::NoTransport, now);
+                        if let Err(error) = refused {
+                            self.control.fail(error);
+                        }
                     }
                 },
                 ExecEffect::Skipped { client_id, reason } => self.on_skipped(client_id, reason),
                 ExecEffect::PlaceNotSent { .. } | ExecEffect::AmendNotSent { .. } => {
-                    self.session.on_unsent(&effect, self.control.clock.now());
+                    let unsent = self.session.on_unsent(&effect, self.control.clock.now());
+                    if let Err(error) = unsent {
+                        self.control.fail(error);
+                    }
                 }
                 ExecEffect::SweepComplete { reason } => self.on_sweep_complete(reason),
             }
@@ -142,8 +149,12 @@ impl Actor {
             Ok(frame) => frame,
             Err(error) => {
                 error!("binance execution could not build a request: {error}");
-                self.session
-                    .refuse(request, PlaceNotSentReason::Encoding, now);
+                if let Err(error) = self
+                    .session
+                    .refuse(request, PlaceNotSentReason::Encoding, now)
+                {
+                    self.control.fail(error);
+                }
                 return FeedOutcome::NotSent;
             }
         };
@@ -191,9 +202,13 @@ impl Actor {
             },
             other => {
                 let now = self.control.clock.now();
-                return self
+                if let Err(error) = self
                     .session
-                    .refuse(other, PlaceNotSentReason::NoTransport, now);
+                    .refuse(other, PlaceNotSentReason::NoTransport, now)
+                {
+                    self.control.fail(error);
+                }
+                return;
             }
         };
         if self.submit(job) {

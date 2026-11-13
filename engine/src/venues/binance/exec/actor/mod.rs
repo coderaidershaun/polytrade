@@ -145,7 +145,6 @@ impl Actor {
                 core: ExecCore::with_limits(edge.max_orders_per_side, mirror_capacity),
                 instruments: instruments.iter().map(|row| row.instrument_id).collect(),
                 events: EventFunnel::new(producer, edge.clock.clone()),
-                fatal: edge.fatal.clone(),
                 inflight_timeout: edge.inflight_timeout,
             }),
             symbols,

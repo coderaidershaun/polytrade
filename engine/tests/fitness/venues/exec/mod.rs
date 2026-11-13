@@ -2,6 +2,6 @@
 
 mod exec_core;
 mod exec_session;
-pub(super) mod obligations;
+pub(crate) mod obligations;
 mod ownership;
 mod timeouts;

@@ -15,7 +15,6 @@ use engine::msg::latency::{Category, Stage, WireSample};
 use engine::msg::time::{DurationUs, LocalTs};
 use engine::runtime::config::SenderPlacement;
 use engine::runtime::metrics::{Metrics, SampleProducers};
-use engine::runtime::shutdown::FatalSignal;
 use engine::venues::edge::sender::{
     CommandTransport, Handover, SendWait, Sender, SenderSetup, TickSource,
 };
@@ -99,7 +98,6 @@ fn quoting_session() -> Session {
         core: ExecCore::with_limits(8, 32),
         instruments: vec![INSTRUMENT],
         events: SentEvents::default(),
-        fatal: FatalSignal::new(),
         inflight_timeout: DurationUs::from_millis(5_000),
     });
     for Outgoing { effect, recon_seq } in session.connect() {
@@ -207,12 +205,15 @@ impl CommandTransport for SocketVenue {
                 request,
             } = effect
             else {
-                self.session.on_unsent(&effect, NOW);
+                self.session
+                    .on_unsent(&effect, NOW)
+                    .expect("the session raises no fault here");
                 continue;
             };
             if !self.is_socket_up && matches!(request, ExecRequest::Place { .. }) {
                 self.session
-                    .refuse(request, PlaceNotSentReason::NoTransport, NOW);
+                    .refuse(request, PlaceNotSentReason::NoTransport, NOW)
+                    .expect("the session raises no fault here");
                 continue;
             }
             self.fed.push(Outgoing {
@@ -245,7 +246,8 @@ impl CommandTransport for SocketVenue {
             };
             if self.is_unencodable(&request) {
                 self.session
-                    .refuse(request, PlaceNotSentReason::Encoding, NOW);
+                    .refuse(request, PlaceNotSentReason::Encoding, NOW)
+                    .expect("the session raises no fault here");
                 continue;
             }
             self.session.inflight.record(InFlightRequest {
@@ -307,12 +309,15 @@ impl CommandTransport for LaneVenue {
                 request,
             } = effect
             else {
-                self.session.on_unsent(&effect, NOW);
+                self.session
+                    .on_unsent(&effect, NOW)
+                    .expect("the session raises no fault here");
                 continue;
             };
             if self.lane.len() == self.room {
                 self.session
-                    .refuse(request, PlaceNotSentReason::NoTransport, NOW);
+                    .refuse(request, PlaceNotSentReason::NoTransport, NOW)
+                    .expect("the session raises no fault here");
                 continue;
             }
             self.session.inflight.record(InFlightRequest {

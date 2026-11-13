@@ -6,14 +6,15 @@ use engine::msg::exec::{
     AccountChunk, CancelReason, ExecCommand, ExecEvent, ExecKind, OrderStyle, RejectClass,
     VenueOrderStatus,
 };
-use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
+use engine::msg::failure::{FailureClass, Halt};
+use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side, TradeId};
 use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::time::{DurationUs, LocalTs};
 use engine::runtime::config::RecordedTables;
-use engine::runtime::shutdown::FatalSignal;
+use engine::runtime::shutdown::{AnswerPart, FatalReason, FatalSignal};
 use engine::venues::exec::{
-    ExecCore, ExecEffect, ExecRequest, ExecSession, InFlightRequest, Outgoing, PlaceNotSentReason,
-    SessionSetup,
+    ExecCore, ExecEffect, ExecRequest, ExecSession, ExecSessionError, InFlightRequest,
+    ObserveOrderError, Outgoing, PlaceNotSentReason, SessionSetup, halt_on_session_error,
 };
 
 use crate::engine_support::ts;
@@ -21,6 +22,7 @@ use crate::exec_support::{
     ASK, BID, CEILING, QuotingSetup, SentEvents, TwoSidedQuoter, built_quoting_engine,
     drain_commands, exec_settings, make_ready, reseat_book, row_with_ceiling, spin_at,
 };
+use crate::venues::binance::obligations::BinanceEdge;
 
 pub(crate) type Session = ExecSession<SentEvents>;
 
@@ -86,7 +88,6 @@ pub(crate) fn quoting_session<H: EdgeHarness>() -> Session {
         core: ExecCore::with_limits(8, 32),
         instruments: vec![H::INSTRUMENT],
         events: SentEvents::default(),
-        fatal: FatalSignal::new(),
         inflight_timeout: INFLIGHT_TIMEOUT,
     });
     let subscribe = session.connect();
@@ -175,7 +176,9 @@ pub(crate) fn every_command_is_eventually_answered<H: EdgeHarness>() {
         },
     ] {
         let mut session = quoting_session::<H>();
-        session.refuse(action, PlaceNotSentReason::NoTransport, NOW);
+        session
+            .refuse(action, PlaceNotSentReason::NoTransport, NOW)
+            .expect("the session raises no fault here");
         assert_eq!(
             session.events.len(),
             1,
@@ -193,7 +196,9 @@ pub(crate) fn every_command_is_eventually_answered<H: EdgeHarness>() {
     let [refused] = send(&mut session, cancel, NOW)[..] else {
         panic!("one cancel request");
     };
-    session.refuse(refused, PlaceNotSentReason::NoTransport, NOW);
+    session
+        .refuse(refused, PlaceNotSentReason::NoTransport, NOW)
+        .expect("the session raises no fault here");
     assert!(
         session
             .core
@@ -387,7 +392,9 @@ pub(crate) fn a_cancel_answer_is_a_finality_promise<H: EdgeHarness>() {
     let pending = harness.pending_cancel(client_id, NOW);
     assert_eq!(pending.status, Some(VenueOrderStatus::PendingCancel));
     assert!(!VenueOrderStatus::PendingCancel.is_terminal());
-    session.fold(&pending, 0, &mut Vec::new());
+    session
+        .fold(&pending, 0, &mut Vec::new())
+        .expect("the session raises no fault here");
     assert!(
         session.core.is_mirrored(client_id),
         "a pending cancel ends nothing"
@@ -406,7 +413,9 @@ pub(crate) fn a_cancel_answer_is_a_finality_promise<H: EdgeHarness>() {
         "a cancel answer is final: {answered:?}"
     );
     for event in &answered {
-        session.fold(event, 0, &mut Vec::new());
+        session
+            .fold(event, 0, &mut Vec::new())
+            .expect("the session raises no fault here");
     }
     assert!(!session.core.is_mirrored(client_id));
 }
@@ -414,8 +423,130 @@ pub(crate) fn a_cancel_answer_is_a_finality_promise<H: EdgeHarness>() {
 /// An open order of this run that the codec cannot decode is never skipped: the mirror would be
 /// incomplete, and quoting against it can strand an order.
 pub(crate) fn an_undecodable_open_order_is_fatal<H: EdgeHarness>() {
-    let (_, is_decoded) = H::new().undecodable_open_order(own::<H>(1));
+    let (venue_order_id, is_decoded) = H::new().undecodable_open_order(own::<H>(1));
     assert!(!is_decoded, "the codec reads no price it cannot decode");
+
+    let mut session = quoting_session::<H>();
+    let error = session.undecodable_open_order(venue_order_id);
+    assert_eq!(
+        error,
+        ExecSessionError::UndecodableOpenOrder {
+            venue: H::VENUE,
+            venue_order_id,
+        }
+    );
+    assert_eq!(error.failure_class(), FailureClass::Halt(Halt::Engine));
+    let fatal = FatalSignal::new();
+    halt_on_session_error(&error, &fatal);
+    assert_eq!(
+        fatal.reason(),
+        Some(FatalReason::UndecodableOpenOrder {
+            venue: H::VENUE,
+            venue_order_id,
+        })
+    );
+    assert!(
+        send(&mut session, place::<H>(own::<H>(2)), NOW).is_empty(),
+        "no placement leaves after the fault"
+    );
+    halt_on_session_error(
+        &ExecSessionError::RestWorkerGone { venue: H::VENUE },
+        &fatal,
+    );
+    assert_eq!(
+        fatal.reason(),
+        Some(FatalReason::UndecodableOpenOrder {
+            venue: H::VENUE,
+            venue_order_id,
+        }),
+        "the latch keeps the first reason"
+    );
+}
+
+/// CONTRACT: a fault of the session of an execution edge halts the engine with its own reason. The
+/// session returns the fault and never trips; the chassis reads its class, writes one ERROR line,
+/// and trips the latch with the reason of the same name and values. A fault that a session raised
+/// in its own words would reach the drain as text that no exit can read.
+#[test]
+fn session_errors_halt_the_engine_with_their_reason() {
+    an_undecodable_open_order_is_fatal::<BinanceEdge>();
+
+    let venue = "binance";
+    let client_id = ClientOrderId(1);
+    let cases = [
+        (
+            ExecSessionError::MirrorRetainFailed {
+                venue,
+                source: ObserveOrderError::MirrorStorageExhausted { capacity: 32 },
+            },
+            FatalReason::MirrorRetainFailed { venue },
+        ),
+        (
+            ExecSessionError::PlacementFailedClosed {
+                venue,
+                client_id,
+                reason: PlaceNotSentReason::MirrorStorage,
+            },
+            FatalReason::PlacementFailedClosed { venue, client_id },
+        ),
+        (
+            ExecSessionError::UndecodableOpenOrder {
+                venue,
+                venue_order_id: 7,
+            },
+            FatalReason::UndecodableOpenOrder {
+                venue,
+                venue_order_id: 7,
+            },
+        ),
+        (
+            ExecSessionError::UndecodableAnswer {
+                venue,
+                part: AnswerPart::Stream,
+            },
+            FatalReason::UndecodableAnswer {
+                venue,
+                part: AnswerPart::Stream,
+            },
+        ),
+        (
+            ExecSessionError::SubscribeRefused { venue, failures: 3 },
+            FatalReason::SubscribeRefused { venue, failures: 3 },
+        ),
+        (
+            ExecSessionError::RestWorkerGone { venue },
+            FatalReason::RestWorkerGone { venue },
+        ),
+        (
+            ExecSessionError::OrderIndexFull { venue },
+            FatalReason::OrderIndexFull { venue },
+        ),
+        (
+            ExecSessionError::SubscribeUnbuildable { venue },
+            FatalReason::SubscribeUnbuildable { venue },
+        ),
+        (
+            ExecSessionError::SettlementFailed {
+                venue,
+                trade: TradeId(9),
+            },
+            FatalReason::SettlementFailed {
+                venue,
+                trade: TradeId(9),
+            },
+        ),
+    ];
+    for (error, reason) in cases {
+        assert_eq!(
+            error.failure_class(),
+            FailureClass::Halt(Halt::Engine),
+            "{error}"
+        );
+        assert_eq!(error.fatal_reason(), reason);
+        let fatal = FatalSignal::new();
+        halt_on_session_error(&error, &fatal);
+        assert_eq!(fatal.reason(), Some(reason));
+    }
 }
 
 /// A venue code that the codec does not know halts quoting rather than retrying: unknown means
@@ -483,7 +614,6 @@ pub(crate) fn readiness_arms_in_fixed_order<H: EdgeHarness>() {
         core: ExecCore::with_limits(8, 32),
         instruments: vec![H::INSTRUMENT],
         events: SentEvents::default(),
-        fatal: FatalSignal::new(),
         inflight_timeout: INFLIGHT_TIMEOUT,
     });
     let subscribe = session.connect();

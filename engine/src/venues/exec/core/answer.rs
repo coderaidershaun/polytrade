@@ -19,6 +19,7 @@ impl ExecCore {
         emit: &mut dyn FnMut(ExecEffect),
     ) -> Result<(), ObserveOrderError> {
         if event.provenance == Provenance::Foreign {
+            self.count_foreign_order();
             return Ok(());
         }
         let observed = self.observe_if_unknown(event, emit);
@@ -115,6 +116,7 @@ impl ExecCore {
     /// the open-orders read instead. [`ExecCore::on_command`] refuses them as well.
     pub fn observe_venue_order(&mut self, order: MirroredOrder) -> Result<(), ObserveOrderError> {
         if matches!(order.provenance, Provenance::Foreign) {
+            self.count_foreign_order();
             warn!(
                 "refusing to mirror a foreign order — foreign ids are not distinct, so the driver reports them directly"
             );
