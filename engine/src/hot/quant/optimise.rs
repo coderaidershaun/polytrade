@@ -53,6 +53,7 @@ impl<const N: usize> NelderMead<N> {
             );
         }
 
+        let objective = |point: &[f64; N]| scored(objective(point));
         let clamp = |point: &mut [f64; N]| {
             for (value, (lower, upper)) in point.iter_mut().zip(self.bounds) {
                 *value = value.clamp(lower, upper);
@@ -169,6 +170,11 @@ impl<const N: usize> NelderMead<N> {
             converged,
         }
     }
+}
+
+/// A value that is not finite sorts last and never wins the best pick.
+fn scored(value: f64) -> f64 {
+    if value.is_finite() { value } else { f64::MAX }
 }
 
 fn sort_by_value<const N: usize, const SIMPLEX: usize>(
