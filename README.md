@@ -95,7 +95,7 @@ Each trading engine reads its `config.yaml`. Each block refuses a key that it do
 | `latency.interval_secs` | `60` | One interval of the metrics thread: the unit of a latency log line and of a budget check. From 1 to 3,600. |
 | `latency.window_intervals` | `10` | Intervals in the rolling window of the latency report. From 1 to 60. |
 | `latency.display_ms` | `1000` | How often the latency report goes to the workstation. From 100 to 60,000. |
-| `latency.sample_ring` | `32768` | Samples that each ring to the metrics thread holds. From 1,024 to 1,048,576. |
+| `latency.sample_ring` | `32768` | Samples that the stage ring to the metrics thread holds, one for each message that the hot thread times. From 1,024 to 1,048,576. The counter ring and the wire ring have fixed sizes, so no key sets them. |
 | `latency.budget.<stage>.p99_us`, `latency.budget.<stage>.p999_us` | none | The budget of one stage, in µs, from 1 to 10,000,000. `<stage>` is `venue_to_engine`, `wire_to_message`, `message_to_decision` or `decision_to_wire`. A breach writes one warning, flags the rows and counts. It does not change trading. A stage without a budget is not checked. |
 | `senders.placement` | `shared` | Where the loops that send commands and link frames run: `shared` wakes on a tick on the runtime of the other edges, `pinned` runs them on one thread on a core of their own. On Linux, `pinned` needs `senders.core_id`. |
 | `senders.core_id` | none | The core of the pinned senders, from 0 to 1,023. On Linux, a pin that fails refuses the start. |

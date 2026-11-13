@@ -946,8 +946,8 @@ impl Site {
         problems
     }
 
-    /// The calls of `name` in the body. A call written with its type (`SystemTime::now()`) keeps the
-    /// type. A method call (`clock.now()`) names no type, so only its name counts.
+    /// The calls of `name` in the body. A call written with its type (`SystemTime::now()`) keeps
+    /// the type. A method call (`clock.now()`) names no type, so only its name counts.
     fn calls_of(&self, name: &str, owners: &[&str]) -> Vec<Call> {
         let mut calls: Vec<(usize, Option<String>)> = Vec::new();
         if name == FREE_CALL {
@@ -1023,8 +1023,8 @@ fn owner_of(path: &str) -> &str {
 const LINT_COVERS: [&str; 4] = [LINT, "clippy::style", "clippy::all", "warnings"];
 
 /// Each function of a source that expects the clock lint. Every attribute is read, inner and outer,
-/// on any item. One that allows or expects the lint, or a group that holds it, is a problem unless it
-/// is a function's own outer expectation of the lint alone: only that reports a site that has
+/// on any item. One that allows or expects the lint, or a group that holds it, is a problem unless
+/// it is a function's own outer expectation of the lint alone: only that reports a site that has
 /// stopped reading a clock, and only a listed function may carry it.
 fn sites_of(source: &str, file: &str, problems: &mut Vec<String>) -> Vec<Site> {
     let code = without_comments_and_literals(source);

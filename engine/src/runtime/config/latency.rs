@@ -1,5 +1,5 @@
 //! The `latency:` block: the interval and window of the metrics thread, its report rate to the
-//! workstation, the size of each sample ring, and the budget of each stage.
+//! workstation, the size of its stage ring, and the budget of each stage.
 
 use serde::Deserialize;
 
