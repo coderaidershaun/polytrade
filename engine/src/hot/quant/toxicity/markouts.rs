@@ -165,7 +165,7 @@ impl SideMarkouts {
         }
     }
 
-    /// Realised markouts (bps, oldest first); smooth with FastQueue::ema.
+    /// Realised markouts in bps, oldest first. Smooth them with `FastQueue::ema_over_window`.
     #[inline]
     pub fn forward(&self, horizon: ForwardHorizon) -> &FastQueue<f64> {
         &self.forward_lanes[horizon.index()].matured

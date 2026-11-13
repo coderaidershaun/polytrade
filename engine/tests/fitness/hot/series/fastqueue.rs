@@ -75,7 +75,7 @@ proptest! {
         let mut model: VecDeque<f64> = VecDeque::new();
         let mut scratch = MedianScratch::for_window(window);
 
-        prop_assert_eq!(queue.median(&mut scratch), None);
+        prop_assert_eq!(queue.median_over_window(&mut scratch), None);
 
         for &item in &items {
             queue.push(item);
@@ -90,7 +90,7 @@ proptest! {
                 (sorted[n / 2 - 1] + sorted[n / 2]) / 2.0
             };
             let before = crate::alloc_count();
-            let median = queue.median(&mut scratch);
+            let median = queue.median_over_window(&mut scratch);
             let after = crate::alloc_count();
             prop_assert_eq!(median, Some(expected));
             prop_assert_eq!(after, before, "median reached the allocator");
@@ -110,7 +110,7 @@ proptest! {
         let mut model: VecDeque<f64> = VecDeque::new();
         let decay = (-std::f64::consts::LN_2 / f64::from(halflife)).exp();
 
-        prop_assert_eq!(queue.ema(halflife), None);
+        prop_assert_eq!(queue.ema_over_window(halflife), None);
 
         for &item in &items {
             queue.push(item);
@@ -119,7 +119,7 @@ proptest! {
             let mut expected = model.iter().copied();
             let seed = expected.next().expect("model is non-empty after a push");
             let expected = expected.fold(seed, |acc, value| decay * acc + (1.0 - decay) * value);
-            prop_assert_eq!(queue.ema(halflife), Some(expected));
+            prop_assert_eq!(queue.ema_over_window(halflife), Some(expected));
         }
     }
 }
@@ -132,19 +132,19 @@ fn ema_halflife_one_weights_each_sample_by_half() {
     let mut queue = FastQueue::<f64>::new(8, 2);
 
     queue.push(4.0);
-    assert_eq!(queue.ema(1), Some(4.0));
+    assert_eq!(queue.ema_over_window(1), Some(4.0));
 
     queue.push(10.0);
-    assert_eq!(queue.ema(1), Some(0.5 * 4.0 + 0.5 * 10.0));
+    assert_eq!(queue.ema_over_window(1), Some(0.5 * 4.0 + 0.5 * 10.0));
 
     queue.push(1.0);
     let two = 0.5 * 4.0 + 0.5 * 10.0;
-    assert_eq!(queue.ema(1), Some(0.5 * two + 0.5 * 1.0));
+    assert_eq!(queue.ema_over_window(1), Some(0.5 * two + 0.5 * 1.0));
 
     // A four-sample halflife weights the newest sample 1 − 2^(−1/4) ≈ 0.159, not 0.5.
     let decay = 2f64.powf(-0.25);
     let mut long = FastQueue::<f64>::new(8, 2);
     long.push(0.0);
     long.push(1.0);
-    assert_eq!(long.ema(4), Some(1.0 - decay));
+    assert_eq!(long.ema_over_window(4), Some(1.0 - decay));
 }

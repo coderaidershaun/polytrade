@@ -3,5 +3,6 @@
 
 mod fastqueue;
 mod spin_sampling;
+mod statistics;
 mod tracker;
 mod volume_bars;

@@ -406,12 +406,14 @@ fn record_spin(
     }
     let ewma_vol = ctx.ewma_vol(instrument);
     ctx.emit_present(features.ewma_vol_per_event, instrument, ewma_vol);
-    let resilience_median = model.resilience_window.median(&mut model.median_scratch);
+    let resilience_median = model
+        .resilience_window
+        .median_over_window(&mut model.median_scratch);
     ctx.emit_present(features.resilience_median_1m, instrument, resilience_median);
     ctx.emit_present(
         features.resilience_mean_1m,
         instrument,
-        model.resilience_window.mean(),
+        model.resilience_window.running_mean(),
     );
     let intensity_scale = mid
         .zip(model.tick)

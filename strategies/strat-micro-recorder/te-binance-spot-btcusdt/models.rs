@@ -480,8 +480,16 @@ pub(crate) fn emit_side_markouts(
         reverse_5s,
         fills,
     } = features.markout(side);
-    let forward = |horizon| markouts.forward(horizon).ema(MARKOUT_EMA_HALFLIFE);
-    let reverse = |horizon| markouts.reverse(horizon).ema(MARKOUT_EMA_HALFLIFE);
+    let forward = |horizon| {
+        markouts
+            .forward(horizon)
+            .ema_over_window(MARKOUT_EMA_HALFLIFE)
+    };
+    let reverse = |horizon| {
+        markouts
+            .reverse(horizon)
+            .ema_over_window(MARKOUT_EMA_HALFLIFE)
+    };
     ctx.emit_present(forward_1s, instrument, forward(ForwardHorizon::Secs1));
     ctx.emit_present(forward_3s, instrument, forward(ForwardHorizon::Secs3));
     ctx.emit_present(forward_5s, instrument, forward(ForwardHorizon::Secs5));
