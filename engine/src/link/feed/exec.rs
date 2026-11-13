@@ -66,6 +66,7 @@ wire_enum! {
     (RejectReason::OutsideWindow) = 18,
     (RejectReason::RateBudget) = 19,
     (RejectReason::Warming) = 20,
+    (RejectReason::IdsSpent) = 21,
 }
 
 // `Refused` is appended rather than slotted beside `Gone`, so splitting the class renumbered nothing
@@ -90,6 +91,11 @@ wire_enum! {
     (HaltReason::CommandBankOverflow) = 6,
     (HaltReason::DuplicateResting) = 7,
     (HaltReason::SealNotAccepted) = 8,
+    (HaltReason::OrphanFill) = 9,
+    (HaltReason::PriorRunOverflow) = 10,
+    (HaltReason::StatusProbesSpent) = 11,
+    (HaltReason::StreamSilent) = 12,
+    (HaltReason::WriterFailed) = 13,
 }
 
 const REJECT_LOCAL: u8 = 1;

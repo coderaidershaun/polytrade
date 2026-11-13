@@ -104,6 +104,15 @@ pub struct OrderClaim {
     pub recon_seq: u64,
 }
 
+/// Why a level of the ladder has no slot for a new order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClaimRefusal {
+    /// An idle slot of the level is retired: the next order is refused, and the engine quotes on.
+    IdsSpent,
+    /// Each slot of the level holds a working order, so a slot leaked: the engine halts.
+    LevelFull,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ReconcilePass {
     pub instrument: InstrumentId,
@@ -199,11 +208,19 @@ impl OrderTable {
             .count()
     }
 
-    pub fn claim(&mut self, claim: OrderClaim) -> Option<(usize, ClientOrderId)> {
+    /// # Errors
+    /// [`ClaimRefusal::IdsSpent`] when an idle slot of the level has spent its client ids, and
+    /// [`ClaimRefusal::LevelFull`] when each slot of the level holds a working order.
+    pub fn claim(&mut self, claim: OrderClaim) -> Result<(usize, ClientOrderId), ClaimRefusal> {
         let base = level_base(claim.instrument, claim.side, claim.level);
-        let index = base + free_or_oldest_closed(&self.slots[base..base + SLOTS_PER_LEVEL])?;
+        let level = &self.slots[base..base + SLOTS_PER_LEVEL];
+        let Some(offset) = free_or_oldest_closed(level) else {
+            let is_any_idle = level.iter().any(|slot| slot.state.is_terminal());
+            return Err(if is_any_idle { ClaimRefusal::IdsSpent } else { ClaimRefusal::LevelFull });
+        };
+        let index = base + offset;
         let slot = &mut self.slots[index];
-        let generation = slot.generation.wrapping_add(1);
+        let generation = slot.generation + 1;
         let client_id = self.layout.encode(index, generation);
         *slot = OrderSlot {
             client_id,
@@ -219,7 +236,7 @@ impl OrderTable {
             placed_recon_seq: claim.recon_seq,
             ..OrderSlot::EMPTY
         };
-        Some((index, client_id))
+        Ok((index, client_id))
     }
 
     pub fn adopt(&mut self, event: &ExecEvent, now: LocalTs) -> Option<usize> {
@@ -358,14 +375,21 @@ impl OrderTable {
     }
 }
 
+/// The slot a new order may take: a free one first, else the one that closed longest ago. A slot at
+/// its last generation is retired for the run, because the next id it minted would wrap to an id
+/// the venue has already seen.
 pub(super) fn free_or_oldest_closed(slots: &[OrderSlot]) -> Option<usize> {
-    if let Some(index) = slots.iter().position(|slot| slot.state == OrderState::Free) {
+    let is_reusable = |slot: &OrderSlot| slot.generation < u16::MAX;
+    let free = slots
+        .iter()
+        .position(|slot| slot.state == OrderState::Free && is_reusable(slot));
+    if let Some(index) = free {
         return Some(index);
     }
     slots
         .iter()
         .enumerate()
-        .filter(|(_, slot)| matches!(slot.state, OrderState::Closed(_)))
+        .filter(|(_, slot)| matches!(slot.state, OrderState::Closed(_)) && is_reusable(slot))
         .min_by_key(|(_, slot)| slot.closed_ts_us)
         .map(|(index, _)| index)
 }

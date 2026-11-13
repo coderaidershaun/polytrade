@@ -2,12 +2,14 @@
 //! order by an id that addresses one slot and one generation only, and retires an order only when a
 //! pass that postdates it did not name it.
 
+use std::collections::HashSet;
+
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
-    AccountTable, ClientIdLayout, CloseReason, DesiredQuote, ExecLimits, HaltReason,
+    AccountTable, ClaimRefusal, ClientIdLayout, CloseReason, DesiredQuote, ExecLimits, HaltReason,
     MAX_ORDER_SLOTS, OrderClaim, OrderSlot, OrderState, OrderTable, QuoteLevel, ReconcileInput,
-    ReconcileOutcome, ReconcilePass, ReleaseOutcome, RestingOrder, TickGrid, reconcile_side,
-    side_base,
+    ReconcileOutcome, ReconcilePass, RejectReason, ReleaseOutcome, RestingOrder, TickGrid,
+    reconcile_side, side_base,
 };
 use engine::msg::exec::{
     AccountChunk, AccountChunkKind, ExecCommand, ExecEvent, ExecKind, OrderStyle, RejectClass,
@@ -20,7 +22,9 @@ use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::{RecordedTables, TableKind};
 use rtrb::Consumer;
 
-use crate::engine_support::{ONE, account_chunk, exec_capacity, exec_event, rich, top, ts};
+use crate::engine_support::{
+    ONE, account_chunk, exec_capacity, exec_event, local_refusals, rich, top, ts,
+};
 use crate::exec_support::{
     ASK, BID, CEILING, INSTRUMENT, QuotingEngine, QuotingSetup, TwoSidedQuoter,
     built_quoting_engine, drain_commands, exec_settings, make_ready, reseat_book, row_with_ceiling,
@@ -713,6 +717,137 @@ fn client_id_addresses_only_its_slot_and_generation() {
         "the reaped order's id still addresses its old slot, so a late report would corrupt the new tenant"
     );
     assert_eq!(orders.find(second), Some(index));
+
+    let mut orders = table(1);
+    let base = side_base(InstrumentId(0), Side::Buy);
+    rest_and_reap(&mut orders, base, u16::MAX - 1);
+    let (index, last) = orders
+        .claim(buy_claim(QuoteLevel::ZERO, 0, 0))
+        .expect("the reaped slot is free again");
+    assert_eq!(
+        (index, ClientIdLayout::generation_of(last)),
+        (base, u16::MAX)
+    );
+    cancel_and_reap(&mut orders, index, last);
+    let (next, id) = orders
+        .claim(buy_claim(QuoteLevel::ZERO, 0, 0))
+        .expect("the level holds three more slots");
+    assert_ne!(
+        next,
+        base,
+        "a slot at its last generation was claimed again, and its id wrapped to generation {}",
+        ClientIdLayout::generation_of(id)
+    );
+    assert_eq!(next, base + 1);
+
+    let mut orders = table(1);
+    let mut minted = HashSet::new();
+    let refusal = loop {
+        match orders.claim(buy_claim(QuoteLevel::ZERO, 0, 0)) {
+            Ok((index, id)) => {
+                assert!(minted.insert(id), "client id {id:?} was minted twice");
+                cancel_and_reap(&mut orders, index, id);
+            }
+            Err(refusal) => break refusal,
+        }
+    };
+    assert_eq!(
+        (minted.len(), refusal),
+        (4 * usize::from(u16::MAX), ClaimRefusal::IdsSpent),
+        "each slot of a level mints each generation once, then the level refuses"
+    );
+
+    let mut full = table(1);
+    for _ in 0..4 {
+        full.claim(buy_claim(QuoteLevel::ZERO, 0, 0))
+            .expect("the level has four slots");
+    }
+    assert_eq!(
+        full.claim(buy_claim(QuoteLevel::ZERO, 0, 0)),
+        Err(ClaimRefusal::LevelFull),
+        "four working orders on one level are a leak, never spent ids"
+    );
+
+    a_spent_level_refuses_and_the_engine_quotes_on();
+}
+
+/// The quote pass reports the refusal on the side whose level is spent, places on the other side,
+/// and does not halt.
+fn a_spent_level_refuses_and_the_engine_quotes_on() {
+    let QuotingEngine {
+        mut engine,
+        mut commands,
+        mut ui_events,
+        ..
+    } = built_quoting_engine(QuotingSetup {
+        row: row_with_ceiling(CEILING),
+        strategy: Box::new(TwoSidedQuoter),
+        restored: &[],
+        settings: exec_settings(),
+        tables: RecordedTables::new(&[TableKind::Orders]),
+        run_nonce: 0,
+    });
+    make_ready(&mut engine, 0);
+    let base = side_base(INSTRUMENT, Side::Buy);
+    for slot in base..base + 4 {
+        let client_id = ClientIdLayout { run_nonce: 0 }.encode(slot, u16::MAX);
+        for (kind, status) in [
+            (ExecKind::SnapshotOrder, VenueOrderStatus::New),
+            (ExecKind::ReportCanceled, VenueOrderStatus::Canceled),
+        ] {
+            engine.dispatch(&InboundMessage::new(
+                ts(20),
+                MessageBody::Exec(ExecEvent {
+                    kind,
+                    status: Some(status),
+                    qty: Qty::from_mantissa(ONE / 10),
+                    ..exec_event(INSTRUMENT, client_id, Side::Buy, BID, 20)
+                }),
+            ));
+        }
+    }
+    let after_reap = 20 + exec_settings().order_reap_window.micros();
+    for message in reseat_book(BID, ASK, after_reap) {
+        engine.dispatch(&message);
+    }
+    drain_commands(&mut commands);
+    local_refusals(&mut ui_events);
+    spin_at(&mut engine, 1, after_reap + 10);
+
+    let sent = drain_commands(&mut commands);
+    assert!(
+        matches!(
+            sent.as_slice(),
+            [ExecCommand::Place {
+                side: Side::Sell,
+                ..
+            }]
+        ),
+        "the sell side still quotes, and the spent buy side sends nothing: {sent:?}"
+    );
+    assert_eq!(local_refusals(&mut ui_events), [RejectReason::IdsSpent]);
+}
+
+const REAP_WINDOW: DurationUs = DurationUs::from_micros(60_000_000);
+
+/// An order of a slot at `generation` that the venue named, then cancelled, then reaped: the slot is
+/// free again, and its generation stays.
+fn rest_and_reap(orders: &mut OrderTable, slot: usize, generation: u16) {
+    let id = ClientIdLayout {
+        run_nonce: RUN_NONCE,
+    }
+    .encode(slot, generation);
+    let index = orders
+        .adopt(&event(ExecKind::SnapshotOrder, id), RECEIVED)
+        .expect("the slot is free");
+    cancel_and_reap(orders, index, id);
+}
+
+fn cancel_and_reap(orders: &mut OrderTable, index: usize, id: ClientOrderId) {
+    let at = LocalTs::from_micros(10);
+    orders.apply(index, &event(ExecKind::AckCanceled, id), at);
+    orders.reap(LocalTs::from_micros(10 + REAP_WINDOW.micros()), REAP_WINDOW);
+    assert_eq!(orders.slot(index).state(), OrderState::Free);
 }
 
 /// FITNESS: a reconciliation pass retires an order only when the order predates the question and

@@ -150,6 +150,8 @@ pub enum RejectReason {
     OutsideWindow,
     /// Declared for a market whose warmup has not passed: the quote is held until it is live.
     Warming,
+    /// Each idle slot of the level is retired: its next client id would wrap to one already sent.
+    IdsSpent,
 }
 
 impl RejectReason {
@@ -177,13 +179,14 @@ impl RejectReason {
             Self::RateBudget => "order rate budget spent",
             Self::OutsideWindow => "outside the trading window",
             Self::Warming => "market still warming up",
+            Self::IdsSpent => "client ids of this level spent",
         }
     }
 }
 
 /// Every kind of refusal, in the order whose place a hot log record carries. `NotReady` stands for
 /// each gap here, and the gap itself travels in the second word.
-const REJECT_KINDS: [RejectReason; 18] = [
+const REJECT_KINDS: [RejectReason; 19] = [
     RejectReason::QtyBelowMin,
     RejectReason::NotionalBelowMin,
     RejectReason::NotionalAboveMax,
@@ -202,6 +205,7 @@ const REJECT_KINDS: [RejectReason; 18] = [
     RejectReason::RateBudget,
     RejectReason::OutsideWindow,
     RejectReason::Warming,
+    RejectReason::IdsSpent,
 ];
 
 /// Prints what `{:?}` prints, `NotReady(Stream)` included, whatever the placeholder: the operator

@@ -258,32 +258,32 @@ impl ExecEngine {
         outcome: FlattenOutcome,
         input: &mut SpinInput<'_>,
     ) {
+        let refusal = match outcome {
+            FlattenOutcome::Nothing => None,
+            // Placed at level ZERO, since a marketable order does not occupy a quote
+            // rung. is_resting_quote() is what stops the reconciler and closer from
+            // confusing it with a quote.
+            FlattenOutcome::Place(intent) => self.place(
+                instrument,
+                side,
+                QuoteLevel::ZERO,
+                intent,
+                input.stamps(),
+                input.bank,
+            ),
+            FlattenOutcome::Refuse(reason) => Some(reason),
+        };
         let index = usize::from(instrument.0);
-        match outcome {
-            FlattenOutcome::Nothing => self.instruments[index].flatten_refusal = None,
-            FlattenOutcome::Place(intent) => {
-                self.instruments[index].flatten_refusal = None;
-                // Placed at level ZERO, since a marketable order does not occupy a quote
-                // rung. is_resting_quote() is what stops the reconciler and closer from
-                // confusing it with a quote.
-                self.place(
-                    instrument,
-                    side,
-                    QuoteLevel::ZERO,
-                    intent,
-                    input.stamps(),
-                    input.bank,
-                );
-            }
-            FlattenOutcome::Refuse(reason) => {
-                if self.instruments[index].flatten_refusal.replace(reason) != Some(reason) {
-                    report_unflattened(
-                        instrument,
-                        input.ledger.row(instrument).position_base(),
-                        reason,
-                    );
-                }
-            }
+        let Some(reason) = refusal else {
+            self.instruments[index].flatten_refusal = None;
+            return;
+        };
+        if self.instruments[index].flatten_refusal.replace(reason) != Some(reason) {
+            report_unflattened(
+                instrument,
+                input.ledger.row(instrument).position_base(),
+                reason,
+            );
         }
     }
 }

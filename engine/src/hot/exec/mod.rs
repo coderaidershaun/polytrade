@@ -35,8 +35,8 @@ pub use gates::{
     assess_exposure, assess_loss,
 };
 pub use order::{
-    Applied, ClientIdLayout, CloseReason, FillDelta, MAX_ORDER_SLOTS, OrderClaim, OrderSlot,
-    OrderState, OrderTable, ReconcilePass, level_of_slot, side_base,
+    Applied, ClaimRefusal, ClientIdLayout, CloseReason, FillDelta, MAX_ORDER_SLOTS, OrderClaim,
+    OrderSlot, OrderState, OrderTable, ReconcilePass, level_of_slot, side_base,
 };
 pub use reconcile::{
     BookTop, ExecLimits, FundsView, PlaceIntent, ReconcileInput, ReconcileOutcome, RejectReason,

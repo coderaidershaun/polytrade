@@ -11,8 +11,8 @@ use super::audit::bank_engine_driven;
 use super::desired::QuoteLevel;
 use super::engine::{ExecEngine, FoldStamps};
 use super::gates::HaltReason;
-use super::order::{OrderClaim, OrderState};
-use super::reconcile::{PlaceIntent, ReconcileOutcome};
+use super::order::{ClaimRefusal, OrderClaim, OrderState};
+use super::reconcile::{PlaceIntent, ReconcileOutcome, RejectReason};
 use super::spin::SpinInput;
 
 impl ExecEngine {
@@ -23,13 +23,13 @@ impl ExecEngine {
         level: QuoteLevel,
         outcome: ReconcileOutcome,
         input: &mut SpinInput<'_>,
-    ) {
+    ) -> Option<RejectReason> {
         let stamps = input.stamps();
         let at = stamps.fold;
         match outcome {
             ReconcileOutcome::Nothing | ReconcileOutcome::Reject(_) => {}
             ReconcileOutcome::Place(intent) => {
-                self.place(instrument, side, level, intent, stamps, input.bank)
+                return self.place(instrument, side, level, intent, stamps, input.bank);
             }
             ReconcileOutcome::Cancel => {
                 if let Some(index) = self.resting_index(instrument, side, level) {
@@ -37,9 +37,7 @@ impl ExecEngine {
                 }
             }
             ReconcileOutcome::AmendQty(qty) => {
-                let Some(index) = self.resting_index(instrument, side, level) else {
-                    return;
-                };
+                let index = self.resting_index(instrument, side, level)?;
                 let client_id = self.orders.slot(index).client_id();
                 let command = ExecCommand::AmendQty {
                     instrument,
@@ -53,6 +51,7 @@ impl ExecEngine {
                 }
             }
         }
+        None
     }
 
     #[inline]
@@ -105,6 +104,9 @@ impl ExecEngine {
     /// Every placement the engine mints passes through here, so every one of them spends the venue
     /// budget — a flatten is exempt from being REFUSED by it, never from consuming it. Counting the
     /// exits is what makes the quote gate refuse early enough to leave room for the next one.
+    ///
+    /// Returns the refusal of a level whose client ids are spent. A level with no slot at all halts
+    /// instead, and the halt is what the next spin reports.
     pub(super) fn place(
         &mut self,
         instrument: InstrumentId,
@@ -113,10 +115,15 @@ impl ExecEngine {
         intent: PlaceIntent,
         stamps: FoldStamps,
         bank: &mut Actions,
-    ) {
+    ) -> Option<RejectReason> {
         let at = stamps.fold;
-        let Some((index, client_id)) = self.claim(instrument, side, level, intent, at) else {
-            return;
+        let (index, client_id) = match self.claim(instrument, side, level, intent, at) {
+            Ok(claimed) => claimed,
+            Err(ClaimRefusal::IdsSpent) => return Some(RejectReason::IdsSpent),
+            Err(ClaimRefusal::LevelFull) => {
+                self.halt(HaltReason::SlotLeak, at);
+                return None;
+            }
         };
         let is_banked = self.pending.bank(
             ExecCommand::Place {
@@ -131,7 +138,7 @@ impl ExecEngine {
         );
         if !is_banked {
             self.unwind(index, stamps, bank);
-            return;
+            return None;
         }
         self.budget.record_place();
         bank_engine_driven(
@@ -141,6 +148,7 @@ impl ExecEngine {
             OrderLifecycle::Free,
             stamps.received,
         );
+        None
     }
 
     fn claim(
@@ -150,8 +158,8 @@ impl ExecEngine {
         level: QuoteLevel,
         intent: PlaceIntent,
         at: LocalTs,
-    ) -> Option<(usize, ClientOrderId)> {
-        let Some((index, client_id)) = self.orders.claim(OrderClaim {
+    ) -> Result<(usize, ClientOrderId), ClaimRefusal> {
+        let (index, client_id) = self.orders.claim(OrderClaim {
             instrument,
             side,
             level,
@@ -160,15 +168,12 @@ impl ExecEngine {
             style: intent.style,
             claimed_ts_us: at,
             recon_seq: self.recon_seq,
-        }) else {
-            self.halt(HaltReason::SlotLeak, at);
-            return None;
-        };
+        })?;
         let asset = self.instruments[usize::from(instrument.0)].spend_asset(side);
         let amount = side.spend(intent.price, intent.qty);
         let reserved_at = self.account.reserve(asset, amount);
         self.orders.hold_reservation(index, amount, reserved_at);
-        Some((index, client_id))
+        Ok((index, client_id))
     }
 
     #[cold]

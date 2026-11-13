@@ -279,7 +279,7 @@ fn arb_liquidity() -> impl Strategy<Value = Option<Liquidity>> {
     ]
 }
 
-const REJECT_REASONS: [RejectReason; 20] = [
+const REJECT_REASONS: [RejectReason; 21] = [
     RejectReason::QtyBelowMin,
     RejectReason::NotionalBelowMin,
     RejectReason::NotionalAboveMax,
@@ -300,6 +300,7 @@ const REJECT_REASONS: [RejectReason; 20] = [
     RejectReason::OutsideWindow,
     RejectReason::RateBudget,
     RejectReason::Warming,
+    RejectReason::IdsSpent,
 ];
 
 /// The slot each refusal claims in [`REJECT_REASONS`], which is what stops that list rotting into a
@@ -331,6 +332,7 @@ fn listed_as(reason: RejectReason) -> RejectReason {
         RejectReason::OutsideWindow => const { REJECT_REASONS[17] },
         RejectReason::RateBudget => const { REJECT_REASONS[18] },
         RejectReason::Warming => const { REJECT_REASONS[19] },
+        RejectReason::IdsSpent => const { REJECT_REASONS[20] },
     }
 }
 
@@ -378,6 +380,11 @@ fn arb_halt() -> impl Strategy<Value = UiHalt> {
                 Just(HaltReason::CommandBankOverflow),
                 Just(HaltReason::DuplicateResting),
                 Just(HaltReason::SealNotAccepted),
+                Just(HaltReason::OrphanFill),
+                Just(HaltReason::PriorRunOverflow),
+                Just(HaltReason::StatusProbesSpent),
+                Just(HaltReason::StreamSilent),
+                Just(HaltReason::WriterFailed),
             ],
             any::<i64>()
         )

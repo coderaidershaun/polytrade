@@ -184,7 +184,9 @@ impl ExecEngine {
             ladder.refusal.get_or_insert(reason);
             return ladder.refusal;
         }
-        self.act_on(instrument, side, level, outcome, input);
+        if let Some(reason) = self.act_on(instrument, side, level, outcome, input) {
+            ladder.refusal.get_or_insert(reason);
+        }
         ladder.resolve()
     }
 
