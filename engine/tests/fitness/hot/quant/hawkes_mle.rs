@@ -3,7 +3,9 @@
 //! everything in the research columns downstream.
 
 use super::{ExpSimulation, START, exponential_fixture, window};
-use engine::hot::quant::hawkes::{HawkesChoice, HawkesChoiceError, HawkesMle, HawkesParams};
+use engine::hot::quant::hawkes::{
+    HawkesChoice, HawkesChoiceError, HawkesFit, HawkesMle, HawkesParams,
+};
 use engine::msg::time::DurationUs;
 
 #[test]
@@ -11,26 +13,32 @@ fn fit_recovers_exponential_params_and_warm_starts() {
     // Warm refit reduces iterations via seeded simplex.
     let (truth, events, now) = exponential_fixture();
     let mut fitter = HawkesMle::new(HawkesChoice::new(32_768, 64, 1).expect("a valid choice"));
-    let cold = fitter.fit(&events, now).expect("cold fit");
+    let cold = fitter
+        .fit(&events, now)
+        .and_then(HawkesFit::fresh)
+        .expect("cold fit");
     assert!(cold.converged, "cold fit hit max_iter");
     for (fitted, expected, name) in [
-        (cold.mu, truth.mu_per_sec(), "mu"),
-        (cold.alpha, truth.alpha_per_sec(), "alpha"),
-        (cold.beta, truth.beta_per_sec(), "beta"),
+        (cold.params.mu_per_sec(), truth.mu_per_sec(), "mu"),
+        (cold.params.alpha_per_sec(), truth.alpha_per_sec(), "alpha"),
+        (cold.params.beta_per_sec(), truth.beta_per_sec(), "beta"),
     ] {
         assert!(
             (fitted / expected - 1.0).abs() < 0.25,
             "{name} {fitted} missed {expected}"
         );
     }
-    assert!(cold.is_stationary() && (cold.branching_ratio - 0.4).abs() < 0.15);
+    assert!(cold.params.is_stationary() && (cold.params.branching_ratio() - 0.4).abs() < 0.15);
 
     let warm = fitter.fit(&events, now).expect("warm refit");
+    let warm = warm.fresh().expect("a fresh warm refit");
     assert!(warm.iterations <= cold.iterations);
-    assert!(!warm.is_stale);
 
     let thin = window(&[START, START + DurationUs::from_secs(1)]);
-    assert!(fitter.fit(&thin, now).expect("stale reissue").is_stale);
+    assert!(matches!(
+        fitter.fit(&thin, now).expect("stale reissue"),
+        HawkesFit::Stale(_)
+    ));
 
     // The likelihood that a fit reports equals its definition, summed here term by term at the
     // returned params: a wrong compensator would still pass the 25% bounds above.
@@ -45,13 +53,14 @@ fn fit_recovers_exponential_params_and_warm_starts() {
     .run();
     let short = fitter
         .fit(&window(&stamps), START + horizon)
+        .and_then(HawkesFit::fresh)
         .expect("short fit");
     let times: Vec<f64> = stamps
         .iter()
         .map(|stamp| stamp.diff(stamps[0]).to_secs())
         .collect();
     let end = (START + horizon).diff(stamps[0]).to_secs();
-    let direct = direct_log_likelihood(&times, end, short.params());
+    let direct = direct_log_likelihood(&times, end, short.params);
     assert!(
         (short.log_likelihood - direct).abs() < 1e-9,
         "reported {} vs direct {direct}",

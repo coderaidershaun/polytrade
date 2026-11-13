@@ -13,27 +13,29 @@ const LOG_BOUNDS: [(f64, f64); PARAMS] = [(-25.0, 10.0), (-25.0, 10.0), (-12.0, 
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HawkesEstimate {
-    pub mu: f64,
-    pub alpha: f64,
-    pub beta: f64,
-    pub branching_ratio: f64,
+    pub params: HawkesParams,
     pub log_likelihood: f64,
     pub events: usize,
     pub converged: bool,
     pub iterations: usize,
-    /// Not a fresh solve: the window could not support one, so these are the previous fit's
-    /// numbers re-dated.
-    pub is_stale: bool,
 }
 
-impl HawkesEstimate {
-    pub fn params(&self) -> HawkesParams {
-        HawkesParams::new(self.mu, self.alpha, self.beta)
-    }
+/// What a fit gives: a new solve, or the previous solve again when the window cannot support one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HawkesFit {
+    Fresh(HawkesEstimate),
+    /// The previous solve, re-dated: the window holds too few events, or they span no time.
+    Stale(HawkesEstimate),
+}
 
-    #[inline]
-    pub fn is_stationary(&self) -> bool {
-        self.branching_ratio < 1.0
+impl HawkesFit {
+    /// A stale fit is a previous one re-dated: recording it would date the arrivals of a dead
+    /// market to now.
+    pub fn fresh(self) -> Option<HawkesEstimate> {
+        match self {
+            Self::Fresh(estimate) => Some(estimate),
+            Self::Stale(_) => None,
+        }
     }
 }
 
@@ -54,12 +56,9 @@ impl HawkesMle {
         }
     }
 
-    pub fn fit(&mut self, events: &HawkesEvents, now: LocalTs) -> Option<HawkesEstimate> {
+    pub fn fit(&mut self, events: &HawkesEvents, now: LocalTs) -> Option<HawkesFit> {
         let Some((times, end)) = fit_window(events, now, self.min_events) else {
-            return self.last.map(|last| HawkesEstimate {
-                is_stale: true,
-                ..last
-            });
+            return self.last.map(HawkesFit::Stale);
         };
         let optimum = NelderMead::new(
             self.cached.unwrap_or_else(|| cold_seed(times, end)),
@@ -69,19 +68,15 @@ impl HawkesMle {
 
         let [mu, alpha, beta] = optimum.x.map(f64::exp);
         let estimate = HawkesEstimate {
-            mu,
-            alpha,
-            beta,
-            branching_ratio: alpha / beta,
+            params: HawkesParams::new(mu, alpha, beta),
             log_likelihood: -optimum.value,
             events: times.len(),
             converged: optimum.converged,
             iterations: optimum.iterations,
-            is_stale: false,
         };
         self.cached = Some(optimum.x);
         self.last = Some(estimate);
-        Some(estimate)
+        Some(HawkesFit::Fresh(estimate))
     }
 }
 

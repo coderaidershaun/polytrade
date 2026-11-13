@@ -3,7 +3,7 @@
 
 use core::num::NonZeroUsize;
 
-use super::{HawkesEstimate, HawkesEvents, HawkesMle, UnivariateHawkes};
+use super::{HawkesEstimate, HawkesEvents, HawkesFit, HawkesMle, UnivariateHawkes};
 use crate::msg::time::{LocalTs, VenueTs};
 
 /// The window, the fit floor, and the refit cadence of one side. A strategy fixes them as
@@ -93,8 +93,7 @@ pub struct HawkesSide {
     choice: HawkesChoice,
     events: HawkesEvents,
     fitter: HawkesMle,
-    /// Fit all columns read. Re-solved on arrival cadence, not per spin.
-    estimate: Option<HawkesEstimate>,
+    fit: Option<HawkesFit>,
     arrivals_since_fit: usize,
     live: Option<UnivariateHawkes>,
     last_exchange_ts_us: Option<VenueTs>,
@@ -106,7 +105,7 @@ impl HawkesSide {
             choice,
             events: HawkesEvents::new(choice.max_events),
             fitter: HawkesMle::new(choice),
-            estimate: None,
+            fit: None,
             arrivals_since_fit: 0,
             live: None,
             last_exchange_ts_us: None,
@@ -131,7 +130,7 @@ impl HawkesSide {
     /// `min_events` have banked — so asking every spin costs nothing and gets the cold fit out the
     /// moment the floor is crossed.
     pub fn is_refit_due(&self) -> bool {
-        self.estimate.is_none() || self.arrivals_since_fit >= self.choice.refit_arrivals
+        self.fit.is_none() || self.arrivals_since_fit >= self.choice.refit_arrivals
     }
 
     /// A full Nelder-Mead simplex whose objective is one O(window) pass, so this is the expensive
@@ -141,30 +140,34 @@ impl HawkesSide {
     /// its params — the excitation carries across a param change, decaying the mismatch away.
     pub fn refit(&mut self, now: LocalTs) {
         self.arrivals_since_fit = 0;
-        self.estimate = self.fitter.fit(&self.events, now);
-        let Some(estimate) = self.estimate.filter(|fit| !fit.is_stale) else {
+        self.fit = self.fitter.fit(&self.events, now);
+        let Some(estimate) = self.fit.and_then(HawkesFit::fresh) else {
             return;
         };
         match self.live.as_mut() {
-            Some(live) => live.set_params(estimate.params()),
+            Some(live) => live.set_params(estimate.params),
             None => {
-                let mut live = UnivariateHawkes::new(estimate.params());
+                let mut live = UnivariateHawkes::new(estimate.params);
                 live.reseed_from(&self.events);
                 self.live = Some(live);
             }
         }
     }
 
-    #[inline]
-    pub fn estimate(&self) -> Option<HawkesEstimate> {
-        self.estimate
+    /// Refits when a fit is due, then gives the fresh fit in force. `None` before the first fresh
+    /// fit, and while the window cannot support a new one.
+    pub fn estimate(&mut self, now: LocalTs) -> Option<HawkesEstimate> {
+        if self.is_refit_due() {
+            self.refit(now);
+        }
+        self.fit.and_then(HawkesFit::fresh)
     }
 
-    /// Present only once a non-stale fit has seeded it, which is why λ is recorded on a gate of its
-    /// own rather than the parameter columns'.
+    /// The live intensity, per second. `None` until a fresh fit seeds the live sum. It then moves
+    /// with each arrival, also while the fit in force is stale.
     #[inline]
-    pub fn live(&self) -> Option<&UnivariateHawkes> {
-        self.live.as_ref()
+    pub fn intensity(&self, now: LocalTs) -> Option<f64> {
+        self.live.as_ref().map(|live| live.intensity(now))
     }
 
     /// A lifetime count, so [`HawkesSide::reset`] does not zero it.
@@ -177,7 +180,7 @@ impl HawkesSide {
     pub fn reset(&mut self) {
         self.events.clear();
         self.fitter = HawkesMle::new(self.choice);
-        self.estimate = None;
+        self.fit = None;
         self.arrivals_since_fit = 0;
         self.live = None;
         self.last_exchange_ts_us = None;

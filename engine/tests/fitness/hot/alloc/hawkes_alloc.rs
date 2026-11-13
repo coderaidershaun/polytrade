@@ -6,7 +6,7 @@
 //! issued estimates AND to have converged at least once inside the measured window.
 
 use crate::hot::quant::ExpSimulation;
-use engine::hot::quant::hawkes::{HawkesChoice, HawkesEvents, HawkesMle, HawkesParams};
+use engine::hot::quant::hawkes::{HawkesChoice, HawkesEvents, HawkesFit, HawkesMle, HawkesParams};
 use engine::msg::time::{DurationUs, LocalTs};
 
 const START: LocalTs = LocalTs::from_micros(0);
@@ -72,7 +72,9 @@ fn hawkes_accumulators_and_warm_fits_do_not_allocate() {
         if index % FIT_STRIDE != 0 {
             continue;
         }
-        if let Some(estimate) = mle.fit(&events, stamp) {
+        if let Some(HawkesFit::Fresh(estimate) | HawkesFit::Stale(estimate)) =
+            mle.fit(&events, stamp)
+        {
             estimates += 1;
             converged += u64::from(estimate.converged);
         }

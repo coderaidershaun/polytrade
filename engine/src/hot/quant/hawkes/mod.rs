@@ -7,6 +7,6 @@ mod kernel;
 mod monitor;
 
 pub use events::HawkesEvents;
-pub use fit::{HawkesEstimate, HawkesMle};
+pub use fit::{HawkesEstimate, HawkesFit, HawkesMle};
 pub use kernel::{HawkesParams, UnivariateHawkes};
 pub use monitor::{HawkesChoice, HawkesChoiceError, HawkesSide};

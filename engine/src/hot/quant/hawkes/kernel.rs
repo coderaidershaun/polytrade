@@ -54,6 +54,11 @@ impl HawkesParams {
     pub fn half_life_secs(&self) -> f64 {
         core::f64::consts::LN_2 / self.beta
     }
+
+    #[inline]
+    pub fn is_stationary(&self) -> bool {
+        self.branching_ratio() < 1.0
+    }
 }
 
 /// Live intensity that keeps only the last stamp and one decayed excitation sum.

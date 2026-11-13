@@ -453,14 +453,14 @@ pub(crate) fn emit_side_hawkes(
     if hawkes.is_refit_due() {
         hawkes.refit(now);
     }
-    if let Some(estimate) = hawkes.estimate().filter(|fit| !fit.is_stale) {
-        ctx.emit(mu, instrument, estimate.mu);
-        ctx.emit(alpha, instrument, estimate.alpha);
-        ctx.emit(beta, instrument, estimate.beta);
-        ctx.emit(branching, instrument, estimate.branching_ratio);
+    if let Some(estimate) = hawkes.estimate(now) {
+        ctx.emit(mu, instrument, estimate.params.mu_per_sec());
+        ctx.emit(alpha, instrument, estimate.params.alpha_per_sec());
+        ctx.emit(beta, instrument, estimate.params.beta_per_sec());
+        ctx.emit(branching, instrument, estimate.params.branching_ratio());
     }
-    if let Some(live) = hawkes.live() {
-        ctx.emit(lambda, instrument, live.intensity(now));
+    if let Some(intensity) = hawkes.intensity(now) {
+        ctx.emit(lambda, instrument, intensity);
     }
 }
 
