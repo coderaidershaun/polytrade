@@ -171,19 +171,21 @@ impl Outputs {
     }
 }
 
-/// The recorded hashes were taken when a venue stamp and a local stamp were one type, `TsUs`, so
-/// each record spells both stamp types by that name before it is hashed. The fields and their
-/// values are hashed as they are.
-fn spelled_with_one_stamp_type(record: &str) -> String {
+/// The name under which the recorded hashes spell every stamp: they were taken while a venue stamp
+/// and a local stamp were one type. Each record spells both stamp types by it before it is hashed,
+/// and the fields and their values are hashed as they are.
+const RECORDED_STAMP_TYPE: &str = "TsUs(";
+
+fn spelled_as_recorded(record: &str) -> String {
     record
-        .replace("LocalTs(", "TsUs(")
-        .replace("VenueTs(", "TsUs(")
+        .replace("LocalTs(", RECORDED_STAMP_TYPE)
+        .replace("VenueTs(", RECORDED_STAMP_TYPE)
 }
 
 fn digest(lane: &'static str, records: &[String]) -> Digest {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for record in records {
-        let record = spelled_with_one_stamp_type(record);
+        let record = spelled_as_recorded(record);
         for byte in record.bytes().chain(std::iter::once(b'\n')) {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
