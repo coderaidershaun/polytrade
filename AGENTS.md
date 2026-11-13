@@ -65,6 +65,8 @@ Each block of an engine's `config.yaml` refuses a key it does not know. Each key
 - `latency:` `interval_secs`, `window_intervals`, `display_ms`, `sample_ring`, and `budget.<stage>.p99_us`, `budget.<stage>.p999_us` for `<stage>` = `venue_to_engine`, `wire_to_message`, `message_to_decision`, `decision_to_wire`. A budget only reports.
 - `senders:` `placement` (`shared` or `pinned`), `core_id`, `tick_us`, `link_flush_ms`. On Linux, `placement: pinned` needs `core_id`.
 - `logging:` `dir`, `ring_capacity`, `drain_deadline_ms`, `reopen_limit`. `drain_deadline_ms` must be below `engine.drain_deadline_ms`.
+- `queues:` `timer_capacity`, `link_capacity`, `execution_capacity`. `input_capacity` sizes the market-data rings only. A full timer or execution ring halts the engine. A full link ring drops the frame.
+- `persistence:` `seal_try_limit`: the tries of a waiting seal before quoting halts.
 
 ## Limits
 
