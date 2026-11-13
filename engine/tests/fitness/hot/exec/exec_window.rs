@@ -16,8 +16,8 @@
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
-    DesiredQuote, ExecHalt, ExecSettings, HaltReason, MAX_ORDER_SLOTS, OrderSlot, OrderState,
-    QuoteLevel, RejectReason,
+    DesiredQuote, ExecHalt, ExecSettings, HaltReason, MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS,
+    OrderSlot, OrderState, QuoteLevel, RejectReason,
 };
 use engine::hot::strategy::{Strategy, StrategyCtx, WindowInfo};
 use engine::msg::exec::{
@@ -321,6 +321,83 @@ fn a_full_command_bank_halts_and_leaves_the_order_it_could_not_cancel_live() {
         working,
         [OrderState::Live; 2],
         "the closing window's cancels were refused too, so both quotes still read as resting"
+    );
+}
+
+/// The bank holds the order table and six commands for each instrument it can quote.
+const COMMAND_BANK_CAPACITY: usize = MAX_ORDER_SLOTS + 6 * MAX_ORDER_INSTRUMENTS;
+
+/// CONTRACT: a bank that holds its whole capacity refuses the next command and halts quoting, and a
+/// cancel that it refuses never reaches the lane, so the order it would have pulled stays `Live`. A
+/// cancel marked as sent but never banked would leave a quote resting with nothing asking again.
+#[test]
+fn full_command_bank_halts_and_leaves_the_order_live() {
+    let built = built_quoting_engine(QuotingSetup {
+        row: row_with_ceiling(CEILING),
+        strategy: Box::new(TwoSidedQuoter),
+        restored: &[],
+        settings: ExecSettings {
+            quote_stop_margin: MARGIN,
+            exec_silence_spins: 1,
+            ..exec_settings()
+        },
+        tables: RecordedTables::new(&ALL_TABLES),
+        run_nonce: 0,
+    });
+    let (mut engine, mut commands, mut ui_events) = (built.engine, built.commands, built.ui_events);
+    make_ready(&mut engine, OPEN);
+    engine.dispatch(&rotation(0, OPEN, CLOSE, OPEN));
+    for message in reseat_book(BID, ASK, OPEN) {
+        engine.dispatch(&message);
+    }
+    spin_at(&mut engine, 1, OPEN + 1_000_000);
+    let placed = drain_commands(&mut commands);
+    assert_eq!(
+        places(&placed),
+        2,
+        "both sides rest before the lane jams: {placed:?}"
+    );
+    ack_placed(&mut engine, &placed, OPEN + 1_100_000);
+
+    let jammed_from = OPEN + 2_000_000;
+    let mut screen = (None, Vec::new());
+    for step in 0..JAM_SPINS {
+        spin_at(&mut engine, 2 + step as u64, jammed_from + step * 10_000);
+        screen = read_screen(&mut ui_events);
+        if screen.0.is_some_and(ExecHalt::is_halted) {
+            break;
+        }
+    }
+    let (halt, working) = screen;
+    assert!(
+        matches!(
+            halt,
+            Some(ExecHalt::Halted {
+                reason: HaltReason::CommandBankOverflow,
+                ..
+            })
+        ),
+        "the bank refuses a command and quoting halts: {halt:?}"
+    );
+    assert_eq!(
+        working,
+        [OrderState::Live; 2],
+        "the refused cancels leave both orders live"
+    );
+
+    let lane = drain_commands(&mut commands);
+    assert!(
+        !lane.iter().any(|command| matches!(
+            command,
+            ExecCommand::Cancel { .. } | ExecCommand::CancelOurs { .. }
+        )),
+        "no cancel reached the lane: {lane:?}"
+    );
+    let banked = engine.counters().orders_submitted as usize;
+    assert_eq!(
+        banked - placed.len() - lane.len(),
+        COMMAND_BANK_CAPACITY,
+        "the bank refused only once it held its whole capacity"
     );
 }
 
