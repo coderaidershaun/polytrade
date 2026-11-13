@@ -148,7 +148,8 @@ orphans real nonce history and could re-mint client ids a venue has already seen
 nonce replaces the file through the durable-file writer (temporary file, sync, rename), so a
 stop in the middle leaves the old nonce or the new one. A missing file is a first run. An
 empty file or one that cannot be read refuses the start: its last nonce is unknown, and a
-guess could re-mint client ids a venue has already seen.
+guess could re-mint client ids a venue has already seen. A folder that cannot be synced
+after the rename refuses the start too, because a power cut could bring back the old nonce.
 
 ## VenueCapabilities
 

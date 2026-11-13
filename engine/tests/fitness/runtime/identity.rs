@@ -1,8 +1,8 @@
 //! The run nonce file of each venue and account, and the host lock of each engine identity. A wrong
 //! name or a wrong key lets a run mint client order ids that a venue has already seen.
 
-use std::fs;
-use std::os::unix::fs::MetadataExt;
+use std::fs::{self, File, Permissions};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
 
 use engine::msg::failure::{FailureClass, Halt};
@@ -59,6 +59,28 @@ fn preflight(state: &Path) -> Result<StartPlan, StartError> {
             max_num_orders: 200,
         },
     })
+}
+
+/// Takes the read permission off a folder, so that this process cannot open the folder to sync it,
+/// and gives it back when dropped, so that the temporary folder can still be removed.
+struct UnreadableFolder<'a>(&'a Path);
+
+impl<'a> UnreadableFolder<'a> {
+    fn new(folder: &'a Path) -> Self {
+        fs::set_permissions(folder, Permissions::from_mode(0o300))
+            .expect("the test takes the read permission off the folder");
+        Self(folder)
+    }
+}
+
+impl Drop for UnreadableFolder<'_> {
+    fn drop(&mut self) {
+        let restored = fs::set_permissions(self.0, Permissions::from_mode(0o700));
+        // A second panic while a failing test unwinds would abort the whole test binary.
+        if !std::thread::panicking() {
+            restored.expect("the test gives the folder its read permission back");
+        }
+    }
 }
 
 fn file_names(state: &Path) -> Vec<String> {
@@ -150,7 +172,9 @@ fn nonce_file_names_and_keys_are_exact() {
 /// again. That run would mint client order ids that the venue has already seen, and the answers for
 /// an order of the earlier run would land on an order of this one. So an empty file refuses the
 /// start and stays as it is, for a person to fill in. A missing file is a first run, and each new
-/// nonce replaces the file by a rename, so a stop in the middle leaves the old or the new nonce.
+/// nonce replaces the file by a rename, so a stop in the middle leaves the old or the new nonce. A
+/// folder that cannot be synced after the rename refuses the start too, because a power cut could
+/// bring back the old nonce: the refused run spends its nonce, and no run uses it.
 #[test]
 fn empty_nonce_file_refuses_start() {
     let root = TempDir::new("empty-nonce");
@@ -200,5 +224,26 @@ fn empty_nonce_file_refuses_start() {
         fs::metadata(&nonce).expect("the nonce file exists").ino(),
         replaced,
         "the new nonce replaces the file by a rename, never in place"
+    );
+
+    let unreadable = UnreadableFolder::new(&state);
+    assert!(
+        File::open(&state).is_err(),
+        "this case needs a user that file permissions bind, not root"
+    );
+    let unsynced = preflight(&state)
+        .err()
+        .expect("a folder that cannot be synced refuses the start");
+    assert!(
+        matches!(&unsynced, StartError::ExecutionIdentityIo { path, .. } if *path == state),
+        "the refusal names the folder: {unsynced}"
+    );
+    assert_eq!(unsynced.failure_class(), FailureClass::Halt(Halt::Start));
+    drop(unreadable);
+    drop(preflight(&state).expect("the run after the refused one starts"));
+    assert_eq!(
+        fs::read_to_string(&nonce).expect("the run wrote its nonce"),
+        "44\n",
+        "the refused run spent nonce 43, and no run uses it"
     );
 }

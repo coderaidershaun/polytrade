@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::msg::ids::FIXED_SCALE;
 use crate::runtime::config::RunIdentity;
-use crate::runtime::durable_file;
+use crate::runtime::durable_file::{self, WriteError};
+use crate::warn;
 
 use super::ExposureError;
 
@@ -126,8 +127,17 @@ pub(super) fn write_atomically(
         path: path.to_path_buf(),
         source: std::io::Error::other(error),
     })?;
-    durable_file::write(path, &body).map_err(|error| ExposureError::Write {
-        path: error.path,
-        source: error.source,
-    })
+    match durable_file::write(path, &body) {
+        Ok(()) => Ok(()),
+        // The file is whole either way, and the next write syncs the folder again.
+        Err(WriteError::FolderNotSynced { directory, source }) => {
+            warn!(
+                "could not flush directory {} ({source}) — {} is written, its directory entry is not yet durable",
+                directory.display(),
+                path.display()
+            );
+            Ok(())
+        }
+        Err(WriteError::NotWritten { path, source }) => Err(ExposureError::Write { path, source }),
+    }
 }

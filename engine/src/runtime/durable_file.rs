@@ -7,18 +7,29 @@ use std::path::{Path, PathBuf};
 
 use crate::warn;
 
-/// A write that failed, with the path where it failed: the folder, the temporary file, or the file.
+/// A write that did not end durable, with the path where it failed.
 #[derive(thiserror::Error, Debug)]
-#[error("could not write {}", .path.display())]
-pub(super) struct WriteError {
-    pub(super) path: PathBuf,
-    #[source]
-    pub(super) source: std::io::Error,
+pub(super) enum WriteError {
+    /// The file was not replaced, so it holds what it held before.
+    #[error("could not write {}", .path.display())]
+    NotWritten {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// The file was replaced, but its folder was not synced, so a power cut can still bring back
+    /// the previous version. Each caller decides whether that is acceptable.
+    #[error("could not sync folder {} after a write", .directory.display())]
+    FolderNotSynced {
+        directory: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 impl WriteError {
-    fn at(path: &Path) -> impl FnOnce(std::io::Error) -> Self + '_ {
-        move |source| Self {
+    fn not_written_at(path: &Path) -> impl FnOnce(std::io::Error) -> Self + '_ {
+        move |source| Self::NotWritten {
             path: path.to_path_buf(),
             source,
         }
@@ -27,35 +38,33 @@ impl WriteError {
 
 pub(super) fn write(path: &Path, body: &[u8]) -> Result<(), WriteError> {
     let directory = path.parent().unwrap_or(Path::new("."));
-    std::fs::create_dir_all(directory).map_err(WriteError::at(directory))?;
+    std::fs::create_dir_all(directory).map_err(WriteError::not_written_at(directory))?;
     let temporary = temporary_path(path);
     if let Err(error) = write_then_rename(&temporary, path, body) {
         remove_temporary(&temporary);
         return Err(error);
     }
-    flush_directory(path, directory);
-    Ok(())
+    sync_folder(directory)
 }
 
 fn write_then_rename(temporary: &Path, path: &Path, body: &[u8]) -> Result<(), WriteError> {
-    let mut file = File::create(temporary).map_err(WriteError::at(temporary))?;
-    file.write_all(body).map_err(WriteError::at(temporary))?;
+    let mut file = File::create(temporary).map_err(WriteError::not_written_at(temporary))?;
+    file.write_all(body)
+        .map_err(WriteError::not_written_at(temporary))?;
     // The rename makes the new bytes visible, so they reach the disk first.
-    file.sync_all().map_err(WriteError::at(temporary))?;
-    std::fs::rename(temporary, path).map_err(WriteError::at(path))
+    file.sync_all()
+        .map_err(WriteError::not_written_at(temporary))?;
+    std::fs::rename(temporary, path).map_err(WriteError::not_written_at(path))
 }
 
-/// A rename survives a power cut only once its folder is synced. A failed sync only warns, because
-/// the file is whole either way: at worst a power cut brings back its previous version.
-fn flush_directory(path: &Path, directory: &Path) {
-    let flushed = File::open(directory).and_then(|handle| handle.sync_all());
-    if let Err(error) = flushed {
-        warn!(
-            "could not flush directory {} ({error}) — {} is written, its directory entry is not yet durable",
-            directory.display(),
-            path.display()
-        );
-    }
+/// A rename survives a power cut only once its folder is synced.
+fn sync_folder(directory: &Path) -> Result<(), WriteError> {
+    File::open(directory)
+        .and_then(|handle| handle.sync_all())
+        .map_err(|source| WriteError::FolderNotSynced {
+            directory: directory.to_path_buf(),
+            source,
+        })
 }
 
 fn remove_temporary(temporary: &Path) {
