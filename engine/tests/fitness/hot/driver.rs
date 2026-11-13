@@ -279,6 +279,7 @@ fn settings(fee_model: FeeModel, holds_reservations_until_settled: bool) -> Exec
         max_consecutive_rejects: 5,
         max_session_loss_quote: Notional::from_mantissa(1_000_000 * ONE),
         inflight_timeout: DurationUs::from_secs(5),
+        max_status_probes: 3,
         exec_silence_spins: u32::MAX,
         order_reap_window: DurationUs::from_secs(3_600),
         quote_stop_margin: DurationUs::from_millis(3_000),

@@ -848,6 +848,7 @@ fn maker_settings() -> ExecSettings {
         max_consecutive_rejects: 5,
         max_session_loss_quote: Notional::from_mantissa(1_000 * FIXED_SCALE),
         inflight_timeout: DurationUs::from_secs(3_600),
+        max_status_probes: u8::MAX,
         // No silence sweep: a reconciliation request in the command stream is noise these tests
         // would have to filter rather than a behaviour they are about.
         exec_silence_spins: u32::MAX,

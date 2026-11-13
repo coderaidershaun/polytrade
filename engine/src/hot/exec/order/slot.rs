@@ -83,6 +83,9 @@ pub struct OrderSlot {
     pub(super) filled_base: Qty,
     pub(super) filled_quote: Notional,
     pub(super) amends_used: u8,
+    /// Each timeout raises it: the status probes, then the read of open orders. Wider than the
+    /// key, so the read after the most probes the key allows still counts.
+    pub(super) status_probes: u16,
     pub(super) generation: u16,
     /// `None` while nothing is held for the order, a zero amount included.
     pub(super) reserved_amount: Option<Spend>,
@@ -158,6 +161,11 @@ impl OrderSlot {
     }
 
     #[inline]
+    pub(crate) fn status_probes(&self) -> u16 {
+        self.status_probes
+    }
+
+    #[inline]
     pub fn reserved_amount(&self) -> Option<Spend> {
         self.reserved_amount
     }
@@ -187,6 +195,7 @@ impl OrderSlot {
         filled_base: Qty::from_mantissa(0),
         filled_quote: Notional::ZERO,
         amends_used: 0,
+        status_probes: 0,
         generation: 0,
         reserved_amount: None,
         reserved_at: AccountWatermark::ZERO,

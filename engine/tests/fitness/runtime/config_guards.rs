@@ -1026,7 +1026,7 @@ fn the_base_floor_may_be_zero_and_the_quote_floor_may_not() {
 #[test]
 fn execution_numeric_fields_reject_out_of_range_values() {
     let max = u64::MAX.to_string();
-    let cases: [(&str, String, Option<&str>); 6] = [
+    let cases: [(&str, String, Option<&str>); 7] = [
         (
             "execution.max_book_age_ms",
             execution_block_overriding("live", "max_book_age_ms", &max),
@@ -1059,6 +1059,11 @@ fn execution_numeric_fields_reject_out_of_range_values() {
             "execution.max_quote_distance_bps",
             execution_block_overriding("live", "max_quote_distance_bps", "1e308"),
             None,
+        ),
+        (
+            "execution.max_status_probes",
+            format!("{}  max_status_probes: 0\n", execution_block("live")),
+            Some("0"),
         ),
     ];
     for (expected_field, block, expected_value) in cases {

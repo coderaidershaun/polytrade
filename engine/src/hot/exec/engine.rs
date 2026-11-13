@@ -42,6 +42,8 @@ pub struct ExecSettings {
     pub max_consecutive_rejects: u32,
     pub max_session_loss_quote: Notional,
     pub inflight_timeout: DurationUs,
+    /// Probes of one unanswered order before the read of open orders, then the halt.
+    pub max_status_probes: u8,
     pub exec_silence_spins: u32,
     pub order_reap_window: DurationUs,
     // How much margin before a closing window the engine stops quoting. Inert on venues
@@ -76,6 +78,8 @@ impl ExecSettings {
             max_consecutive_rejects: 0,
             max_session_loss_quote: Notional::ZERO,
             inflight_timeout: DurationUs::ZERO,
+            // The most that the key allows, so an engine with no limits halts on probes last.
+            max_status_probes: u8::MAX,
             exec_silence_spins: 0,
             order_reap_window: DurationUs::ZERO,
             quote_stop_margin: DurationUs::ZERO,

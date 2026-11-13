@@ -359,6 +359,7 @@ fn settings(execution: &ExecutionConfig, capabilities: &VenueCapabilities) -> Ex
         )),
 
         inflight_timeout: inflight_timeout(execution),
+        max_status_probes: execution.max_status_probes,
         exec_silence_spins: execution.exec_silence_spins,
         order_reap_window: DurationUs::from_secs(execution.order_reap_secs as i64),
         quote_stop_margin: DurationUs::from_millis(execution.quote_stop_margin_ms as i64),

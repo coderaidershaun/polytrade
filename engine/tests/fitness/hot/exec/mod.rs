@@ -12,5 +12,6 @@ mod loss_gate;
 mod meter;
 mod order_table;
 mod prior_run;
+mod probes;
 mod quoting;
 mod risk_gate;

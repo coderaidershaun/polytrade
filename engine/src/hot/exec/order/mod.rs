@@ -368,7 +368,9 @@ impl OrderTable {
     /// Returns the state it left.
     #[cold]
     pub fn mark_timed_out(&mut self, index: usize, now: LocalTs) -> OrderState {
-        self.slots[index].last_event_ts_us = now;
+        let slot = &mut self.slots[index];
+        slot.last_event_ts_us = now;
+        slot.status_probes = slot.status_probes.saturating_add(1);
         self.move_to(index, OrderState::Unknown)
     }
 

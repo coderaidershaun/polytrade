@@ -98,6 +98,7 @@ pub(crate) fn exec_settings() -> ExecSettings {
         max_consecutive_rejects: 5,
         max_session_loss_quote: Notional::from_mantissa(1_000_000 * ONE),
         inflight_timeout: DurationUs::from_secs(3_600),
+        max_status_probes: u8::MAX,
         // No silence sweep: a reconciliation request in the command stream would be noise to filter
         // rather than a behaviour these tests are about.
         exec_silence_spins: u32::MAX,

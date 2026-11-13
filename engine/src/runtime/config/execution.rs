@@ -109,6 +109,10 @@ pub struct ExecutionConfig {
 
     #[serde(default = "default_inflight_timeout_ms")]
     pub inflight_timeout_ms: u64,
+    /// Status probes of one unanswered order. Then its instrument gets one read of open orders,
+    /// and an order still unknown after that halts quoting.
+    #[serde(default = "default_max_status_probes")]
+    pub max_status_probes: u8,
     /// Detects a silent listenKey expiry — Binance's user stream goes quiet with no error.
     /// Inert on Polymarket.
     #[serde(default = "default_exec_silence_spins")]
@@ -199,6 +203,10 @@ impl ExecutionConfig {
         check_non_zero(
             "execution.max_consecutive_rejects",
             u64::from(self.max_consecutive_rejects),
+        )?;
+        check_non_zero(
+            "execution.max_status_probes",
+            u64::from(self.max_status_probes),
         )?;
         check_positive_milliseconds("execution.quote_stop_margin_ms", self.quote_stop_margin_ms)?;
         if self.flatten_slack_ticks > MAX_FLATTEN_SLACK_TICKS {
@@ -350,6 +358,10 @@ fn default_requote_threshold_ticks() -> u32 {
 
 fn default_max_consecutive_rejects() -> u32 {
     5
+}
+
+fn default_max_status_probes() -> u8 {
+    3
 }
 
 fn default_exec_silence_spins() -> u32 {

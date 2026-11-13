@@ -60,10 +60,17 @@ impl ExecEngine {
     }
 
     /// The venue never answered this order's request, so its state is unknown until the venue is
-    /// asked about the order directly.
+    /// asked. It is asked about the order a few times, then for the open orders of its instrument
+    /// once. An order still unknown after that would leave the engine trading with an order it
+    /// cannot account for, so quoting halts.
     #[cold]
     fn chase_timed_out(&mut self, index: usize, stamps: FoldStamps, bank: &mut Actions) {
         let now = stamps.fold;
+        let probes = self.orders.slot(index).status_probes();
+        let max_probes = u16::from(self.settings.max_status_probes);
+        if probes > max_probes {
+            return self.halt(HaltReason::StatusProbesSpent, now);
+        }
         let previous = self.orders.mark_timed_out(index, now);
         self.bank_moved(
             index,
@@ -75,10 +82,18 @@ impl ExecEngine {
         let slot = self.orders.slot(index);
         let (instrument, client_id) = (slot.instrument(), slot.client_id());
         self.recon_seq += 1;
-        let command = ExecCommand::ReconcileOrder {
-            instrument,
-            client_id,
-            recon_seq: self.recon_seq,
+        let recon_seq = self.recon_seq;
+        let command = if probes < max_probes {
+            ExecCommand::ReconcileOrder {
+                instrument,
+                client_id,
+                recon_seq,
+            }
+        } else {
+            ExecCommand::ReconcileOpenOrders {
+                instrument,
+                recon_seq,
+            }
         };
         self.bank_or_halt(command, now);
     }
