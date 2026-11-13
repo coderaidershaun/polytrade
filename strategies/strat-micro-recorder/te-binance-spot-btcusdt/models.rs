@@ -449,10 +449,6 @@ pub(crate) fn emit_side_hawkes(
         beta,
         branching,
     } = features.hawkes(side);
-    // Full simplex over arrival window, once per HAWKES.refit_arrivals. Rest reads resident.
-    if hawkes.is_refit_due() {
-        hawkes.refit(now);
-    }
     if let Some(estimate) = hawkes.estimate(now) {
         ctx.emit(mu, instrument, estimate.params.mu_per_sec());
         ctx.emit(alpha, instrument, estimate.params.alpha_per_sec());
