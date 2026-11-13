@@ -197,9 +197,12 @@ impl Registry {
     pub(crate) fn set_order_rate_limits(&mut self, limits: Vec<OrderRateLimit>) {
         // One source means one stamped market; a second stamp would silently keep only the
         // last budget.
-        debug_assert!(
+        assert!(
             self.order_rate_limits.is_empty(),
-            "order rate limits stamped twice — a second binance market would overwrite the first"
+            "order rate limits stamped twice: {:?} held, {:?} offered — a second binance market \
+             would overwrite the first",
+            self.order_rate_limits,
+            limits
         );
         self.order_rate_limits = limits;
     }
