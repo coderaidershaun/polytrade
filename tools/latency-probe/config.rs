@@ -1,6 +1,5 @@
-//! The config of the harness's full start, taken from its one `--config` argument and checked
-//! before anything else runs. A start with execution live would load the venue keys and sign a
-//! call, so the check refuses it here.
+//! The config of the harness's full start, from its one `--config` argument, checked before
+//! anything runs. It refuses execution live, which would load the venue keys and sign a call.
 
 use std::path::{Path, PathBuf};
 
