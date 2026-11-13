@@ -7,6 +7,7 @@
 
 mod account;
 mod audit;
+mod booking;
 mod budget;
 mod capacity;
 mod desired;
