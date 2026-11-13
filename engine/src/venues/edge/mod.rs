@@ -364,6 +364,9 @@ pub(crate) trait EdgeDriver {
     /// What this edge leaves in the log once its loop ends.
     fn report_stop(&self);
 
+    /// The orders of another trader that a read or the stream showed, each left alone.
+    fn foreign_orders(&self) -> u64;
+
     /// Stop whatever the driver spawned beside itself.
     fn abort_workers(&self);
 }
@@ -425,6 +428,11 @@ pub(crate) async fn run_edge<D: EdgeDriver>(mut driver: D, lane: EdgeLane) {
     }
 
     driver.report_stop();
+    info!(
+        "{} execution stopped — {} orders of another trader seen and left alone",
+        driver.venue(),
+        driver.foreign_orders()
+    );
     let control = driver.control();
     control.stop.settle(control.sweep_failure.take());
     driver.abort_workers();

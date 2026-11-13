@@ -17,7 +17,7 @@ use crate::venues::edge::rest_quiet::SharedRestQuiet;
 use crate::warn;
 
 use super::{
-    AccountInfo, AccountTrade, BinanceEnv, FailureVerdict, Fetched, HttpMethod, OrderRecord,
+    AccountInfo, AccountTrade, BinanceEnv, FailureVerdict, Fetched, Host, HttpMethod, OrderRecord,
     Prepared, RestClient, RestError, RestRequest, decode,
 };
 
@@ -89,6 +89,22 @@ impl SignedRestClient {
             config,
             quiet,
         })
+    }
+
+    /// A client that sends each request to a stand-in on this host at `port`, signed with a key
+    /// that is no key, so that a test can watch what the client sends. It reaches no other host,
+    /// and the engine never builds one.
+    ///
+    /// # Errors
+    /// [`RestError::Transport`] if the TLS backend fails to initialise.
+    pub fn on_loopback(
+        port: u16,
+        config: SignedRestConfig,
+        quiet: SharedRestQuiet,
+    ) -> Result<Self, RestError> {
+        let mut client = Self::new(Credentials::loopback(), config, quiet)?;
+        client.rest.host = Host::Loopback(port);
+        Ok(client)
     }
 
     /// # Errors

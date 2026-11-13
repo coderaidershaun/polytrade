@@ -385,6 +385,10 @@ impl EdgeDriver for Actor {
         self.dispatch(outgoing, writer).await;
     }
 
+    fn foreign_orders(&self) -> u64 {
+        self.session.core.foreign_orders()
+    }
+
     fn report_stop(&self) {
         if let Some(exit) = &self.control.exit {
             info!(
