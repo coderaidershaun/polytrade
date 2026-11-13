@@ -33,6 +33,7 @@ use crate::venues::exec::{
 use crate::venues::polymarket::rotation::WindowAssignment;
 use crate::{info, warn};
 
+use super::ORDER_REQUEST_TIMEOUT;
 use super::codec::{OrderIndex, OrderSigner, SettlementWatermark, TokenTable, VenueAvailability};
 use super::handle::PolymarketExecAdapterSetup;
 use super::rest::ClobHttp;
@@ -59,10 +60,6 @@ const CLOSE_MARGIN: DurationUs = DurationUs::from_micros(3_000_000);
 const ORDER_INDEX_CAPACITY: usize = 256;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-
-// Set below REQUEST_TIMEOUT so every placement gets an HTTP verdict before that expiry
-// fires. This keeps the inflight timeout an exceptional path, never the normal case.
-const REQUEST_HTTP_TIMEOUT: Duration = Duration::from_secs(4);
 
 // The venue is temporarily unavailable; this is not a rejection of the order, which has no
 // errors of its own.
@@ -155,7 +152,7 @@ impl Actor {
         } = setup;
         let request_signer = RequestSigner::new(&credentials, wallet.signer)
             .expect("the startup gate already built a request signer from these credentials");
-        let http = ClobHttp::new(CONNECT_TIMEOUT, REQUEST_HTTP_TIMEOUT)
+        let http = ClobHttp::new(CONNECT_TIMEOUT, ORDER_REQUEST_TIMEOUT)
             .expect("the startup gate already built an http client with these settings");
         let (lanes, outcomes) = spawn_lanes(
             LaneSetup {

@@ -194,7 +194,15 @@ impl RestClient {
     /// # Errors
     /// [`RestError::Transport`] if the TLS backend fails to initialise.
     pub fn new(market: BinanceMarket, env: BinanceEnv) -> Result<Self, RestError> {
-        let http = HttpClient::new(Deadlines::STANDARD)?;
+        Self::with_deadlines(market, env, Deadlines::STANDARD)
+    }
+
+    pub(crate) fn with_deadlines(
+        market: BinanceMarket,
+        env: BinanceEnv,
+        deadlines: Deadlines,
+    ) -> Result<Self, RestError> {
+        let http = HttpClient::new(deadlines)?;
         Ok(Self {
             http,
             market,
