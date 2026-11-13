@@ -378,12 +378,12 @@ fn live_document(source: &str, inflight_timeout_ms: u64, state: &Path) -> String
 const ORDER_CLIENT_TIMEOUT_MS: u64 = 4_000;
 
 proptest! {
-    /// FITNESS: the order client of a live venue gives its verdict on a request before the in-flight
-    /// table gives up on it. If the table gave up first, it would read back a request whose answer
-    /// is still on its way, and its expiry would be the normal path rather than the exception. So
-    /// the start is refused exactly when the in-flight timeout is at or below the deadline of the
-    /// order client, before any venue is asked anything; otherwise the start goes on to its next
-    /// check, here a scale read that the stand-in refuses.
+    /// FITNESS: the order client of a live venue gives its verdict on a request before the
+    /// in-flight table gives up on it. If the table gave up first, it would read back a request
+    /// whose answer is still on its way, and its expiry would be the normal path rather than the
+    /// exception. So the start is refused exactly when the in-flight timeout is at or below the
+    /// deadline of the order client, before any venue is asked anything; otherwise the start goes
+    /// on to its next check, here a scale read that the stand-in refuses.
     #[test]
     fn http_timeout_at_or_above_inflight_timeout_refuses_start(
         is_binance in any::<bool>(),

@@ -127,9 +127,9 @@ pub(super) fn check_execution(check: ExecCheck<'_>) -> Result<Option<ExecPlan>, 
 }
 
 /// The order client of a live venue must give its verdict on a request before the in-flight table
-/// gives up on it. Otherwise the table reads back a request whose answer is still on its way, and its
-/// expiry becomes the normal path rather than the exception. Only the config is read, so a run that
-/// breaks this asks no venue anything.
+/// gives up on it. Otherwise the table reads back a request whose answer is still on its way, and
+/// its expiry becomes the normal path rather than the exception. Only the config is read, so a run
+/// that breaks this asks no venue anything.
 ///
 /// # Errors
 /// [`StartError::ExecutionHttpTimeout`] when `execution.inflight_timeout_ms` is at or below the
@@ -370,8 +370,8 @@ fn settings(execution: &ExecutionConfig, capabilities: &VenueCapabilities) -> Ex
     }
 }
 
-/// One deadline for a request with no answer, read by the hot slot and by the in-flight table of the
-/// edge alike.
+/// One deadline for a request with no answer, read by the hot slot and by the in-flight table of
+/// the edge alike.
 fn inflight_timeout(execution: &ExecutionConfig) -> DurationUs {
     DurationUs::from_millis(execution.inflight_timeout_ms as i64)
 }

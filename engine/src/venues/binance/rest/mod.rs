@@ -1,5 +1,5 @@
-//! REST client: public snapshots + backfills, payloads returned raw so a recorder can save them
-//! byte-for-byte, plus a rolling weight counter that warns before the venue's per-minute limit.
+//! The Binance REST client: public snapshots and backfills, each returned raw so that a recorder
+//! can save it byte for byte, and a rolling weight counter that warns before the limit of a minute.
 //!
 //! That counter is per CLIENT. The venue bills per IP, and the signed half builds a client of its
 //! own, so the two halves of one deployment each behave as though they held the whole budget: the
@@ -20,7 +20,7 @@ use crate::venues::edge::http::{self, Deadlines, HttpClient, TransportError};
 
 use weight::{OrderCountBudget, WeightBudget, weight_budget};
 
-/// Re-exported for adapter use (config owns deployment choice).
+/// Re-exported for the adapters. The config owns the choice of deployment.
 pub use crate::runtime::config::BinanceEnv;
 
 pub use payload::{
@@ -31,7 +31,7 @@ pub use request::{HttpMethod, RequestAuth, RequestPlan};
 pub use signed::{SignedRestClient, SignedRestConfig};
 pub use weight::OrderCountWindow;
 
-/// Request shape enables typed getters + recorder's fetch_text.
+/// One request, in the form that the typed getters and the raw read of the recorder share.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RestRequest {
     DepthSnapshot {
@@ -56,8 +56,8 @@ pub enum RestRequest {
         symbol: String,
         orig_client_order_id: String,
     },
-    /// Endpoint keyed by VENUE id (myTrades names orders that way, no client id -> only route
-    /// back from fill to owner -> ours to book vs human to leave).
+    /// Keyed by the venue's order id, because a trade of `myTrades` names its order only that way.
+    /// It is the one route from a fill back to its owner: ours to book, or a person's to leave.
     OrderStatusByVenueId {
         symbol: String,
         venue_order_id: i64,
@@ -77,7 +77,7 @@ pub struct KlineQuery {
     pub end_ts_ms: Option<i64>,
 }
 
-/// Driver's failure treatment. Venue codes hidden.
+/// How the driver treats a failure. The codes of the venue stay behind it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FailureVerdict {
     Retry,
@@ -172,8 +172,9 @@ fn status_verdict(code: Option<i64>, message: Option<&str>) -> FailureVerdict {
     }
 }
 
-/// -2010 = two codes in one: "match" (ordinary post-only) vs "balance" (not ordinary).
-/// Message match (no other discriminator; edge). Unknown -2010 = NOT routine.
+/// Binance code -2010 is two codes in one: a "match" refusal is the ordinary cost of post-only, and
+/// a "balance" refusal is not. Only the message tells them apart, so a -2010 with any other message
+/// is not routine.
 fn new_order_rejected_verdict(message: Option<&str>) -> FailureVerdict {
     match message {
         Some(text) if text.contains("immediately match") => FailureVerdict::Routine,
@@ -212,7 +213,7 @@ impl RestClient {
         })
     }
 
-    /// Response body verbatim (recorder saves byte-for-byte as fixture).
+    /// The response body as the venue sent it, so that a recorder can save it byte for byte.
     ///
     /// # Errors
     /// Transport, non-2xx status, or 429/418 rate limiting.
@@ -323,7 +324,8 @@ impl RestClient {
     }
 }
 
-/// Planned request + auth. Public half passes neither optional; SignedRestClient fills both.
+/// A planned request and its authentication. A public read passes neither; the signed client fills
+/// both.
 struct Prepared<'a> {
     plan: &'a RequestPlan,
     signed_query: Option<&'a str>,
