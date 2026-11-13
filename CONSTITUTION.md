@@ -302,10 +302,14 @@ WHY: execution command ring carries EVENTS, not state. Thus the precondition of 
     - Replaced 2026-11-13: "Sink still counts drops. §6's letter holds, and in steady state the
       count is unreachable." WHY: the sink drops no command, and no code held such a count.
   - Reachable failure becomes the bank's own high-water mark: a full bank is a quoting halt. It is
-    one of the two ring-pressure halts (2026-11-13 section on failure classes, below). The bank is
-    full when it holds `COMMAND_BANK_CAPACITY` commands, never at the capacity of its `Vec`.
+    one of the two ring-pressure halts (2026-11-13 section on failure classes, below). The bank of
+    each venue is full when it holds `ExecCapacity::command_bank()` commands, never at the capacity
+    of its `Vec`.
     - Amended 2026-11-13: the bank takes its capacity from the registry rows (§3, 2026-11-13
       section on capacity). It is still full at that capacity.
+    - Replaced 2026-11-13: "The bank is full when it holds `COMMAND_BANK_CAPACITY` commands". WHY:
+      the constant became a size of `ExecCapacity`, and each venue has its own bank (§8,
+      2026-11-13).
     - Replaced 2026-11-13: "It is a message-driven count, not a ring occupancy. Thus §2 replay
       determinism survives." WHY: a bank fills only while the ring refuses its commands, so its
       halt follows ring space.
@@ -363,19 +367,39 @@ Failure classes:
   HALT names its kind: quoting, engine, or start refused.
 - [ ] Each error enum that reaches a supervisor has `failure_class()`. Its `match` has no catch-all
   arm, so a new variant does not compile until it has a class.
-  - Amended 2026-11-13, as built: only `StartError`, `ConfigError`, and `FatalReason` have
-    `failure_class()`. Four error enums reach the drain of the start code with none:
-    `PersistError`, `ExposureError`, `SweepFailure`, and `DrainFailure`. The next part of the plan,
-    part 3 (money), closes the gap. Until then this clause is the rule, not yet a fact of the code.
+  - Replaced 2026-11-13: "Amended 2026-11-13, as built: only `StartError`, `ConfigError`, and
+    `FatalReason` have `failure_class()`. Four error enums reach the drain of the start code with
+    none: `PersistError`, `ExposureError`, `SweepFailure`, and `DrainFailure`. The next part of the
+    plan, part 3 (money), closes the gap. Until then this clause is the rule, not yet a fact of the
+    code." WHY: part 3 gave `failure_class()` to `ExecSessionError`, `PersistError`,
+    `ExposureError`, `SweepFailure`, and `DrainFailure`. The clause is a fact of the code.
 - [ ] An error that wraps another error gives the class of the inner error, or a higher class.
   Never a lower one.
 - [ ] One supervisor acts on the class at each thread root: the driver of the hot thread, the
   session chassis of a venue edge, the root of each writer thread, and the start code. Lower code
   returns the error.
-  - Amended 2026-11-13, as built: no supervisor reads `failure_class()` yet, and only fitness tests
-    read it. Each of the 19 sites that trip the fatal latch trips it itself, where the error is
-    found. The next part of the plan, part 3 (money), closes the gap. Until then this clause is the
-    rule, not yet a fact of the code.
+  - Amended 2026-11-13, as built: four roots read `failure_class()`.
+    - The session chassis of a venue edge: `halt_on_session_error` (`engine/src/venues/exec/`).
+    - The root of the exposure writer: a failed write is RETRY, up to
+      `exposure.max_failed_writes` in a row.
+    - The drain: `Exit::decide` (`engine/src/runtime/assembly/exit.rs`).
+    - The start code: `Exit::refused(class)`, for each refusal
+      (`engine/src/runtime/assembly/run.rs`).
+  - Amended 2026-11-13, as built: three roots have no reader yet, each with its receiving part.
+    - The root of the tape writer: part 5 of the plan.
+    - The market-data actors and the simulator actor: part 4. Each of their 4 sites trips the fatal
+      latch at the place of its fault.
+    - The driver of the hot thread: no error enum reaches it. Each halt of the fold is a
+      `HaltReason` that the fold decides from messages, and the driver stops at the fatal latch.
+    - Two more sites trip by design: an engine-fed input producer at a full ring (the lane table
+      below), and the panic hook (a bug has no class).
+    - WHY: the plan gives the edges of market data and the simulator to part 4, and the tape to
+      part 5.
+  - Replaced 2026-11-13: "Amended 2026-11-13, as built: no supervisor reads `failure_class()` yet,
+    and only fitness tests read it. Each of the 19 sites that trip the fatal latch trips it itself,
+    where the error is found. The next part of the plan, part 3 (money), closes the gap. Until then
+    this clause is the rule, not yet a fact of the code." WHY: part 3 built four readers, and the
+    13 sites of the execution edges trip through the chassis.
 - [ ] An internal invariant violation has no failure class. It is a bug, and it panics (top of §6).
 
 Lanes:
@@ -392,6 +416,15 @@ Lanes:
 | Command lane | commands stay in the bank, in order, with their bank stamps (2026-07-27) | RETRY |
 | Command bank | quoting halt `HaltReason::CommandBankOverflow` | HALT (quoting) |
 | Persistence seal | try at the request and at each spin, up to `persistence.seal_try_limit` tries, then quoting halt `HaltReason::SealNotAccepted` | RETRY, then HALT (quoting) |
+
+- [ ] Amended 2026-11-13: the writer-status input queue is an engine-fed input queue: a full ring
+  is HALT (engine). It holds 4 messages, and it exists only when execution is armed. Each writer
+  sends at most one `WriterFailed` in a run, so the ring cannot fill in a correct run. WHY: a
+  writer failure halts quoting at one message of the input sequence, so a replay halts at the same
+  point.
+- [ ] Amended 2026-11-13: the exposure lane keeps its class. Its ring carries whole snapshots from a
+  pool made at start, and the reader hands each snapshot back. WHY: a snapshot at the size of the
+  registry cannot cross a ring by value, and the hot thread allocates nothing.
 
 Two kinds of halt:
 
@@ -757,6 +790,8 @@ WHY: three venues implement the execution seam by convention. A fourth needs law
   - cancel finality
   - readiness order
   - fatal on an undecodable open order
+  - Amended 2026-11-13: the README writes nine obligations, and one generic seam suite pins them.
+    Section on the execution contract, end of §8.
 - [ ] The README = prose half of the adapter contract. Changes to it are seam changes, not doc
   edits.
 
@@ -1031,18 +1066,42 @@ each venue needed its own engine. The link between two engines carries state and
 
 - [ ] A TE reads one source or more. Its config names them in the list `sources:`. Each source has
   its own execution block and its own checks.
+  - Amended 2026-11-13, as built: each item of `sources:` holds `feed:` and its own optional
+    `execution:` block. No `execution:` block stands at the top of the config. The config refuses
+    (HALT, start refused): an empty list (`ConfigError::NoSource`), two sources of one venue with
+    another venue between them (`VenueSourcesApart`), two execution blocks for one venue
+    (`VenueExecutionRepeated`), and two sources that send orders in different modes
+    (`SourceModesDiffer`). WHY: one venue has one account, so one block sets its execution.
+  - Amended 2026-11-13, as built: the sources of one venue share one `VenueId`. Thus a shared asset
+    of that venue has one balance row. WHY: a venue has one execution edge and one account, so its
+    sources share its id.
 - [ ] Identity stays two-part (2026-07-25). One TE = one binary = one process. A source is an input
   of a TE, never a part of its identity.
 - [ ] Each venue that a TE trades on has its own execution edge, command lane, execution lease, and
   execution input queue. Each adapter keeps its ONE input queue (2026-08-08).
+  - Amended 2026-11-13, as built: the registry gives each venue that sends orders its own execution
+    input queue. The start still drives one execution edge with one lease: preflight refuses a
+    second source that sends orders (`StartError::ExecutionOnSeveralSources`). Stage 3 tasks T6
+    and T12 of the master plan build the start of several edges with their leases. Then this
+    refusal goes. WHY: the plan defers the start of several edges first when the part is too large.
 - [ ] Preflight runs the checks of each source (§2, 2026-11-13). The execution leases stay the last
   checks. Preflight takes the lock of each lease before it advances any run nonce. Thus a refused
   lock leaves each nonce unspent.
+  - Amended 2026-11-13, as built: preflight runs the checks of each source, and it takes one lease.
+    The order of several locks and nonces comes with the start of several edges (stage 3 tasks T6
+    and T12 of the master plan). WHY: until then one source sends orders.
 - [ ] The cap of 20 input queues (§2) counts the queues of all sources. The start refuses a config
   that needs more (`ConfigError::TooManyInputQueues`).
 - [ ] The execution state of each venue sits in its own `VenueExec`. Examples: its account, rate
   budget, readiness, reject streak, and command bank. A field that only the messages of one venue
   change belongs there.
+  - Amended 2026-11-13, as built: `VenueExec` holds the account, the command bank and its lane, the
+    readiness, the reject streak, the rate budget, the settings, the silence of the order stream,
+    the count of reconcile passes, and the run nonce of its venue. A stream reset invalidates the
+    slots and the readiness of its own venue only. The order tables, the refusal latch, the loss
+    sums, and the incident counts stay engine-wide. `Registry::venue_name` is the one source of the
+    name of each venue. WHY: a halt and the loss budget stop the whole engine, and an order slot
+    names its venue through its instrument.
 - [ ] The registry knows an asset by its venue and its name. Thus USDT at two venues is two assets
   with two balance rows.
 - [ ] A halt, the spin, and the fold time stay engine-wide. A quoting halt stops each venue of the
@@ -1053,6 +1112,80 @@ each venue needed its own engine. The link between two engines carries state and
 - [ ] Fitness tests pin it. `two_venues_equal_two_single_runs`: one run of two venues gives the rows
   of two runs of one venue each. `balances_of_two_venues_never_mix`: two venues never share a
   balance.
+
+### Amended 2026-11-13: the execution contract of part 3
+
+WHY: three faults had no end. An order that the venue never answered got status probes with no
+end. A dead order stream never escalated while its reads answered. The signed REST client of
+Binance sent an order action again after a lost answer.
+
+- [ ] No resend. An order action that can have reached the venue is never sent again (2026-08-08:
+  reconcile-never-resend). The edge and the fold expire an unanswered request by one timeout,
+  `execution.inflight_timeout_ms`. The start refuses a venue whose order client has an HTTP timeout
+  at or above it (`StartError::ExecutionHttpTimeout`).
+  - The signed REST client of Binance returns a failed order action at once. Only a read is tried
+    again. Pin: `a_timed_out_order_action_is_sent_once`.
+- [ ] Probe cap. A slot counts its status probes. At `execution.max_status_probes` the instrument
+  gets one read of open orders. IF the order stays unknown after that read, THEN quoting halts
+  (`HaltReason::StatusProbesSpent`).
+- [ ] Silence escalation. IF the order stream shows no event for `execution.stream_silence_ms` of
+  message time while an order works, THEN one read of open orders goes out.
+  - A read that agrees with the order table ends the silence, and no count rises.
+  - A read that differs is one missed event: the fold takes the state of the read and sends
+    `ExecCommand::ResubscribeStream` to the edge.
+  - IF the missed events pass `execution.max_stream_resets` with no stream event between, THEN
+    quoting halts (`HaltReason::StreamSilent`). Only an event of the stream sets the count to 0.
+  - Thus a quiet stream with a resting order never halts.
+- [ ] Incident records: §6 (2026-11-13 section on money).
+- [ ] One generic seam suite pins the nine obligations of `engine/src/venues/exec/README.md`: the
+  macro `venue_edge_keeps_each_written_obligation!` gives one test for each obligation. Each venue
+  edge runs it. Binance runs it today, and part 4 adds the other venues.
+
+### Amended 2026-11-13: the `pub` items of part 3, each with its merit
+
+WHY: §12 (2026-07-28) forbids `pub` for a test's sake. Each item below has a caller that is not a
+test, sits in a module that is a concept in its own right, or has a ruling of §12.
+
+- [ ] Concept module `engine::hot::exec`:
+  - `ExecCapacity` with its sizes, `command_bank` among them: the start code and the timing
+    harness size an engine from the same rows.
+  - The named transitions of `OrderTable`, the getters of `OrderSlot`, `ClaimRefusal` (`IdsSpent`,
+    `LevelFull`), the field `OrderClaim.run_nonce`, and `OrderTable::slots_in_use`.
+  - `ExecVenueSetup` and `ExecVenueSetup::disabled`: the element of the field
+    `ExecEngineSetup.venues`, which replaces its fields `run_nonce`, `settings`, and `sink`.
+  - The `ExecSettings` fields `max_status_probes`, `stream_silence`, and `max_stream_resets`.
+  - `HaltReason::{OrphanFill, PriorRunOverflow, StatusProbesSpent, StreamSilent, WriterFailed}` and
+    `RejectReason::IdsSpent`: the reasons cross to the link and the workstation.
+- [ ] Vocabulary of `msg`, the data that crosses domains: `VenueId`, `ExecEvent.venue`,
+  `AccountChunk.venue`, `IncidentRow`, `IncidentKind`, `PersistRecord::Incident`,
+  `ExecCommand::ResubscribeStream`, `MessageBody::WriterFailed`, `MessageKind::WriterFailed`,
+  `WriterFailure`, `FileWriter`, and the `EngineCounters` fields `fee_gaps`, `stranded_positions`,
+  `orphan_fills`, `unbooked_fees`, and `orphan_events_without_fill`. The metrics report reads the
+  counters.
+- [ ] Concept module `engine::venues::exec`: `ExecSessionError` with `failure_class` and
+  `fatal_reason`, `ExecSession::undecodable_open_order`, `ExecCore::foreign_orders` (the chassis
+  writes the count when a session stops), `OrderOwnership` as an enum, and the removal method of
+  `InFlightTable` with `SessionSetup.inflight_timeout`.
+- [ ] Concept module `engine::runtime::config`: `Config::sources` with `SourceConfig`, the new
+  `ExecutionConfig` fields, `ExposureConfig::max_failed_writes`, and the new `ConfigError`
+  variants. The binaries load the config.
+- [ ] Concept module `engine::runtime::registry`: `InstrumentRow.venue`,
+  `Registry::writer_status_queue_id`, `Registry::venue_name`, and `Registry::asset_symbols`. The
+  other getters of `Registry` are `pub`, so one design language holds.
+- [ ] Concept module `engine::runtime::exposure`: `ExposureSnapshot::{for_instruments, active,
+  set_rows, copy_from}`.
+- [ ] `failure_class` of `PersistError`, `ExposureError`, `SweepFailure`, and `DrainFailure`: the
+  rule of §6 that each error enum that reaches a supervisor has it.
+- [ ] `Exit::refused`: by the clause on `Exit` (2026-11-13 section on the fold, start, and exit
+  seams).
+- [ ] `StartError::{ExecutionCapacity, ExecutionNonceEmpty, ExecutionHttpTimeout,
+  ExecutionOnSeveralSources}`: `StartError` is `pub` by the ruling of §12 on the start seam.
+- [ ] `HotEngineSetup.exec`, now one `ExecWiring` for each venue: the timing harness builds
+  `HotEngineSetup`.
+- [ ] By the rulings of §12 (2026-11-13): the fault seam of the chassis (`halt_on_session_error`),
+  the loopback constructor `SignedRestClient::on_loopback`, and the value form of the exposure
+  writer seam.
+- [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
 
 ## 9. Naming & API Ergonomics
 
@@ -1681,15 +1814,36 @@ drives both. A seam that a change reshapes and that no test drives can break wit
   test holds for each other item.
 - [ ] Ruling, 2026-11-13: the fault seam of the chassis has no caller outside the tests, and it is
   `pub` by this ruling. It is the decision that the session chassis of a venue edge takes on a
-  session error (`engine/src/venues/edge/mod.rs`, `engine/src/venues/exec/`). One function takes
-  the `ExecSessionError` and the fatal latch. It reads `failure_class()`, writes one ERROR line with
-  the values, and trips the latch with the typed reason. Test:
-  `session_errors_halt_the_engine_with_their_reason`.
+  session error: `engine::venues::exec::halt_on_session_error(&ExecSessionError, &FatalSignal)`.
+  It reads `failure_class()`, writes one ERROR line with the values, and trips the latch with the
+  typed reason. Test: `session_errors_halt_the_engine_with_their_reason`.
   - WHY: the seam changes. Each execution edge tripped the fatal latch at the place of each fault.
     Now one reader of the class at the root of the edge trips it (§6, 2026-11-13). The chassis runs
     only inside a live venue edge, and a test cannot start one with no key.
-  - The ruling makes `pub` that function and the value that it returns, IF it returns one. The
-    chassis calls it, and `EdgeControl` stays `pub(crate)`. §8 names the function as built.
+  - The ruling makes only that function `pub`, and it returns nothing. `EdgeControl::fail` calls
+    it, and `EdgeControl` stays `pub(crate)`.
+  - Replaced 2026-11-13: "One function takes the `ExecSessionError` and the fatal latch." and "The
+    ruling makes `pub` that function and the value that it returns, IF it returns one. The chassis
+    calls it, and `EdgeControl` stays `pub(crate)`. §8 names the function as built." WHY: the
+    function has its name as built.
+- [ ] Ruling, 2026-11-13: the loopback constructor of the signed REST client of Binance has no
+  caller outside the tests, and it is `pub` by this ruling. It is
+  `SignedRestClient::on_loopback(port, config, quiet)` (`engine::venues::binance::rest`). It takes
+  only a port. Each request goes to `http://127.0.0.1:<port>`, signed with a key that is no key.
+  Thus it reaches no other host. The engine never builds one, and production keeps
+  `SignedRestClient::new`. Test: `a_timed_out_order_action_is_sent_once`.
+  - WHY: the seam holds the Never line "send a request again after a timeout". It changed in part
+    3: the signed client no longer sends an order action again after a lost answer. The live run of
+    the job uses that client, and a test reaches the network only through a stand-in.
+- [ ] Ruling, 2026-11-13: the value form of the exposure writer seam has no caller outside the
+  tests, and it is `pub` by this ruling. It is `ExposureWriterSetup`, `WriterStatus`,
+  `ExposureWriter::spawn`, and `ExposureWriter::lane` (`engine::runtime::exposure`), and
+  `ExposureReceiver` with `pop_into` and `ExposureSink::lane` (`engine::hot::sink`). Test:
+  `exposure_write_failure_halts_at_limit`.
+  - WHY: the halt at a failed exposure write is a seam that changed in part 3. The writer runs on
+    its own thread against the file system. Thus a test drives it only with a stand-in writer, as
+    with the value form of the log drain (2026-11-12 ruling).
+  - `ExposureSink::lane` also has a caller that is not a test: the timing harness.
 - [ ] This ruling makes no other item `pub`. The ban of 2026-07-28 on `pub(crate) -> pub` for a
   test holds for each other item.
 
@@ -1715,6 +1869,11 @@ venue to a person. Thus each run against a venue needs one owner, in one table.
 - [ ] CAUTION: Do not start quoting again after a quoting halt, and do not start an engine again
   after a refused start. §6 keeps each of them for a person, and no row of this table gives them
   to an agent. A restart can send orders from a state that the halt found unsafe.
+- [ ] Amended 2026-11-13, as built: the signed tests of
+  `engine/tests/integration/binance_recording.rs` are the recording, the kill switch, the rollback,
+  and the reads of the venue, each with its dry-run form. Each dry run loads the live keys, so it is
+  a live run too. Only `live-runner` runs it, and the ledger of the live policy gets a row for it.
+  WHY: a dry run that loads a live key can lose that key as a live run can.
 
 ## 13. Performance
 
