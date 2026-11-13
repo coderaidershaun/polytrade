@@ -25,7 +25,7 @@ use proptest::strategy::Strategy as _;
 use crate::engine_support::{
     FillPen, ONE, book_reset, delta_chunk, engine_without_warmup, idle_at, instrument_row,
     last_snapshot_chunk, persist_ring, rotation, run_control, running_at, snapshot_pair, spin,
-    strategy_log_ring, trade,
+    strategy_log_ring,
 };
 
 /// One hundredth of a price unit — the grid a venue quotes on. Note it is EVEN in mantissas, so a
@@ -516,75 +516,6 @@ fn a_mark_needs_both_sides_and_survives_a_book_reset() {
     );
     assert_eq!(held.exposure_quote, 101 * ONE);
     assert_eq!(held.pnl_quote, ONE);
-}
-
-/// FITNESS: the ledger is a pure function of the message sequence. Every reset it performs is
-/// message-driven, so the same tape read twice gives the same numbers at the same points — the
-/// property replay-based backtesting will rest on.
-#[test]
-fn replaying_one_tape_twice_reads_the_same_ledger() {
-    let instruments = [bare_row(0)];
-    let tape = mixed_tape();
-    let first = read_back(&instruments, &tape);
-    let second = read_back(&instruments, &tape);
-    assert!(
-        first.len() > 40,
-        "the tape produced only {} readings — nothing meaningful is being compared",
-        first.len()
-    );
-    assert_eq!(
-        first, second,
-        "the same tape produced different ledgers, so something outside the message sequence \
-         reached the fold"
-    );
-}
-
-fn read_back(instruments: &[InstrumentRow], tape: &[InboundMessage]) -> Vec<Reading> {
-    let (mut engine, readings) = probe_engine(instruments);
-    dispatch_all(&mut engine, tape);
-    take_readings(&readings)
-}
-
-/// Fills on both sides, prints, re-seated books, a rotation and a park/resume — every path that
-/// writes the ledger, in one sequence.
-fn mixed_tape() -> Vec<InboundMessage> {
-    let mut messages = Vec::new();
-    let mut pen = FillPen::new(0);
-    messages.extend(reseat_book(0, 100 * ONE, 102 * ONE, 0));
-    for step in 0..24i64 {
-        let when = 100 + step * 1_000;
-        let side = if step % 3 == 0 { Side::Sell } else { Side::Buy };
-        messages.push(InboundMessage::Trade(trade(
-            0,
-            (100 + step % 5) * ONE,
-            ONE / 2,
-            side,
-            when,
-        )));
-        messages.extend(pen.fill(side, (100 + step % 5) * ONE, ONE / 2, when));
-        if step % 7 == 3 {
-            messages.extend(reseat_book(
-                0,
-                (99 + step % 4) * ONE,
-                (101 + step % 4) * ONE + TICK,
-                when + 1,
-            ));
-        }
-        if step == 11 {
-            messages.push(InboundMessage::MarketRotation(rotation(
-                0,
-                when,
-                when + 300_000_000,
-                when + 2,
-            )));
-        }
-        if step == 17 {
-            messages.push(run_control(idle_at(1), when + 2));
-            messages.push(run_control(running_at(2), when + 3));
-        }
-        messages.push(InboundMessage::SpinTick(spin(step as u64, when + 5)));
-    }
-    messages
 }
 
 /// Reports the engine's own position and PnL each spin, so an assertion can be made against the

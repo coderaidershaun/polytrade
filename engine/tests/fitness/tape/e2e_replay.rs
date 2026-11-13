@@ -194,26 +194,6 @@ fn e2e_reads_back_every_table_and_drains_clean() {
     }
 }
 
-#[test]
-fn e2e_replay_is_identical_across_runs() {
-    let dir_a = TempDir::new("determinism-a");
-    let dir_b = TempDir::new("determinism-b");
-    run_e2e(dir_a.path());
-    run_e2e(dir_b.path());
-
-    for expect in &TABLES {
-        let rows_a = table_rows(dir_a.path(), expect.name);
-        let rows_b = table_rows(dir_b.path(), expect.name);
-        assert!(!rows_a.is_empty(), "{} produced rows", expect.name);
-        assert_eq!(
-            rows_a, rows_b,
-            "{} row contents differ between two runs of the same input sequence, so the run is \
-             reading something the tape does not carry",
-            expect.name
-        );
-    }
-}
-
 /// FITNESS: the threaded runtime is a pure function of its input. Two runs of one sequence through
 /// real rings, the hot thread and the writer drain without a fatal and write the same rows to each
 /// table, so nothing that the tape does not carry reaches the output.

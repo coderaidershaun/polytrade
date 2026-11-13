@@ -967,6 +967,11 @@ fn fold_twice_gives_equal_digest_at_each_message() {
         !callbacks.strategy_log.is_empty(),
         "the probe banked strategy log lines"
     );
+    assert!(
+        callbacks.digests.windows(2).all(|pair| pair[0] != pair[1]),
+        "each message of the callback case tees an event, which moves the state, so each moves \
+         the digest"
+    );
 
     let feed = two_folds_agree(Start::Feed, &feed_sequence())
         .unwrap_or_else(|difference| panic!("two folds of the feed sequence part: {difference}"));

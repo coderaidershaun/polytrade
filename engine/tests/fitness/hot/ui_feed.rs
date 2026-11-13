@@ -240,85 +240,6 @@ fn book_snapshot_lifecycle_from_commit_through_reset_and_rotation() {
     assert_eq!(snaps[0].seq, 3);
 }
 
-/// The whole feed is a pure function of the input sequence: two fresh engines fed an identical mixed
-/// sequence — books, trades (Trade + a probe OrderUpdate and Fill), spins (Feature + Quote +
-/// Position) and a rotation — emit byte-identical snapshot and event streams, and the
-/// streams exercise every kind that mix can reach so the pin cannot pass vacuously.
-#[test]
-fn replay_produces_identical_feed() {
-    let run = || {
-        let (mut engine, mut books, mut events) =
-            ui_engine(Box::new(MixedProbe { feature: None }), DurationUs::ZERO);
-        let mut pen = FillPen::new(0);
-        let (bids, asks) = snapshot_pair(0, &[(100 * ONE, ONE)], &[(101 * ONE, ONE)], 10);
-        engine.dispatch(&InboundMessage::Book(bids));
-        engine.dispatch(&InboundMessage::Book(asks));
-        for seq in 0..5u64 {
-            let when = 100 + seq as i64 * 10;
-            let side = if seq % 2 == 0 { Side::Buy } else { Side::Sell };
-            engine.dispatch(&InboundMessage::Trade(trade(0, 100 * ONE, ONE, side, when)));
-            for message in pen.fill(side, 100 * ONE, ONE, when + 1) {
-                engine.dispatch(&message);
-            }
-            engine.dispatch(&InboundMessage::SpinTick(spin(seq, when + 2)));
-            engine.dispatch(&InboundMessage::Book(delta_chunk(
-                0,
-                Side::Buy,
-                &[(100 * ONE, (seq as i64 + 2) * ONE)],
-                when + 5,
-            )));
-        }
-        engine.dispatch(&InboundMessage::MarketRotation(rotation(
-            0,
-            300 * ONE,
-            600 * ONE,
-            200,
-        )));
-        (drain(&mut books), drain(&mut events))
-    };
-    let (first_books, first_events) = run();
-    let (second_books, second_events) = run();
-    assert_eq!(
-        first_books, second_books,
-        "book snapshot sequence is replay-deterministic"
-    );
-    assert_eq!(
-        lane_shape(&first_events),
-        lane_shape(&second_events),
-        "the lane's kinds and sequence numbers are replay-deterministic"
-    );
-    assert_eq!(
-        first_events, second_events,
-        "event sequence is replay-deterministic across every kind"
-    );
-    // Balance and Reject need messages this mix does not carry. Execution and OrderSnapshot require
-    // a command ring; the wired per-spin test below pins both. Every kind this unwired mix CAN reach
-    // must appear here, or the determinism claim is over a stream that never exercised it.
-    let mut kinds = [false; 7];
-    for event in &first_events {
-        let slot = match event {
-            UiEvent::Quote { .. } => 0,
-            UiEvent::Trade { .. } => 1,
-            UiEvent::OrderUpdate { .. } => 2,
-            UiEvent::Feature { .. } => 3,
-            UiEvent::Fill { .. } => 4,
-            UiEvent::Rotation { .. } => 5,
-            UiEvent::Position { .. } => 6,
-            UiEvent::OrderSnapshot { .. } | UiEvent::Execution { .. } => continue,
-            UiEvent::Balance { .. } | UiEvent::Reject { .. } => continue,
-        };
-        kinds[slot] = true;
-    }
-    assert!(
-        kinds.iter().all(|&seen| seen),
-        "the determinism pin must cover every event kind the mix reaches, saw {kinds:?}"
-    );
-    assert!(
-        !first_books.is_empty(),
-        "the run actually emitted a book feed"
-    );
-}
-
 /// The ENGINE tees the desired quote, once per instrument per spin, carrying what the strategy
 /// declared for THAT spin and the spin's own event time. The strategy has no UI call at all: it
 /// declares into level-triggered state the engine owns, so the ladder can never show a quote the
@@ -1037,15 +958,6 @@ fn mixed_kind_lane_sequence_is_globally_monotonic() {
             "{expected} never reached the one lane: {kinds:?}"
         );
     }
-}
-
-/// The lane reduced to what each run must reproduce exactly: which kind landed where, under which
-/// sequence number.
-fn lane_shape(events: &[UiEvent]) -> Vec<(&'static str, u64)> {
-    events
-        .iter()
-        .map(|event| (event_kind(event), event.seq()))
-        .collect()
 }
 
 /// The variant's name alone — enough to assert a kind reached the lane without pinning how many of
