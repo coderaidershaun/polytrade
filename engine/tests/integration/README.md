@@ -4,6 +4,8 @@ Each test of this folder is ignored. The signed tests of `binance_recording.rs` 
 
 Only the role `live-runner` runs a test of this file, by the runbook of its job and the live policy. The run command of each test is in the runbook of the job, and in no other place.
 
+Each dry run of this file loads the live keys, and most of them make signed reads. So each dry run is a live run by the live policy. Only `live-runner` runs it, and each dry run gets its own row in the ledger. A dry run sends no order action.
+
 ## Words
 
 - **Run folder:** the folder that the variable `REX_RUN_DIR` names. One live run has one run folder, below the data folder of its job. It is never below `engine/fixtures/`.
@@ -43,14 +45,21 @@ CAUTION: The files of this test hold balances. Do not put them in Git or in a ha
 Only `live-runner` runs this test, by the runbook of its job.
 
 - **Dry run first:** `records_a_small_order_lifecycle_on_binance_dry_run`. It reads the venue and builds the buy and its cancel. Then it prints each request with `apiKey` and `signature` as `<redacted>`. It sends no order action and writes no file.
-- **What it does:** it places one post-only buy of about 10 USDT at the best bid, under the tag of the tests. It records each answer, and each execution report of the user data stream, in `recording/` of the run folder. It waits up to 5 minutes for a fill. Then it cancels what rests, by its client order id.
+- **Dry run, more:** it also builds the taker buy of the fallback below, and sends none. It prints `dry run: 3 requests built, none sent`.
+- **What it does:**
+  1. It places one post-only buy of about 10 USDT at the best bid, under the tag of the tests.
+  2. It records each answer, and each execution report of the user data stream, in `recording/` of the run folder.
+  3. It waits up to 5 minutes for a fill. Then it cancels what rests, by its client order id.
+  4. IF the resting buy has no fill, THEN, after the venue shows its cancel, the test sends one buy of the same size at the best ask, with time in force IOC. It sends this buy once, on the same connection. The buy lives for one match and never rests. The test records its answer and its trade reports in the same way.
 - **Expected outcome:**
+  - A resting order is placed and cancelled, or it fills. Then there is at most one taker fill.
   - The run ends inside 10 minutes.
-  - No order of the tests rests.
-  - The test prints what the venue gave: a full fill, a partial fill, or no fill. It prints the fee fields `t`, `l`, `z`, `n`, `N` of each trade report.
+  - At no time does more than one order of the tests rest on a side. At the end, no order of the tests rests.
+  - The test prints what the venue gave, and the fee fields `t`, `l`, `z`, `n`, `N` of each trade report.
   - No payload file holds a key, a signature, a listen key, an account id, or a balance event.
-- **Check at the venue:** the order history of the account shows one buy of the tests, filled or cancelled.
-- **Kill switch:** `cancels_only_the_orders_of_the_tests`. **Rollback:** `sells_back_the_base_above_before`.
+- **Expected cost:** one taker fee and the spread on about 10 USDT. The rollback then sells the base back to `before`, within one lot.
+- **Check at the venue:** the order history of the account shows the buy of the tests (filled or cancelled), and at most one taker buy of the tests.
+- **Kill switch:** `cancels_only_the_orders_of_the_tests`. **Rollback:** `sells_back_the_base_above_before`. Run the rollback after each fill.
 
 The test refuses each of these in code, before it sends an order:
 

@@ -20,16 +20,22 @@ use serde_json::{Value, json};
 use crate::binance_live::{
     Answer, EXPOSURE_USDT, INSTRUMENT, LaneFiles, LaneKeys, ONE, ORDER_CEILING_USDT,
     ORDER_SIZE_USDT, OrderLane, PayloadFile, RESERVE_BTC, RESERVE_USDT, RUN_LENGTH, SYMBOL,
-    Sending, SymbolFacts, client_id, decimal, floor_to, is_ours, mantissa, notional, public_market,
-    redacted, report_key_variables, require_real_funds_ack, run_folder, test_identity,
+    Sending, SymbolFacts, Touch, client_id, decimal, floor_to, is_ours, mantissa, notional,
+    public_market, redacted, report_key_variables, require_real_funds_ack, run_folder,
+    test_identity,
 };
 
 /// How long the recording waits for its resting buy to fill, inside the length of one run.
 const FILL_WAIT: Duration = Duration::from_secs(5 * 60);
 
-/// The slot of the client order id of each side, so a run holds one order at most on each side.
+/// The slot of the client order id of each order of a run. The taker buy goes out only after the
+/// cancel of the resting buy is confirmed, so one order at most rests on each side.
 const BUY_SLOT: u64 = 1;
 const SELL_SLOT: u64 = 2;
+const TAKER_BUY_SLOT: u64 = 3;
+
+/// The taker buy lives for one match and never rests.
+const IMMEDIATE_OR_CANCEL: &[(&str, &str)] = &[("timeInForce", "IOC")];
 
 /// The reads of a run: before the recording, after it, and after a rollback.
 const READ_PHASES: [&str; 3] = ["before", "after", "after-rollback"];
@@ -39,7 +45,9 @@ const SELL_THROUGH_TICKS: i64 = 20;
 
 /// Places one post-only buy of about 10 USDT at the best bid, records each answer and each
 /// execution report of the user data stream, waits for a fill, cancels what rests by its client
-/// order id, and prints each request with each secret field shown as `<redacted>`.
+/// order id, and prints each request with each secret field shown as `<redacted>`. IF the resting
+/// buy has no fill, THEN after its cancel is confirmed at the venue, one buy of the same size at
+/// the best ask, which lives for one match, gives the trade report that U-M3 needs.
 #[ignore = "real funds on live binance: only the live-runner role of a job runs it, by the runbook of its job and the live policy"]
 #[tokio::test]
 async fn records_a_small_order_lifecycle_on_binance() {
@@ -162,8 +170,15 @@ async fn record_order_lifecycle(sending: Sending) {
     let placed = lane
         .send_once(buy.request(buy_id, OrderStyle::PostOnly))
         .await;
+    let taker_id = client_id(identity, TAKER_BUY_SLOT);
     if sending == Sending::DryRun {
         lane.send_once(cancel(buy_id)).await;
+        let taker = taker_buy(&facts, touch, &account, &before);
+        lane.send_once_with(
+            taker.request(taker_id, OrderStyle::Immediate),
+            IMMEDIATE_OR_CANCEL,
+        )
+        .await;
         println!("  dry run: {} requests built, none sent", lane.sent().len());
         return;
     }
@@ -171,7 +186,9 @@ async fn record_order_lifecycle(sending: Sending) {
     let placed_status = status_of(&placed, &client_order_id, &mut client).await;
     println!("  placed: {placed_status}");
 
-    let reports = if placed_status.is_open() { lane.listen(FILL_WAIT).await } else { Vec::new() };
+    if placed_status.is_open() {
+        lane.listen(FILL_WAIT).await;
+    }
     let now = status_of(&Answer::Unknown, &client_order_id, &mut client).await;
     if now.is_open() {
         let answer = lane.send_once(cancel(buy_id)).await;
@@ -179,6 +196,16 @@ async fn record_order_lifecycle(sending: Sending) {
         lane.listen(Duration::from_secs(2)).await;
     }
     let after = status_of(&Answer::Unknown, &client_order_id, &mut client).await;
+    let mut reports = lane.take_reports();
+    let has_traded = reports.iter().any(|report| report["x"] == "TRADE");
+    let mut taker_after = None;
+    if !has_traded && after.is_cancelled() {
+        let taker_order_id = format_client_order_id(identity.te_tag, taker_id);
+        let status = take_the_ask(&mut lane, &mut client, identity, &before, taker_id).await;
+        println!("    taker buy {taker_order_id}: {status}");
+        reports.extend(lane.take_reports());
+        taker_after = Some(status);
+    }
 
     println!("  what the venue gave:");
     println!("    order {client_order_id}: {after}");
@@ -190,7 +217,7 @@ async fn record_order_lifecycle(sending: Sending) {
         );
     }
     assert!(
-        !after.is_open(),
+        !after.is_open() && !taker_after.as_ref().is_some_and(OrderStatus::is_open),
         "no order of the tests rests at the end of the run: {after}"
     );
     assert!(
@@ -461,6 +488,42 @@ impl Order {
     }
 }
 
+/// A buy of the size of the resting buy at the best ask, inside the caps.
+fn taker_buy(facts: &SymbolFacts, touch: Touch, account: &AccountInfo, before: &Reads) -> Order {
+    let order = Order {
+        side: Side::Buy,
+        price: touch.ask,
+        qty: floor_to(ORDER_SIZE_USDT * ONE / touch.ask, facts.step),
+    };
+    order.check_inside_caps(facts, account, before);
+    order
+}
+
+/// The fill of last resort: one buy at the best ask that lives for one match, sent once, after a
+/// new read of the touch and the account, and a new check that no buy of the tests rests.
+async fn take_the_ask(
+    lane: &mut OrderLane,
+    client: &mut SignedRestClient,
+    identity: EngineIdentity,
+    before: &Reads,
+    taker_id: engine::msg::ids::ClientOrderId,
+) -> OrderStatus {
+    let (facts, touch) = public_market().await;
+    let account = client.account().await.expect("the account read answers");
+    refuse_a_second_order_on(Side::Buy, client, identity).await;
+    let taker = taker_buy(&facts, touch, &account, before);
+    let answer = lane
+        .send_once_with(
+            taker.request(taker_id, OrderStyle::Immediate),
+            IMMEDIATE_OR_CANCEL,
+        )
+        .await;
+    println!("  taker buy: {}", answer_text(&answer));
+    lane.listen(Duration::from_secs(3)).await;
+    let taker_order_id = format_client_order_id(identity.te_tag, taker_id);
+    status_of(&answer, &taker_order_id, client).await
+}
+
 fn cancel(id: engine::msg::ids::ClientOrderId) -> ExecRequest {
     ExecRequest::Cancel {
         instrument: INSTRUMENT,
@@ -500,6 +563,10 @@ enum OrderStatus {
 }
 
 impl OrderStatus {
+    fn is_cancelled(&self) -> bool {
+        matches!(self, OrderStatus::Known(status) if &**status == "CANCELED")
+    }
+
     fn is_open(&self) -> bool {
         matches!(self, OrderStatus::Known(status) if &**status == "NEW" || &**status == "PARTIALLY_FILLED")
     }

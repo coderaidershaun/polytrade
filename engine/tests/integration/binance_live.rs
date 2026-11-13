@@ -304,6 +304,8 @@ pub(crate) struct OrderLane {
     answers: Option<PayloadFile>,
     events: Option<PayloadFile>,
     sent: Vec<Value>,
+    /// Each execution report heard and not yet taken, redacted.
+    reports: Vec<Value>,
 }
 
 /// The keys that sign each order action, and the clock offset of the venue that stamps it.
@@ -353,6 +355,7 @@ impl OrderLane {
             answers,
             events,
             sent: Vec::new(),
+            reports: Vec::new(),
         };
         if sending == Sending::Live {
             let (socket, _) = connect_async("wss://ws-api.binance.com:443/ws-api/v3")
@@ -371,9 +374,19 @@ impl OrderLane {
     /// Signs one request and sends it once. It prints the request with each secret field shown
     /// as `<redacted>`. A dry lane sends nothing.
     pub(crate) async fn send_once(&mut self, request: ExecRequest) -> Answer {
+        self.send_once_with(request, &[]).await
+    }
+
+    /// As [`OrderLane::send_once`], with each parameter of `extra` set over the encoded ones
+    /// before the request is signed.
+    pub(crate) async fn send_once_with(
+        &mut self,
+        request: ExecRequest,
+        extra: &[(&'static str, &'static str)],
+    ) -> Answer {
         let id = self.next_id;
         self.next_id += 1;
-        let frame = self.frame(id, request);
+        let frame = self.frame(id, request, extra);
         if let Some(symbol) = frame["params"].get("symbol") {
             assert_eq!(symbol, SYMBOL, "the tests trade {SYMBOL} alone");
         }
@@ -396,17 +409,18 @@ impl OrderLane {
         answer
     }
 
-    /// Records each stream event that comes within `span`, and returns the execution reports
-    /// among them.
-    pub(crate) async fn listen(&mut self, span: Duration) -> Vec<Value> {
-        let mut reports = Vec::new();
+    /// Records each stream event that comes within `span`.
+    pub(crate) async fn listen(&mut self, span: Duration) {
         let deadline = tokio::time::Instant::now() + span;
         while let Ok(Some(frame)) = tokio::time::timeout_at(deadline, self.next_frame()).await {
-            if let Some(report) = self.record_event(&frame) {
-                reports.push(report);
-            }
+            self.record_event(&frame);
         }
-        reports
+    }
+
+    /// Each execution report heard since the last take, redacted, also those that came before
+    /// the answer of a request.
+    pub(crate) fn take_reports(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.reports)
     }
 
     /// Each request that the lane sent or built, with each secret field shown as `<redacted>`.
@@ -414,13 +428,21 @@ impl OrderLane {
         &self.sent
     }
 
-    fn frame(&self, id: u64, request: ExecRequest) -> Value {
+    fn frame(
+        &self,
+        id: u64,
+        request: ExecRequest,
+        extra: &[(&'static str, &'static str)],
+    ) -> Value {
         let context = EncodeContext {
             symbols: &self.symbols,
             identity: self.identity,
         };
         let EncodedRequest { method, params } =
             encode_request(request, &context).expect("the request names the one symbol");
+        let params = extra
+            .iter()
+            .fold(params, |params, (name, value)| params.set(name, *value));
         let window = RecvWindow::from_millis(5_000).expect("5000 ms is a receive window");
         let signed = self
             .signer
@@ -470,16 +492,21 @@ impl OrderLane {
         }
     }
 
-    /// Writes a stream event to the events file, unless it holds balances.
-    fn record_event(&self, frame: &Value) -> Option<Value> {
-        let event = frame.get("event")?;
+    /// Writes a stream event to the events file, unless it holds balances, and keeps each
+    /// execution report.
+    fn record_event(&mut self, frame: &Value) {
+        let Some(event) = frame.get("event") else {
+            return;
+        };
         let kind = event["e"].as_str().unwrap_or_default();
         if BALANCE_EVENTS.contains(&kind) {
-            return None;
+            return;
         }
         if let Some(file) = &self.events {
             file.write(event);
         }
-        (kind == "executionReport").then(|| redacted(event))
+        if kind == "executionReport" {
+            self.reports.push(redacted(event));
+        }
     }
 }
