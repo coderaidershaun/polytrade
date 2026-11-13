@@ -12,7 +12,6 @@ mod step;
 mod tally;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, bail};
@@ -36,6 +35,16 @@ fn main() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::FAILURE;
     };
+    if mode == "stages" {
+        let arguments: Vec<String> = args.collect();
+        return match config::stages_config_path(&arguments) {
+            Ok(config) => stages::run(&config),
+            Err(refusal) => {
+                eprintln!("latency-probe stages refused: {refusal}\n{USAGE}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let options = match options(args) {
         Ok(options) => options,
         Err(error) => {
@@ -43,13 +52,6 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if mode == "stages" {
-        let Some(config) = options.get("config") else {
-            eprintln!("latency-probe stages needs --config PATH\n{USAGE}");
-            return ExitCode::FAILURE;
-        };
-        return stages::run(&PathBuf::from(config));
-    }
     match run_timed(&mode, &options) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -96,10 +98,15 @@ fn options(mut args: impl Iterator<Item = String>) -> anyhow::Result<HashMap<Str
         let Some(name) = flag.strip_prefix("--") else {
             bail!("expected a --flag, got {flag:?}");
         };
+        if name.contains('=') {
+            bail!("write {flag:?} as `--name value`");
+        }
         let value = args
             .next()
             .with_context(|| format!("--{name} needs a value"))?;
-        options.insert(name.to_owned(), value);
+        if options.insert(name.to_owned(), value).is_some() {
+            bail!("--{name} is given twice");
+        }
     }
     Ok(options)
 }

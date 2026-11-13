@@ -1,5 +1,6 @@
-//! The config of the harness's full start, loaded and checked before anything else runs. A start
-//! with execution live would load the venue keys and sign a call, so the check refuses it here.
+//! The config of the harness's full start, taken from its one `--config` argument and checked
+//! before anything else runs. A start with execution live would load the venue keys and sign a
+//! call, so the check refuses it here.
 
 use std::path::{Path, PathBuf};
 
@@ -13,12 +14,31 @@ pub enum ProbeError {
         mode.as_str()
     )]
     LiveExecution { path: PathBuf, mode: ExecutionMode },
+    /// The engine starts on the first config that its arguments name, so any other argument could
+    /// carry a config that the harness never checked.
+    #[error(
+        "latency-probe stages takes exactly `--config PATH`, got {given:?} - a second config, or the flag in another form, could start an engine on a file that the harness never checked"
+    )]
+    StagesArguments { given: Vec<String> },
     #[error("cannot load the harness config {}", path.display())]
     Config {
         path: PathBuf,
         #[source]
         source: ConfigError,
     },
+}
+
+/// The one config of mode `stages`, from the arguments after the mode.
+///
+/// # Errors
+/// [`ProbeError::StagesArguments`] for anything but one `--config PATH`.
+pub fn stages_config_path(arguments: &[String]) -> Result<PathBuf, ProbeError> {
+    match arguments {
+        [flag, path] if flag == "--config" && !path.starts_with("--") => Ok(PathBuf::from(path)),
+        _ => Err(ProbeError::StagesArguments {
+            given: arguments.to_vec(),
+        }),
+    }
 }
 
 /// # Errors

@@ -5,10 +5,10 @@
 #[path = "../../../../tools/latency-probe/config.rs"]
 mod probe_config;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use engine::runtime::config::ExecutionMode;
-use probe_config::{ProbeError, load_harness_config};
+use probe_config::{ProbeError, load_harness_config, stages_config_path};
 
 /// The config that the harness ships for its full start, which runs with execution off.
 const STAGES_CONFIG: &str = include_str!("../../../../tools/latency-probe/stages.yaml");
@@ -64,4 +64,29 @@ fn latency_probe_refuses_live_execution() {
             .is_none_or(|execution| execution.mode != ExecutionMode::Live),
         "the shipped harness config never runs live"
     );
+
+    // The engine starts on the first config that its arguments name, so the harness takes exactly
+    // one, in one form, and checks that one.
+    let arguments =
+        |given: &[&str]| -> Vec<String> { given.iter().map(|arg| (*arg).to_owned()).collect() };
+    assert!(
+        matches!(
+            stages_config_path(&arguments(&["--config", "shipped.yaml"])),
+            Ok(path) if path == Path::new("shipped.yaml")
+        ),
+        "one --config names the config that is checked and used"
+    );
+    let smuggled: [&[&str]; 4] = [
+        &["--config", "shipped.yaml", "--config", "live.yaml"],
+        &["--config=live.yaml", "--config", "shipped.yaml"],
+        &["--config", "shipped.yaml", "--config=live.yaml"],
+        &[],
+    ];
+    for given in smuggled {
+        let refusal = stages_config_path(&arguments(given));
+        assert!(
+            matches!(refusal, Err(ProbeError::StagesArguments { .. })),
+            "{given:?} is refused before any config loads: {refusal:?}"
+        );
+    }
 }

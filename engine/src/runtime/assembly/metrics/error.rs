@@ -8,8 +8,9 @@ use super::ring::SampleRing;
 #[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MetricsError {
     #[error(
-        "the {} ring dropped {dropped} samples in one interval, so the tail of each stage that it feeds reads low - enlarge latency.sample_ring",
-        ring.label()
+        "the {} ring dropped {dropped} samples in one interval, so the tail of each stage that it feeds reads low - {}",
+        ring.label(),
+        ring.remedy()
     )]
     SampleRingFull { ring: SampleRing, dropped: u64 },
     #[error(
