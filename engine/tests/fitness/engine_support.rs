@@ -1,6 +1,8 @@
 //! Shared builders for the dispatch fitness tests (zero-alloc + replay): synthetic messages,
 //! a fully-configured instrument row, and a persistence ring wired to a `PersistSink`.
 
+use std::num::NonZeroU32;
+
 use engine::hot::dispatch::{
     ExecWiring, ExposureWiring, HotEngine, HotEngineSetup, LinkWiring, PersistWiring,
 };
@@ -532,7 +534,7 @@ pub fn persist_ring_for(
 ) -> (PersistWiring, Consumer<PersistRecord>) {
     let (producer, consumer) = RingBuffer::<PersistRecord>::new(capacity);
     let wiring = PersistWiring {
-        sink: PersistSink::new(producer),
+        sink: PersistSink::new(producer, NonZeroU32::MAX),
         tables,
     };
     (wiring, consumer)

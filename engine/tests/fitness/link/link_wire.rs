@@ -380,6 +380,7 @@ fn arb_halt() -> impl Strategy<Value = ExecHalt> {
                 Just(HaltReason::FilterViolation),
                 Just(HaltReason::CommandBankOverflow),
                 Just(HaltReason::DuplicateResting),
+                Just(HaltReason::SealNotAccepted),
             ],
             any::<i64>()
         )

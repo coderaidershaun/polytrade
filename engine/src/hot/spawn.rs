@@ -12,6 +12,7 @@ use super::dispatch::HotEngine;
 use super::ingress::IngressQueues;
 use super::metrics::{DriverSamples, Folded};
 use crate::log::{hot_error, hot_warn};
+use crate::msg::failure::{FailureClass, Halt};
 use crate::msg::ids::{QueueId, SourceId};
 use crate::msg::inbound::{InboundMessage, MarketTapItem, MessageBody, TappedMessage, VenueMeta};
 use crate::msg::latency::CounterSample;
@@ -74,6 +75,9 @@ pub struct QueueProducer {
 }
 
 impl QueueProducer {
+    /// A full input ring or a full market tap trips the fatal latch: the engine has stalled.
+    pub const WHEN_FULL: FailureClass = FailureClass::Halt(Halt::Engine);
+
     pub fn new(
         producer: Producer<InboundMessage>,
         fatal: FatalSignal,
@@ -206,6 +210,9 @@ pub struct LinkQueueProducer {
 }
 
 impl LinkQueueProducer {
+    /// A full ring drops the frame and counts it, because an untrusted peer fills it.
+    pub const WHEN_FULL: FailureClass = FailureClass::Reject;
+
     pub fn new(producer: Producer<InboundMessage>, queue_id: QueueId) -> Self {
         Self {
             producer,

@@ -17,6 +17,7 @@ mod sources;
 mod tables;
 mod tracker;
 
+use std::num::NonZeroU32;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
@@ -136,6 +137,14 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
                 1..=87_600,
                 "1..=87600 (1 hour to 10 years)",
             )?;
+            if let Some(limit) = persistence.seal_try_limit {
+                check_range(
+                    "persistence.seal_try_limit",
+                    u64::from(limit),
+                    1..=u64::from(u32::MAX),
+                    "1 or more",
+                )?;
+            }
         }
         self.logging.validate(self.engine.drain_deadline_ms)?;
         self.source.validate()?;
@@ -197,6 +206,21 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
 
 /// The slots of each ring. Each kind of input queue has its own capacity, because a full timer or
 /// execution ring halts the engine while a full link ring drops a frame.
+impl<P> Config<P> {
+    pub(crate) fn seal_try_limit(&self) -> NonZeroU32 {
+        let configured = self
+            .persistence
+            .as_ref()
+            .and_then(|persistence| persistence.seal_try_limit);
+        let limit = configured.unwrap_or_else(|| {
+            let drain_deadline_us = self.engine.drain_deadline_ms.saturating_mul(1_000);
+            let spins = drain_deadline_us.div_ceil(self.engine.spin_interval_us);
+            u32::try_from(spins).unwrap_or(u32::MAX)
+        });
+        NonZeroU32::new(limit).unwrap_or(NonZeroU32::MIN)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueuesConfig {
@@ -263,6 +287,10 @@ pub struct PersistenceConfig {
     pub dir: PathBuf,
     #[serde(default = "default_retention_hours")]
     pub retention_hours: u64,
+    /// The tries of a waiting seal before quoting halts. `None` takes the spins of one
+    /// `engine.drain_deadline_ms`: a writer that takes no seal for that long has stalled.
+    #[serde(default)]
+    pub seal_try_limit: Option<u32>,
 }
 
 /// Separate from `persistence:` and always in force, because position outlives any single run.

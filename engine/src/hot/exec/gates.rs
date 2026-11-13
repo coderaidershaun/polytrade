@@ -24,6 +24,7 @@ labelled_enum! {
         FilterViolation = "filter violation",
         DuplicateResting = "duplicate resting order",
         CommandBankOverflow = "command bank overflow",
+        SealNotAccepted = "persistence seal not accepted",
     }
     /// Operator words for the halt banner: a halted engine's reason is read under pressure, and the
     /// table sits beside the variants so a new reason cannot ship as a bare Rust identifier.

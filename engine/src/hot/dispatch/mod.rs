@@ -14,12 +14,13 @@ use gate::Warmup;
 
 use crate::hot::book::Book;
 use crate::hot::dispatch::ui_emit::UiEmitter;
-use crate::hot::exec::{DesiredBook, ExecCallback, ExecEngine, QuoteLevel, SpinInput};
+use crate::hot::exec::{DesiredBook, ExecCallback, ExecEngine, HaltReason, QuoteLevel, SpinInput};
 use crate::hot::ledger::PositionLedger;
 use crate::hot::quant::volatility::EwmaVol;
 use crate::hot::sink::{ExposureSink, LinkSink, PersistSink, StrategyLogSink};
 use crate::hot::strategy::{Actions, ActionsSetup, DrainSinks, Strategy, StrategyCtx, WindowInfo};
 use crate::hot::tracker::MicroTracker;
+use crate::log::hot_error;
 use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
 use crate::msg::inbound::{InboundMessage, MessageBody, SpinTick};
@@ -68,10 +69,9 @@ impl HotState {
         self.sink.as_ref().map_or(0, PersistSink::dropped)
     }
 
-    fn retry_pending_seal(&mut self) {
-        if let Some(sink) = self.sink.as_mut() {
-            sink.retry_pending_seal();
-        }
+    /// The count of tries, at the one spin where the seal is first past its cap.
+    fn retry_pending_seal(&mut self) -> Option<u32> {
+        self.sink.as_mut()?.retry_pending_seal()
     }
 
     fn ctx(&mut self, event_ts: LocalTs) -> StrategyCtx<'_> {
@@ -291,10 +291,23 @@ impl HotEngine {
     }
 
     /// A parked run seals its files through a spin, so a seal or a snapshot that the ring refused
-    /// is tried again on each spin.
+    /// is tried again on each spin. A seal that the ring refused at each try of its cap halts
+    /// quoting.
     fn retry_latched_writes(&mut self) {
-        self.state.retry_pending_seal();
+        if let Some(tries) = self.state.retry_pending_seal() {
+            self.halt_on_unsent_seal(tries);
+        }
         self.state.exposure.retry_pending();
+    }
+
+    #[cold]
+    fn halt_on_unsent_seal(&mut self, tries: u32) {
+        hot_error!(
+            "persistence seal refused at each of its {} tries — the tape writer has stalled, so quoting halts",
+            tries
+        );
+        let at = self.state.fold_time.as_local();
+        self.state.exec.halt(HaltReason::SealNotAccepted, at);
     }
 
     fn spin_strategy(&mut self, tick: &SpinTick, received_ts_us: LocalTs) {

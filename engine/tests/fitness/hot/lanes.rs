@@ -1,25 +1,30 @@
 //! What each lane of the hot thread does when its ring is full. A lane that halted where it should
 //! drop, or dropped where it should halt, would lose state or let a stalled consumer stop the run.
 
-use engine::hot::dispatch::HotEngine;
-use engine::hot::exec::ExecHalt;
+use engine::hot::dispatch::{HotEngine, PersistWiring};
+use engine::hot::exec::{ExecHalt, HaltReason};
 use engine::hot::ingress::IngressQueues;
+use engine::hot::sink::{
+    ExposureSink, LinkSink, PersistSink, SampleSink, StrategyLogSink, UiBookSink, UiEventSink,
+};
 use engine::hot::spawn::spawn_hot_thread;
 use engine::hot::spawn::{HotThreadConfig, IdleWait, LinkQueueProducer, QueueProducer, SimTapGate};
 use engine::msg::failure::{FailureClass, Halt};
 use engine::msg::ids::{QueueId, Side, SourceId};
 use engine::msg::inbound::{InboundMessage, MarketTapItem, MessageBody, SpinTick, VenueMeta};
+use engine::msg::latency::StageSample;
 use engine::msg::persist::PersistRecord;
 use engine::msg::ui::UiEvent;
 use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
 use engine::runtime::shutdown::{DrainSignal, FatalReason, FatalSignal};
 use engine::runtime::{DrainDeadline, DrainOutcome, Exit, Trigger};
 use rtrb::{Consumer, RingBuffer};
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use crate::engine_support::{
-    Idle, detached_setup, engine_with_ui_and_exec, idle_at, instrument_row, persist_ring_for,
-    run_control, running_at, strategy_log_ring, trade, ts,
+    Idle, detached_setup, engine_with_ui_and_exec, idle_at, instrument_row, run_control,
+    running_at, strategy_log_ring, trade, ts,
 };
 
 fn spin_at(seq: u64, when: i64) -> InboundMessage {
@@ -44,6 +49,7 @@ fn each_lane_full_gives_its_class() {
         .expect("the second push trips the fatal latch");
     assert_eq!(reason, FatalReason::InputQueueFull { queue, capacity: 1 });
     assert_eq!(reason.failure_class(), FailureClass::Halt(Halt::Engine));
+    assert_eq!(reason.failure_class(), QueueProducer::WHEN_FULL);
     assert_eq!(
         consumer.slots(),
         1,
@@ -99,13 +105,32 @@ fn each_lane_full_gives_its_class() {
     tapped.push_tapped(message, VenueMeta::None);
     let reason = fatal.reason().expect("a full tap trips the fatal latch");
     assert_eq!(reason, FatalReason::MarketTapFull { queue, capacity: 1 });
-    assert_eq!(reason.failure_class(), FailureClass::Halt(Halt::Engine));
+    assert_eq!(reason.failure_class(), QueueProducer::WHEN_FULL);
     assert_eq!(
         input_ring.slots(),
         0,
         "the input ring took nothing that the tap refused"
     );
     assert_eq!(tap_ring.slots(), 1, "the tap holds only its watermark");
+
+    assert_eq!(LinkQueueProducer::WHEN_FULL, FailureClass::Reject);
+    let state_lanes = [
+        ("ui books", UiBookSink::WHEN_FULL),
+        ("ui events", UiEventSink::WHEN_FULL),
+        ("outbound link", LinkSink::WHEN_FULL),
+        ("strategy log", StrategyLogSink::WHEN_FULL),
+        ("latency samples", SampleSink::<StageSample>::WHEN_FULL),
+        ("exposure, older snapshot", ExposureSink::WHEN_FULL),
+        ("tape rows", PersistSink::ROW_WHEN_FULL),
+    ];
+    for (lane, class) in state_lanes {
+        assert_eq!(class, FailureClass::Reject, "{lane}");
+    }
+    assert_eq!(PersistSink::SEAL_WHEN_FULL, FailureClass::Retry);
+    assert_eq!(
+        PersistSink::SEAL_PAST_CAP,
+        FailureClass::Halt(Halt::Quoting)
+    );
 }
 
 /// A tape that records the link-frame table, so that each run-control message writes one row.
@@ -117,11 +142,18 @@ struct Parked {
 
 impl Parked {
     /// Two run controls fill a tape ring of two slots. The park at epoch 5 asks for a seal that
-    /// does not fit, so the seal waits.
-    fn new() -> Parked {
+    /// does not fit, so the seal waits, with a cap on its tries.
+    fn with_seal_try_limit(limit: u32) -> Parked {
+        let (producer, tape) = RingBuffer::<PersistRecord>::new(2);
+        let persistence = PersistWiring {
+            sink: PersistSink::new(producer, NonZeroU32::new(limit).unwrap()),
+            tables: RecordedTables::new(&[TableKind::LinkFrames]),
+        };
+        Parked::parked_with(persistence, tape)
+    }
+
+    fn parked_with(persistence: PersistWiring, tape: Consumer<PersistRecord>) -> Parked {
         let instruments = [instrument_row(0, TrackerSpec::default(), 64)];
-        let (persistence, tape) =
-            persist_ring_for(2, RecordedTables::new(&[TableKind::LinkFrames]));
         let (mut engine, _ui_books, ui_events, _commands) = engine_with_ui_and_exec(
             &instruments,
             Box::new(Idle),
@@ -164,7 +196,7 @@ impl Parked {
 /// seal had closed.
 #[test]
 fn pending_seal_goes_first_when_room_returns() {
-    let mut parked = Parked::new();
+    let mut parked = Parked::with_seal_try_limit(3);
     assert_eq!(
         parked.engine.dropped_persist_records(),
         1,
@@ -186,5 +218,58 @@ fn pending_seal_goes_first_when_room_returns() {
             [PersistRecord::LinkFrame(_), PersistRecord::SealAll]
         ),
         "the second row, then the seal at the next spin: {tape:?}"
+    );
+
+    for message in [
+        run_control(running_at(6), 5_000),
+        run_control(idle_at(7), 6_000),
+    ] {
+        parked.engine.dispatch(&message);
+    }
+    let halt = parked.spin(2, 7_000);
+    assert_eq!(
+        halt.map(ExecHalt::is_halted),
+        Some(false),
+        "the next seal counts its tries from 1 again, so its second try halts nothing: {halt:?}"
+    );
+}
+
+/// CONTRACT: a seal that the ring refuses is tried at the request and at each spin, and the last try
+/// that the cap allows halts quoting. A seal that waited with no end would drop each row of a parked
+/// run for as long as the writer stalls, with nothing to say so.
+#[test]
+fn seal_retry_reaches_cap_then_halts() {
+    let mut parked = Parked::with_seal_try_limit(3);
+    let halt = parked.spin(1, 4_000);
+    assert_eq!(
+        halt.map(ExecHalt::is_halted),
+        Some(false),
+        "try 2 of 3 fails: {halt:?}"
+    );
+    let halt = parked.spin(2, 5_000);
+    assert!(
+        matches!(
+            halt,
+            Some(ExecHalt::Halted {
+                reason: HaltReason::SealNotAccepted,
+                ..
+            })
+        ),
+        "try 3 of 3 fails, and quoting halts: {halt:?}"
+    );
+
+    parked.engine.dispatch(&run_control(idle_at(5), 6_000));
+    assert_eq!(
+        parked.engine.dropped_persist_records(),
+        2,
+        "the row of the park and the row that came while the seal waited are dropped and counted"
+    );
+    let tape = parked.tape();
+    assert!(
+        matches!(
+            tape.as_slice(),
+            [PersistRecord::LinkFrame(_), PersistRecord::LinkFrame(_)]
+        ),
+        "no row lands behind a seal that was not sent: {tape:?}"
     );
 }

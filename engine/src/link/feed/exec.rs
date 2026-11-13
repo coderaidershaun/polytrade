@@ -87,6 +87,7 @@ wire_enum! {
     (HaltReason::FilterViolation) = 5,
     (HaltReason::CommandBankOverflow) = 6,
     (HaltReason::DuplicateResting) = 7,
+    (HaltReason::SealNotAccepted) = 8,
 }
 
 const REJECT_LOCAL: u8 = 1;
