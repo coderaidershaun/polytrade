@@ -148,9 +148,9 @@ fn total_places(transcript: &[SpinOutcome]) -> usize {
 ///
 /// Over generated budgets of one or two windows and generated spin stamps, late ones included: a
 /// late spin is folded at the time already reached, which is the only way an earlier stamp reaches
-/// the meter. A budget of N admits N and refuses the next, under the same spins that a budget out of
-/// reach and no budget at all place more on, and a window that has passed returns its budget while
-/// one that has not keeps it.
+/// the meter. A budget of N admits N and refuses the next, under the same spins that place more
+/// with a budget out of reach or with no budget at all. A window that has passed returns its
+/// budget, and one that has not keeps it.
 #[test]
 fn placements_in_any_window_never_exceed_budget() {
     a_budget_of_n_admits_n_and_refuses_the_next();
@@ -175,7 +175,8 @@ fn placements_in_any_window_never_exceed_budget() {
     }
     assert!(
         late_spins.get() > 0 && refused_runs.get() > 0,
-        "the generated runs must fold late spins and spend a budget: {} late spins, {} runs refused",
+        "the generated runs must fold late spins and spend a budget: {} late spins, {} runs \
+         refused",
         late_spins.get(),
         refused_runs.get()
     );

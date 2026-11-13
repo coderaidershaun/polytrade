@@ -13,9 +13,9 @@ use crate::log::hot_warn;
 use crate::msg::exec::OrderStyle;
 use crate::msg::ids::{FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side};
 
-use super::desired::QuoteLevel;
 use super::engine::ExecEngine;
 use super::gates::reducing_side;
+use super::mint::PlacementKind;
 use super::reconcile::{BookTop, ExecLimits, FundsView, PlaceIntent, RejectReason, TickGrid};
 use super::spin::SpinInput;
 
@@ -213,9 +213,9 @@ fn notional_capped_qty(price: Price, max_notional_quote: Notional) -> Qty {
 impl ExecEngine {
     /// Sends one marketable order per instrument per spin while a strategy wants out and holding.
     /// Deliberately NOT window-gated — the close margin is when positions most need closing — and
-    /// deliberately not budget-gated either, for the reason `place_refusal` gives. Still gated on
-    /// every money protection (halt, readiness, single-flight, per-side order count, funds,
-    /// notional), so it bypasses only what would keep a position open.
+    /// deliberately not budget-gated either, for the reason `admit_quote_placement` gives. Still
+    /// gated on every money protection (halt, readiness, single-flight, per-side order count,
+    /// funds, notional), so it bypasses only what would keep a position open.
     pub(super) fn flatten_pass(&mut self, input: &mut SpinInput<'_>) {
         if self.halt.is_halted() || self.readiness_gap().is_some() {
             return;
@@ -260,14 +260,11 @@ impl ExecEngine {
     ) {
         let refusal = match outcome {
             FlattenOutcome::Nothing => None,
-            // Placed at level ZERO, since a marketable order does not occupy a quote
-            // rung. is_resting_quote() is what stops the reconciler and closer from
-            // confusing it with a quote.
             FlattenOutcome::Place(intent) => self.place(
                 instrument,
                 side,
-                QuoteLevel::ZERO,
                 intent,
+                PlacementKind::Flatten,
                 input.stamps(),
                 input.bank,
             ),

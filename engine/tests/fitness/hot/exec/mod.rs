@@ -3,7 +3,6 @@
 mod capacity;
 mod command_lane;
 mod exec_audit;
-mod exec_budget;
 mod exec_flatten;
 mod exec_ladder;
 mod exec_prior_run;

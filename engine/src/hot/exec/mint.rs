@@ -8,6 +8,7 @@ use crate::msg::persist::{OrderLifecycle, OrderTransition};
 use crate::msg::time::LocalTs;
 
 use super::audit::bank_engine_driven;
+use super::budget::QuotePermit;
 use super::desired::QuoteLevel;
 use super::engine::{ExecEngine, FoldStamps};
 use super::gates::HaltReason;
@@ -29,7 +30,12 @@ impl ExecEngine {
         match outcome {
             ReconcileOutcome::Nothing | ReconcileOutcome::Reject(_) => {}
             ReconcileOutcome::Place(intent) => {
-                return self.place(instrument, side, level, intent, stamps, input.bank);
+                let permit = match self.admit_quote_placement(instrument, side) {
+                    Ok(permit) => permit,
+                    Err(reason) => return Some(reason),
+                };
+                let kind = PlacementKind::Quote { level, permit };
+                return self.place(instrument, side, intent, kind, stamps, input.bank);
             }
             ReconcileOutcome::Cancel => {
                 if let Some(index) = self.resting_index(instrument, side, level) {
@@ -101,9 +107,9 @@ impl ExecEngine {
         bank_engine_driven(bank, slot, transition, previous.into(), received);
     }
 
-    /// Every placement the engine mints passes through here, so every one of them spends the venue
-    /// budget — a flatten is exempt from being REFUSED by it, never from consuming it. Counting the
-    /// exits is what makes the quote gate refuse early enough to leave room for the next one.
+    /// Every placement the engine mints passes through here, so each one spends the venue budget,
+    /// the order that gets a market flat included: the budget never refuses it, but it still counts
+    /// it, so the quotes after it are refused early enough to leave room for the next one.
     ///
     /// Returns the refusal of a level whose client ids are spent. A level with no slot at all halts
     /// instead, and the halt is what the next spin reports.
@@ -111,12 +117,16 @@ impl ExecEngine {
         &mut self,
         instrument: InstrumentId,
         side: Side,
-        level: QuoteLevel,
         intent: PlaceIntent,
+        kind: PlacementKind,
         stamps: FoldStamps,
         bank: &mut Actions,
     ) -> Option<RejectReason> {
         let at = stamps.fold;
+        let level = match kind {
+            PlacementKind::Quote { level, .. } => level,
+            PlacementKind::Flatten => QuoteLevel::ZERO,
+        };
         let (index, client_id) = match self.claim(instrument, side, level, intent, at) {
             Ok(claimed) => claimed,
             Err(ClaimRefusal::IdsSpent) => return Some(RejectReason::IdsSpent),
@@ -140,7 +150,10 @@ impl ExecEngine {
             self.unwind(index, stamps, bank);
             return None;
         }
-        self.budget.record_place();
+        match kind {
+            PlacementKind::Quote { permit, .. } => self.budget.spend_quote(permit),
+            PlacementKind::Flatten => self.budget.spend_flatten(),
+        }
         bank_engine_driven(
             bank,
             self.orders.slot(index),
@@ -199,4 +212,16 @@ impl ExecEngine {
         }
         is_banked
     }
+}
+
+/// What a placement is, for the slot it takes and the budget it spends. A quote rests at its level
+/// and spends the permit that the meter gave it. The order that gets a market flat takes level zero
+/// and needs no permit, because the budget never refuses it. It holds no rung of the ladder:
+/// `is_resting_quote` is what keeps the reconciler from reading it as a quote.
+pub(super) enum PlacementKind {
+    Quote {
+        level: QuoteLevel,
+        permit: QuotePermit,
+    },
+    Flatten,
 }
