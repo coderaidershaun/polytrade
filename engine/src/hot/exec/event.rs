@@ -143,7 +143,9 @@ impl ExecEngine {
         let index = match self.prior_orders.find_or_seat(event, now) {
             Ok(index) => index,
             Err(Unseated::TableFull) => return self.on_prior_run_overflow(event, stamps, bank),
-            Err(Unseated::NoInstrument) => return self.prior_run_without_instrument_error(event),
+            Err(Unseated::NoInstrument) => {
+                return self.on_prior_run_without_instrument(event, stamps, bank);
+            }
         };
         let previous_state = OrderLifecycle::from(self.prior_orders.slot(index).state());
         let applied = self.prior_orders.apply(index, event, now);
@@ -167,6 +169,22 @@ impl ExecEngine {
         self.prior_run_overflow_error(event);
         self.record_orphan_fill(event, stamps.received, bank);
         self.halt(HaltReason::PriorRunOverflow, stamps.fold);
+    }
+
+    /// With a fill and no instrument, the order has no entry and the fill no record, so quoting
+    /// halts as for each other fill that no slot holds.
+    #[cold]
+    fn on_prior_run_without_instrument(
+        &mut self,
+        event: &ExecEvent,
+        stamps: FoldStamps,
+        bank: &mut Actions,
+    ) {
+        self.prior_run_without_instrument_error(event);
+        if event.cumulative_qty.mantissa() > 0 {
+            self.record_orphan_fill(event, stamps.received, bank);
+            self.halt(HaltReason::OrphanFill, stamps.fold);
+        }
     }
 
     #[cold]

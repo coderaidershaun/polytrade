@@ -31,7 +31,8 @@ impl ExecEngine {
         self.halt(HaltReason::OrphanFill, stamps.fold);
     }
 
-    /// The fill of an own order that holds no slot, as the venue's running total.
+    /// The fill of an own order that holds no slot, as the venue's running total. A record needs an
+    /// instrument, so a fill that names none keeps only its count.
     #[cold]
     pub(super) fn record_orphan_fill(
         &mut self,
@@ -39,10 +40,13 @@ impl ExecEngine {
         received: LocalTs,
         bank: &mut Actions,
     ) {
-        let Some(instrument) = event.instrument else { return };
         if event.cumulative_qty.mantissa() <= 0 {
             return;
         }
+        let Some(instrument) = event.instrument else {
+            self.incidents.orphan_fills += 1;
+            return;
+        };
         let orphan_fill = IncidentRow {
             kind: IncidentKind::OrphanFill,
             instrument,

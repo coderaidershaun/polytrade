@@ -266,6 +266,34 @@ fn prior_run_overflow_halts() {
         "the fill that no entry holds stays on the tape"
     );
     assert_eq!(fixture.engine.counters().orphan_fills, 1);
+    a_prior_run_fill_that_names_no_instrument_halts();
+}
+
+/// A prior-run report with a fill and no instrument has no entry to fold into, and no instrument
+/// for a record. Quoting halts as for any fill that no slot holds, and the count keeps it.
+fn a_prior_run_fill_that_names_no_instrument_halts() {
+    let mut fixture = fixture();
+    let MessageBody::Exec(mut report) = prior_run_trade(1, Side::Buy, 100 * ONE, ONE, ONE, 10).body
+    else {
+        unreachable!("a prior-run trade is an execution message");
+    };
+    report.instrument = None;
+    fixture
+        .engine
+        .dispatch(&InboundMessage::new(ts(10), MessageBody::Exec(report)));
+    let after = read(&mut fixture, 0, 20);
+    assert_eq!(
+        halt_reason(&mut fixture.ui_events),
+        Some(HaltReason::OrphanFill),
+        "a fill that names no instrument halts quoting, and never ends in a log line only"
+    );
+    assert_eq!(after.position_base, Qty::from_mantissa(0));
+    assert_eq!(
+        incidents(&mut fixture.records),
+        [],
+        "a record needs an instrument"
+    );
+    assert_eq!(fixture.engine.counters().orphan_fills, 1);
 }
 
 /// One order of the earlier run in a generated case: where it rests, its trades as steps of its
