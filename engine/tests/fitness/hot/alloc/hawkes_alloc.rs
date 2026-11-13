@@ -6,7 +6,7 @@
 //! issued estimates AND to have converged at least once inside the measured window.
 
 use crate::hot::quant::ExpSimulation;
-use engine::hot::quant::hawkes::{HawkesEvents, HawkesMle, HawkesParams};
+use engine::hot::quant::hawkes::{HawkesChoice, HawkesEvents, HawkesMle, HawkesParams};
 use engine::msg::time::{DurationUs, LocalTs};
 
 const START: LocalTs = LocalTs::from_micros(0);
@@ -54,8 +54,9 @@ fn exponential_path() -> Vec<LocalTs> {
 #[test]
 fn hawkes_accumulators_and_warm_fits_do_not_allocate() {
     let stamps = tile(&exponential_path(), PRIME + MEASURED);
-    let mut events = HawkesEvents::new(WINDOW);
-    let mut mle = HawkesMle::new(64);
+    let choice = HawkesChoice::new(WINDOW, 64, FIT_STRIDE).expect("a valid choice");
+    let mut events = HawkesEvents::new(choice.max_events());
+    let mut mle = HawkesMle::new(choice);
 
     for &stamp in &stamps[..PRIME] {
         events.push(stamp);

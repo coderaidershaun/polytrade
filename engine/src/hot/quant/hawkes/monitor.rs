@@ -1,16 +1,18 @@
 //! Per-aggressor-side arrival monitor: the rolling window the fitter reads, the paced re-solve that
 //! keeps it current, and the resident evaluator answering λ between fits.
 
+use core::num::NonZeroUsize;
+
 use super::{HawkesEstimate, HawkesEvents, HawkesMle, UnivariateHawkes};
 use crate::msg::time::{LocalTs, VenueTs};
 
-/// Hawkes monitor rolling window, fit floor, refit cadence. Strategy constants, not config.
+/// The window, the fit floor, and the refit cadence of one side. A strategy fixes them as
+/// constants, not as config.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HawkesChoice {
-    pub max_events: usize,
-    pub min_events: usize,
-    /// Fresh arrivals before kernel re-solve.
-    pub refit_arrivals: usize,
+    max_events: NonZeroUsize,
+    min_events: usize,
+    refit_arrivals: usize,
 }
 
 impl HawkesChoice {
@@ -22,9 +24,9 @@ impl HawkesChoice {
         min_events: usize,
         refit_arrivals: usize,
     ) -> Result<Self, HawkesChoiceError> {
-        if max_events == 0 {
+        let Some(window) = NonZeroUsize::new(max_events) else {
             return Err(HawkesChoiceError::EmptyWindow);
-        }
+        };
         if min_events < 2 {
             return Err(HawkesChoiceError::TooFewEvents { min_events });
         }
@@ -38,10 +40,28 @@ impl HawkesChoice {
             return Err(HawkesChoiceError::NoRefitCadence);
         }
         Ok(Self {
-            max_events,
+            max_events: window,
             min_events,
             refit_arrivals,
         })
+    }
+
+    /// The most events that the window keeps; a full window evicts its oldest.
+    #[inline]
+    pub const fn max_events(&self) -> NonZeroUsize {
+        self.max_events
+    }
+
+    /// The fewest events in the window for which a fit runs.
+    #[inline]
+    pub const fn min_events(&self) -> usize {
+        self.min_events
+    }
+
+    /// The new arrivals between two fits.
+    #[inline]
+    pub const fn refit_arrivals(&self) -> usize {
+        self.refit_arrivals
     }
 }
 
@@ -81,20 +101,11 @@ pub struct HawkesSide {
 }
 
 impl HawkesSide {
-    /// # Panics
-    /// When min_events > max_events: window can't hold fit floor, every fit stale forever. Config bug.
     pub fn new(choice: HawkesChoice) -> Self {
-        assert!(
-            choice.min_events <= choice.max_events,
-            "hawkes min_events = {} exceeds max_events = {}, so the window could never hold the fit \
-             floor and every fit would be stale — lower min_events or raise max_events",
-            choice.min_events,
-            choice.max_events
-        );
         Self {
             choice,
             events: HawkesEvents::new(choice.max_events),
-            fitter: HawkesMle::new(choice.min_events),
+            fitter: HawkesMle::new(choice),
             estimate: None,
             arrivals_since_fit: 0,
             live: None,
@@ -165,7 +176,7 @@ impl HawkesSide {
     /// Reset to post-new state keeping allocator. Window + fitter (warm-start inline) rebuilt from floor.
     pub fn reset(&mut self) {
         self.events.clear();
-        self.fitter = HawkesMle::new(self.choice.min_events);
+        self.fitter = HawkesMle::new(self.choice);
         self.estimate = None;
         self.arrivals_since_fit = 0;
         self.live = None;

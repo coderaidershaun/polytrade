@@ -2,15 +2,19 @@
 //! and the closed-form readouts must match hand arithmetic. The recursion is the only intensity the
 //! engine ever computes, so a drift from the definition is invisible at run time.
 
+use core::num::NonZeroUsize;
+
 use super::ts;
 use engine::hot::quant::hawkes::{HawkesEvents, HawkesParams, UnivariateHawkes};
+
+const WINDOW: NonZeroUsize = NonZeroUsize::new(16).expect("a window holds events");
 
 #[test]
 fn recursion_matches_the_direct_kernel_sum_and_relaxes_to_baseline() {
     let params = HawkesParams::new(0.4, 1.2, 2.5);
     let times = [0.0, 0.3, 0.35, 1.9, 4.2];
     let mut hawkes = UnivariateHawkes::new(params);
-    let mut events = HawkesEvents::new(16);
+    let mut events = HawkesEvents::new(WINDOW);
     for &secs in &times {
         hawkes.on_event(ts(secs));
         events.push(ts(secs));
@@ -47,7 +51,7 @@ fn known_worked_example_reads_back_from_the_accessors() {
 fn a_late_stamp_reads_the_intensity_of_a_reseed() {
     let params = HawkesParams::new(0.5, 0.8, 2.0);
     let mut live = UnivariateHawkes::new(params);
-    let mut events = HawkesEvents::new(16);
+    let mut events = HawkesEvents::new(WINDOW);
     for secs in [10.0, 10.5, 10.2] {
         live.on_event(ts(secs));
         events.push(ts(secs));

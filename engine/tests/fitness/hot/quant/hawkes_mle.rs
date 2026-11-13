@@ -10,7 +10,7 @@ use engine::msg::time::DurationUs;
 fn fit_recovers_exponential_params_and_warm_starts() {
     // Warm refit reduces iterations via seeded simplex.
     let (truth, events, now) = exponential_fixture();
-    let mut fitter = HawkesMle::new(64);
+    let mut fitter = HawkesMle::new(HawkesChoice::new(32_768, 64, 1).expect("a valid choice"));
     let cold = fitter.fit(&events, now).expect("cold fit");
     assert!(cold.converged, "cold fit hit max_iter");
     for (fitted, expected, name) in [

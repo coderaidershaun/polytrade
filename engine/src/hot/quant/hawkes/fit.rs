@@ -1,7 +1,7 @@
 //! Maximum-likelihood fit of the exponential kernel. The likelihood has a closed form, so one
 //! objective call is a single pass over the window, and each refit starts from the last optimum.
 
-use super::{HawkesEvents, HawkesParams};
+use super::{HawkesChoice, HawkesEvents, HawkesParams};
 use crate::hot::quant::MIN_RATE;
 use crate::hot::quant::optimise::NelderMead;
 use crate::msg::time::LocalTs;
@@ -46,15 +46,9 @@ pub struct HawkesMle {
 }
 
 impl HawkesMle {
-    /// # Panics
-    /// When `min_events < 2`, because a fit needs at least one gap between events.
-    pub fn new(min_events: usize) -> Self {
-        assert!(
-            min_events >= 2,
-            "hawkes mle needs at least two events, got {min_events}"
-        );
+    pub fn new(choice: HawkesChoice) -> Self {
         Self {
-            min_events,
+            min_events: choice.min_events(),
             cached: None,
             last: None,
         }

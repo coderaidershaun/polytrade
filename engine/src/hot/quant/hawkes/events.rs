@@ -1,6 +1,8 @@
 //! The rolling window of event times that the fitter and the live evaluator both read. A late stamp
 //! is clamped to the one before it, because each recursion here needs time that never runs back.
 
+use core::num::NonZeroUsize;
+
 use crate::hot::series::FastQueue;
 use crate::msg::time::LocalTs;
 
@@ -15,12 +17,9 @@ pub struct HawkesEvents {
 }
 
 impl HawkesEvents {
-    /// # Panics
-    /// `max_events == 0` (config bug).
-    pub fn new(max_events: usize) -> Self {
-        assert!(max_events != 0, "hawkes event window must be non-zero");
+    pub fn new(max_events: NonZeroUsize) -> Self {
         Self {
-            times: FastQueue::new(max_events, 2),
+            times: FastQueue::new(max_events.get(), 2),
             origin: None,
             last_ts: None,
             last_secs: 0.0,

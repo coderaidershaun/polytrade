@@ -1,6 +1,8 @@
 //! Quant calculator pins: leaf numeric correctness for the estimators feeding the research tape.
 //! One module per calculator, each named for the concept rather than the source path.
 
+use core::num::NonZeroUsize;
+
 use engine::hot::quant::hawkes::{HawkesEvents, HawkesParams};
 use engine::msg::time::{DurationUs, LocalTs};
 
@@ -103,7 +105,7 @@ fn ts(secs: f64) -> LocalTs {
 const START: LocalTs = LocalTs::from_micros(0);
 
 fn window(stamps: &[LocalTs]) -> HawkesEvents {
-    let mut events = HawkesEvents::new(32_768);
+    let mut events = HawkesEvents::new(NonZeroUsize::new(32_768).expect("a window holds events"));
     for &stamp in stamps {
         events.push(stamp);
     }
