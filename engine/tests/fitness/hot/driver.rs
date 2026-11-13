@@ -280,7 +280,6 @@ fn settings(fee_model: FeeModel, holds_reservations_until_settled: bool) -> Exec
         max_session_loss_quote: Notional::from_mantissa(1_000_000 * ONE),
         inflight_timeout: DurationUs::from_secs(5),
         max_status_probes: 3,
-        exec_silence_spins: u32::MAX,
         stream_silence: DurationUs::from_micros(i64::MAX),
         max_stream_resets: 2,
         order_reap_window: DurationUs::from_secs(3_600),

@@ -295,7 +295,7 @@ impl HotEngine {
     /// A balance is a reading, not an event, so it earns no callback. The workstation hears it at
     /// each spin.
     fn on_account(&mut self, chunk: &AccountChunk) {
-        self.state.exec.on_account(chunk);
+        self.state.exec.on_account(chunk, self.state.fold_time);
     }
 
     fn sample_trackers(&mut self) {

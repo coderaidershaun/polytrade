@@ -851,7 +851,6 @@ fn maker_settings() -> ExecSettings {
         max_status_probes: u8::MAX,
         // No silence sweep: a reconciliation request in the command stream is noise these tests
         // would have to filter rather than a behaviour they are about.
-        exec_silence_spins: u32::MAX,
         stream_silence: DurationUs::from_micros(i64::MAX),
         max_stream_resets: 2,
         order_reap_window: DurationUs::from_secs(3_600),

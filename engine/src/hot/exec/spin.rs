@@ -98,31 +98,6 @@ impl ExecEngine {
         self.bank_or_halt(command, now);
     }
 
-    fn detect_silence(&mut self, now: LocalTs) {
-        self.spins_since_exec_event += 1;
-        let is_silent = self.spins_since_exec_event >= self.settings.exec_silence_spins;
-        let has_working = self
-            .orders
-            .slots_in_use()
-            .any(|index| self.orders.slot(index).state().is_working());
-        if is_silent && has_working {
-            self.request_open_orders(now);
-        }
-    }
-
-    #[cold]
-    fn request_open_orders(&mut self, now: LocalTs) {
-        self.spins_since_exec_event = 0;
-        for index in 0..self.instruments.len() {
-            self.recon_seq += 1;
-            let command = ExecCommand::ReconcileOpenOrders {
-                instrument: InstrumentId(index as u16),
-                recon_seq: self.recon_seq,
-            };
-            self.bank_or_halt(command, now);
-        }
-    }
-
     /// A realised loss of a quote asset at the budget halts quoting before any side is decided, and
     /// then each instrument quotes the sides that its own loss permission leaves open.
     fn quote_pass(&mut self, input: &mut SpinInput<'_>) {

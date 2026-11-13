@@ -65,8 +65,9 @@ execution:
   flatten_slack_ticks: 2
   # Venue taker fee. Works out around 1.75% of notional at even money.
   taker_fee_rate: 0.07
-  # No exec events for this many spins -> reconnect. 300 spins at 100ms is 30 seconds.
-  exec_silence_spins: 300
+  # 30 s with no stream event while an order works -> one read of open orders. A read that shows
+  # what the stream missed subscribes again.
+  stream_silence_ms: 30000
   # recv_window_ms and max_clock_skew_ms are binance-shaped and stay at their defaults; polymarket
   # stamps requests its own way.
 link:

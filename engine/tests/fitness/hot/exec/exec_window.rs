@@ -287,7 +287,7 @@ fn full_command_bank_halts_and_leaves_the_order_live() {
         restored: &[],
         settings: ExecSettings {
             quote_stop_margin: MARGIN,
-            exec_silence_spins: 1,
+            stream_silence: DurationUs::from_micros(1),
             ..exec_settings()
         },
         tables: RecordedTables::new(&ALL_TABLES),

@@ -113,10 +113,6 @@ pub struct ExecutionConfig {
     /// and an order still unknown after that halts quoting.
     #[serde(default = "default_max_status_probes")]
     pub max_status_probes: u8,
-    /// Detects a silent listenKey expiry — Binance's user stream goes quiet with no error.
-    /// Inert on Polymarket.
-    #[serde(default = "default_exec_silence_spins")]
-    pub exec_silence_spins: u32,
     /// A span of message time with no event of the order stream while an order works. Then one read
     /// of open orders asks the venue what the stream may have missed.
     #[serde(default = "default_stream_silence_ms")]
@@ -202,10 +198,6 @@ impl ExecutionConfig {
                 expected: "1..=8, the fixed quote-ladder capacity",
             });
         }
-        check_non_zero(
-            "execution.exec_silence_spins",
-            u64::from(self.exec_silence_spins),
-        )?;
         // The counter records the reject before the comparison, so zero halts on the FIRST hard
         // one — the strictest setting there is, wearing the look of a disabled limit.
         check_non_zero(
@@ -375,10 +367,6 @@ fn default_max_consecutive_rejects() -> u32 {
 
 fn default_max_status_probes() -> u8 {
     3
-}
-
-fn default_exec_silence_spins() -> u32 {
-    30
 }
 
 fn default_stream_silence_ms() -> u64 {

@@ -6,7 +6,9 @@ use crate::hot::ledger::PositionLedger;
 use crate::hot::sink::{ExecSink, PendingCommands};
 use crate::hot::strategy::Actions;
 use crate::log::{hot_error, hot_warn};
-use crate::msg::exec::{AccountChunk, CancelReason, ExecCommand, ExecEvent, ExecKind, Provenance};
+use crate::msg::exec::{
+    AccountChunk, AccountChunkKind, CancelReason, ExecCommand, ExecEvent, ExecKind, Provenance,
+};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Qty, Side};
 use crate::msg::time::{DurationUs, FoldTime, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
@@ -21,6 +23,7 @@ use super::flatten::FeeModel;
 use super::gates::{ExecHalt, HaltReason, LossSums, Readiness, RefusalLatch};
 use super::order::{OrderSlot, OrderTable, PriorRunOrders};
 use super::reconcile::{ExecLimits, RejectReason, RestingOrder, TickGrid};
+use super::silence::{StreamSilence, is_stream_report};
 use super::view::{ExecCallback, OrderReject, OrderView, WorkingOrderView};
 
 /// The two times of the message under fold. The fold time stamps what the engine decides: a slot, a
@@ -44,7 +47,6 @@ pub struct ExecSettings {
     pub inflight_timeout: DurationUs,
     /// Probes of one unanswered order before the read of open orders, then the halt.
     pub max_status_probes: u8,
-    pub exec_silence_spins: u32,
     /// Message time with no event of the order stream while an order works, before one read of
     /// open orders.
     pub stream_silence: DurationUs,
@@ -85,7 +87,6 @@ impl ExecSettings {
             inflight_timeout: DurationUs::ZERO,
             // The most that the key allows, so an engine with no limits halts on probes last.
             max_status_probes: u8::MAX,
-            exec_silence_spins: 0,
             stream_silence: DurationUs::ZERO,
             // The most that the key allows, so an engine with no limits halts on silence last.
             max_stream_resets: u32::MAX,
@@ -148,7 +149,7 @@ pub struct ExecEngine {
     pub(super) budget: BudgetMeter,
     pub(super) instruments: Vec<InstrumentExec>,
     pub(super) settings: ExecSettings,
-    pub(super) spins_since_exec_event: u32,
+    pub(super) silence: StreamSilence,
     pub(super) recon_seq: u64,
     pub(super) incidents: IncidentCounts,
     /// The PnL baseline at the first honest valuation; the session loss gate compares
@@ -167,7 +168,7 @@ digest_fields! {
 digest_fields! {
     ExecEngine {
         orders, prior_orders, account, pending, sink, halt, readiness, refusals, reject_streak,
-        budget, instruments, settings, spins_since_exec_event, recon_seq, incidents,
+        budget, instruments, settings, silence, recon_seq, incidents,
         pnl_at_baseline,
     }
     not_state {
@@ -222,7 +223,7 @@ impl ExecEngine {
             budget: BudgetMeter::new(setup.settings.order_budget),
             instruments,
             settings: setup.settings,
-            spins_since_exec_event: 0,
+            silence: StreamSilence::default(),
             recon_seq: 0,
             incidents: IncidentCounts::default(),
             pnl_at_baseline: vec![None; setup.instruments.len()],
@@ -317,7 +318,9 @@ impl ExecEngine {
         bank: &mut Actions,
     ) -> ExecCallback {
         let now = stamps.fold;
-        self.spins_since_exec_event = 0;
+        if is_stream_report(event.kind) {
+            self.silence.observe_stream_event(now);
+        }
         match event.kind {
             ExecKind::StreamReset => return self.on_stream_reset(stamps.received, bank),
             ExecKind::StreamReady => {
@@ -339,11 +342,22 @@ impl ExecEngine {
         let Some(index) = self.locate(event, stamps, bank) else {
             return ExecCallback::None;
         };
-        self.apply_to_slot(index, event, stamps, ledger, bank)
+        let was_working = self.orders.slot(index).state().is_working();
+        let callback = self.apply_to_slot(index, event, stamps, ledger, bank);
+        let has_closed = was_working && !self.orders.slot(index).state().is_working();
+        let has_moved = has_closed || matches!(callback, ExecCallback::Fill(_));
+        if event.kind == ExecKind::SnapshotOrder && has_moved {
+            self.silence.observe_read_change(event.recon_seq);
+        }
+        callback
     }
 
-    /// Absolute balances only — see [`AccountChunk`] for why a delta may never reach here.
-    pub fn on_account(&mut self, chunk: &AccountChunk) {
+    /// Absolute balances only — see [`AccountChunk`] for why a delta may never reach here. A
+    /// balance update comes from the order stream, and a snapshot answers an own read.
+    pub fn on_account(&mut self, chunk: &AccountChunk, at: FoldTime) {
+        if chunk.kind == AccountChunkKind::Update {
+            self.silence.observe_stream_event(at.as_local());
+        }
         self.account.apply(chunk);
         self.retry_reservation_releases();
     }

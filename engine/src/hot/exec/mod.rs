@@ -18,6 +18,7 @@ mod gates;
 mod mint;
 mod order;
 mod reconcile;
+mod silence;
 mod spin;
 mod view;
 mod window;

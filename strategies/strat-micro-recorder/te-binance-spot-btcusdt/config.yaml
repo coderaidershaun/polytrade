@@ -68,9 +68,9 @@ execution:
   # Loss budget for the run. A realised breach halts; unrealised only stops adding to a position.
   max_session_loss_quote: 5.0
   inflight_timeout_ms: 5000
-  # Binance's stream key can expire and go quiet without saying so. No exec events for this many
-  # spins -> reconnect.
-  exec_silence_spins: 30
+  # Binance's order stream can go quiet without saying so. 30 s with no stream event while an order
+  # works -> one read of open orders. A read that shows what the stream missed subscribes again.
+  stream_silence_ms: 30000
   # How long to remember closed orders. Must outlast the venue resending them.
   order_reap_secs: 60
   recv_window_ms: 5000

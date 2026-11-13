@@ -48,12 +48,18 @@ impl ExecEngine {
             recon_seq: event.recon_seq,
             recon_ts_us: stamps.fold,
         };
+        let mut has_swept = false;
         self.orders.sweep_unseen(pass, &mut |slot, previous| {
+            has_swept = true;
             swept_warning(slot, pass.recon_seq);
             let transition = OrderTransition::SweepClosed;
             bank_engine_driven(bank, slot, transition, previous.into(), stamps.received);
         });
+        if has_swept {
+            self.silence.observe_read_change(pass.recon_seq);
+        }
         self.readiness.observe_open_orders_snapshot();
+        self.end_silence_read(pass.recon_seq, stamps.fold);
         ExecCallback::None
     }
 
