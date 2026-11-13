@@ -667,6 +667,43 @@ fn steps() -> impl Generator<Value = Vec<Step>> {
     prop::collection::vec(step, SEQUENCE_LEN)
 }
 
+/// A sequence that is sure to place: the account stream is up, the open orders have landed, the
+/// balances are known, both sides of market 0 are booked, and a spin past the warmup of market 0
+/// lets the probe quote its touch. Drawn sequences place only by chance.
+fn placing_steps() -> Vec<Step> {
+    let ready = |answer| {
+        Draw::Exec(ExecDraw {
+            market: 0,
+            side: Side::Buy,
+            answer,
+        })
+    };
+    let book = |chunk, side| {
+        Draw::Book(BookDraw {
+            market: 0,
+            chunk,
+            side,
+            offset: 0,
+            lots: 1,
+        })
+    };
+    let account = Draw::Account {
+        base_units: 10,
+        quote_units: 1_000_000,
+    };
+    let past_warmup_us = Start::TwoMarkets.warmup().micros() + 100_000;
+    [
+        (ready(Answer::StreamReady), 0),
+        (ready(Answer::SnapshotEnd), 0),
+        (account, 0),
+        (book(Chunk::SnapshotBids, Side::Buy), 0),
+        (book(Chunk::SnapshotAsks, Side::Sell), 0),
+        (Draw::Spin, past_warmup_us),
+    ]
+    .map(|(draw, gap_us)| Step { draw, gap_us })
+    .to_vec()
+}
+
 /// What a drawn sequence keeps from one message to the next: message time, the next spin and peer
 /// frame numbers, the run epoch, and the fills of the order an earlier run left on each market.
 struct Builder {
@@ -1043,7 +1080,17 @@ fn fold_twice_gives_equal_digest_at_each_message() {
 /// the latency tick of each command.
 #[test]
 fn state_is_equal_with_measurement_on_and_off() {
-    let places = Cell::new(0);
+    let placing = Builder::sequence(&placing_steps());
+    let measured = fold(Start::TwoMarkets, &placing, Measure::On);
+    let unmeasured = fold(Start::TwoMarkets, &placing, Measure::Off);
+    if let Some(difference) = first_difference(&placing, &measured, &unmeasured) {
+        panic!("measurement changed the fold of the placing sequence: {difference}");
+    }
+    assert!(
+        measured.places() > 0,
+        "the placing sequence banked no command, so the bank never read its counter"
+    );
+    let places = Cell::new(measured.places());
     let outcome = runner(16).run(&steps(), |steps| {
         let sequence = Builder::sequence(&steps);
         let measured = fold(Start::TwoMarkets, &sequence, Measure::On);
