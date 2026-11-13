@@ -64,6 +64,7 @@ fn each_instrument_with_a_position_survives_restart() {
     the_last_snapshot_leaves_the_sink_when_its_owner_ends();
     a_restored_position_with_no_mark_is_not_flat();
     a_snapshot_holds_a_row_for_each_instrument_with_a_position();
+    a_restored_position_boots_quoting_and_the_session_limit_still_bites();
 }
 
 fn a_missing_file_is_a_cold_start() {
@@ -937,12 +938,11 @@ fn readings_of_a_restored_long_before_any_book() -> Readings {
     last_readings()
 }
 
-/// FITNESS: an engine that starts with inventory quotes, and the session loss limit still bites once
-/// it does. The restored cost basis is 60,000 against a loss budget of 5, so a gate that read raw
+/// An engine that starts with inventory quotes, and the session loss limit still bites once it
+/// does. The restored cost basis is 60,000 against a loss budget of 5, so a gate that read raw
 /// PnL, or took its baseline before the first mark, would withdraw both sides at the start and
 /// never place an order; a baseline taken at construction would swallow the same 60,000 as headroom,
 /// and no session loss could reach the limit.
-#[test]
 fn a_restored_position_boots_quoting_and_the_session_limit_still_bites() {
     let instruments = [instrument_row(0, TrackerSpec::default(), 64)];
     let (mut engine, mut commands) = restored_engine(&instruments, &restored_long());
@@ -997,30 +997,6 @@ fn a_restored_position_boots_quoting_and_the_session_limit_still_bites() {
     assert!(
         placed(&after_confirmation, Side::Sell).is_some(),
         "the reducing side was not placed again after its cancel ended: {after_confirmation:?}"
-    );
-}
-
-/// FITNESS: a restored position with no mark does not read as flat.
-#[test]
-fn a_restored_position_without_a_mark_is_not_flat() {
-    let readings = readings_of_a_restored_long_before_any_book();
-    assert_eq!(
-        readings.position_base,
-        Qty::from_mantissa(RESTORED_POSITION),
-        "the restored position is there from the first message"
-    );
-    assert!(
-        !readings.has_mark,
-        "and carries no valuation: no book has produced one yet"
-    );
-    assert_eq!(
-        readings.exposure_quote, 0,
-        "so exposure is zero: a position with no honest mark must not invent one"
-    );
-    assert_eq!(
-        readings.pnl_quote, RESTORED_COST,
-        "and raw PnL reads as the whole cost basis lost, which is why no loss limit may compare \
-         against it"
     );
 }
 
