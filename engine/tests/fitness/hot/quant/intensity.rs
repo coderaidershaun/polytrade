@@ -38,8 +38,6 @@ fn snapshot_chunk(side: Side, price: Price, is_last_chunk: bool) -> BookChunk {
         is_last_chunk,
         update_id: 1,
         exchange_ts_us: None,
-        received_ts_us: ts(0),
-        queued_ts_us: ts(0),
     }
 }
 
@@ -73,13 +71,14 @@ fn ev(side: Side, price: Price, when: i64) -> TradeEvent {
         side,
         exchange_ts_us: venue_ts(when),
         exchange_sent_ts_us: None,
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
     }
 }
 
 fn buy(tracker: &mut MicroTracker, ticks: i64, when: i64) {
-    tracker.on_trade(&ev(Side::Buy, Price(ASK.0 + ticks * TICK.0), when));
+    tracker.on_trade(
+        &ev(Side::Buy, Price(ASK.0 + ticks * TICK.0), when),
+        ts(when),
+    );
 }
 
 fn geometric(tracker: &mut MicroTracker, seed: u64, k: f64, count: i64, dt_us: i64) {
@@ -106,7 +105,7 @@ fn prints_inside_the_spread_or_without_a_book_are_counted_as_anomalies() {
 
     // A print with no book to anchor against cannot be bucketed at all.
     tracker.on_book_reset();
-    tracker.on_trade(&ev(Side::Sell, BID, 1_000_000));
+    tracker.on_trade(&ev(Side::Sell, BID, 1_000_000), ts(1_000_000));
     assert_eq!(
         tracker
             .intensity()
@@ -154,7 +153,7 @@ fn fit_recovers_a_and_k_and_warm_starts() {
 #[test]
 fn a_pacer_with_no_cadence_never_fits() {
     let mut unconfigured = MicroTracker::new(&TrackerSpec::default(), &[], Some(TICK));
-    unconfigured.on_trade(&ev(Side::Buy, ASK, 0));
+    unconfigured.on_trade(&ev(Side::Buy, ASK, 0), ts(0));
     assert!(
         unconfigured.intensity().is_none(),
         "no reach histogram configured, so there are no counts to pace against"

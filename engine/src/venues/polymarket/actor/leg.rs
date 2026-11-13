@@ -1,7 +1,7 @@
 //! Outcome leg: Up/Down token. Validates book vs shadow, detects collapse, emits normalized.
 
 use crate::msg::ids::{InstrumentId, Qty, Side};
-use crate::msg::inbound::{BookReset, InboundMessage, Level};
+use crate::msg::inbound::{BookReset, InboundMessage, Level, MessageBody};
 use crate::msg::time::{LocalTs, VenueTs};
 use crate::venues::polymarket::book::{BookNormaliser, ChunkStamps};
 use crate::venues::polymarket::parse::{PolyBook, PolyDelta};
@@ -77,11 +77,12 @@ impl Leg {
                 None
             }
             BookFrameOutcome::Diverged(mismatch) => {
-                emit(InboundMessage::BookReset(BookReset {
-                    instrument: self.instrument,
-                    received_ts_us: now,
-                    queued_ts_us: now,
-                }));
+                emit(InboundMessage::new(
+                    now,
+                    MessageBody::BookReset(BookReset {
+                        instrument: self.instrument,
+                    }),
+                ));
                 self.normaliser.emit_snapshot(book, emit);
                 self.reseed_collapse(book);
                 Some(mismatch)

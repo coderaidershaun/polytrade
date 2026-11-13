@@ -94,7 +94,9 @@ impl Actor {
             instrument: read.instrument().unwrap_or(InstrumentId(0)),
             recon_seq,
         };
-        let decoded = decode_orders_page(response.answer(), orders_read, &self.decode_context());
+        let context = self.decode_context();
+        let received_ts_us = context.received_ts_us;
+        let decoded = decode_orders_page(response.answer(), orders_read, &context);
         let decoded = match decoded {
             Ok(VenueAnswer::Answered(decoded)) => decoded,
             Ok(VenueAnswer::Unavailable(availability)) => {
@@ -150,7 +152,7 @@ impl Actor {
         }
         for event in events {
             self.session.fold(&event, recon_seq, &mut outgoing);
-            self.forward_exec(event);
+            self.forward_exec(received_ts_us, event);
         }
         if self.next_orders_page(read, page, &seen, decoded.next_cursor.as_deref())
             == PageWalk::Complete
@@ -278,9 +280,9 @@ impl Actor {
             );
             return;
         }
-        let event = self.adopted_event(unmapped, client_id);
+        let (received_ts_us, event) = self.adopted_event(unmapped, client_id);
         self.session.fold(&event, 0, outgoing);
-        self.forward_exec(event);
+        self.forward_exec(received_ts_us, event);
         self.drain_pending(outgoing);
     }
 
@@ -317,9 +319,13 @@ impl Actor {
         clippy::disallowed_methods,
         reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
     )]
-    fn adopted_event(&self, unmapped: &UnmappedOrder, client_id: ClientOrderId) -> ExecEvent {
+    fn adopted_event(
+        &self,
+        unmapped: &UnmappedOrder,
+        client_id: ClientOrderId,
+    ) -> (LocalTs, ExecEvent) {
         let now = self.control.clock.now();
-        ExecEvent {
+        let event = ExecEvent {
             venue_order_id: Some(venue_order_id_digest(&unmapped.venue_order_id)),
             status: Some(unmapped.status),
             side: unmapped.side,
@@ -334,7 +340,8 @@ impl Actor {
                 client_id,
                 now,
             )
-        }
+        };
+        (now, event)
     }
 
     /// Absence from the read could mean fill or lag, so each mirrored order the read never named is

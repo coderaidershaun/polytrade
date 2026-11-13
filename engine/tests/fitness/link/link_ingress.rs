@@ -8,12 +8,11 @@
 
 use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
 use engine::link::{
-    Envelope, FrameGuard, InboundLink, LINK_MAX_DATAGRAM, LINK_MAX_FIELDS, LinkBody, LinkDatagram,
-    LinkFrame, LinkHash, LinkIdentity, LinkOrigin, LinkPayload, SequenceGate, TopicId,
-    schema_hash_of_fields,
+    Envelope, FrameGuard, LINK_MAX_DATAGRAM, LINK_MAX_FIELDS, LinkBody, LinkDatagram, LinkFrame,
+    LinkHash, LinkIdentity, LinkOrigin, LinkPayload, SequenceGate, TopicId, schema_hash_of_fields,
 };
 use engine::msg::ids::InstrumentId;
-use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::persist::{FeatureId, LinkFrameRow, LinkRowKind, PersistRecord};
 use engine::msg::time::{DurationUs, VenueTs};
 use engine::runtime::config::{RecordedTables, TableKind};
@@ -132,14 +131,11 @@ impl Edge {
         let LinkBody::Payload(payload) = decoded.body else {
             panic!("a strategy topic decodes to a payload");
         };
-        Some(InboundMessage::Link(InboundLink {
-            frame: LinkFrame {
-                origin: LinkOrigin::from(&decoded.envelope),
-                payload,
-            },
-            received_ts_us: ts(received),
-            queued_ts_us: ts(received),
-        }))
+        let frame = LinkFrame {
+            origin: LinkOrigin::from(&decoded.envelope),
+            payload,
+        };
+        Some(InboundMessage::new(ts(received), MessageBody::Link(frame)))
     }
 }
 
@@ -313,9 +309,7 @@ fn the_sequence_gate_keeps_duplicates_and_reorders_off_the_hot_thread() {
 #[test]
 fn link_send_banks_the_declared_schema_on_a_registered_topic() {
     let mut linked = linked(&[TableKind::Features]);
-    linked
-        .engine
-        .dispatch(&InboundMessage::SpinTick(spin(4, 200)));
+    linked.engine.dispatch(&spin(4, 200));
 
     let outbound = linked.outbound.pop().expect("the spin banked one payload");
     assert_eq!(
@@ -391,7 +385,5 @@ fn dispatch_one_spin(strategy: Box<dyn Strategy>) {
         tables: RecordedTables::default(),
         warmup: DurationUs::ZERO,
     });
-    linked
-        .engine
-        .dispatch(&InboundMessage::SpinTick(spin(1, 1)));
+    linked.engine.dispatch(&spin(1, 1));
 }

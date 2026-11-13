@@ -76,7 +76,13 @@ impl IntensityCounts {
     }
 
     /// Buy -> ASK side, sell -> BID side. Sweep (same side + ts) extends group; else new.
-    pub fn on_trade(&mut self, event: &TradeEvent, bid: Option<Price>, ask: Option<Price>) {
+    pub(crate) fn on_trade(
+        &mut self,
+        event: &TradeEvent,
+        received_ts_us: LocalTs,
+        bid: Option<Price>,
+        ask: Option<Price>,
+    ) {
         if let Some(group) = self.open_group
             && group.side == event.side
             && group.exchange_ts_us == event.exchange_ts_us
@@ -84,7 +90,7 @@ impl IntensityCounts {
             self.extend_group(group, event.price);
             return;
         }
-        self.start_group(event, bid, ask);
+        self.start_group(event, received_ts_us, bid, ask);
     }
 
     /// Wipes histograms/exposure/open sweep (lifetime counters survive).
@@ -117,8 +123,14 @@ impl IntensityCounts {
         }
     }
 
-    fn start_group(&mut self, event: &TradeEvent, bid: Option<Price>, ask: Option<Price>) {
-        self.decay_to(event.received_ts_us);
+    fn start_group(
+        &mut self,
+        event: &TradeEvent,
+        received_ts_us: LocalTs,
+        bid: Option<Price>,
+        ask: Option<Price>,
+    ) {
+        self.decay_to(received_ts_us);
         let anchor = match event.side {
             Side::Buy => ask,
             Side::Sell => bid,

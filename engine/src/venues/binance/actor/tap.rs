@@ -20,7 +20,7 @@ impl Actor {
     pub(super) fn flush_tapped(&mut self, out: Vec<TappedMessage>) {
         for tapped in out {
             let mut message = tapped.message;
-            message.set_queued_ts_us(self.clock.now());
+            message.header.queued_ts_us = self.clock.now();
             self.producer.push_tapped(message, tapped.venue_meta);
         }
     }

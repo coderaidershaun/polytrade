@@ -2,7 +2,7 @@
 
 use super::super::wire::decimal;
 use super::{EffectStamp, SimExecDriver, asset_name, venue_millis};
-use crate::msg::inbound::InboundMessage;
+use crate::msg::inbound::{InboundMessage, MessageBody};
 use crate::msg::time::LocalTs;
 use crate::venues::binance::exec::{DecodeContext, account_snapshot_chunks};
 use crate::venues::binance::rest::Balance;
@@ -40,7 +40,8 @@ impl SimExecDriver {
             ..context
         };
         let settlement = self.venue.wallet_mut().settle(venue_millis(at_ts_us));
-        let mut messages = vec![InboundMessage::Exec(stream_ready(at_ts_us))];
+        let exec = |event| InboundMessage::new(at_ts_us, MessageBody::Exec(event));
+        let mut messages = vec![exec(stream_ready(at_ts_us))];
         let rows: Vec<Balance> = settlement
             .balances
             .iter()
@@ -52,11 +53,12 @@ impl SimExecDriver {
             .collect();
         let chunks = account_snapshot_chunks(&rows, settlement.update_ts_ms as i64, &decode)
             .expect("the wallet's own balances decode: it minted every string in them");
-        messages.extend(chunks.into_iter().map(InboundMessage::Account));
-        messages.push(InboundMessage::Exec(open_orders_snapshot_end(
-            self.instrument,
-            at_ts_us,
-        )));
+        messages.extend(
+            chunks
+                .into_iter()
+                .map(|chunk| InboundMessage::new(at_ts_us, MessageBody::Account(chunk))),
+        );
+        messages.push(exec(open_orders_snapshot_end(self.instrument, at_ts_us)));
 
         self.fold(&messages, EffectStamp::at(at_ts_us));
         messages

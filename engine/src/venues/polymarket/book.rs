@@ -3,7 +3,7 @@
 use std::borrow::Borrow;
 
 use crate::msg::ids::{InstrumentId, Side};
-use crate::msg::inbound::{BookChunkKind, InboundMessage, Level};
+use crate::msg::inbound::{BookChunkKind, InboundMessage, Level, MessageBody};
 use crate::msg::time::{LocalTs, VenueTs};
 use crate::venues::edge::chunk::{ChunkEmitter, ChunkPlan};
 
@@ -88,7 +88,10 @@ impl BookNormaliser {
             received_ts_us: self.chunks.clamp_emit_ts(stamps.received_ts_us),
         };
         self.chunks.emit_book(plan, bids, asks, &mut |chunk| {
-            emit(InboundMessage::Book(chunk));
+            emit(InboundMessage::new(
+                plan.received_ts_us,
+                MessageBody::Book(chunk),
+            ));
         });
     }
 }

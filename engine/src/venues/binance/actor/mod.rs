@@ -14,7 +14,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::hot::spawn::QueueProducer;
 use crate::msg::ids::{InstrumentId, StreamEpoch};
-use crate::msg::inbound::{InboundMessage, TappedMessage, VenueMeta};
+use crate::msg::inbound::{InboundMessage, MessageBody, TappedMessage, VenueMeta};
 use crate::msg::run_state::RunState;
 use crate::msg::time::{EngineClock, LocalTs};
 use crate::runtime::config::{BinanceMarket, KlineInterval};
@@ -238,7 +238,7 @@ impl Actor {
     fn handle_trade(&mut self, data: &str, ctx: ParseContext) {
         let Some(event) = self.parsed(parse_agg_trade(data, ctx)) else { return };
         self.flush_tapped(vec![TappedMessage {
-            message: InboundMessage::Trade(event.trade),
+            message: InboundMessage::new(ctx.received_ts_us, MessageBody::Trade(event.trade)),
             venue_meta: VenueMeta::Trade {
                 aggregate_id: event.aggregate_id,
                 first_trade_id: event.first_trade_id,
@@ -255,7 +255,7 @@ impl Actor {
     )]
     fn flush(&mut self, out: Vec<InboundMessage>) {
         for mut message in out {
-            message.set_queued_ts_us(self.clock.now());
+            message.header.queued_ts_us = self.clock.now();
             self.producer.push(message);
         }
     }

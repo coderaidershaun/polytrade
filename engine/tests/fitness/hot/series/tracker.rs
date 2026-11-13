@@ -15,7 +15,7 @@ use engine::runtime::config::{
 };
 use proptest::prelude::*;
 
-use crate::engine_support::{ONE, kline, snapshot_pair, trade};
+use crate::engine_support::{ONE, kline, snapshot_pair, trade, ts};
 
 fn book_with(bids: &[(i64, i64)], asks: &[(i64, i64)]) -> Book {
     let (bid_chunk, ask_chunk) = snapshot_pair(0, bids, asks, 0);
@@ -70,7 +70,7 @@ proptest! {
         let mut cumulative: i128 = 0;
         for (i, &(price, qty, side)) in trades.iter().enumerate() {
             cumulative += i128::from(price) * i128::from(qty) / i128::from(ONE);
-            tracker.on_trade(&trade(0, price, qty, side, i as i64));
+            tracker.on_trade(&trade(0, price, qty, side, i as i64), ts(i as i64));
         }
 
         let expected = (cumulative / target_mantissa) as usize;
@@ -116,11 +116,14 @@ fn replay(spec: &TrackerSpec) -> MicroTracker {
         &[(100 * ONE, 2 * ONE), (99 * ONE, ONE)],
         &[(101 * ONE, ONE)],
     );
-    tracker.on_trade(&trade(0, 100 * ONE, ONE, Side::Buy, 1));
-    tracker.on_trade(&trade(0, 100 * ONE + ONE / 2, 3 * ONE, Side::Sell, 2));
+    tracker.on_trade(&trade(0, 100 * ONE, ONE, Side::Buy, 1), ts(1));
+    tracker.on_trade(
+        &trade(0, 100 * ONE + ONE / 2, 3 * ONE, Side::Sell, 2),
+        ts(2),
+    );
     tracker.on_book(&book);
     // A bar-closing trade after the book samples the current microprice onto the volume clock.
-    tracker.on_trade(&trade(0, 100 * ONE, 1_000_000, Side::Buy, 3));
+    tracker.on_trade(&trade(0, 100 * ONE, 1_000_000, Side::Buy, 3), ts(3));
     tracker.on_kline(&kline(
         0,
         KlineInterval::OneMinute,
@@ -260,7 +263,7 @@ fn on_rotation_clears_tracker_to_fresh() {
     tracker.on_book(&book);
     for i in 0..6i64 {
         let side = if i % 2 == 0 { Side::Buy } else { Side::Sell };
-        tracker.on_trade(&trade(0, 100 * ONE, 2_000_000, side, i));
+        tracker.on_trade(&trade(0, 100 * ONE, 2_000_000, side, i), ts(i));
     }
     tracker.on_kline(&kline(
         0,

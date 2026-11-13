@@ -16,6 +16,7 @@ use crate::hot::series::FastQueue;
 use crate::log::hot_warn;
 use crate::msg::ids::{Price, Side};
 use crate::msg::inbound::{KlineEvent, TradeEvent};
+use crate::msg::time::LocalTs;
 use crate::runtime::config::{KlineInterval, SpinField, TrackerSpec};
 
 pub use candles::{Candle, CandleSeries};
@@ -158,7 +159,7 @@ impl MicroTracker {
 
     /// Returns how many volume bars this trade closed — 0 unless a volume clock is configured and
     /// armed. Closed bars land oldest-first in [`Self::volume_bars`]; dispatch fans them out.
-    pub fn on_trade(&mut self, event: &TradeEvent) -> usize {
+    pub fn on_trade(&mut self, event: &TradeEvent, received_ts_us: LocalTs) -> usize {
         self.last_trade = Some(*event);
         if let Some(sampler) = self.spin.as_mut() {
             sampler.trades.add(event);
@@ -169,7 +170,7 @@ impl MicroTracker {
         // reach histogram anchors against.
         let (best_bid, best_ask) = (self.latest.best_bid, self.latest.best_ask);
         if let Some(intensity) = self.intensity.as_mut() {
-            intensity.on_trade(event, best_bid, best_ask);
+            intensity.on_trade(event, received_ts_us, best_bid, best_ask);
         }
         closed
     }

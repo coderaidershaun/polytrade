@@ -361,7 +361,7 @@ impl OrderTable {
         Some((index, client_id))
     }
 
-    pub fn adopt(&mut self, event: &ExecEvent) -> Option<usize> {
+    pub fn adopt(&mut self, event: &ExecEvent, received_ts_us: LocalTs) -> Option<usize> {
         let index = ClientIdLayout::slot_of(event.client_id);
         let slot = self.slots.get_mut(index)?;
         if slot.state != OrderState::Free {
@@ -377,7 +377,7 @@ impl OrderTable {
             price: event.price,
             qty: event.qty,
             generation: ClientIdLayout::generation_of(event.client_id),
-            last_event_ts_us: event.received_ts_us,
+            last_event_ts_us: received_ts_us,
             placed_recon_seq: event.recon_seq,
             ..OrderSlot::EMPTY
         };

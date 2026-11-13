@@ -20,7 +20,7 @@ use engine::msg::exec::{
 use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{
     BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, BookReset, InboundMessage, KlineEvent, Level,
-    MarketRotation, RunControl, SpinTick, TradeEvent,
+    MarketRotation, MessageBody, RunControl, SpinTick, TradeEvent,
 };
 use engine::msg::persist::{FeatureId, FillRow, OrderRow, PersistRecord};
 use engine::msg::run_state::RunAssertion;
@@ -58,8 +58,6 @@ pub fn trade(instrument: u16, price: i64, qty: i64, side: Side, when: i64) -> Tr
         side,
         exchange_ts_us: venue_ts(when),
         exchange_sent_ts_us: None,
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
     }
 }
 
@@ -90,8 +88,6 @@ fn chunk(
         is_last_chunk,
         update_id: when as u64,
         exchange_ts_us: None,
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
     }
 }
 
@@ -167,24 +163,22 @@ pub fn partial_delta_chunk(
     chunk(instrument, BookChunkKind::Delta, side, levels, false, when)
 }
 
-pub fn book_reset(instrument: u16, when: i64) -> BookReset {
-    BookReset {
+pub fn book_reset(instrument: u16, when: i64) -> InboundMessage {
+    let reset = BookReset {
         instrument: InstrumentId(instrument),
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
-    }
+    };
+    InboundMessage::new(ts(when), MessageBody::BookReset(reset))
 }
 
 /// Emitted at subscribe, so `open`/`close` are the window bounds while `when` is the (earlier)
 /// receipt stamp — mirrors the pre-open phase where `window_open_ts_us` exceeds `received_ts_us`.
-pub fn rotation(instrument: u16, open: i64, close: i64, when: i64) -> MarketRotation {
-    MarketRotation {
+pub fn rotation(instrument: u16, open: i64, close: i64, when: i64) -> InboundMessage {
+    let rotation = MarketRotation {
         instrument: InstrumentId(instrument),
         window_open_ts_us: venue_ts(open),
         window_close_ts_us: venue_ts(close),
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
-    }
+    };
+    InboundMessage::new(ts(when), MessageBody::MarketRotation(rotation))
 }
 
 pub fn kline(
@@ -209,17 +203,11 @@ pub fn kline(
         is_closed,
         exchange_ts_us: venue_ts(when),
         exchange_sent_ts_us: None,
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
     }
 }
 
-pub fn spin(seq: u64, when: i64) -> SpinTick {
-    SpinTick {
-        seq,
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
-    }
+pub fn spin(seq: u64, when: i64) -> InboundMessage {
+    InboundMessage::new(ts(when), MessageBody::SpinTick(SpinTick { seq }))
 }
 
 fn all_spin_fields() -> Vec<SpinField> {
@@ -503,11 +491,10 @@ pub fn engine_with_link(setup: LinkedSetup<'_>) -> LinkedEngine {
 
 /// The marker the link actor would push for `assertion`, stamped at `when`.
 pub fn run_control(assertion: RunAssertion, when: i64) -> InboundMessage {
-    InboundMessage::RunControl(RunControl {
-        desired: assertion,
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
-    })
+    InboundMessage::new(
+        ts(when),
+        MessageBody::RunControl(RunControl { desired: assertion }),
+    )
 }
 
 pub fn idle_at(epoch: u64) -> RunAssertion {
@@ -654,12 +641,15 @@ impl FillPen {
             return None;
         }
         self.is_adopted[side as usize] = true;
-        Some(InboundMessage::Exec(ExecEvent {
-            kind: ExecKind::SnapshotOrder,
-            // A large size, because the slot must outlive every fill this pen reports into it.
-            qty: Qty(i64::MAX / 4),
-            ..exec_event(self.instrument, self.client_id(side), side, price, when)
-        }))
+        Some(InboundMessage::new(
+            ts(when),
+            MessageBody::Exec(ExecEvent {
+                kind: ExecKind::SnapshotOrder,
+                // A large size, because the slot must outlive every fill this pen reports into it.
+                qty: Qty(i64::MAX / 4),
+                ..exec_event(self.instrument, self.client_id(side), side, price, when)
+            }),
+        ))
     }
 
     /// One more fill on an already-seated side, as a single allocation-free message.
@@ -668,16 +658,19 @@ impl FillPen {
         total.0 += qty;
         total.1 += Price(price).notional(Qty(qty));
         let (cumulative_qty, cumulative_quote) = (Qty(total.0), total.1);
-        InboundMessage::Exec(ExecEvent {
-            kind: ExecKind::ReportTrade,
-            status: Some(VenueOrderStatus::PartiallyFilled),
-            last_price: Price(price),
-            last_qty: Qty(qty),
-            cumulative_qty,
-            cumulative_quote,
-            qty: Qty(i64::MAX / 4),
-            ..exec_event(self.instrument, self.client_id(side), side, price, when)
-        })
+        InboundMessage::new(
+            ts(when),
+            MessageBody::Exec(ExecEvent {
+                kind: ExecKind::ReportTrade,
+                status: Some(VenueOrderStatus::PartiallyFilled),
+                last_price: Price(price),
+                last_qty: Qty(qty),
+                cumulative_qty,
+                cumulative_quote,
+                qty: Qty(i64::MAX / 4),
+                ..exec_event(self.instrument, self.client_id(side), side, price, when)
+            }),
+        )
     }
 
     /// The same fill from a venue that did NOT say whether we made or took.
@@ -687,13 +680,12 @@ impl FillPen {
     /// maker in a fee-determining column. A named variant rather than a flag on
     /// [`FillPen::report`]: a `bool` at the call site would not say which way it pointed.
     pub fn silent_report(&mut self, side: Side, price: i64, qty: i64, when: i64) -> InboundMessage {
-        let InboundMessage::Exec(event) = self.report(side, price, qty, when) else {
+        let mut message = self.report(side, price, qty, when);
+        let MessageBody::Exec(event) = &mut message.body else {
             unreachable!("report builds an Exec message");
         };
-        InboundMessage::Exec(ExecEvent {
-            liquidity: None,
-            ..event
-        })
+        event.liquidity = None;
+        message
     }
 }
 
@@ -731,16 +723,17 @@ pub fn exec_event(
         recon_seq: 0,
         exchange_ts_us: venue_ts(when),
         request_sent_ts_us: None,
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
     }
 }
 
 pub fn stream_ready(instrument: InstrumentId, when: i64) -> InboundMessage {
-    InboundMessage::Exec(ExecEvent {
-        kind: ExecKind::StreamReady,
-        ..exec_event(instrument, ClientOrderId(0), Side::Buy, 0, when)
-    })
+    InboundMessage::new(
+        ts(when),
+        MessageBody::Exec(ExecEvent {
+            kind: ExecKind::StreamReady,
+            ..exec_event(instrument, ClientOrderId(0), Side::Buy, 0, when)
+        }),
+    )
 }
 
 /// A whole-account snapshot in one chunk with nothing locked, all three stamps at `when`.
@@ -764,8 +757,6 @@ pub fn account_chunk(balances: &[(AssetId, i64)], when: i64) -> AccountChunk {
         is_last_chunk: true,
         venue_update_ts_ms: 1,
         exchange_ts_us: venue_ts(when),
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
     }
 }
 

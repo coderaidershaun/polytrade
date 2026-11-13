@@ -4,13 +4,13 @@
 //! the read-back assertions.
 
 use engine::msg::ids::{InstrumentId, Side};
-use engine::msg::inbound::InboundMessage;
+use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::persist::RotationRow;
 use engine::msg::time::{LocalTs, VenueTs};
 use engine::runtime::config::KlineInterval;
 
 use crate::engine_support::{
-    ONE, book_reset, delta_chunk, kline, rotation, snapshot_pair, spin, trade,
+    ONE, book_reset, delta_chunk, kline, rotation, snapshot_pair, spin, trade, ts,
 };
 
 pub const HOUR_US: i64 = 3_600_000_000;
@@ -34,12 +34,12 @@ pub struct RotationFixture {
 
 impl RotationFixture {
     fn message(&self) -> InboundMessage {
-        InboundMessage::MarketRotation(rotation(
+        rotation(
             self.instrument,
             self.window_open_ts_us,
             self.window_close_ts_us,
             self.received_ts_us,
-        ))
+        )
     }
 
     pub fn row(&self) -> RotationRow {
@@ -96,37 +96,55 @@ fn epoch(base: i64, spin_seq: u64) -> Vec<InboundMessage> {
         base,
     );
     vec![
-        InboundMessage::Book(bids),
-        InboundMessage::Book(asks),
-        InboundMessage::Book(delta_chunk(
-            0,
-            Side::Buy,
-            &[(100 * ONE, 5 * ONE)],
-            base + 10,
-        )),
-        InboundMessage::Book(delta_chunk(
-            0,
-            Side::Sell,
-            &[(101 * ONE, 3 * ONE)],
-            base + 20,
-        )),
-        InboundMessage::Trade(trade(0, 100 * ONE, 1_000_000, Side::Buy, base + 30)),
-        InboundMessage::Trade(trade(0, 101 * ONE, 2_000_000, Side::Sell, base + 40)),
-        InboundMessage::Kline(kline(
-            0,
-            KlineInterval::OneMinute,
-            (100 * ONE, 103 * ONE, 98 * ONE, 101 * ONE),
-            false,
-            base + 50,
-        )),
-        InboundMessage::Kline(kline(
-            0,
-            KlineInterval::OneMinute,
-            (100 * ONE, 103 * ONE, 98 * ONE, 101 * ONE),
-            true,
-            base + 60,
-        )),
-        InboundMessage::SpinTick(spin(spin_seq, base + 70)),
-        InboundMessage::BookReset(book_reset(0, base + 80)),
+        InboundMessage::new(ts(base), MessageBody::Book(bids)),
+        InboundMessage::new(ts(base), MessageBody::Book(asks)),
+        InboundMessage::new(
+            ts(base + 10),
+            MessageBody::Book(delta_chunk(
+                0,
+                Side::Buy,
+                &[(100 * ONE, 5 * ONE)],
+                base + 10,
+            )),
+        ),
+        InboundMessage::new(
+            ts(base + 20),
+            MessageBody::Book(delta_chunk(
+                0,
+                Side::Sell,
+                &[(101 * ONE, 3 * ONE)],
+                base + 20,
+            )),
+        ),
+        InboundMessage::new(
+            ts(base + 30),
+            MessageBody::Trade(trade(0, 100 * ONE, 1_000_000, Side::Buy, base + 30)),
+        ),
+        InboundMessage::new(
+            ts(base + 40),
+            MessageBody::Trade(trade(0, 101 * ONE, 2_000_000, Side::Sell, base + 40)),
+        ),
+        InboundMessage::new(
+            ts(base + 50),
+            MessageBody::Kline(kline(
+                0,
+                KlineInterval::OneMinute,
+                (100 * ONE, 103 * ONE, 98 * ONE, 101 * ONE),
+                false,
+                base + 50,
+            )),
+        ),
+        InboundMessage::new(
+            ts(base + 60),
+            MessageBody::Kline(kline(
+                0,
+                KlineInterval::OneMinute,
+                (100 * ONE, 103 * ONE, 98 * ONE, 101 * ONE),
+                true,
+                base + 60,
+            )),
+        ),
+        spin(spin_seq, base + 70),
+        book_reset(0, base + 80),
     ]
 }

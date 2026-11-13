@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use crate::msg::ids::InstrumentId;
-use crate::msg::inbound::{BookReset, InboundMessage, MarketRotation, TradeEvent};
+use crate::msg::inbound::{BookReset, InboundMessage, MarketRotation, MessageBody, TradeEvent};
 use crate::msg::persist::RotationRow;
 use crate::msg::time::{LocalTs, VenueTs};
 use crate::venues::polymarket::discovery::{PolySchedule, Slot};
@@ -219,11 +219,10 @@ impl PolyDriverCore {
                 }
                 leg.resubscribe();
                 let instrument = leg.instrument();
-                emit(DriverEffect::Emit(InboundMessage::BookReset(BookReset {
-                    instrument,
-                    received_ts_us: now,
-                    queued_ts_us: now,
-                })));
+                emit(DriverEffect::Emit(InboundMessage::new(
+                    now,
+                    MessageBody::BookReset(BookReset { instrument }),
+                )));
             }
         }
     }
@@ -319,14 +318,13 @@ impl PolyDriverCore {
                 emit(DriverEffect::Subscribe(tokens));
             }
             SlotAction::Rotation(facts) => {
-                emit(DriverEffect::Emit(InboundMessage::MarketRotation(
-                    MarketRotation {
+                emit(DriverEffect::Emit(InboundMessage::new(
+                    now,
+                    MessageBody::MarketRotation(MarketRotation {
                         instrument: facts.instrument,
                         window_open_ts_us: facts.window_open_ts_us,
                         window_close_ts_us: facts.window_close_ts_us,
-                        received_ts_us: now,
-                        queued_ts_us: now,
-                    },
+                    }),
                 )));
                 emit(DriverEffect::PersistRotation(RotationRow {
                     instrument: facts.instrument,
@@ -339,11 +337,10 @@ impl PolyDriverCore {
                 }));
             }
             SlotAction::BookReset(instrument) => {
-                emit(DriverEffect::Emit(InboundMessage::BookReset(BookReset {
-                    instrument,
-                    received_ts_us: now,
-                    queued_ts_us: now,
-                })));
+                emit(DriverEffect::Emit(InboundMessage::new(
+                    now,
+                    MessageBody::BookReset(BookReset { instrument }),
+                )));
             }
             SlotAction::Unsubscribe(tokens) => {
                 self.slots[slot].up.clear();
@@ -417,16 +414,17 @@ impl PolyDriverCore {
         };
         self.feed(slot, now, SlotInput::Frame, emit);
         let instrument = self.slots[slot].leg(side).instrument();
-        emit(DriverEffect::Emit(InboundMessage::Trade(TradeEvent {
-            instrument,
-            price: trade.price,
-            qty: trade.qty,
-            side: trade.side,
-            exchange_ts_us: trade.exchange_ts_us,
-            exchange_sent_ts_us: None,
-            received_ts_us: trade.received_ts_us,
-            queued_ts_us: trade.received_ts_us,
-        })));
+        emit(DriverEffect::Emit(InboundMessage::new(
+            trade.received_ts_us,
+            MessageBody::Trade(TradeEvent {
+                instrument,
+                price: trade.price,
+                qty: trade.qty,
+                side: trade.side,
+                exchange_ts_us: trade.exchange_ts_us,
+                exchange_sent_ts_us: None,
+            }),
+        )));
     }
 
     fn route(&self, asset_id: &str) -> Option<(usize, LegSide)> {

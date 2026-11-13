@@ -6,18 +6,17 @@ use std::collections::HashSet;
 use engine::hot::ingress::IngressQueues;
 use engine::hot::spawn::QueueProducer;
 use engine::msg::ids::{QueueId, SourceId};
-use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::LocalTs;
 use engine::runtime::shutdown::FatalSignal;
 use proptest::prelude::*;
 use rtrb::RingBuffer;
 
 fn spin(seq: u64, received: i64) -> InboundMessage {
-    InboundMessage::SpinTick(SpinTick {
-        seq,
-        received_ts_us: LocalTs::from_micros(received),
-        queued_ts_us: LocalTs::from_micros(received),
-    })
+    InboundMessage::new(
+        LocalTs::from_micros(received),
+        MessageBody::SpinTick(SpinTick { seq }),
+    )
 }
 
 proptest! {
@@ -49,8 +48,8 @@ proptest! {
         let mut ingress = IngressQueues::new(consumers);
         let mut popped: Vec<(i64, u8, u64)> = Vec::new();
         while let Some((queue_id, message)) = ingress.pop_next() {
-            let received = message.received_ts_us().micros();
-            let InboundMessage::SpinTick(tick) = message else {
+            let received = message.header.received_ts_us.micros();
+            let MessageBody::SpinTick(tick) = message.body else {
                 unreachable!("only spin ticks were pushed");
             };
             popped.push((received, queue_id.0, tick.seq));

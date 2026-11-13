@@ -404,12 +404,7 @@ fn restored_ledger_boundaries_match_named_cases() {
 fn rotate(fixture: &mut QuotingEngine, when: i64) {
     fixture
         .engine
-        .dispatch(&InboundMessage::MarketRotation(rotation(
-            0,
-            when,
-            when + 300 * 1_000_000,
-            when,
-        )));
+        .dispatch(&rotation(0, when, when + 300 * 1_000_000, when));
 }
 
 /// FITNESS: the budget spans the RUN, not the market. A venue that rotates every few minutes hands

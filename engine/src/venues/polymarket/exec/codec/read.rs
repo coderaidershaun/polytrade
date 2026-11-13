@@ -300,7 +300,6 @@ pub fn account_snapshot(
     let chunk_stamps = ChunkStamps {
         venue_update_ts_ms: settled_through.0,
         exchange_ts_us: received_ts_us.as_venue_calendar(),
-        received_ts_us,
     };
     account_chunks(kind, balances, chunk_stamps)
 }

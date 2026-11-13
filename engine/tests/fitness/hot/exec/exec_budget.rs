@@ -17,12 +17,12 @@ use engine::hot::exec::{
 use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, OrderStyle, VenueOrderStatus};
 use engine::msg::ids::{Price, Qty, Side};
-use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::DurationUs;
 use engine::runtime::config::RecordedTables;
 use engine::runtime::exposure::InstrumentExposure;
 
-use crate::engine_support::{ALL_TABLES, ONE, exec_event, local_refusals};
+use crate::engine_support::{ALL_TABLES, ONE, exec_event, local_refusals, ts};
 use crate::exec_support::{
     ASK, BID, CEILING, INSTRUMENT, QUOTE_QTY, QuotingEngine, QuotingSetup, TwoSidedQuoter,
     built_quoting_engine, drain_commands, exec_settings, make_ready, reseat_book, row_with_ceiling,
@@ -89,11 +89,14 @@ fn report_canceled(engine: &mut HotEngine, command: ExecCommand, when: i64) {
     else {
         return;
     };
-    engine.dispatch(&InboundMessage::Exec(ExecEvent {
-        kind: ExecKind::ReportCanceled,
-        status: Some(VenueOrderStatus::Canceled),
-        ..exec_event(INSTRUMENT, client_id, side, 0, when)
-    }));
+    engine.dispatch(&InboundMessage::new(
+        ts(when),
+        MessageBody::Exec(ExecEvent {
+            kind: ExecKind::ReportCanceled,
+            status: Some(VenueOrderStatus::Canceled),
+            ..exec_event(INSTRUMENT, client_id, side, 0, when)
+        }),
+    ));
 }
 
 /// What one spin did: how many placements went out, and every refusal the engine reported. Kept

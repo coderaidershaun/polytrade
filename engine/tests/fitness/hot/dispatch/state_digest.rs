@@ -6,19 +6,21 @@ use std::cell::Cell;
 
 use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup, StateDigest};
 use engine::hot::exec::{ClientIdLayout, side_base};
+use engine::hot::ingress::IngressQueues;
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{
     DesiredQuote, Fill, OrderReject, OrderStyle, OrderUpdate, QuoteLevel, Registration, Strategy,
     StrategyCtx,
 };
-use engine::link::{InboundLink, LinkFrame, LinkHash, LinkOrigin, LinkPayload, TopicId};
+use engine::link::{LinkFrame, LinkHash, LinkOrigin, LinkPayload, TopicId};
 use engine::log::{HotRecord, TextRecord, open_hot_lane, open_text_lane};
 use engine::msg::exec::{
     AccountChunk, ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus,
 };
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{
-    BookChunk, InboundMessage, KlineEvent, MarketRotation, SpinTick, TradeEvent,
+    BookChunk, InboundMessage, KlineEvent, MarketRotation, MessageBody, MessageKind, SpinTick,
+    TradeEvent,
 };
 use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::run_state::{RunAssertion, RunState};
@@ -28,7 +30,7 @@ use engine::runtime::config::{KlineInterval, RecordedTables, TableKind};
 use engine::runtime::exposure::ExposureSnapshot;
 use engine::runtime::registry::InstrumentRow;
 use engine::venues::exec::open_orders_snapshot_end;
-use proptest::prelude::{Just, any, prop, prop_oneof};
+use proptest::prelude::{Just, any, prop, prop_assert_eq, prop_oneof};
 use proptest::strategy::Strategy as Generator;
 use proptest::test_runner::{Config, TestCaseError, TestRunner};
 use rtrb::{Consumer, RingBuffer};
@@ -388,7 +390,7 @@ fn fold_on_this_thread(start: Start, sequence: &[InboundMessage], measure: Measu
     let mut folded = Folded::default();
     for message in sequence {
         engine.dispatch(message);
-        if measure == Measure::On && matches!(message, InboundMessage::SpinTick(_)) {
+        if measure == Measure::On && matches!(message.body, MessageBody::SpinTick(_)) {
             std::hint::black_box(engine.counters());
         }
         folded.digests.push(engine.state_digest());
@@ -492,17 +494,17 @@ const KINDS: [&str; 10] = [
 /// No arm catches the rest, so a new kind of message stops this file compiling here. Its name then
 /// joins [`KINDS`], and the property fails until the generator draws it.
 fn kind_of(message: &InboundMessage) -> usize {
-    match message {
-        InboundMessage::Trade(_) => 0,
-        InboundMessage::Book(_) => 1,
-        InboundMessage::BookReset(_) => 2,
-        InboundMessage::MarketRotation(_) => 3,
-        InboundMessage::Kline(_) => 4,
-        InboundMessage::SpinTick(_) => 5,
-        InboundMessage::Link(_) => 6,
-        InboundMessage::RunControl(_) => 7,
-        InboundMessage::Exec(_) => 8,
-        InboundMessage::Account(_) => 9,
+    match &message.body {
+        MessageBody::Trade(_) => 0,
+        MessageBody::Book(_) => 1,
+        MessageBody::BookReset(_) => 2,
+        MessageBody::MarketRotation(_) => 3,
+        MessageBody::Kline(_) => 4,
+        MessageBody::SpinTick(_) => 5,
+        MessageBody::Link(_) => 6,
+        MessageBody::RunControl(_) => 7,
+        MessageBody::Exec(_) => 8,
+        MessageBody::Account(_) => 9,
     }
 }
 
@@ -702,13 +704,14 @@ impl Builder {
                 side,
             } => {
                 let price = (98 + offset) * ONE;
-                InboundMessage::Trade(trade(market, price, lots * ONE / 10, side, when))
+                InboundMessage::new(
+                    ts(when),
+                    MessageBody::Trade(trade(market, price, lots * ONE / 10, side, when)),
+                )
             }
-            Draw::Book(book) => InboundMessage::Book(book.chunk(when)),
-            Draw::BookReset { market } => InboundMessage::BookReset(book_reset(market, when)),
-            Draw::Rotation { market } => {
-                InboundMessage::MarketRotation(rotation(market, when, when + 300_000_000, when))
-            }
+            Draw::Book(book) => InboundMessage::new(ts(when), MessageBody::Book(book.chunk(when))),
+            Draw::BookReset { market } => book_reset(market, when),
+            Draw::Rotation { market } => rotation(market, when, when + 300_000_000, when),
             Draw::Kline {
                 market,
                 offset,
@@ -719,15 +722,21 @@ impl Builder {
                     if is_tracked { KlineInterval::OneMinute } else { KlineInterval::FiveMinutes };
                 let close = (99 + offset) * ONE;
                 let ohlc = (100 * ONE, 104 * ONE, 98 * ONE, close);
-                InboundMessage::Kline(kline(market, interval, ohlc, is_closed, when))
+                InboundMessage::new(
+                    ts(when),
+                    MessageBody::Kline(kline(market, interval, ohlc, is_closed, when)),
+                )
             }
             Draw::Spin => {
                 self.spin_seq += 1;
-                InboundMessage::SpinTick(spin(self.spin_seq, when))
+                spin(self.spin_seq, when)
             }
             Draw::Link { value } => {
                 self.link_seq += 1;
-                InboundMessage::Link(peer_frame(self.link_seq, f64::from(value), when))
+                InboundMessage::new(
+                    ts(when),
+                    MessageBody::Link(peer_frame(self.link_seq, f64::from(value), when)),
+                )
             }
             Draw::RunControl {
                 is_running,
@@ -752,10 +761,13 @@ impl Builder {
                 ];
                 // Each report carries its own venue time, or the engine sets it aside as stale.
                 let venue_update_ts_ms = u64::try_from(when / 1_000).expect("time is positive");
-                InboundMessage::Account(AccountChunk {
-                    venue_update_ts_ms,
-                    ..account_chunk(&balances, when)
-                })
+                InboundMessage::new(
+                    ts(when),
+                    MessageBody::Account(AccountChunk {
+                        venue_update_ts_ms,
+                        ..account_chunk(&balances, when)
+                    }),
+                )
             }
         }
     }
@@ -769,9 +781,10 @@ impl Builder {
         let instrument = InstrumentId(market);
         match answer {
             Answer::StreamReady => stream_ready(instrument, when),
-            Answer::SnapshotEnd => {
-                InboundMessage::Exec(open_orders_snapshot_end(instrument, ts(when)))
-            }
+            Answer::SnapshotEnd => InboundMessage::new(
+                ts(when),
+                MessageBody::Exec(open_orders_snapshot_end(instrument, ts(when))),
+            ),
             Answer::PriorFill { offset, lots } => {
                 let pen = &mut self.pens[usize::from(market)];
                 let price = (99 + offset) * ONE;
@@ -789,16 +802,19 @@ impl Builder {
                 let price = if side == Side::Buy { 99 * ONE } else { 101 * ONE };
                 let is_fill = kind == ExecKind::ReportTrade;
                 let filled = if is_fill { QUOTE_QTY } else { Qty(0) };
-                InboundMessage::Exec(ExecEvent {
-                    kind,
-                    status: Some(status),
-                    qty: QUOTE_QTY,
-                    last_price: Price(if is_fill { price } else { 0 }),
-                    last_qty: filled,
-                    cumulative_qty: filled,
-                    cumulative_quote: Price(price).notional(filled),
-                    ..exec_event(instrument, client_id, side, price, when)
-                })
+                InboundMessage::new(
+                    ts(when),
+                    MessageBody::Exec(ExecEvent {
+                        kind,
+                        status: Some(status),
+                        qty: QUOTE_QTY,
+                        last_price: Price(if is_fill { price } else { 0 }),
+                        last_qty: filled,
+                        cumulative_qty: filled,
+                        cumulative_quote: Price(price).notional(filled),
+                        ..exec_event(instrument, client_id, side, price, when)
+                    }),
+                )
             }
         }
     }
@@ -834,23 +850,19 @@ impl BookDraw {
 }
 
 /// A state frame of a peer engine, carrying one value.
-fn peer_frame(seq: u64, value: f64, when: i64) -> InboundLink {
-    InboundLink {
-        frame: LinkFrame {
-            origin: LinkOrigin {
-                sender_te_hash: LinkHash::of_name("peer-te"),
-                boot_ts_us: venue_ts(1),
-                topic: TopicId::FIRST_STRATEGY,
-                seq,
-            },
-            payload: LinkPayload::new(
-                LinkHash::of_name("peer-schema"),
-                venue_ts(when - 1),
-                &[value],
-            ),
+fn peer_frame(seq: u64, value: f64, when: i64) -> LinkFrame {
+    LinkFrame {
+        origin: LinkOrigin {
+            sender_te_hash: LinkHash::of_name("peer-te"),
+            boot_ts_us: venue_ts(1),
+            topic: TopicId::FIRST_STRATEGY,
+            seq,
         },
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
+        payload: LinkPayload::new(
+            LinkHash::of_name("peer-schema"),
+            venue_ts(when - 1),
+            &[value],
+        ),
     }
 }
 
@@ -864,24 +876,39 @@ fn callback_sequence() -> Vec<InboundMessage> {
         1,
     );
     vec![
-        InboundMessage::Book(bids),
-        InboundMessage::Book(asks),
-        InboundMessage::Trade(trade(0, 100 * ONE, 2_000_000, Side::Buy, 2)),
-        InboundMessage::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 5 * ONE)], 3)),
-        InboundMessage::Kline(kline(
-            0,
-            KlineInterval::OneMinute,
-            (100 * ONE, 103 * ONE, 98 * ONE, 101 * ONE),
-            true,
-            4,
-        )),
-        InboundMessage::SpinTick(spin(1, 5)),
-        InboundMessage::BookReset(book_reset(0, 6)),
+        InboundMessage::new(ts(1), MessageBody::Book(bids)),
+        InboundMessage::new(ts(1), MessageBody::Book(asks)),
+        InboundMessage::new(
+            ts(2),
+            MessageBody::Trade(trade(0, 100 * ONE, 2_000_000, Side::Buy, 2)),
+        ),
+        InboundMessage::new(
+            ts(3),
+            MessageBody::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 5 * ONE)], 3)),
+        ),
+        InboundMessage::new(
+            ts(4),
+            MessageBody::Kline(kline(
+                0,
+                KlineInterval::OneMinute,
+                (100 * ONE, 103 * ONE, 98 * ONE, 101 * ONE),
+                true,
+                4,
+            )),
+        ),
+        spin(1, 5),
+        book_reset(0, 6),
         // The rotation is stamped at subscribe, 7, and its window opens later, at 300 s.
-        InboundMessage::MarketRotation(rotation(0, 300_000_000, 600_000_000, 7)),
-        InboundMessage::BookReset(book_reset(0, 8)),
-        InboundMessage::Book(snapshot_pair(0, &[(100 * ONE, ONE)], &[(101 * ONE, ONE)], 9).0),
-        InboundMessage::Book(snapshot_pair(0, &[(100 * ONE, ONE)], &[(101 * ONE, ONE)], 9).1),
+        rotation(0, 300_000_000, 600_000_000, 7),
+        book_reset(0, 8),
+        InboundMessage::new(
+            ts(9),
+            MessageBody::Book(snapshot_pair(0, &[(100 * ONE, ONE)], &[(101 * ONE, ONE)], 9).0),
+        ),
+        InboundMessage::new(
+            ts(9),
+            MessageBody::Book(snapshot_pair(0, &[(100 * ONE, ONE)], &[(101 * ONE, ONE)], 9).1),
+        ),
     ]
 }
 
@@ -891,27 +918,28 @@ fn feed_sequence() -> Vec<InboundMessage> {
     let mut messages = Vec::new();
     let mut pen = FillPen::new(0);
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, ONE)], &[(101 * ONE, ONE)], 10);
-    messages.push(InboundMessage::Book(bids));
-    messages.push(InboundMessage::Book(asks));
+    messages.push(InboundMessage::new(ts(10), MessageBody::Book(bids)));
+    messages.push(InboundMessage::new(ts(10), MessageBody::Book(asks)));
     for seq in 0..5_u64 {
         let when = 100 + seq as i64 * 10;
         let side = if seq % 2 == 0 { Side::Buy } else { Side::Sell };
-        messages.push(InboundMessage::Trade(trade(0, 100 * ONE, ONE, side, when)));
+        messages.push(InboundMessage::new(
+            ts(when),
+            MessageBody::Trade(trade(0, 100 * ONE, ONE, side, when)),
+        ));
         messages.extend(pen.fill(side, 100 * ONE, ONE, when + 1));
-        messages.push(InboundMessage::SpinTick(spin(seq, when + 2)));
-        messages.push(InboundMessage::Book(delta_chunk(
-            0,
-            Side::Buy,
-            &[(100 * ONE, (seq as i64 + 2) * ONE)],
-            when + 5,
-        )));
+        messages.push(spin(seq, when + 2));
+        messages.push(InboundMessage::new(
+            ts(when + 5),
+            MessageBody::Book(delta_chunk(
+                0,
+                Side::Buy,
+                &[(100 * ONE, (seq as i64 + 2) * ONE)],
+                when + 5,
+            )),
+        ));
     }
-    messages.push(InboundMessage::MarketRotation(rotation(
-        0,
-        300 * ONE,
-        600 * ONE,
-        200,
-    )));
+    messages.push(rotation(0, 300 * ONE, 600 * ONE, 200));
     messages
 }
 
@@ -1033,4 +1061,58 @@ fn state_is_equal_with_measurement_on_and_off() {
         places.get() > 0,
         "the measured folds banked commands, so the bank read its counter"
     );
+}
+
+/// The kind that each body names, written apart from the engine's own match so that a wrong arm
+/// there shows here. No arm catches the rest.
+fn kind_named_by(body: &MessageBody) -> MessageKind {
+    match body {
+        MessageBody::Trade(_) => MessageKind::Trade,
+        MessageBody::Book(_) => MessageKind::Book,
+        MessageBody::BookReset(_) => MessageKind::BookReset,
+        MessageBody::MarketRotation(_) => MessageKind::MarketRotation,
+        MessageBody::Kline(_) => MessageKind::Kline,
+        MessageBody::SpinTick(_) => MessageKind::SpinTick,
+        MessageBody::Link(_) => MessageKind::Link,
+        MessageBody::RunControl(_) => MessageKind::RunControl,
+        MessageBody::Exec(_) => MessageKind::Exec,
+        MessageBody::Account(_) => MessageKind::Account,
+    }
+}
+
+/// FITNESS: the received stamp in the header is the key that orders the fold. Each kind of
+/// message comes out of an input queue with the kind its body names, the received stamp it was
+/// built with, the queued stamp its producer set, and its body unchanged. A key that a kind lost
+/// or moved would reorder the fold with every other test green.
+#[test]
+fn each_kind_round_trips_with_header_key() {
+    let kinds = Cell::new([0_u64; KINDS.len()]);
+    let outcome = runner(64).run(&steps(), |steps| {
+        let mut builder = Builder::new();
+        let (mut producer, consumer) = RingBuffer::<InboundMessage>::new(1);
+        let mut ingress = IngressQueues::new(vec![consumer]);
+        let mut seen = kinds.get();
+        for step in &steps {
+            let mut message = builder.message(step);
+            let queued = ts(builder.when + 1);
+            message.header.queued_ts_us = queued;
+            producer
+                .push(message)
+                .expect("the ring is empty before each push");
+            let (_, popped) = ingress.pop_next().expect("one message waits");
+            prop_assert_eq!(popped.kind(), kind_named_by(&popped.body));
+            prop_assert_eq!(popped.header.received_ts_us, ts(builder.when));
+            prop_assert_eq!(popped.header.queued_ts_us, queued);
+            prop_assert_eq!(popped, message);
+            seen[kind_of(&popped)] += 1;
+        }
+        kinds.set(seen);
+        Ok(())
+    });
+    if let Err(failure) = outcome {
+        panic!("a message lost its kind or its key in a queue: {failure}");
+    }
+    for (kind, count) in KINDS.iter().zip(kinds.get()) {
+        assert!(count > 0, "no drawn sequence held a {kind} message");
+    }
 }

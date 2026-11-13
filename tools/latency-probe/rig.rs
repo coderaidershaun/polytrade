@@ -13,7 +13,7 @@ use engine::hot::sink::{ExposureSink, StrategyLogSink, UiBookSink, UiEventSink};
 use engine::hot::strategy::{EngineView, Strategy, StrategyConfig};
 use engine::log::{LogConfig, LogHandle};
 use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty};
-use engine::msg::inbound::{InboundMessage, SpinTick, TradeEvent};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick, TradeEvent};
 use engine::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, Stamper};
 use engine::runtime::config::{
     BinanceMarket, KlineInterval, LatencyConfig, NoParams, StrategySpec, Subscriptions,
@@ -121,20 +121,17 @@ pub fn recorded_trades() -> Vec<TradeEvent> {
 pub fn message(trades: &[TradeEvent], index: usize, clock: &EngineClock) -> InboundMessage {
     let at = clock::now(clock);
     if index % TRADES_PER_SPIN == TRADES_PER_SPIN - 1 {
-        return InboundMessage::SpinTick(SpinTick {
+        let tick = SpinTick {
             seq: (index / TRADES_PER_SPIN) as u64,
-            received_ts_us: at,
-            queued_ts_us: at,
-        });
+        };
+        return InboundMessage::new(at, MessageBody::SpinTick(tick));
     }
     let mut trade = trades[index % trades.len()];
     // No venue sits behind the harness, so the venue's stamps are the send itself and the venue
     // stages read zero rather than the age of the recording.
     trade.exchange_ts_us = at.as_venue_calendar();
     trade.exchange_sent_ts_us = Some(at.as_venue_calendar());
-    trade.received_ts_us = at;
-    trade.queued_ts_us = at;
-    InboundMessage::Trade(trade)
+    InboundMessage::new(at, MessageBody::Trade(trade))
 }
 
 /// Pins the calling thread when the run names a core. On Linux a run that names a core and cannot

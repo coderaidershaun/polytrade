@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use engine::hot::book::{Book, SnapshotOutcome};
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
-use engine::msg::inbound::{BookChunkKind, InboundMessage, Level};
+use engine::msg::inbound::{BookChunkKind, InboundMessage, Level, MessageBody};
 use engine::msg::time::{LocalTs, VenueTs};
 use engine::venues::edge::decode::DecimalFault;
 use engine::venues::edge::venue_clock::MAX_VENUE_SKEW_US;
@@ -37,7 +37,7 @@ fn parse(text: &str) -> PolyFrame {
 
 pub(crate) fn apply(book: &mut Book, messages: &[InboundMessage]) {
     for message in messages {
-        let InboundMessage::Book(chunk) = message else {
+        let MessageBody::Book(chunk) = &message.body else {
             continue;
         };
         match chunk.kind {
@@ -172,8 +172,8 @@ mod chunk_stamp {
     fn emitted_stamps(messages: &[InboundMessage], kind: BookChunkKind) -> Vec<Option<VenueTs>> {
         messages
             .iter()
-            .filter_map(|message| match message {
-                InboundMessage::Book(chunk) if chunk.kind == kind => Some(chunk.exchange_ts_us),
+            .filter_map(|message| match &message.body {
+                MessageBody::Book(chunk) if chunk.kind == kind => Some(chunk.exchange_ts_us),
                 _ => None,
             })
             .collect()

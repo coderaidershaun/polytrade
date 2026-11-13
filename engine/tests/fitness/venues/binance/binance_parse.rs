@@ -227,8 +227,6 @@ mod recorded_agg_trade {
                 event.exchange_sent_ts_us.is_some(),
                 "real venue frames carry the E send stamp"
             );
-            assert_eq!(event.received_ts_us, received);
-            assert_eq!(event.queued_ts_us, received);
             match event.side {
                 Side::Buy => saw_buy = true,
                 Side::Sell => saw_sell = true,

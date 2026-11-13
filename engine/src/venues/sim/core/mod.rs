@@ -28,7 +28,7 @@ pub(crate) use revise::ForcedOrderExit;
 use wallet::{FillSettlement, SimWallet, SimWalletSetup, WalletError};
 
 use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, TradeId};
-use crate::msg::inbound::{BookChunkKind, InboundMessage, TappedMessage, VenueMeta};
+use crate::msg::inbound::{BookChunkKind, InboundMessage, MessageBody, TappedMessage, VenueMeta};
 use crate::msg::time::{DurationUs, LocalTs};
 use crate::venues::exec::ExecRequest;
 
@@ -183,7 +183,7 @@ impl SimVenue {
     /// When the market inbox is full.
     pub fn on_market_batch(&mut self, tapped: &[TappedMessage], latency: latency::LatencyBudget) {
         for item in tapped {
-            let effective_ts_us = latency.market_effective(item.message.received_ts_us());
+            let effective_ts_us = latency.market_effective(item.message.header.received_ts_us);
             let Some(phase) = self.phase_of(&item.message, item.venue_meta) else {
                 continue;
             };
@@ -240,19 +240,19 @@ impl SimVenue {
     }
 
     fn phase_of(&self, message: &InboundMessage, venue_meta: VenueMeta) -> Option<Phase> {
-        match (message, venue_meta) {
-            (InboundMessage::Trade(_), VenueMeta::Trade { .. }) => Some(Phase::Trade),
-            (InboundMessage::Book(chunk), VenueMeta::DepthDelta { .. })
+        match (&message.body, venue_meta) {
+            (MessageBody::Trade(_), VenueMeta::Trade { .. }) => Some(Phase::Trade),
+            (MessageBody::Book(chunk), VenueMeta::DepthDelta { .. })
                 if chunk.kind == BookChunkKind::Delta =>
             {
                 Some(Phase::DeltaCommit)
             }
-            (InboundMessage::Book(chunk), VenueMeta::None)
+            (MessageBody::Book(chunk), VenueMeta::None)
                 if chunk.kind == BookChunkKind::Snapshot =>
             {
                 Some(Phase::SnapshotRebuild)
             }
-            (InboundMessage::BookReset(reset), VenueMeta::DepthReset { .. }) => {
+            (MessageBody::BookReset(reset), VenueMeta::DepthReset { .. }) => {
                 assert_eq!(
                     reset.instrument,
                     self.market.instrument(),
@@ -260,10 +260,7 @@ impl SimVenue {
                 );
                 Some(Phase::DepthReset)
             }
-            (
-                InboundMessage::Trade(_) | InboundMessage::Book(_) | InboundMessage::BookReset(_),
-                _,
-            ) => {
+            (MessageBody::Trade(_) | MessageBody::Book(_) | MessageBody::BookReset(_), _) => {
                 panic!("a matching market message reached the venue as {venue_meta:?}")
             }
             _ => None,
@@ -272,10 +269,10 @@ impl SimVenue {
 
     fn apply_market(&mut self, event: Sequenced<(InboundMessage, VenueMeta)>) {
         let (message, venue_meta) = event.item;
-        let reset = match &message {
-            InboundMessage::Trade(trade) => self.apply_trade(trade, venue_meta, event.at_ts_us),
-            InboundMessage::Book(chunk) => self.market.on_book_chunk(chunk, venue_meta),
-            InboundMessage::BookReset(_) => {
+        let reset = match &message.body {
+            MessageBody::Trade(trade) => self.apply_trade(trade, venue_meta, event.at_ts_us),
+            MessageBody::Book(chunk) => self.market.on_book_chunk(chunk, venue_meta),
+            MessageBody::BookReset(_) => {
                 let VenueMeta::DepthReset { exchange_ts_us } = venue_meta else {
                     panic!("a book reset reached the venue without its exchange stamp")
                 };

@@ -258,7 +258,7 @@ impl ExecEngine {
                     side,
                     QuoteLevel::ZERO,
                     intent,
-                    input.tick.received_ts_us,
+                    input.received_ts_us,
                     input.bank,
                 );
             }

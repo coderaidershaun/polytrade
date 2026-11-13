@@ -2,7 +2,7 @@
 //! (live WS closes) and REST backfill, plus the gap-repair receipt-stamp monotonicity edge.
 
 use engine::msg::ids::{Price, Qty};
-use engine::msg::inbound::{InboundMessage, KlineEvent};
+use engine::msg::inbound::{KlineEvent, MessageBody};
 use engine::msg::time::{LocalTs, VenueTs};
 use engine::runtime::config::KlineInterval;
 use engine::venues::binance::kline::{KlineOutcome, KlineSequencer};
@@ -44,8 +44,6 @@ fn candle_at(open_ts_us: i64, is_closed: bool, received: LocalTs) -> KlineEvent 
         is_closed,
         exchange_ts_us: received.as_venue_calendar(),
         exchange_sent_ts_us: None,
-        received_ts_us: received,
-        queued_ts_us: received,
     }
 }
 
@@ -63,7 +61,9 @@ fn perp_live_stream_forwards() {
     let mut sequencer = KlineSequencer::new(KlineInterval::OneMinute);
     let mut emitted = Vec::new();
     for event in events {
-        let outcome = sequencer.on_live(event, &mut |message| emitted.push(message));
+        let outcome = sequencer.on_live(event, ctx().received_ts_us, &mut |message| {
+            emitted.push(message);
+        });
         assert_ne!(outcome, KlineOutcome::Duplicate);
         assert!(
             !matches!(outcome, KlineOutcome::Gap { .. }),
@@ -72,8 +72,8 @@ fn perp_live_stream_forwards() {
     }
     let closes: Vec<&KlineEvent> = emitted
         .iter()
-        .filter_map(|message| match message {
-            InboundMessage::Kline(event) if event.is_closed => Some(event),
+        .filter_map(|message| match &message.body {
+            MessageBody::Kline(event) if event.is_closed => Some(event),
             _ => None,
         })
         .collect();
@@ -95,12 +95,13 @@ fn rest_backfill_emits_closed_then_dedupes_on_overlap() {
 
     let mut sequencer = KlineSequencer::new(KlineInterval::OneMinute);
     let mut emitted = Vec::new();
-    sequencer.on_backfill(&backfill, &mut |message| emitted.push(message));
+    let received = ctx().received_ts_us;
+    sequencer.on_backfill(&backfill, received, &mut |message| emitted.push(message));
     assert_eq!(emitted.len(), closed_count);
 
     // Re-fetching the same window on reconnect must add nothing (dedupe by open time).
     let before = emitted.len();
-    sequencer.on_backfill(&backfill, &mut |message| emitted.push(message));
+    sequencer.on_backfill(&backfill, received, &mut |message| emitted.push(message));
     assert_eq!(emitted.len(), before, "overlapping backfill is deduped");
 }
 
@@ -117,23 +118,24 @@ fn gap_repair_never_emits_a_decreasing_receipt_stamp() {
     let live_stamp = LocalTs::from_micros(2_000_000);
     let repair_stamp = LocalTs::from_micros(9_000_000);
 
-    sequencer.on_backfill(&[candle_at(FIRST_OPEN_US, true, early)], &mut |m| {
+    sequencer.on_backfill(&[candle_at(FIRST_OPEN_US, true, early)], early, &mut |m| {
         emitted.push(m)
     });
 
     let gap_close = candle_at(FIRST_OPEN_US + 2 * MINUTE_US, true, live_stamp);
-    let outcome = sequencer.on_live(gap_close, &mut |m| emitted.push(m));
+    let outcome = sequencer.on_live(gap_close, live_stamp, &mut |m| emitted.push(m));
     assert!(matches!(outcome, KlineOutcome::Gap { .. }));
 
     sequencer.on_backfill(
         &[candle_at(FIRST_OPEN_US + MINUTE_US, true, repair_stamp)],
+        repair_stamp,
         &mut |m| emitted.push(m),
     );
-    sequencer.on_live(gap_close, &mut |m| emitted.push(m));
+    sequencer.on_live(gap_close, live_stamp, &mut |m| emitted.push(m));
 
     let stamps: Vec<i64> = emitted
         .iter()
-        .map(|m| m.received_ts_us().micros())
+        .map(|m| m.header.received_ts_us.micros())
         .collect();
     assert!(
         stamps.windows(2).all(|w| w[0] <= w[1]),

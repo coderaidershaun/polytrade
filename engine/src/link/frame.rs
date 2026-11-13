@@ -2,7 +2,7 @@
 //! `link_fields()` declaration and never from the wire itself, so two senders whose field lists
 //! differ do not agree about what a given slot index holds.
 
-use crate::msg::time::{LocalTs, VenueTs};
+use crate::msg::time::VenueTs;
 use crate::msg::ui::{LatencyReport, UiBookSnapshot, UiEvent};
 
 use super::control::{
@@ -16,12 +16,12 @@ use super::envelope::{
 use super::feed::{BOOK_BODY_LEN, EVENT_BODY_LEN, REPORT_BODY_LEN};
 use super::wire::{WireField, wire_array};
 
-/// 38 measured maximum (see InboundLink budget assert).
+/// The most slots that fit the 384-byte input message. Its size assert fails on a 39th.
 pub const LINK_MAX_FIELDS: usize = 38;
 
 const PAYLOAD_BODY_LEN: usize = 8 + 8 + 1 + 8 * LINK_MAX_FIELDS;
 
-// Envelope+payload lands on InboundLink's 384-byte budget exactly.
+// A frame with every slot filled still fits one datagram.
 const _: () = assert!(ENVELOPE_LEN + PAYLOAD_BODY_LEN <= LINK_MAX_DATAGRAM);
 
 /// `schema_hash` is a digest of the sender's ordered `link_fields()`. A mismatch drops the frame
@@ -118,24 +118,13 @@ impl From<&Envelope> for LinkOrigin {
     }
 }
 
+/// The sender's `event_ts_us` stays data and never orders the fold, because clock skew between
+/// regions would reorder the stream.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LinkFrame {
     pub origin: LinkOrigin,
     pub payload: LinkPayload,
 }
-
-/// A decoded frame together with the local ingress stamps. The sender's `event_ts_us` stays data
-/// and is never the ordering key, because clock skew between regions would reorder the stream.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct InboundLink {
-    pub frame: LinkFrame,
-    pub received_ts_us: LocalTs,
-    pub queued_ts_us: LocalTs,
-}
-
-/// 38 slots land on InboundMessage's 384-byte budget EXACTLY, where BookChunk takes 352. A 39th
-/// slot or a new field trips this assert; the budget never moves.
-const _: () = assert!(size_of::<InboundLink>() + align_of::<InboundLink>() <= 384);
 
 /// Carries no envelope, because the actor owns the sequence and the identity. A replay therefore
 /// produces byte-identical output.

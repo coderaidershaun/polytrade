@@ -22,7 +22,7 @@ use crate::hot::strategy::{Actions, ActionsSetup, DrainSinks, Strategy, Strategy
 use crate::hot::tracker::MicroTracker;
 use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
-use crate::msg::inbound::{InboundMessage, SpinTick};
+use crate::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::LocalTs;
 use crate::msg::ui::{DomQuote, UI_QUOTE_LEVELS};
@@ -165,18 +165,19 @@ impl HotEngine {
     }
 
     pub fn dispatch(&mut self, message: &InboundMessage) {
-        crate::log::set_message_time(message.received_ts_us());
-        if self.warmup.observe(message.received_ts_us()) {
+        let received_ts_us = message.header.received_ts_us;
+        crate::log::set_message_time(received_ts_us);
+        if self.warmup.observe(received_ts_us) {
             self.log_warmup_complete();
         }
-        self.handle(message);
+        self.handle(&message.body, received_ts_us);
         if moves_position(message) {
-            self.state.publish_exposure(message.received_ts_us());
+            self.state.publish_exposure(received_ts_us);
         }
         self.drain_actions();
-        if let InboundMessage::SpinTick(tick) = message {
-            self.exec_spin(tick);
-            self.emit_positions(tick.received_ts_us);
+        if let MessageBody::SpinTick(tick) = &message.body {
+            self.exec_spin(tick, received_ts_us);
+            self.emit_positions(received_ts_us);
         }
     }
 
@@ -204,30 +205,32 @@ impl HotEngine {
         });
     }
 
-    fn handle(&mut self, message: &InboundMessage) {
-        match message {
-            InboundMessage::Trade(event) => self.on_trade(event),
-            InboundMessage::Book(chunk) => self.on_book(chunk),
-            InboundMessage::BookReset(reset) => self.on_book_reset(reset),
-            InboundMessage::MarketRotation(rotation) => self.on_market_rotation(rotation),
-            InboundMessage::Kline(event) => self.on_kline(event),
-            InboundMessage::SpinTick(tick) => self.on_spin(tick),
-            InboundMessage::Link(link) => self.on_link(link),
-            InboundMessage::RunControl(control) => self.on_run_control(control),
-            InboundMessage::Exec(event) => self.on_exec(event),
-            InboundMessage::Account(chunk) => self.on_account(chunk),
+    fn handle(&mut self, body: &MessageBody, received_ts_us: LocalTs) {
+        match body {
+            MessageBody::Trade(event) => self.on_trade(event, received_ts_us),
+            MessageBody::Book(chunk) => self.on_book(chunk, received_ts_us),
+            MessageBody::BookReset(reset) => self.on_book_reset(reset, received_ts_us),
+            MessageBody::MarketRotation(rotation) => {
+                self.on_market_rotation(rotation, received_ts_us);
+            }
+            MessageBody::Kline(event) => self.on_kline(event, received_ts_us),
+            MessageBody::SpinTick(tick) => self.on_spin(tick, received_ts_us),
+            MessageBody::Link(frame) => self.on_link(frame, received_ts_us),
+            MessageBody::RunControl(control) => self.on_run_control(control, received_ts_us),
+            MessageBody::Exec(event) => self.on_exec(event, received_ts_us),
+            MessageBody::Account(chunk) => self.on_account(chunk),
         }
     }
 
     /// Apply ungated (fills during warmup = money). Callback gated only.
-    fn on_exec(&mut self, event: &ExecEvent) {
+    fn on_exec(&mut self, event: &ExecEvent, received_ts_us: LocalTs) {
         let HotState {
             exec,
             ledger,
             actions,
             ..
         } = &mut self.state;
-        let callback = exec.on_exec_event(event, ledger, actions);
+        let callback = exec.on_exec_event(event, received_ts_us, ledger, actions);
         // Tee ahead of live gate (operator sees fill/transition/refusal).
         match callback {
             ExecCallback::None => {}
@@ -245,7 +248,7 @@ impl HotEngine {
         if !self.is_strategy_live() {
             return;
         }
-        let mut ctx = self.state.ctx(event.received_ts_us);
+        let mut ctx = self.state.ctx(received_ts_us);
         match callback {
             ExecCallback::None => {}
             ExecCallback::Fill(fill) => self.strategy.on_fill(&mut ctx, &fill),
@@ -259,7 +262,7 @@ impl HotEngine {
         self.state.exec.on_account(chunk);
     }
 
-    fn on_spin(&mut self, tick: &SpinTick) {
+    fn on_spin(&mut self, tick: &SpinTick, received_ts_us: LocalTs) {
         self.state.spin_seq = tick.seq;
         for tracker in &mut self.state.trackers {
             tracker.on_spin();
@@ -270,12 +273,12 @@ impl HotEngine {
         if !self.is_strategy_live() {
             return;
         }
-        let mut ctx = self.state.ctx(tick.received_ts_us);
+        let mut ctx = self.state.ctx(received_ts_us);
         self.strategy.on_spin(&mut ctx, tick);
     }
 
     /// After strategy drain (reconciler sees declarations). Separate (runs parked/warming).
-    fn exec_spin(&mut self, tick: &SpinTick) {
+    fn exec_spin(&mut self, tick: &SpinTick, received_ts_us: LocalTs) {
         let HotState {
             books,
             ledger,
@@ -287,6 +290,7 @@ impl HotEngine {
         } = &mut self.state;
         exec.on_spin(SpinInput {
             tick,
+            received_ts_us,
             books,
             desired,
             windows,
@@ -296,12 +300,11 @@ impl HotEngine {
         // Refusals banked, drain separate (state-first, not ring-first).
         let ui = &mut self.ui;
         exec.drain_refusals(&mut |reject| ui.emit_reject(reject));
-        self.emit_exec_state(tick);
+        self.emit_exec_state(tick, received_ts_us);
     }
 
     /// Halt/balances/desired every spin (corrects late-attach). Desired expires this spin.
-    fn emit_exec_state(&mut self, tick: &SpinTick) {
-        let at = tick.received_ts_us;
+    fn emit_exec_state(&mut self, tick: &SpinTick, at: LocalTs) {
         let is_execution_wired = if let Some(halt) = self.state.exec.halt_state() {
             self.ui.emit_execution(halt, at);
             true

@@ -2,7 +2,7 @@
 //! the synthetic spot/perp equal-boundary asymmetry a fixture can't force.
 
 use engine::msg::ids::{InstrumentId, Side};
-use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunkKind, InboundMessage};
+use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunkKind, InboundMessage, MessageBody};
 use engine::msg::time::{LocalTs, VenueTs};
 use engine::venues::binance::depth::{ChainRule, DepthSequencer, DiffOutcome, SnapshotOutcome};
 use engine::venues::binance::parse::{
@@ -25,8 +25,8 @@ pub(crate) fn ctx() -> ParseContext {
 fn count_delta_chunks(messages: &[InboundMessage], update_id: u64) -> usize {
     messages
         .iter()
-        .filter(|message| match message {
-            InboundMessage::Book(chunk) => {
+        .filter(|message| match &message.body {
+            MessageBody::Book(chunk) => {
                 chunk.kind == BookChunkKind::Delta && chunk.update_id == update_id
             }
             _ => false,
@@ -45,7 +45,7 @@ fn assert_event_chunks(
     let mut sell = 0usize;
     let mut last_flags = 0usize;
     for message in emitted {
-        let InboundMessage::Book(chunk) = message else {
+        let MessageBody::Book(chunk) = &message.body else {
             panic!("expected a book chunk, got {message:?}");
         };
         assert_eq!(chunk.kind, kind);
@@ -66,7 +66,7 @@ fn assert_event_chunks(
     } else {
         assert_eq!(last_flags, 1, "exactly one is_last_chunk per event");
         let last = emitted.last().expect("non-empty event");
-        let InboundMessage::Book(chunk) = last else { unreachable!() };
+        let MessageBody::Book(chunk) = &last.body else { unreachable!() };
         assert!(chunk.is_last_chunk, "is_last_chunk sits on the final chunk");
     }
 }
@@ -237,7 +237,13 @@ mod depth_synthetic {
             "there is no sequence id after u64::MAX"
         );
         assert!(
-            matches!(emitted.as_slice(), [InboundMessage::BookReset(_)]),
+            matches!(
+                emitted.as_slice(),
+                [InboundMessage {
+                    body: MessageBody::BookReset(_),
+                    ..
+                }]
+            ),
             "exhaustion is an explicit loss of sequencing, not a wrapped duplicate"
         );
     }
@@ -334,7 +340,7 @@ mod venue_metadata {
         assert!(!stamped.is_empty(), "snapshot: a snapshot emits its book");
         for (message, venue_meta) in &stamped {
             assert!(
-                matches!(message, InboundMessage::Book(chunk) if chunk.kind == BookChunkKind::Snapshot),
+                matches!(&message.body, MessageBody::Book(chunk) if chunk.kind == BookChunkKind::Snapshot),
                 "snapshot"
             );
             assert_eq!(
@@ -360,7 +366,7 @@ mod venue_metadata {
         );
         for (message, venue_meta) in &stamped {
             assert!(
-                matches!(message, InboundMessage::Book(chunk) if chunk.kind == BookChunkKind::Delta),
+                matches!(&message.body, MessageBody::Book(chunk) if chunk.kind == BookChunkKind::Delta),
                 "delta"
             );
             assert_eq!(
@@ -387,7 +393,10 @@ mod venue_metadata {
             matches!(
                 stamped.as_slice(),
                 [(
-                    InboundMessage::BookReset(_),
+                    InboundMessage {
+                        body: MessageBody::BookReset(_),
+                        ..
+                    },
                     VenueMeta::DepthReset {
                         exchange_ts_us: RESET_EXCHANGE_TS
                     }

@@ -251,10 +251,7 @@ digest_by_hash!(
 );
 
 digest_fields! {
-    TradeEvent {
-        instrument, price, qty, side, exchange_ts_us, exchange_sent_ts_us, received_ts_us,
-        queued_ts_us,
-    }
+    TradeEvent { instrument, price, qty, side, exchange_ts_us, exchange_sent_ts_us }
 }
 digest_fields! { FeatureRow { instrument, feature, value, event_ts_us } }
 digest_fields! { TradeRow { instrument, price, qty, side, exchange_ts_us, received_ts_us } }

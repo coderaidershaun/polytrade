@@ -27,7 +27,7 @@ use engine::hot::sink::{ExecSink, ExposureSink};
 use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle};
 use engine::msg::ids::{ClientOrderId, InstrumentId, Qty, Side};
-use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::Stamper;
 use engine::runtime::config::TrackerSpec;
 use engine::runtime::exposure::{
@@ -38,7 +38,7 @@ use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
     FillPen, ONE, book_reset, detached_setup, exec_event, exposure_ring, instrument_row,
-    persist_ring, snapshot_pair,
+    persist_ring, snapshot_pair, ts,
 };
 use crate::exec_support::{drain_commands, exec_settings, make_ready, spin_at};
 use crate::parquet_readback::TempDir;
@@ -132,9 +132,15 @@ fn dispatch(engine: &mut HotEngine, message: &InboundMessage) {
 /// Restate the whole book so the mark moves with no transient crossed top to reason about.
 fn reseat_book(engine: &mut HotEngine, bid: i64, ask: i64, when: i64) {
     let (bids, asks) = snapshot_pair(0, &[(bid, ONE)], &[(ask, ONE)], when);
-    dispatch(engine, &InboundMessage::BookReset(book_reset(0, when)));
-    dispatch(engine, &InboundMessage::Book(bids));
-    dispatch(engine, &InboundMessage::Book(asks));
+    dispatch(engine, &book_reset(0, when));
+    dispatch(
+        engine,
+        &InboundMessage::new(ts(when), MessageBody::Book(bids)),
+    );
+    dispatch(
+        engine,
+        &InboundMessage::new(ts(when), MessageBody::Book(asks)),
+    );
 }
 
 fn placed(commands: &[ExecCommand], wanted: Side) -> Option<ClientOrderId> {
@@ -155,21 +161,27 @@ fn is_cancelled(commands: &[ExecCommand], wanted: ClientOrderId) -> bool {
 fn ack_placed(engine: &mut HotEngine, client_id: ClientOrderId, side: Side, price: i64, when: i64) {
     dispatch(
         engine,
-        &InboundMessage::Exec(ExecEvent {
-            kind: ExecKind::AckPlaced,
-            qty: Qty(ONE / 100),
-            ..exec_event(INSTRUMENT, client_id, side, price, when)
-        }),
+        &InboundMessage::new(
+            ts(when),
+            MessageBody::Exec(ExecEvent {
+                kind: ExecKind::AckPlaced,
+                qty: Qty(ONE / 100),
+                ..exec_event(INSTRUMENT, client_id, side, price, when)
+            }),
+        ),
     );
 }
 
 fn ack_canceled(engine: &mut HotEngine, client_id: ClientOrderId, side: Side, when: i64) {
     dispatch(
         engine,
-        &InboundMessage::Exec(ExecEvent {
-            kind: ExecKind::AckCanceled,
-            ..exec_event(INSTRUMENT, client_id, side, 0, when)
-        }),
+        &InboundMessage::new(
+            ts(when),
+            MessageBody::Exec(ExecEvent {
+                kind: ExecKind::AckCanceled,
+                ..exec_event(INSTRUMENT, client_id, side, 0, when)
+            }),
+        ),
     );
 }
 

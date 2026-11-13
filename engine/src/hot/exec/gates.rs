@@ -413,7 +413,7 @@ impl ExecEngine {
                 .then_some(RejectReason::BookNotQuotable)
         });
         self.refusals
-            .observe(instrument, side, reason, input.tick.received_ts_us);
+            .observe(instrument, side, reason, input.received_ts_us);
     }
 }
 

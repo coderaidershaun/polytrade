@@ -24,13 +24,13 @@ use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, VenueOrderStatus,
 };
 use engine::msg::ids::{Price, Side};
-use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::msg::ui::UiEvent;
 use engine::runtime::config::RecordedTables;
 use rtrb::Consumer;
 
-use crate::engine_support::{ALL_TABLES, ONE, exec_event, local_refusals, rotation};
+use crate::engine_support::{ALL_TABLES, ONE, exec_event, local_refusals, rotation, ts};
 use crate::exec_support::{
     ASK, BID, CEILING, INSTRUMENT, QUOTE_QTY, QuotingSetup, TwoSidedQuoter, built_quoting_engine,
     drain_commands, exec_settings, make_ready, reseat_book, row_with_ceiling, spin_at,
@@ -165,9 +165,7 @@ fn the_quote_stop_pulls_the_whole_ladder_and_an_unwindowed_instrument_never_stop
     let (mut engine, mut commands, mut ui_events) =
         quoting_engine(Box::new(LadderQuoter), LADDER_DEPTH);
     make_ready(&mut engine, OPEN);
-    engine.dispatch(&InboundMessage::MarketRotation(rotation(
-        0, OPEN, CLOSE, OPEN,
-    )));
+    engine.dispatch(&rotation(0, OPEN, CLOSE, OPEN));
     for message in reseat_book(BID, ASK, OPEN) {
         engine.dispatch(&message);
     }
@@ -191,9 +189,7 @@ fn the_quote_stop_pulls_the_whole_ladder_and_an_unwindowed_instrument_never_stop
     ack_cancelled(&mut engine, &swept, stop + 2_000_000);
     let next_open = CLOSE;
     let next_close = next_open + WINDOW.micros();
-    engine.dispatch(&InboundMessage::MarketRotation(rotation(
-        0, next_open, next_close, next_open,
-    )));
+    engine.dispatch(&rotation(0, next_open, next_close, next_open));
     for message in reseat_book(BID, ASK, next_open + 1_000_000) {
         engine.dispatch(&message);
     }
@@ -279,9 +275,7 @@ fn a_full_command_bank_halts_and_leaves_the_order_it_could_not_cancel_live() {
     });
     let (mut engine, mut commands, mut ui_events) = (built.engine, built.commands, built.ui_events);
     make_ready(&mut engine, OPEN);
-    engine.dispatch(&InboundMessage::MarketRotation(rotation(
-        0, OPEN, CLOSE, OPEN,
-    )));
+    engine.dispatch(&rotation(0, OPEN, CLOSE, OPEN));
     for message in reseat_book(BID, ASK, OPEN) {
         engine.dispatch(&message);
     }
@@ -362,11 +356,14 @@ fn ack_placed(engine: &mut HotEngine, commands: &[ExecCommand], when: i64) {
         else {
             continue;
         };
-        engine.dispatch(&InboundMessage::Exec(ExecEvent {
-            kind: ExecKind::AckPlaced,
-            status: Some(VenueOrderStatus::New),
-            ..exec_event(INSTRUMENT, *client_id, *side, price.0, when)
-        }));
+        engine.dispatch(&InboundMessage::new(
+            ts(when),
+            MessageBody::Exec(ExecEvent {
+                kind: ExecKind::AckPlaced,
+                status: Some(VenueOrderStatus::New),
+                ..exec_event(INSTRUMENT, *client_id, *side, price.0, when)
+            }),
+        ));
     }
 }
 
@@ -375,10 +372,13 @@ fn ack_cancelled(engine: &mut HotEngine, commands: &[ExecCommand], when: i64) {
         let ExecCommand::Cancel { client_id, .. } = command else {
             continue;
         };
-        engine.dispatch(&InboundMessage::Exec(ExecEvent {
-            kind: ExecKind::ReportCanceled,
-            status: Some(VenueOrderStatus::Canceled),
-            ..exec_event(INSTRUMENT, *client_id, Side::Buy, BID, when)
-        }));
+        engine.dispatch(&InboundMessage::new(
+            ts(when),
+            MessageBody::Exec(ExecEvent {
+                kind: ExecKind::ReportCanceled,
+                status: Some(VenueOrderStatus::Canceled),
+                ..exec_event(INSTRUMENT, *client_id, Side::Buy, BID, when)
+            }),
+        ));
     }
 }

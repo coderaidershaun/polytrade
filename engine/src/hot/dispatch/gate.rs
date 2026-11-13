@@ -4,7 +4,7 @@
 
 use crate::hot::digest::digest_fields;
 use crate::hot::sink::LinkSink;
-use crate::link::{InboundLink, TopicId};
+use crate::link::{LinkFrame, TopicId};
 use crate::log::hot_info;
 use crate::msg::inbound::RunControl;
 use crate::msg::persist::{LinkFrameRow, LinkRowKind, PersistRecord};
@@ -77,18 +77,18 @@ impl HotEngine {
 
     /// The frame is recorded before the strategy sees it, so on the tape it comes ahead of anything
     /// the strategy writes in reply.
-    pub(super) fn on_link(&mut self, link: &InboundLink) {
-        self.record_link_payload(link);
+    pub(super) fn on_link(&mut self, frame: &LinkFrame, received_ts_us: LocalTs) {
+        self.record_link_payload(frame, received_ts_us);
         if !self.is_strategy_live() {
             return;
         }
-        let mut ctx = self.state.ctx(link.received_ts_us);
-        self.strategy.on_link(&mut ctx, &link.frame);
+        let mut ctx = self.state.ctx(received_ts_us);
+        self.strategy.on_link(&mut ctx, frame);
     }
 
-    fn record_link_payload(&mut self, link: &InboundLink) {
-        let origin = link.frame.origin;
-        let payload = &link.frame.payload;
+    fn record_link_payload(&mut self, frame: &LinkFrame, received_ts_us: LocalTs) {
+        let origin = frame.origin;
+        let payload = &frame.payload;
         let values = payload.values();
         let count = values.len() as u16;
         for (slot, value) in values.iter().enumerate() {
@@ -103,17 +103,17 @@ impl HotEngine {
                     count,
                     value: *value,
                     event_ts_us: payload.event_ts_us,
-                    received_ts_us: link.received_ts_us,
+                    received_ts_us,
                 }));
         }
     }
 
     /// Only run-state input to dispatch (level-triggered markers; epoch dedups; republish ack cell).
     #[cold]
-    pub(super) fn on_run_control(&mut self, control: &RunControl) {
-        self.record_run_control(control);
+    pub(super) fn on_run_control(&mut self, control: &RunControl, received_ts_us: LocalTs) {
+        self.record_run_control(control, received_ts_us);
         if control.desired.epoch > self.run.epoch {
-            self.apply_run_state(control.desired, control.received_ts_us);
+            self.apply_run_state(control.desired, received_ts_us);
         }
         if let Some(report) = &self.run_report {
             report.store(self.run);
@@ -121,7 +121,7 @@ impl HotEngine {
     }
 
     #[cold]
-    fn record_run_control(&mut self, control: &RunControl) {
+    fn record_run_control(&mut self, control: &RunControl, received_ts_us: LocalTs) {
         let kind = match control.desired.state {
             RunState::Running => LinkRowKind::RunRunning,
             RunState::Idle => LinkRowKind::RunIdle,
@@ -136,8 +136,8 @@ impl HotEngine {
                 slot: 0,
                 count: 0,
                 value: 0.0,
-                event_ts_us: control.received_ts_us.to_peer(),
-                received_ts_us: control.received_ts_us,
+                event_ts_us: received_ts_us.to_peer(),
+                received_ts_us,
             }));
     }
 

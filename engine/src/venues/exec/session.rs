@@ -4,6 +4,7 @@
 
 use crate::msg::exec::{CancelReason, ExecEvent};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Side};
+use crate::msg::inbound::{InboundMessage, MessageBody};
 use crate::msg::time::LocalTs;
 use crate::runtime::shutdown::{FatalReason, FatalSignal};
 use crate::{error, warn};
@@ -15,12 +16,15 @@ use super::{
 };
 
 pub trait EventSink {
-    fn send_exec(&mut self, event: ExecEvent);
+    fn send_exec(&mut self, received_ts_us: LocalTs, event: ExecEvent);
 }
 
-impl EventSink for Vec<ExecEvent> {
-    fn send_exec(&mut self, event: ExecEvent) {
-        self.push(event);
+impl EventSink for Vec<InboundMessage> {
+    fn send_exec(&mut self, received_ts_us: LocalTs, event: ExecEvent) {
+        self.push(InboundMessage::new(
+            received_ts_us,
+            MessageBody::Exec(event),
+        ));
     }
 }
 
@@ -126,7 +130,7 @@ impl<S: EventSink> ExecSession<S> {
                     self.venue, client_id.0
                 );
                 self.events
-                    .send_exec(place_not_sent(instrument, client_id, side, now));
+                    .send_exec(now, place_not_sent(instrument, client_id, side, now));
                 if reason.is_fatal() {
                     self.fatal.trip(FatalReason::PlacementFailedClosed {
                         venue: self.venue,
@@ -143,7 +147,7 @@ impl<S: EventSink> ExecSession<S> {
                     self.venue, client_id.0
                 );
                 self.events
-                    .send_exec(amend_not_sent(instrument, client_id, now));
+                    .send_exec(now, amend_not_sent(instrument, client_id, now));
             }
             ExecEffect::Send { .. }
             | ExecEffect::Skipped { .. }
@@ -205,7 +209,7 @@ impl<S: EventSink> ExecSession<S> {
         let side = self.mirrored_side(client_id);
         self.core.mark_ambiguous(client_id);
         self.events
-            .send_exec(request_timed_out(instrument, client_id, side, now));
+            .send_exec(now, request_timed_out(instrument, client_id, side, now));
     }
 
     pub fn lose_connection(&mut self, now: LocalTs) {
@@ -221,7 +225,7 @@ impl<S: EventSink> ExecSession<S> {
             self.mark_in_doubt(entry.request, now);
         }
         self.core.on_disconnected();
-        self.events.send_exec(stream_reset(now));
+        self.events.send_exec(now, stream_reset(now));
     }
 
     /// An expired order request is reconciled with a status probe and never resent, because the
@@ -245,7 +249,7 @@ impl<S: EventSink> ExecSession<S> {
             );
             let side = self.mirrored_side(client_id);
             self.events
-                .send_exec(request_timed_out(instrument, client_id, side, now));
+                .send_exec(now, request_timed_out(instrument, client_id, side, now));
             let mut probe = Outgoing::sink(&mut expired.outgoing, entry.recon_seq);
             self.core
                 .on_request_timeout(instrument, client_id, &mut probe);
@@ -296,7 +300,7 @@ impl<S: EventSink> ExecSession<S> {
         self.is_readiness_pending = false;
         for &instrument in &self.instruments {
             self.events
-                .send_exec(open_orders_snapshot_end(instrument, now));
+                .send_exec(now, open_orders_snapshot_end(instrument, now));
         }
         true
     }

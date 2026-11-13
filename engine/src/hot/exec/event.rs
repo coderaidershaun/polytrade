@@ -1,26 +1,68 @@
-//! Folding a venue event: the slot transition, the money it moves, the reservation it releases and
-//! the audit rows it earns, for this run's orders and for those an earlier run left resting.
+//! Folding a venue event: a stream reset, the end of an open-orders snapshot, or the transition of
+//! an order of this run or an earlier one, with its money, reservation release and audit rows.
 
 use crate::hot::digest::digest_fields;
 use crate::hot::ledger::{LedgerFill, PositionLedger};
 use crate::hot::strategy::Actions;
-use crate::log::hot_error;
+use crate::log::{hot_error, hot_warn};
 use crate::msg::exec::{ExecEvent, ExecKind, RejectClass};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Side};
-use crate::msg::persist::OrderLifecycle;
+use crate::msg::persist::{OrderLifecycle, OrderTransition};
+use crate::msg::time::LocalTs;
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 
 use super::account::ReleaseOutcome;
-use super::audit::bank_event_rows;
+use super::audit::{bank_engine_driven, bank_event_rows};
 use super::engine::{ExecEngine, view_of};
 use super::gates::HaltReason;
 use super::order::{
-    FillDelta, MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS, OrderSlot, OrderState, free_or_oldest_closed,
+    FillDelta, MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS, OrderSlot, OrderState, ReconcilePass,
+    free_or_oldest_closed,
 };
 use super::transition::apply_exec_event;
 use super::view::{ExecCallback, Fill, OrderReject, RejectOrigin};
 
 impl ExecEngine {
+    #[cold]
+    pub(super) fn on_stream_reset(&mut self, at: LocalTs, bank: &mut Actions) -> ExecCallback {
+        hot_warn!(
+            "execution stream reset — every open order is unknown until a reconciliation lands"
+        );
+        self.readiness.observe_stream_reset();
+        // Every reason the pass last reported was derived from order state that is now a memory, so
+        // the next refusal is news again rather than a repeat the latch would swallow.
+        self.refusals.forget();
+        self.orders.invalidate_all(&mut |slot, previous| {
+            let transition = OrderTransition::StreamReset;
+            bank_engine_driven(bank, slot, transition, previous.into(), at);
+        });
+        ExecCallback::None
+    }
+
+    #[cold]
+    pub(super) fn on_snapshot_end(
+        &mut self,
+        event: &ExecEvent,
+        received_ts_us: LocalTs,
+        bank: &mut Actions,
+    ) -> ExecCallback {
+        let Some(instrument) = event.instrument else {
+            return ExecCallback::None;
+        };
+        let pass = ReconcilePass {
+            instrument,
+            recon_seq: event.recon_seq,
+            recon_ts_us: received_ts_us,
+        };
+        self.orders.sweep_unseen(pass, &mut |slot, previous| {
+            swept_warning(slot, pass.recon_seq);
+            let transition = OrderTransition::SweepClosed;
+            bank_engine_driven(bank, slot, transition, previous.into(), pass.recon_ts_us);
+        });
+        self.readiness.observe_open_orders_snapshot();
+        ExecCallback::None
+    }
+
     /// Retry releases that beat account update. Fixed-slot scan, no alloc.
     pub(super) fn retry_reservation_releases(&mut self) {
         for index in 0..MAX_ORDER_SLOTS {
@@ -36,11 +78,12 @@ impl ExecEngine {
         &mut self,
         index: usize,
         event: &ExecEvent,
+        received_ts_us: LocalTs,
         ledger: &mut PositionLedger,
         bank: &mut Actions,
     ) -> ExecCallback {
         let previous_state = OrderLifecycle::from(self.orders.slot(index).state);
-        let applied = apply_exec_event(self.orders.slot_mut(index), event);
+        let applied = apply_exec_event(self.orders.slot_mut(index), event, received_ts_us);
         if applied.is_resurrection {
             self.resurrection_error(event);
         }
@@ -52,8 +95,15 @@ impl ExecEngine {
         } else {
             self.release_reservation(index);
         }
-        self.record_outcome(event, applied.state);
-        bank_event_rows(bank, &slot, event, previous_state, applied.fill);
+        self.record_outcome(event, applied.state, received_ts_us);
+        bank_event_rows(
+            bank,
+            &slot,
+            event,
+            previous_state,
+            applied.fill,
+            received_ts_us,
+        );
 
         if !applied.fill.is_empty() {
             return ExecCallback::Fill(Fill {
@@ -69,7 +119,7 @@ impl ExecEngine {
                 liquidity: event.liquidity,
                 trade_id: event.trade_id,
                 state: applied.state,
-                event_ts_us: event.received_ts_us,
+                event_ts_us: received_ts_us,
             });
         }
         if let Some(class) = event.reject {
@@ -82,10 +132,10 @@ impl ExecEngine {
                     class,
                     code: event.reject_code,
                 },
-                event_ts_us: event.received_ts_us,
+                event_ts_us: received_ts_us,
             });
         }
-        ExecCallback::Update(view_of(&slot).updated_at(event.received_ts_us))
+        ExecCallback::Update(view_of(&slot).updated_at(received_ts_us))
     }
 
     /// Prior-run order event: no reservation release, no reject count, no callback (position already in ledger).
@@ -93,21 +143,29 @@ impl ExecEngine {
     pub(super) fn apply_to_prior_run(
         &mut self,
         event: &ExecEvent,
+        received_ts_us: LocalTs,
         ledger: &mut PositionLedger,
         bank: &mut Actions,
     ) {
         // SMELL: when every prior-run slot is taken, this event is logged and dropped, so a fill of
         // an order from the earlier run never reaches the ledger and the position stays wrong. A
         // full table should halt the engine instead.
-        let Some(index) = self.prior_orders.find_or_seat(event) else {
+        let Some(index) = self.prior_orders.find_or_seat(event, received_ts_us) else {
             self.prior_run_overflow_error(event);
             return;
         };
         let previous_state = OrderLifecycle::from(self.prior_orders.slot(index).state);
-        let applied = apply_exec_event(self.prior_orders.slot_mut(index), event);
+        let applied = apply_exec_event(self.prior_orders.slot_mut(index), event, received_ts_us);
         let slot = *self.prior_orders.slot(index);
         self.book_fill(&slot, event, applied.fill, ledger);
-        bank_event_rows(bank, &slot, event, previous_state, applied.fill);
+        bank_event_rows(
+            bank,
+            &slot,
+            event,
+            previous_state,
+            applied.fill,
+            received_ts_us,
+        );
     }
 
     /// Fee + fill. No-op on empty (duplicates already folded).
@@ -216,7 +274,7 @@ impl ExecEngine {
     /// `Refused`: the two share venue code `-2010` and only the reject REASON separates them. Both
     /// Binance decoders split on the message, and an unrecognised `-2010` classifies `Fatal`, which
     /// parks the engine loudly rather than letting it place orders it cannot fund.
-    fn record_outcome(&mut self, event: &ExecEvent, state: OrderState) {
+    fn record_outcome(&mut self, event: &ExecEvent, state: OrderState, received_ts_us: LocalTs) {
         let Some(class) = event.reject else {
             // One order the venue accepts shows the requests are not wrong in kind, so it ends the
             // streak, and only the venue can do that. The kinds the EDGE synthesises for a request
@@ -233,7 +291,7 @@ impl ExecEngine {
         match class {
             RejectClass::Fatal => {
                 self.fatal_reject_error(event);
-                self.halt(HaltReason::FatalReject, event.received_ts_us);
+                self.halt(HaltReason::FatalReject, received_ts_us);
             }
             // The ordinary cost of quoting post-only. It must never touch the hard-reject streak: a
             // maker earns these all day, and counting them parks the engine exactly when the market
@@ -245,7 +303,7 @@ impl ExecEngine {
             RejectClass::StillLive | RejectClass::Ambiguous => {
                 self.reject_streak += 1;
                 if self.reject_streak >= self.settings.max_consecutive_rejects {
-                    self.halt(HaltReason::RejectStreak, event.received_ts_us);
+                    self.halt(HaltReason::RejectStreak, received_ts_us);
                 }
             }
         }
@@ -260,6 +318,19 @@ impl ExecEngine {
             event.reject_code
         );
     }
+}
+
+/// A reconciliation retiring a working order is the engine LOSING one, not routine housekeeping: the
+/// venue was asked what it holds and did not mention an order this table believed in. It is logged
+/// as a warning because otherwise a duplicate resting on the venue is the first anyone hears of it.
+#[cold]
+fn swept_warning(slot: &OrderSlot, recon_seq: u64) {
+    hot_warn!(
+        "reconciliation pass {} did not name order {:x} on instrument {} — closing it as gone",
+        recon_seq,
+        slot.client_id.0,
+        slot.instrument.0
+    );
 }
 
 const PRIOR_RUN_SLOTS: usize = MAX_QUOTE_LEVELS * 2 * MAX_ORDER_INSTRUMENTS;
@@ -307,7 +378,11 @@ impl PriorRunOrders {
         })
     }
 
-    pub(super) fn find_or_seat(&mut self, event: &ExecEvent) -> Option<usize> {
+    pub(super) fn find_or_seat(
+        &mut self,
+        event: &ExecEvent,
+        received_ts_us: LocalTs,
+    ) -> Option<usize> {
         if let Some(index) = self.find(event.client_id) {
             return Some(index);
         }
@@ -320,7 +395,7 @@ impl PriorRunOrders {
             instrument: event.instrument?,
             price: event.price,
             qty: event.qty,
-            last_event_ts_us: event.received_ts_us,
+            last_event_ts_us: received_ts_us,
             ..OrderSlot::EMPTY
         };
         Some(index)

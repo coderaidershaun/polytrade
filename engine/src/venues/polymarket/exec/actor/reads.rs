@@ -106,16 +106,17 @@ impl Actor {
             self.balances.clear();
             return;
         }
+        let received_ts_us = self.control.clock.now();
         let chunks = account_snapshot(
             &self.balances,
             AccountChunkKind::Snapshot,
             AccountStamps {
                 settled_through: self.settled_through,
-                received_ts_us: self.control.clock.now(),
+                received_ts_us,
             },
         );
         self.balances.clear();
-        self.session.events.send_account(chunks);
+        self.session.events.send_account(received_ts_us, chunks);
         self.settle_pass_read(resync_seq);
         // A fill may have landed during the sweep, making these reads stale, so a
         // restatement is issued if one is now due.

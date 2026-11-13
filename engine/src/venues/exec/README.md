@@ -26,10 +26,11 @@ each command to the venue's transport and from there to `ExecCore::on_command`):
 There is deliberately no cancel-all: the engine cannot distinguish foreign orders, so it
 never asks for something it could not account for.
 
-**Events out** (`InboundMessage::Exec(ExecEvent)` and `::Account(AccountChunk)` through
-`EventFunnel`): sixteen `ExecKind`s covering acks, reports, refusals, snapshots and stream
-lifecycle, plus balance chunks. Everything is a fixed-size POD of integer newtypes — prices
-and quantities are i64 mantissas, identity is packed integers, and no string crosses inward.
+**Events out** (an `InboundMessage` with body `MessageBody::Exec(ExecEvent)` or
+`MessageBody::Account(AccountChunk)`, through `EventFunnel`): sixteen `ExecKind`s covering acks,
+reports, refusals, snapshots and stream lifecycle, plus balance chunks. Everything is a fixed-size
+POD of integer newtypes — prices and quantities are i64 mantissas, identity is packed integers,
+and no string crosses inward.
 
 Both live in `msg/exec.rs`. The venue's raw codes ride along as tape-only fields; the hot
 engine branches solely on the normalised enums.
@@ -84,8 +85,9 @@ engine branches solely on the normalised enums.
 4. **Written obligations** — the rules no signature can carry:
    - Every command is eventually answered. A refusal, a timeout, a disconnect — each
      synthesises an event; no hot slot ever waits forever.
-   - One input queue per adapter, events stamped with monotone `queued_ts_us`. Acks and
-     stream reports share that one queue so the tape is deterministic. Never split lanes.
+   - One input queue per adapter, events stamped with a monotone `queued_ts_us` in the
+     message header. Acks and stream reports share that one queue so the tape is deterministic.
+     Never split lanes.
    - Fill quantities are cumulative absolute venue totals, never deltas. A dropped or
      re-delivered event must be a no-op, which is what makes drop+count safe. A venue that
      reports per-fill increments gets accumulated at the edge, before the seam.

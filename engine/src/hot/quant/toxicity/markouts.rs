@@ -221,7 +221,12 @@ impl SideMarkouts {
     }
 
     /// Some(armed) if print filled us at our level, None else (side effects apply either way).
-    fn on_trade(&mut self, trade: &TradeEvent, mids: &FastQueue<MidSample>) -> Option<Price> {
+    fn on_trade(
+        &mut self,
+        trade: &TradeEvent,
+        received_ts_us: LocalTs,
+        mids: &FastQueue<MidSample>,
+    ) -> Option<Price> {
         let armed = self.armed?;
         if !self.side.is_through(armed, trade.price) {
             return None;
@@ -232,9 +237,9 @@ impl SideMarkouts {
         }
         self.armed = None;
         self.fills += 1;
-        self.record_reverse(trade.received_ts_us, mids);
+        self.record_reverse(received_ts_us, mids);
         self.queue_forward(PendingFill {
-            fill_ts_us: trade.received_ts_us,
+            fill_ts_us: received_ts_us,
             fill_price: armed.to_f64(),
         });
         Some(armed)
@@ -372,17 +377,17 @@ impl MarkoutTracker {
 
     /// Route print by aggressor (seller->bid, buyer->ask). Fill at OUR armed level (not print), stamped at receipt.
     /// Report recorded fill (routed side only) or None if no armed level reached.
-    pub fn on_trade(&mut self, trade: &TradeEvent) -> Option<MarkoutFill> {
+    pub fn on_trade(&mut self, trade: &TradeEvent, received_ts_us: LocalTs) -> Option<MarkoutFill> {
         let side = MarkoutSide::from_aggressor(trade.side);
         let markouts = match side {
             MarkoutSide::Bid => &mut self.bid,
             MarkoutSide::Ask => &mut self.ask,
         };
-        let price = markouts.on_trade(trade, &self.mids)?;
+        let price = markouts.on_trade(trade, received_ts_us, &self.mids)?;
         Some(MarkoutFill {
             side,
             price,
-            fill_ts_us: trade.received_ts_us,
+            fill_ts_us: received_ts_us,
         })
     }
 

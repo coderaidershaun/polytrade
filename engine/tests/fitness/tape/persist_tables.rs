@@ -13,13 +13,13 @@
 
 use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
 use engine::msg::ids::{Price, Qty, Side};
-use engine::msg::inbound::{InboundMessage, TradeEvent};
+use engine::msg::inbound::{InboundMessage, MessageBody, TradeEvent};
 use engine::msg::persist::{BookEventKind, BookEventRow, FeatureId, KlineRow, TradeRow};
 use engine::runtime::config::{KlineInterval, RecordedTables, TableKind, TrackerSpec};
 
 use crate::engine_support::{
     ALL_TABLES, ONE, engine_without_persistence, engine_without_warmup, instrument_row,
-    persist_ring_for, strategy_log_ring, trade,
+    persist_ring_for, strategy_log_ring, trade, ts,
 };
 use crate::parquet_readback::BASE_TS_US;
 
@@ -58,7 +58,7 @@ impl Strategy for EmitsEveryTable {
             qty: event.qty,
             side: event.side,
             exchange_ts_us: event.exchange_ts_us,
-            received_ts_us: event.received_ts_us,
+            received_ts_us: ctx.event_ts(),
         });
         ctx.emit_book_event_row(BookEventRow {
             instrument: event.instrument,
@@ -67,12 +67,12 @@ impl Strategy for EmitsEveryTable {
             price: Price(0),
             qty: Qty(0),
             update_id: 0,
-            received_ts_us: event.received_ts_us,
+            received_ts_us: ctx.event_ts(),
         });
         ctx.emit_kline_row(KlineRow {
             instrument: event.instrument,
             interval: KlineInterval::OneMinute,
-            open_ts_us: event.received_ts_us.as_venue_calendar(),
+            open_ts_us: ctx.event_ts().as_venue_calendar(),
             open: event.price,
             high: event.price,
             low: event.price,
@@ -82,7 +82,7 @@ impl Strategy for EmitsEveryTable {
             trade_count: 1,
             is_closed: true,
             exchange_ts_us: event.exchange_ts_us,
-            received_ts_us: event.received_ts_us,
+            received_ts_us: ctx.event_ts(),
         });
     }
 }
@@ -100,13 +100,10 @@ fn only_the_tables_the_config_names_receive_rows() {
             log_sink,
         );
 
-        engine.dispatch(&InboundMessage::Trade(trade(
-            0,
-            100 * ONE,
-            ONE,
-            Side::Buy,
-            BASE_TS_US,
-        )));
+        engine.dispatch(&InboundMessage::new(
+            ts(BASE_TS_US),
+            MessageBody::Trade(trade(0, 100 * ONE, ONE, Side::Buy, BASE_TS_US)),
+        ));
 
         let mut landed: Vec<&str> = Vec::new();
         while let Ok(record) = consumer.pop() {
@@ -139,13 +136,10 @@ fn rows_without_a_persistence_ring_count_as_no_drop() {
         log_sink,
     );
     for offset in 0..1_000 {
-        engine.dispatch(&InboundMessage::Trade(trade(
-            0,
-            100 * ONE,
-            ONE,
-            Side::Buy,
-            BASE_TS_US + offset,
-        )));
+        engine.dispatch(&InboundMessage::new(
+            ts(BASE_TS_US + offset),
+            MessageBody::Trade(trade(0, 100 * ONE, ONE, Side::Buy, BASE_TS_US + offset)),
+        ));
     }
     assert_eq!(
         engine.dropped_persist_records(),

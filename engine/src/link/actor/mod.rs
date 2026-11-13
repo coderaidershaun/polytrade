@@ -15,7 +15,7 @@ use tokio::net::UdpSocket;
 use tokio::runtime::Handle;
 
 use crate::hot::spawn::LinkQueueProducer;
-use crate::msg::inbound::{InboundMessage, RunControl};
+use crate::msg::inbound::{InboundMessage, MessageBody, MessageHeader, RunControl};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{DurationUs, EngineClock, LocalTs};
 use crate::msg::ui::LatencyReport;
@@ -29,9 +29,7 @@ use crate::{info, warn, warn_repeating};
 
 use super::control::{LINK_MAX_TOPICS, RunPhase, Subscribe, TopicSet};
 use super::envelope::{FrameGuard, LINK_MAX_DATAGRAM, LinkDecodeError, LinkIdentity, TopicId};
-use super::frame::{
-    InboundLink, LinkBody, LinkDatagram, LinkFrame, LinkOrigin, LinkPayload, OutboundLink,
-};
+use super::frame::{LinkBody, LinkDatagram, LinkFrame, LinkOrigin, LinkPayload, OutboundLink};
 use super::subscribers::{
     LINK_MAX_SUBSCRIBERS, LINK_SUBSCRIPTION_TTL, RefreshOutcome, SequenceGate, SubscriberTable,
 };
@@ -282,11 +280,13 @@ impl Actor {
         reason = "the link actor stamps each peer frame and marker with message time before the tape records it"
     )]
     fn on_payload(&mut self, origin: LinkOrigin, payload: LinkPayload, received_ts_us: LocalTs) {
-        self.inbound.push(InboundMessage::Link(InboundLink {
-            frame: LinkFrame { origin, payload },
-            received_ts_us,
-            queued_ts_us: self.clock.now(),
-        }));
+        self.inbound.push(InboundMessage {
+            header: MessageHeader {
+                received_ts_us,
+                queued_ts_us: self.clock.now(),
+            },
+            body: MessageBody::Link(LinkFrame { origin, payload }),
+        });
     }
 
     fn on_subscribe(&mut self, from: SocketAddr, subscribe: Subscribe, now: LocalTs) {
@@ -317,11 +317,10 @@ impl Actor {
         let Some(desired) = self.control.pending() else {
             return;
         };
-        self.inbound.push(InboundMessage::RunControl(RunControl {
-            desired,
-            received_ts_us: now,
-            queued_ts_us: now,
-        }));
+        self.inbound.push(InboundMessage::new(
+            now,
+            MessageBody::RunControl(RunControl { desired }),
+        ));
     }
 
     fn note_peer_seen(&mut self, from: SocketAddr, now: LocalTs) {

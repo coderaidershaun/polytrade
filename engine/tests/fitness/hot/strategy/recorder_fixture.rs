@@ -6,7 +6,7 @@ use engine::hot::sink::ExecSink;
 use engine::hot::strategy::StrategyConfig;
 use engine::msg::exec::{ExecCommand, ExecLaneItem};
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
-use engine::msg::inbound::InboundMessage;
+use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::persist::PersistRecord;
 use engine::msg::time::{DurationUs, Stamper};
 use engine::runtime::config::{IntensitySpec, KlineInterval, TableKind};
@@ -16,7 +16,7 @@ use rtrb::{Consumer, RingBuffer};
 use crate::engine_support::{
     ONE, account_chunk, book_reset, delta_chunk, detached_setup, engine_view, instrument_row,
     kline, persist_ring, recorder_spec, snapshot_pair, spin, stream_ready, tracker_spec_all, trade,
-    ui_event_ring,
+    ts, ui_event_ring,
 };
 use crate::exec_support::{drain_commands, exec_settings, open_orders_snapshot};
 use crate::micro_strategy::features::FEATURE_NAMES;
@@ -97,10 +97,13 @@ pub(crate) fn recorder_engine(
 pub(crate) fn make_ready(engine: &mut HotEngine, when: i64) {
     engine.dispatch(&stream_ready(INSTRUMENT, when));
     open_orders_snapshot(engine, when);
-    engine.dispatch(&InboundMessage::Account(account_chunk(
-        &[(BASE_ASSET, 1_000 * ONE), (QUOTE_ASSET, 1_000_000 * ONE)],
-        when,
-    )));
+    engine.dispatch(&InboundMessage::new(
+        ts(when),
+        MessageBody::Account(account_chunk(
+            &[(BASE_ASSET, 1_000 * ONE), (QUOTE_ASSET, 1_000_000 * ONE)],
+            when,
+        )),
+    ));
 }
 
 pub(crate) fn seed_book(engine: &mut HotEngine, base: i64, when: i64) {
@@ -113,9 +116,9 @@ pub(crate) fn seed_book(engine: &mut HotEngine, base: i64, when: i64) {
         when + 1,
     );
     for message in [
-        InboundMessage::BookReset(book_reset(0, when)),
-        InboundMessage::Book(bids),
-        InboundMessage::Book(asks),
+        book_reset(0, when),
+        InboundMessage::new(ts(when + 1), MessageBody::Book(bids)),
+        InboundMessage::new(ts(when + 1), MessageBody::Book(asks)),
     ] {
         engine.dispatch(&message);
     }
@@ -134,26 +137,35 @@ pub(crate) fn step_messages(base: i64, index: i64, when: i64) -> [InboundMessage
         false => (Side::Buy, base - 5 * TICK),
     };
     [
-        InboundMessage::Trade(trade(0, price, ONE / 100, side, when)),
-        InboundMessage::Book(delta_chunk(
-            0,
-            level_side,
-            &[(level, (1 + index % 5) * ONE)],
-            when,
-        )),
-        InboundMessage::Kline(kline(
-            0,
-            KlineInterval::OneMinute,
-            (
-                base,
-                base + 5 * TICK,
-                base - 5 * TICK,
-                base + (index % 5) * TICK,
-            ),
-            true,
-            when,
-        )),
-        InboundMessage::SpinTick(spin(index as u64, when)),
+        InboundMessage::new(
+            ts(when),
+            MessageBody::Trade(trade(0, price, ONE / 100, side, when)),
+        ),
+        InboundMessage::new(
+            ts(when),
+            MessageBody::Book(delta_chunk(
+                0,
+                level_side,
+                &[(level, (1 + index % 5) * ONE)],
+                when,
+            )),
+        ),
+        InboundMessage::new(
+            ts(when),
+            MessageBody::Kline(kline(
+                0,
+                KlineInterval::OneMinute,
+                (
+                    base,
+                    base + 5 * TICK,
+                    base - 5 * TICK,
+                    base + (index % 5) * TICK,
+                ),
+                true,
+                when,
+            )),
+        ),
+        spin(index as u64, when),
     ]
 }
 

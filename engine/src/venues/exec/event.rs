@@ -102,8 +102,6 @@ pub(crate) fn blank(
         recon_seq: 0,
         exchange_ts_us: at.as_venue_calendar(),
         request_sent_ts_us: None,
-        received_ts_us: at,
-        queued_ts_us: at,
     }
 }
 
@@ -111,7 +109,6 @@ pub(crate) fn blank(
 pub(crate) struct ChunkStamps {
     pub(crate) venue_update_ts_ms: u64,
     pub(crate) exchange_ts_us: VenueTs,
-    pub(crate) received_ts_us: LocalTs,
 }
 
 /// The engine stays unready until it sees the last chunk of a balance snapshot, so an empty sweep
@@ -132,8 +129,6 @@ pub(crate) fn account_chunks(
         is_last_chunk: false,
         venue_update_ts_ms: stamps.venue_update_ts_ms,
         exchange_ts_us: stamps.exchange_ts_us,
-        received_ts_us: stamps.received_ts_us,
-        queued_ts_us: stamps.received_ts_us,
     };
     let mut chunks: Vec<AccountChunk> = balances
         .chunks(ACCOUNT_CHUNK_ASSETS)

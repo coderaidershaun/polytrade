@@ -7,27 +7,34 @@ use crate::msg::ids::{InstrumentId, Price};
 use crate::msg::inbound::{
     BookChunk, BookChunkKind, BookReset, KlineEvent, MarketRotation, TradeEvent,
 };
+use crate::msg::time::LocalTs;
 
 use super::HotEngine;
 
 impl HotEngine {
-    pub(super) fn on_trade(&mut self, event: &TradeEvent) {
+    pub(super) fn on_trade(&mut self, event: &TradeEvent, received_ts_us: LocalTs) {
         let index = usize::from(event.instrument.0);
-        let closed = self.state.trackers[index].on_trade(event);
+        let closed = self.state.trackers[index].on_trade(event, received_ts_us);
         // Tape ahead of warmup (operators see prints).
-        self.ui.emit_trade(event);
+        self.ui.emit_trade(event, received_ts_us);
         if !self.is_strategy_live() {
             return;
         }
-        let mut ctx = self.state.ctx(event.received_ts_us);
+        let mut ctx = self.state.ctx(received_ts_us);
         self.strategy.on_trade(&mut ctx, event);
         if closed > 0 {
-            self.fan_out_volume_bars(event, index, closed);
+            self.fan_out_volume_bars(event, index, closed, received_ts_us);
         }
     }
 
     /// Bars copied before ctx built (series borrow + &mut Actions coexist limit).
-    fn fan_out_volume_bars(&mut self, event: &TradeEvent, index: usize, closed: usize) {
+    fn fan_out_volume_bars(
+        &mut self,
+        event: &TradeEvent,
+        index: usize,
+        closed: usize,
+        received_ts_us: LocalTs,
+    ) {
         let retained = self.state.trackers[index]
             .volume_bars()
             .map_or(0, |series| series.closed.len());
@@ -40,7 +47,7 @@ impl HotEngine {
                 .volume_bars()
                 .and_then(|series| series.closed.get(series.closed.len() - 1 - offset));
             if let Some(bar) = bar {
-                let mut ctx = self.state.ctx(event.received_ts_us);
+                let mut ctx = self.state.ctx(received_ts_us);
                 self.strategy.on_volume(&mut ctx, event.instrument, &bar);
             }
         }
@@ -58,7 +65,7 @@ impl HotEngine {
         self.unretained_volume_bars += count as u64;
     }
 
-    pub(super) fn on_book(&mut self, chunk: &BookChunk) {
+    pub(super) fn on_book(&mut self, chunk: &BookChunk, received_ts_us: LocalTs) {
         let index = usize::from(chunk.instrument.0);
         match chunk.kind {
             BookChunkKind::Snapshot => {
@@ -80,14 +87,14 @@ impl HotEngine {
             // Message stamp (replay-exact, not clock).
             self.state
                 .exec
-                .on_book_commit(chunk.instrument, chunk.received_ts_us);
+                .on_book_commit(chunk.instrument, received_ts_us);
             self.ui
-                .emit_book(chunk.instrument, &self.state.books, chunk.received_ts_us);
+                .emit_book(chunk.instrument, &self.state.books, received_ts_us);
         }
         if !self.is_strategy_live() {
             return;
         }
-        let mut ctx = self.state.ctx(chunk.received_ts_us);
+        let mut ctx = self.state.ctx(received_ts_us);
         self.strategy.on_book_update(&mut ctx, chunk);
     }
 
@@ -104,17 +111,17 @@ impl HotEngine {
 
     /// Fires on proven loss only (rare).
     #[cold]
-    pub(super) fn on_book_reset(&mut self, reset: &BookReset) {
+    pub(super) fn on_book_reset(&mut self, reset: &BookReset, received_ts_us: LocalTs) {
         let index = usize::from(reset.instrument.0);
         self.state.books[index].apply_reset();
         self.reset_derived_state(index);
         // Dims UI (dropped levels not live). Ahead of warmup.
         self.ui
-            .emit_book(reset.instrument, &self.state.books, reset.received_ts_us);
+            .emit_book(reset.instrument, &self.state.books, received_ts_us);
         if !self.is_strategy_live() {
             return;
         }
-        let mut ctx = self.state.ctx(reset.received_ts_us);
+        let mut ctx = self.state.ctx(received_ts_us);
         self.strategy.on_book_reset(&mut ctx, reset.instrument);
     }
 
@@ -129,7 +136,11 @@ impl HotEngine {
 
     /// New window -> wipe tracker/EwmaVol/ledger (new distribution). Only place ledger zeroed.
     #[cold]
-    pub(super) fn on_market_rotation(&mut self, rotation: &MarketRotation) {
+    pub(super) fn on_market_rotation(
+        &mut self,
+        rotation: &MarketRotation,
+        received_ts_us: LocalTs,
+    ) {
         let index = usize::from(rotation.instrument.0);
         self.state.windows[index] = Some(WindowInfo {
             open_ts_us: rotation.window_open_ts_us,
@@ -145,26 +156,23 @@ impl HotEngine {
             ewma.reset();
         }
         // Refresh UI (re-stamps identity). Ahead of warmup.
-        self.ui.emit_book(
-            rotation.instrument,
-            &self.state.books,
-            rotation.received_ts_us,
-        );
-        self.ui.emit_rotation(rotation);
+        self.ui
+            .emit_book(rotation.instrument, &self.state.books, received_ts_us);
+        self.ui.emit_rotation(rotation, received_ts_us);
         if !self.is_strategy_live() {
             return;
         }
-        let mut ctx = self.state.ctx(rotation.received_ts_us);
+        let mut ctx = self.state.ctx(received_ts_us);
         self.strategy.on_market_rotation(&mut ctx, rotation);
     }
 
-    pub(super) fn on_kline(&mut self, event: &KlineEvent) {
+    pub(super) fn on_kline(&mut self, event: &KlineEvent, received_ts_us: LocalTs) {
         let index = usize::from(event.instrument.0);
         self.state.trackers[index].on_kline(event);
         if !self.is_strategy_live() {
             return;
         }
-        let mut ctx = self.state.ctx(event.received_ts_us);
+        let mut ctx = self.state.ctx(received_ts_us);
         self.strategy.on_kline(&mut ctx, event);
     }
 }

@@ -45,7 +45,7 @@ impl Actor {
             // it never needs a SnapshotEnd, because it feeds the mirror, not the hot table.
             // An order this build cannot read leaves the mirror incomplete, and quoting against an
             // incomplete mirror is what strands somebody's order.
-            let Some(event) = self.decode_order(order, ExecKind::SnapshotOrder, 0) else {
+            let Some((event, _)) = self.decode_order(order, ExecKind::SnapshotOrder, 0) else {
                 self.session.core.stop_quoting();
                 self.fail_resync(resync_seq);
                 self.control.fatal.trip(FatalReason::UndecodableOpenOrder {

@@ -10,13 +10,13 @@ use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, OrderStyle, RejectClass, VenueOrderStatus,
 };
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
-use engine::msg::inbound::InboundMessage;
+use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::time::LocalTs;
 use engine::msg::ui::UiEvent;
 use engine::runtime::config::{RecordedTables, TableKind};
 use rtrb::Consumer;
 
-use crate::engine_support::{ONE, exec_event};
+use crate::engine_support::{ONE, exec_event, ts};
 use crate::exec_support::{
     BID, CEILING, INSTRUMENT, QuotingEngine, QuotingSetup, TwoSidedQuoter, built_quoting_engine,
     drain_commands, exec_settings, make_ready, reseat_book, row_with_ceiling, spin_at,
@@ -100,6 +100,7 @@ fn resurrected_slot(orders: &mut OrderTable, recon_seq: u64) -> usize {
             status: Some(VenueOrderStatus::Canceled),
             ..base
         },
+        ts(10),
     );
     apply_exec_event(
         orders.slot_mut(index),
@@ -109,6 +110,7 @@ fn resurrected_slot(orders: &mut OrderTable, recon_seq: u64) -> usize {
             recon_seq,
             ..base
         },
+        ts(10),
     );
     index
 }
@@ -144,6 +146,7 @@ fn a_probe_refused_at_the_gateway_leaves_the_doubt_standing() {
             reject_code: -1003,
             ..exec_event(INSTRUMENT, client_id, Side::Buy, 100, 20)
         },
+        ts(20),
     );
     assert_eq!(orders.slot(index).state, OrderState::Unknown);
 
@@ -168,6 +171,7 @@ fn a_probe_refused_at_the_gateway_leaves_the_doubt_standing() {
                 reject_code: -1003,
                 ..exec_event(INSTRUMENT, id, Side::Buy, 100, 20)
             },
+            ts(20),
         );
         assert_eq!(orders.slot(other).state, OrderState::Live);
     }
@@ -176,12 +180,15 @@ fn a_probe_refused_at_the_gateway_leaves_the_doubt_standing() {
 fn adopt_live(engine: &mut HotEngine, generation_offset: usize, side: Side, when: i64) {
     let slot = side_base(INSTRUMENT, side) + generation_offset;
     let client_id = ClientIdLayout { run_nonce: 0 }.encode(slot, 1);
-    engine.dispatch(&InboundMessage::Exec(ExecEvent {
-        kind: ExecKind::SnapshotOrder,
-        status: Some(VenueOrderStatus::New),
-        qty: Qty(ONE / 10),
-        ..exec_event(INSTRUMENT, client_id, side, BID, when)
-    }));
+    engine.dispatch(&InboundMessage::new(
+        ts(when),
+        MessageBody::Exec(ExecEvent {
+            kind: ExecKind::SnapshotOrder,
+            status: Some(VenueOrderStatus::New),
+            qty: Qty(ONE / 10),
+            ..exec_event(INSTRUMENT, client_id, side, BID, when)
+        }),
+    ));
 }
 
 fn halt_of(events: &mut Consumer<UiEvent>) -> Option<ExecHalt> {

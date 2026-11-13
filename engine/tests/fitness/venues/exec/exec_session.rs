@@ -18,7 +18,9 @@ use engine::venues::exec::{
     TimeoutFallout,
 };
 
-type Session = ExecSession<Vec<ExecEvent>>;
+use crate::exec_support::SentEvents;
+
+type Session = ExecSession<SentEvents>;
 
 const VENUE: &str = "test-venue";
 const INSTRUMENT: InstrumentId = InstrumentId(0);
@@ -32,7 +34,7 @@ fn new_session() -> (Session, FatalSignal) {
         venue: VENUE,
         core: ExecCore::with_limits(8, 32),
         instruments: vec![INSTRUMENT, OTHER_INSTRUMENT],
-        events: Vec::new(),
+        events: SentEvents::default(),
         fatal: fatal.clone(),
     });
     (session, fatal)
@@ -151,8 +153,6 @@ fn resting_report(client_id: u64) -> ExecEvent {
         recon_seq: 0,
         exchange_ts_us: NOW.as_venue_calendar(),
         request_sent_ts_us: None,
-        received_ts_us: NOW,
-        queued_ts_us: NOW,
     }
 }
 

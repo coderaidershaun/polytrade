@@ -7,7 +7,7 @@ use tokio::runtime::Handle;
 use tokio::time;
 
 use crate::hot::spawn::QueueProducer;
-use crate::msg::inbound::{InboundMessage, SpinTick};
+use crate::msg::inbound::{InboundMessage, MessageBody, MessageHeader, SpinTick};
 use crate::msg::time::{DurationUs, EngineClock, SpinSchedule};
 use crate::runtime::shutdown::TaskHandle;
 use crate::warn;
@@ -31,11 +31,13 @@ pub(super) fn spawn_timer(
         let (mut slot, mut skipped) = (0, 0);
         let mut skipped_slots: u64 = 0;
         loop {
-            producer.push(InboundMessage::SpinTick(SpinTick {
-                seq: slot,
-                received_ts_us: schedule.stamp_of(slot),
-                queued_ts_us: woke_ts_us,
-            }));
+            producer.push(InboundMessage {
+                header: MessageHeader {
+                    received_ts_us: schedule.stamp_of(slot),
+                    queued_ts_us: woke_ts_us,
+                },
+                body: MessageBody::SpinTick(SpinTick { seq: slot }),
+            });
             if skipped > 0 {
                 skipped_slots += skipped;
                 warn!(

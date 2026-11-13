@@ -34,6 +34,9 @@ const ONE: i64 = 100_000_000;
 const TICK: i64 = ONE / 100;
 const STEP: i64 = ONE / 100_000;
 
+/// The receipt stamp of every venue answer built here.
+const RECEIVED: LocalTs = LocalTs::from_micros(2_000);
+
 fn grid() -> TickGrid {
     TickGrid {
         tick: TICK,
@@ -110,8 +113,6 @@ fn amend_answer(kind: ExecKind, qty: i64) -> ExecEvent {
         recon_seq: 0,
         exchange_ts_us: VenueTs::from_micros(2_000),
         request_sent_ts_us: None,
-        received_ts_us: LocalTs::from_micros(2_000),
-        queued_ts_us: LocalTs::from_micros(2_000),
     }
 }
 
@@ -495,7 +496,7 @@ fn an_amend_answer_lands_the_size_once_and_spends_exactly_one_amend_per_command(
     for answers in deliveries {
         let mut slot = amending_slot(10 * STEP);
         for kind in answers {
-            apply_exec_event(&mut slot, &amend_answer(*kind, 4 * STEP));
+            apply_exec_event(&mut slot, &amend_answer(*kind, 4 * STEP), RECEIVED);
         }
         assert_eq!(
             slot.qty,
@@ -518,7 +519,7 @@ fn an_amend_answer_lands_the_size_once_and_spends_exactly_one_amend_per_command(
         // another amend, which is exactly what the budget is counting.
         slot.state = OrderState::AmendInFlight;
         for kind in answers {
-            apply_exec_event(&mut slot, &amend_answer(*kind, 3 * STEP));
+            apply_exec_event(&mut slot, &amend_answer(*kind, 3 * STEP), RECEIVED);
         }
         assert_eq!(
             slot.amends_used, 2,
@@ -541,7 +542,7 @@ fn a_definitive_zero_retires_the_amend_and_an_unknown_leaves_it_alone() {
         state: OrderState::Live,
         ..amending_slot(10 * STEP)
     };
-    apply_exec_event(&mut spent, &amend_refused(0));
+    apply_exec_event(&mut spent, &amend_refused(0), RECEIVED);
     let outcome = reconcile_side(input(Side::Buy, shrink, resting_of(&spent)));
     assert_eq!(
         outcome,
@@ -553,7 +554,11 @@ fn a_definitive_zero_retires_the_amend_and_an_unknown_leaves_it_alone() {
         state: OrderState::Live,
         ..amending_slot(10 * STEP)
     };
-    apply_exec_event(&mut unclaimed, &amend_refused(ExecEvent::AMENDS_UNKNOWN));
+    apply_exec_event(
+        &mut unclaimed,
+        &amend_refused(ExecEvent::AMENDS_UNKNOWN),
+        RECEIVED,
+    );
     assert_eq!(
         reconcile_side(input(Side::Buy, shrink, resting_of(&unclaimed))),
         ReconcileOutcome::AmendQty(Qty(4 * STEP)),
@@ -568,9 +573,21 @@ fn a_definitive_zero_retires_the_amend_and_an_unknown_leaves_it_alone() {
 #[test]
 fn a_late_amend_answer_never_restores_a_larger_size() {
     let mut slot = amending_slot(10 * STEP);
-    apply_exec_event(&mut slot, &amend_answer(ExecKind::AckAmended, 6 * STEP));
-    apply_exec_event(&mut slot, &amend_answer(ExecKind::AckAmended, 3 * STEP));
-    apply_exec_event(&mut slot, &amend_answer(ExecKind::ReportAmended, 6 * STEP));
+    apply_exec_event(
+        &mut slot,
+        &amend_answer(ExecKind::AckAmended, 6 * STEP),
+        RECEIVED,
+    );
+    apply_exec_event(
+        &mut slot,
+        &amend_answer(ExecKind::AckAmended, 3 * STEP),
+        RECEIVED,
+    );
+    apply_exec_event(
+        &mut slot,
+        &amend_answer(ExecKind::ReportAmended, 6 * STEP),
+        RECEIVED,
+    );
     assert_eq!(
         slot.qty,
         Qty(3 * STEP),
@@ -592,7 +609,7 @@ fn a_late_amend_answer_never_restores_a_larger_size() {
 #[test]
 fn an_amend_that_never_left_releases_the_slot_and_the_shrink_is_decided_again() {
     let mut slot = amending_slot(10 * STEP);
-    apply_exec_event(&mut slot, &amend_not_sent());
+    apply_exec_event(&mut slot, &amend_not_sent(), RECEIVED);
     assert_eq!(
         slot.state,
         OrderState::Live,
@@ -621,8 +638,9 @@ fn an_amend_that_never_left_releases_the_slot_and_the_shrink_is_decided_again() 
     apply_exec_event(
         &mut retired,
         &amend_answer(ExecKind::ReportCanceled, 10 * STEP),
+        RECEIVED,
     );
-    apply_exec_event(&mut retired, &amend_not_sent());
+    apply_exec_event(&mut retired, &amend_not_sent(), RECEIVED);
     assert_eq!(
         retired.state,
         OrderState::Closed(CloseReason::Canceled),

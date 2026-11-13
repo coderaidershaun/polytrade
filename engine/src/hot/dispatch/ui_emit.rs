@@ -64,12 +64,12 @@ impl UiEmitter {
         });
     }
 
-    pub(crate) fn emit_trade(&mut self, event: &TradeEvent) {
+    pub(crate) fn emit_trade(&mut self, event: &TradeEvent, received_ts_us: LocalTs) {
         self.event_sink
             .push_stamped(&mut self.event_seq, |seq| UiEvent::Trade {
                 instrument: event.instrument,
                 seq,
-                event_ts_us: event.received_ts_us.to_peer(),
+                event_ts_us: received_ts_us.to_peer(),
                 aggressor: event.side,
                 price: event.price,
                 qty: event.qty,
@@ -235,12 +235,12 @@ impl UiEmitter {
             });
     }
 
-    pub(crate) fn emit_rotation(&mut self, rotation: &MarketRotation) {
+    pub(crate) fn emit_rotation(&mut self, rotation: &MarketRotation, received_ts_us: LocalTs) {
         self.event_sink
             .push_stamped(&mut self.event_seq, |seq| UiEvent::Rotation {
                 instrument: rotation.instrument,
                 seq,
-                event_ts_us: rotation.received_ts_us.to_peer(),
+                event_ts_us: received_ts_us.to_peer(),
             });
     }
 

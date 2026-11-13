@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use engine::hot::book::{Book, BookState, SnapshotOutcome};
 use engine::msg::ids::{InstrumentId, Side};
-use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, InboundMessage, Level};
+use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, Level, MessageBody};
 use engine::msg::time::{LocalTs, VenueTs};
 use engine::venues::polymarket::book::BookNormaliser;
 use engine::venues::polymarket::parse::PolyBook;
@@ -199,7 +199,7 @@ fn an_empty_snapshot_still_carries_the_terminator() {
 
     let mut chunks = Vec::new();
     normaliser.emit_snapshot(&empty, &mut |message| {
-        if let InboundMessage::Book(chunk) = message {
+        if let MessageBody::Book(chunk) = message.body {
             chunks.push(chunk);
         }
     });

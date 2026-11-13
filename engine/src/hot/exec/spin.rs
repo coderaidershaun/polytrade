@@ -28,7 +28,7 @@ impl ExecEngine {
         if self.sink.is_none() {
             return;
         }
-        let now = input.tick.received_ts_us;
+        let now = input.received_ts_us;
         self.budget.observe_spin(now);
         self.orders.reap(now, self.settings.order_reap_window);
         self.sweep_timeouts(now, input.bank);
@@ -103,7 +103,7 @@ impl ExecEngine {
     fn quote_pass(&mut self, input: &mut SpinInput<'_>) {
         let session = self.session_permission(input.ledger);
         if session == QuotePermission::Neither && !self.halt.is_halted() {
-            self.halt(HaltReason::RealisedLoss, input.tick.received_ts_us);
+            self.halt(HaltReason::RealisedLoss, input.received_ts_us);
         }
         for index in 0..self.instruments.len() {
             let instrument = InstrumentId(index as u16);
@@ -307,7 +307,7 @@ impl ExecEngine {
             mid,
             is_valid: book.state() == BookState::Valid,
             last_commit_ts_us: self.instruments[usize::from(instrument.0)].last_commit_ts_us,
-            now_ts_us: input.tick.received_ts_us,
+            now_ts_us: input.received_ts_us,
         }
     }
 }
@@ -337,6 +337,7 @@ impl DesiredLadder {
 
 pub struct SpinInput<'a> {
     pub tick: &'a SpinTick,
+    pub received_ts_us: LocalTs,
     pub books: &'a [Book],
     pub desired: &'a DesiredBook,
     /// Per instrument, the window the venue last rotated it into. `None` where the venue does not

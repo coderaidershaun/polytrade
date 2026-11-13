@@ -8,9 +8,7 @@ use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{DesiredQuote, QuoteLevel};
 use engine::hot::sink::{ExecSink, SampleSink};
 use engine::hot::strategy::{Strategy, StrategyCtx};
-use engine::msg::exec::{
-    ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, StampedExecCommand,
-};
+use engine::msg::exec::{ExecCommand, ExecKind, ExecLaneItem, OrderStyle, StampedExecCommand};
 use engine::msg::ids::{ClientOrderId, Price, QueueId, Side};
 use engine::msg::inbound::SpinTick;
 use engine::msg::latency::{Category, Stage, WireSample};
@@ -30,12 +28,12 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::engine_support::detached_setup;
 use crate::exec_support::{
-    ASK, BID, CEILING, INSTRUMENT, QUOTE_QTY, exec_settings, make_ready, reseat_book,
+    ASK, BID, CEILING, INSTRUMENT, QUOTE_QTY, SentEvents, exec_settings, make_ready, reseat_book,
     row_with_ceiling, spin_at,
 };
 use crate::runtime::metrics::{Counter, Harness, Rows};
 
-type Session = ExecSession<Vec<ExecEvent>>;
+type Session = ExecSession<SentEvents>;
 
 const NOW: LocalTs = LocalTs::from_micros(1_785_000_000_000_000);
 const INTERVAL_US: i64 = 60_000_000;
@@ -98,7 +96,7 @@ fn quoting_session() -> Session {
         venue: "test-venue",
         core: ExecCore::with_limits(8, 32),
         instruments: vec![INSTRUMENT],
-        events: Vec::new(),
+        events: SentEvents::default(),
         fatal: FatalSignal::new(),
     });
     for Outgoing { effect, recon_seq } in session.connect() {

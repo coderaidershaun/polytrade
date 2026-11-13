@@ -2,7 +2,7 @@
 
 use crate::hot::sink::ExposureSink;
 use crate::log::hot_warn;
-use crate::msg::inbound::InboundMessage;
+use crate::msg::inbound::{InboundMessage, MessageKind};
 use crate::msg::time::LocalTs;
 use crate::runtime::exposure::{ExposureSnapshot, InstrumentExposure, MAX_EXPOSURE_INSTRUMENTS};
 
@@ -19,8 +19,8 @@ pub struct ExposureWiring<'a> {
 #[inline]
 pub(super) fn moves_position(message: &InboundMessage) -> bool {
     matches!(
-        message,
-        InboundMessage::Exec(_) | InboundMessage::MarketRotation(_)
+        message.kind(),
+        MessageKind::Exec | MessageKind::MarketRotation
     )
 }
 

@@ -131,7 +131,8 @@ fn a_cold_start_quotes_only_once_the_resync_marker_lands() {
 /// orders it just read back.
 #[test]
 fn the_resync_marker_can_retire_no_slot() {
-    let marker = open_orders_snapshot_end(INSTRUMENT, LocalTs::from_micros(1_000));
+    let marked_at = LocalTs::from_micros(1_000);
+    let marker = open_orders_snapshot_end(INSTRUMENT, marked_at);
     assert_eq!(marker.kind, ExecKind::SnapshotEnd);
     assert_eq!(marker.instrument, Some(INSTRUMENT));
 
@@ -156,7 +157,7 @@ fn the_resync_marker_can_retire_no_slot() {
                 .instrument
                 .expect("a snapshot end names its instrument"),
             recon_seq: marker.recon_seq,
-            recon_ts_us: marker.received_ts_us,
+            recon_ts_us: marked_at,
         },
         &mut |_, _| closed += 1,
     );

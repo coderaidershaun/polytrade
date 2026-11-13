@@ -10,7 +10,7 @@ use engine::hot::strategy::Strategy;
 use engine::log::{Level, LogDrain, LogOutput, LogValue, LogWriter, open_hot_lane};
 use engine::msg::exec::ExecKind;
 use engine::msg::ids::{InstrumentId, Side};
-use engine::msg::inbound::InboundMessage;
+use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::time::{EngineClock, LocalTs};
 use engine::runtime::config::KlineInterval;
 
@@ -68,16 +68,17 @@ fn overfull_bid_snapshot() -> Vec<InboundMessage> {
             let levels: Vec<(i64, i64)> = (0..20)
                 .map(|level| ((best_bid - chunk * 20 - level) * ONE, ONE))
                 .collect();
-            InboundMessage::Book(partial_snapshot_chunk(0, Side::Buy, &levels, SNAPSHOT_AT))
+            InboundMessage::new(
+                ts(SNAPSHOT_AT),
+                MessageBody::Book(partial_snapshot_chunk(0, Side::Buy, &levels, SNAPSHOT_AT)),
+            )
         })
         .collect();
     let asks = [((best_bid + 1) * ONE, ONE)];
-    messages.push(InboundMessage::Book(last_snapshot_chunk(
-        0,
-        Side::Sell,
-        &asks,
-        SNAPSHOT_AT,
-    )));
+    messages.push(InboundMessage::new(
+        ts(SNAPSHOT_AT),
+        MessageBody::Book(last_snapshot_chunk(0, Side::Sell, &asks, SNAPSHOT_AT)),
+    ));
     messages
 }
 

@@ -8,7 +8,9 @@ use rtrb::{Consumer, RingBuffer};
 use super::lanes::SimLane;
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::info;
-use crate::msg::inbound::{BookChunkKind, InboundMessage, MarketTapItem, TappedMessage, VenueMeta};
+use crate::msg::inbound::{
+    BookChunkKind, InboundMessage, MarketTapItem, MessageBody, TappedMessage, VenueMeta,
+};
 use crate::msg::time::LocalTs;
 use crate::runtime::config::{BinanceMarket, VenueMarket};
 use crate::runtime::registry::{ConnectionCategory, Registry};
@@ -49,7 +51,7 @@ impl MarketTapLane {
                         self.lane
                     );
                     self.drained.push(tapped);
-                    message.received_ts_us()
+                    message.header.received_ts_us
                 }
             };
             assert!(
@@ -74,10 +76,10 @@ impl MarketTapLane {
 }
 
 fn has_required_evidence(message: &InboundMessage, venue_meta: VenueMeta) -> bool {
-    match message {
-        InboundMessage::Trade(_) => matches!(venue_meta, VenueMeta::Trade { .. }),
-        InboundMessage::BookReset(_) => matches!(venue_meta, VenueMeta::DepthReset { .. }),
-        InboundMessage::Book(chunk) => match chunk.kind {
+    match &message.body {
+        MessageBody::Trade(_) => matches!(venue_meta, VenueMeta::Trade { .. }),
+        MessageBody::BookReset(_) => matches!(venue_meta, VenueMeta::DepthReset { .. }),
+        MessageBody::Book(chunk) => match chunk.kind {
             BookChunkKind::Delta => matches!(venue_meta, VenueMeta::DepthDelta { .. }),
             BookChunkKind::Snapshot => venue_meta == VenueMeta::None,
         },

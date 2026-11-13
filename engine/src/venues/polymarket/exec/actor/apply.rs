@@ -11,7 +11,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::msg::exec::{CancelReason, ExecEvent};
 use crate::msg::ids::{ClientOrderId, Side};
-use crate::msg::time::DurationUs;
+use crate::msg::time::{DurationUs, LocalTs};
 use crate::runtime::shutdown::FatalReason;
 use crate::venues::edge::EdgeDriver;
 use crate::venues::exec::{
@@ -189,7 +189,7 @@ impl Actor {
             self.is_subscribed = true;
         }
         let now = self.control.clock.now();
-        self.forward_exec(stream_ready(now));
+        self.forward_exec(now, stream_ready(now));
         self.start_resync();
         None
     }
@@ -359,11 +359,12 @@ impl Actor {
         if self.session.connect().is_empty() {
             return;
         }
-        self.forward_exec(stream_ready(self.control.clock.now()));
+        let now = self.control.clock.now();
+        self.forward_exec(now, stream_ready(now));
         self.start_resync();
     }
 
-    pub(super) fn forward_exec(&mut self, event: ExecEvent) {
+    pub(super) fn forward_exec(&mut self, received_ts_us: LocalTs, event: ExecEvent) {
         // A fill changes the account, so the read is triggered where the report is rather than
         // where a caller remembers to ask for it. It does not release the reservation the fill
         // took: this venue answers a read taken now with the pre-fill number, and only the trade's
@@ -371,6 +372,6 @@ impl Actor {
         if restates_balances(&event) {
             self.restate_balances();
         }
-        self.session.events.send_exec(event);
+        self.session.events.send_exec(received_ts_us, event);
     }
 }

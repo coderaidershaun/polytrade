@@ -15,12 +15,12 @@ use engine::log::{
     open_text_lane,
 };
 use engine::msg::ids::Side;
-use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::{EngineClock, LocalTs};
 
 use crate::engine_support::{
     ONE, delta_chunk, engine_without_persistence, instrument_row, spin, strategy_log_ring,
-    tracker_spec_all,
+    tracker_spec_all, ts,
 };
 
 /// A log writer in memory that counts flushes and syncs, so a test sees what reached the output
@@ -130,13 +130,13 @@ fn engine_on_this_thread() -> (HotEngine, LaneReader<HotRecord>) {
 fn write_hot_warnings(engine: &mut HotEngine, count: i64) {
     for when in 1..=count {
         let delta = delta_chunk(0, Side::Buy, &[(100 * ONE, ONE)], when);
-        engine.dispatch(&InboundMessage::Book(delta));
+        engine.dispatch(&InboundMessage::new(ts(when), MessageBody::Book(delta)));
     }
 }
 
 fn write_strategy_notes(engine: &mut HotEngine, count: i64) {
     for seq in 1..=count {
-        let message = InboundMessage::SpinTick(spin(seq as u64, 1_000 + seq));
+        let message = spin(seq as u64, 1_000 + seq);
         engine.dispatch(&message);
     }
 }

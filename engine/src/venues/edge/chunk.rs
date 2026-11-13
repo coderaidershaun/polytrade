@@ -112,10 +112,6 @@ impl ChunkEmitter {
             is_last_chunk,
             update_id: plan.update_id,
             exchange_ts_us: plan.exchange_ts_us,
-            received_ts_us: plan.received_ts_us,
-            // Restamped by the shell that pushes onto the ring; it alone knows when the message
-            // was actually queued, and a chunk that never reaches a ring was never queued.
-            queued_ts_us: plan.received_ts_us,
         }
     }
 }

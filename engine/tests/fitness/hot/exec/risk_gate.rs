@@ -13,20 +13,21 @@ use engine::hot::exec::{
 };
 use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, RejectClass, VenueOrderStatus};
 use engine::msg::ids::{Price, Qty, Side};
-use engine::msg::inbound::InboundMessage;
+use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::ui::UiEvent;
 use engine::runtime::config::RecordedTables;
 use engine::runtime::exposure::InstrumentExposure;
 use proptest::prelude::*;
 use rtrb::Consumer;
 
-use crate::engine_support::{ALL_TABLES, ONE, exec_event};
+use crate::engine_support::{ALL_TABLES, ONE, exec_event, ts};
 use crate::exec_support::{
     ASK, BID, CEILING, INSTRUMENT, QUOTE_QTY, QuotingEngine, QuotingSetup, TwoSidedQuoter,
     built_quoting_engine, drain_commands, exec_settings, has_halted, is_placing, make_ready,
     quoting_engine, reseat_book, row_with_ceiling, spin_at,
 };
 use crate::micro_strategy::models::{RiskBudget, signed};
+use engine::msg::time::LocalTs;
 
 proptest! {
     /// FITNESS: whatever the exposure, at least one side is always quotable. This is the deadlock
@@ -331,19 +332,25 @@ fn fill_and_close(engine: &mut HotEngine, side: Side, price: i64, qty: i64, when
         qty: Qty(qty),
         ..exec_event(INSTRUMENT, client_id, side, price, when)
     };
-    engine.dispatch(&InboundMessage::Exec(ExecEvent {
-        kind: ExecKind::SnapshotOrder,
-        ..base
-    }));
-    engine.dispatch(&InboundMessage::Exec(ExecEvent {
-        kind: ExecKind::ReportTrade,
-        status: Some(VenueOrderStatus::Filled),
-        last_price: Price(price),
-        last_qty: Qty(qty),
-        cumulative_qty: Qty(qty),
-        cumulative_quote: Price(price).notional(Qty(qty)),
-        ..base
-    }));
+    engine.dispatch(&InboundMessage::new(
+        ts(when),
+        MessageBody::Exec(ExecEvent {
+            kind: ExecKind::SnapshotOrder,
+            ..base
+        }),
+    ));
+    engine.dispatch(&InboundMessage::new(
+        ts(when),
+        MessageBody::Exec(ExecEvent {
+            kind: ExecKind::ReportTrade,
+            status: Some(VenueOrderStatus::Filled),
+            last_price: Price(price),
+            last_qty: Qty(qty),
+            cumulative_qty: Qty(qty),
+            cumulative_quote: Price(price).notional(Qty(qty)),
+            ..base
+        }),
+    ));
 }
 
 /// The message sequence both engine-driven tests below share: come ready, take a long position by
@@ -430,7 +437,11 @@ fn a_position_at_the_ceiling_stops_the_engine_adding_whether_filled_or_restored(
 fn an_edge_refusal_never_ends_a_venue_reject_streak() {
     let mut halting = engine_holding_one_live_order();
     for reject in 0..REJECT_STREAK {
-        dispatch_exec(&mut halting.engine, hard_reject(100 + i64::from(reject)));
+        dispatch_exec(
+            &mut halting.engine,
+            hard_reject(100 + i64::from(reject)),
+            ts(100 + i64::from(reject)),
+        );
     }
     spin_at(&mut halting.engine, 1, 200);
     assert!(
@@ -443,6 +454,7 @@ fn an_edge_refusal_never_ends_a_venue_reject_streak() {
         dispatch_exec(
             &mut interrupted.engine,
             hard_reject(100 + i64::from(reject)),
+            ts(100 + i64::from(reject)),
         );
     }
     dispatch_exec(
@@ -451,8 +463,9 @@ fn an_edge_refusal_never_ends_a_venue_reject_streak() {
             kind: ExecKind::AmendNotSent,
             ..live_order_event(150)
         },
+        ts(150),
     );
-    dispatch_exec(&mut interrupted.engine, hard_reject(160));
+    dispatch_exec(&mut interrupted.engine, hard_reject(160), ts(160));
     spin_at(&mut interrupted.engine, 1, 200);
     assert!(
         has_halted(&mut interrupted.commands),
@@ -471,12 +484,17 @@ fn an_edge_refusal_never_ends_a_venue_reject_streak() {
 fn a_post_only_refusal_neither_extends_nor_ends_a_hard_reject_streak() {
     let mut extended = engine_holding_one_live_order();
     for reject in 0..REJECT_STREAK - 1 {
-        dispatch_exec(&mut extended.engine, hard_reject(100 + i64::from(reject)));
+        dispatch_exec(
+            &mut extended.engine,
+            hard_reject(100 + i64::from(reject)),
+            ts(100 + i64::from(reject)),
+        );
     }
     for refusal in 0..REJECT_STREAK {
         dispatch_exec(
             &mut extended.engine,
             refused_reject(150 + i64::from(refusal)),
+            ts(150 + i64::from(refusal)),
         );
     }
     spin_at(&mut extended.engine, 1, 200);
@@ -492,10 +510,14 @@ fn a_post_only_refusal_neither_extends_nor_ends_a_hard_reject_streak() {
 
     let mut ended = engine_holding_one_live_order();
     for reject in 0..REJECT_STREAK - 1 {
-        dispatch_exec(&mut ended.engine, hard_reject(100 + i64::from(reject)));
+        dispatch_exec(
+            &mut ended.engine,
+            hard_reject(100 + i64::from(reject)),
+            ts(100 + i64::from(reject)),
+        );
     }
-    dispatch_exec(&mut ended.engine, refused_reject(150));
-    dispatch_exec(&mut ended.engine, hard_reject(160));
+    dispatch_exec(&mut ended.engine, refused_reject(150), ts(150));
+    dispatch_exec(&mut ended.engine, hard_reject(160), ts(160));
     spin_at(&mut ended.engine, 1, 200);
     assert!(
         has_halted(&mut ended.commands),
@@ -535,6 +557,7 @@ fn engine_holding_one_live_order() -> QuotingEngine {
             kind: ExecKind::SnapshotOrder,
             ..live_order_event(10)
         },
+        ts(10),
     );
     dispatch_exec(
         &mut built.engine,
@@ -542,6 +565,7 @@ fn engine_holding_one_live_order() -> QuotingEngine {
             kind: ExecKind::ReportNew,
             ..live_order_event(20)
         },
+        ts(20),
     );
     built
 }
@@ -574,8 +598,11 @@ fn refused_reject(when: i64) -> ExecEvent {
     }
 }
 
-fn dispatch_exec(engine: &mut HotEngine, event: ExecEvent) {
-    engine.dispatch(&InboundMessage::Exec(event));
+fn dispatch_exec(engine: &mut HotEngine, event: ExecEvent, received_ts_us: LocalTs) {
+    engine.dispatch(&InboundMessage::new(
+        received_ts_us,
+        MessageBody::Exec(event),
+    ));
 }
 
 /// The kill switch as the workstation was last told it. The engine restates it every spin, so the

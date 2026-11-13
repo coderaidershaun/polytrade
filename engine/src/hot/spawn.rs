@@ -13,7 +13,7 @@ use super::ingress::IngressQueues;
 use super::metrics::{DriverSamples, Folded};
 use crate::log::{hot_error, hot_warn};
 use crate::msg::ids::{QueueId, SourceId};
-use crate::msg::inbound::{InboundMessage, MarketTapItem, TappedMessage, VenueMeta};
+use crate::msg::inbound::{InboundMessage, MarketTapItem, MessageBody, TappedMessage, VenueMeta};
 use crate::msg::latency::CounterSample;
 use crate::msg::time::LocalTs;
 use crate::runtime::pin::pin_current_thread;
@@ -127,7 +127,7 @@ impl QueueProducer {
         if tap.producer.is_full() {
             return self.signal_full(FullRing::MarketTap);
         }
-        tap.high_water_ts_us = tap.high_water_ts_us.max(message.received_ts_us());
+        tap.high_water_ts_us = tap.high_water_ts_us.max(message.header.received_ts_us);
         let tapped = MarketTapItem::Event(TappedMessage {
             message,
             venue_meta,
@@ -314,9 +314,9 @@ impl HotDriver {
             pop_seq: self.pops,
         });
         self.pops = self.pops.wrapping_add(1);
-        if let InboundMessage::SpinTick(tick) = &message {
+        if let MessageBody::SpinTick(tick) = &message.body {
             samples.counters.push(CounterSample {
-                spin_ts_us: tick.received_ts_us,
+                spin_ts_us: message.header.received_ts_us,
                 spin_seq: tick.seq,
                 backlog: self.queues.backlog_by_queue(),
                 counters: self.engine.counters(),

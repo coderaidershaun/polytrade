@@ -3,7 +3,7 @@
 //! stamp clamp: gap-fill lands AFTER live close it repairs -> received_ts_us non-decreasing.
 //! Pure (fixtures replay without socket).
 
-use crate::msg::inbound::{InboundMessage, KlineEvent};
+use crate::msg::inbound::{InboundMessage, KlineEvent, MessageBody};
 use crate::msg::time::{DurationUs, LocalTs, VenueTs};
 use crate::runtime::config::KlineInterval;
 
@@ -44,7 +44,12 @@ impl KlineSequencer {
 
     /// Emit closed rows oldest-first (skip already-final, forming). Stop at hole, emit contiguous
     /// prefix only (anchor never jumps unfetched).
-    pub fn on_backfill(&mut self, events: &[KlineEvent], emit: &mut impl FnMut(InboundMessage)) {
+    pub fn on_backfill(
+        &mut self,
+        events: &[KlineEvent],
+        received_ts_us: LocalTs,
+        emit: &mut impl FnMut(InboundMessage),
+    ) {
         for event in events {
             if !event.is_closed || self.is_stale_open(event.open_ts_us) {
                 continue;
@@ -52,13 +57,14 @@ impl KlineSequencer {
             if self.gap_start(event.open_ts_us).is_some() {
                 return;
             }
-            self.emit_closed(*event, emit);
+            self.emit_closed(*event, received_ts_us, emit);
         }
     }
 
     pub fn on_live(
         &mut self,
-        mut event: KlineEvent,
+        event: KlineEvent,
+        received_ts_us: LocalTs,
         emit: &mut impl FnMut(InboundMessage),
     ) -> KlineOutcome {
         let open_ts_us = event.open_ts_us;
@@ -72,10 +78,10 @@ impl KlineSequencer {
                     next_open_ts_us: open_ts_us,
                 };
             }
-            self.emit_closed(event, emit);
+            self.emit_closed(event, received_ts_us, emit);
             return KlineOutcome::Forwarded;
         }
-        self.emit_clamped(&mut event, emit);
+        self.emit_clamped(event, received_ts_us, emit);
         KlineOutcome::Forwarded
     }
 
@@ -91,17 +97,32 @@ impl KlineSequencer {
             .filter(|&expected| open_ts_us > expected)
     }
 
-    fn emit_closed(&mut self, mut event: KlineEvent, emit: &mut impl FnMut(InboundMessage)) {
+    fn emit_closed(
+        &mut self,
+        event: KlineEvent,
+        received_ts_us: LocalTs,
+        emit: &mut impl FnMut(InboundMessage),
+    ) {
         let open_ts_us = event.open_ts_us;
-        self.emit_clamped(&mut event, emit);
+        self.emit_clamped(event, received_ts_us, emit);
         self.last_closed_open_ts_us = Some(open_ts_us);
     }
 
-    fn emit_clamped(&mut self, event: &mut KlineEvent, emit: &mut impl FnMut(InboundMessage)) {
-        if let Some(floor_ts_us) = self.last_emitted_received_ts_us {
-            event.received_ts_us = event.received_ts_us.max(floor_ts_us);
-        }
-        self.last_emitted_received_ts_us = Some(event.received_ts_us);
-        emit(InboundMessage::Kline(*event));
+    fn emit_clamped(
+        &mut self,
+        event: KlineEvent,
+        received_ts_us: LocalTs,
+        emit: &mut impl FnMut(InboundMessage),
+    ) {
+        let received_ts_us = self
+            .last_emitted_received_ts_us
+            .map_or(received_ts_us, |floor_ts_us| {
+                received_ts_us.max(floor_ts_us)
+            });
+        self.last_emitted_received_ts_us = Some(received_ts_us);
+        emit(InboundMessage::new(
+            received_ts_us,
+            MessageBody::Kline(event),
+        ));
     }
 }

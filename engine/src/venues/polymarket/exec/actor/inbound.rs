@@ -8,6 +8,7 @@
 use tokio_tungstenite::tungstenite::{Error as ProtocolError, Message};
 
 use crate::msg::exec::{ExecEvent, Liquidity};
+use crate::msg::time::LocalTs;
 use crate::runtime::shutdown::{AnswerPart, FatalReason};
 use crate::venues::edge::EdgeDriver;
 use crate::venues::edge::RECENT_TRADES;
@@ -63,9 +64,11 @@ impl Actor {
         text: &str,
         outgoing: &mut Vec<Outgoing>,
     ) -> bool {
-        match decode_stream_frame(text, &self.decode_context()) {
+        let context = self.decode_context();
+        let received_ts_us = context.received_ts_us;
+        match decode_stream_frame(text, &context) {
             Ok(StreamEvent::Order(event)) => {
-                self.on_stream_order(event, outgoing);
+                self.on_stream_order(event, received_ts_us, outgoing);
                 false
             }
             Ok(StreamEvent::Trade(lineage)) => {
@@ -95,13 +98,18 @@ impl Actor {
         }
     }
 
-    fn on_stream_order(&mut self, event: ExecEvent, outgoing: &mut Vec<Outgoing>) {
+    fn on_stream_order(
+        &mut self,
+        event: ExecEvent,
+        received_ts_us: LocalTs,
+        outgoing: &mut Vec<Outgoing>,
+    ) {
         if event.status.is_some_and(|status| status.is_terminal()) {
             self.orders.forget(event.client_id);
             self.delayed.forget(event.client_id);
         }
         self.session.fold(&event, 0, outgoing);
-        self.forward_exec(event);
+        self.forward_exec(received_ts_us, event);
     }
 
     /// Reads lineage, fees, settlement only — never quantity (would multiply by settlement depth).

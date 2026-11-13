@@ -23,6 +23,9 @@ use crate::engine_support::account_chunk;
 const RUN_NONCE: u32 = 0x5EED_1234;
 const TICK: i64 = 1_000_000;
 
+/// The receipt stamp of every venue answer built here.
+const RECEIVED: LocalTs = LocalTs::from_micros(2);
+
 fn event(kind: ExecKind, client_id: ClientOrderId) -> ExecEvent {
     ExecEvent {
         instrument: Some(InstrumentId(0)),
@@ -48,8 +51,6 @@ fn event(kind: ExecKind, client_id: ClientOrderId) -> ExecEvent {
         recon_seq: 0,
         exchange_ts_us: VenueTs::from_micros(1),
         request_sent_ts_us: None,
-        received_ts_us: LocalTs::from_micros(2),
-        queued_ts_us: LocalTs::from_micros(3),
     }
 }
 
@@ -125,7 +126,7 @@ proptest! {
         let mut slot = OrderSlot { qty: Qty(highest), ..live_slot() };
         let mut applied_base = 0i64;
         for report in &reports {
-            applied_base += apply_exec_event(&mut slot, report).fill.base.0;
+            applied_base += apply_exec_event(&mut slot, report, RECEIVED).fill.base.0;
         }
 
         prop_assert_eq!(slot.filled_base.0, highest, "the slot's total is not the venue's");
@@ -153,7 +154,7 @@ fn ambiguous_or_late_answers_never_resolve_past_what_the_venue_confirmed() {
     };
     let mut ack = event(ExecKind::AckFailed, ClientOrderId(1));
     ack.reject = Some(RejectClass::Ambiguous);
-    let applied = apply_exec_event(&mut ambiguous, &ack);
+    let applied = apply_exec_event(&mut ambiguous, &ack, RECEIVED);
     assert_eq!(
         applied.state,
         OrderState::Unknown,
@@ -172,7 +173,7 @@ fn ambiguous_or_late_answers_never_resolve_past_what_the_venue_confirmed() {
     let mut trade = event(ExecKind::ReportTrade, ClientOrderId(1));
     trade.cumulative_qty = Qty(4);
     trade.cumulative_quote = 400;
-    let applied = apply_exec_event(&mut mid_cancel, &trade);
+    let applied = apply_exec_event(&mut mid_cancel, &trade, RECEIVED);
     assert_eq!(
         applied.state,
         OrderState::CancelInFlight,
@@ -194,7 +195,7 @@ fn ambiguous_or_late_answers_never_resolve_past_what_the_venue_confirmed() {
     let mut late = event(ExecKind::ReportTrade, ClientOrderId(1));
     late.cumulative_qty = Qty(10);
     late.cumulative_quote = 1_000;
-    let applied = apply_exec_event(&mut closed, &late);
+    let applied = apply_exec_event(&mut closed, &late, RECEIVED);
     assert_eq!(
         applied.fill.base,
         Qty(4),
@@ -239,9 +240,8 @@ fn a_client_id_addresses_only_the_slot_and_generation_it_was_encoded_for() {
         .expect("a fresh side has free slots");
     assert_eq!(table.find(first), Some(index));
 
-    let mut canceled = event(ExecKind::AckCanceled, first);
-    canceled.received_ts_us = LocalTs::from_micros(10);
-    apply_exec_event(table.slot_mut(index), &canceled);
+    let canceled = event(ExecKind::AckCanceled, first);
+    apply_exec_event(table.slot_mut(index), &canceled, LocalTs::from_micros(10));
     table.reap(
         LocalTs::from_micros(10 + 60_000_000),
         DurationUs::from_micros(60_000_000),
@@ -356,13 +356,14 @@ fn a_pending_cancel_answer_never_resolves_the_cancel_it_was_asked_about() {
     apply_exec_event(
         table.slot_mut(index),
         &event(ExecKind::AckPlaced, client_id),
+        RECEIVED,
     );
     table.slot_mut(index).state = OrderState::CancelInFlight;
 
     let mut probe = event(ExecKind::SnapshotOrder, client_id);
     probe.status = Some(VenueOrderStatus::PendingCancel);
     probe.recon_seq = 1;
-    let applied = apply_exec_event(table.slot_mut(index), &probe);
+    let applied = apply_exec_event(table.slot_mut(index), &probe, RECEIVED);
     assert_eq!(
         applied.state,
         OrderState::CancelInFlight,
@@ -377,7 +378,7 @@ fn a_pending_cancel_answer_never_resolves_the_cancel_it_was_asked_about() {
     let mut trade = event(ExecKind::ReportTrade, client_id);
     trade.cumulative_qty = Qty(4);
     trade.cumulative_quote = 400;
-    let applied = apply_exec_event(table.slot_mut(index), &trade);
+    let applied = apply_exec_event(table.slot_mut(index), &trade, RECEIVED);
     assert_eq!(
         applied.fill.base,
         Qty(4),
@@ -395,7 +396,9 @@ fn a_pending_cancel_answer_never_resolves_the_cancel_it_was_asked_about() {
     restated.cumulative_qty = Qty(4);
     restated.cumulative_quote = 400;
     assert_eq!(
-        apply_exec_event(table.slot_mut(index), &restated).fill.base,
+        apply_exec_event(table.slot_mut(index), &restated, RECEIVED)
+            .fill
+            .base,
         Qty(0),
         "a probe restating the venue's running totals paid the same fill a second time"
     );
@@ -403,7 +406,7 @@ fn a_pending_cancel_answer_never_resolves_the_cancel_it_was_asked_about() {
     let mut canceled = event(ExecKind::ReportCanceled, client_id);
     canceled.cumulative_qty = Qty(4);
     canceled.cumulative_quote = 400;
-    let applied = apply_exec_event(table.slot_mut(index), &canceled);
+    let applied = apply_exec_event(table.slot_mut(index), &canceled, RECEIVED);
     assert_eq!(
         applied.state,
         OrderState::Closed(CloseReason::Canceled),
@@ -468,7 +471,7 @@ fn a_reservation_releases_only_on_terminal_proof_from_either_direction() {
     };
     let unsent = event(ExecKind::PlaceNotSent, slot.client_id);
     assert_eq!(
-        apply_exec_event(&mut slot, &unsent).state,
+        apply_exec_event(&mut slot, &unsent, RECEIVED).state,
         OrderState::Closed(CloseReason::Rejected)
     );
     unsent_account.release_unsent(quote, 400);
@@ -489,8 +492,6 @@ fn balances(
         kind,
         venue_update_ts_ms,
         exchange_ts_us: VenueTs::from_micros(1),
-        received_ts_us: LocalTs::from_micros(2),
-        queued_ts_us: LocalTs::from_micros(3),
         ..account_chunk(&[(asset, free)], 0)
     }
 }

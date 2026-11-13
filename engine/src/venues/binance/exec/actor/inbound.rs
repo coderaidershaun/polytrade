@@ -5,6 +5,7 @@
 use tokio_tungstenite::tungstenite::{Error as ProtocolError, Message};
 
 use crate::msg::exec::ExecEvent;
+use crate::msg::time::LocalTs;
 use crate::runtime::shutdown::{AnswerPart, FatalReason};
 use crate::venues::binance::ws;
 use crate::venues::edge::EdgeDriver;
@@ -86,7 +87,7 @@ impl Actor {
             recon_seq: entry.recon_seq,
         };
         match decode_response(text, &context) {
-            Ok(decoded) => self.on_decoded(decoded, entry, writer).await,
+            Ok(decoded) => self.on_decoded(decoded, entry, now, writer).await,
             Err(error) if error.is_fatal() => {
                 error!("binance execution fatal decode: {error}");
                 self.session.mark_in_doubt(entry.request, now);
@@ -121,10 +122,11 @@ impl Actor {
         &mut self,
         decoded: DecodedResponse,
         entry: InFlightRequest,
+        received_ts_us: LocalTs,
         writer: &mut Writer,
     ) -> Option<SessionOutcome> {
         if matches!(entry.request, ExecRequest::SubscribeUserStream) {
-            return self.on_subscribe_answer(&decoded);
+            return self.on_subscribe_answer(&decoded, received_ts_us);
         }
         let mut outgoing = Vec::new();
         for event in &decoded.events {
@@ -142,14 +144,18 @@ impl Actor {
             {
                 self.session.core.re_arm_cancel(event.client_id);
             }
-            self.session.events.send_exec(event);
+            self.session.events.send_exec(received_ts_us, event);
         }
         let ended = self.dispatch(outgoing, Some(writer)).await;
         self.session.arm_readiness(self.control.clock.now());
         ended
     }
 
-    fn on_subscribe_answer(&mut self, decoded: &DecodedResponse) -> Option<SessionOutcome> {
+    fn on_subscribe_answer(
+        &mut self,
+        decoded: &DecodedResponse,
+        received_ts_us: LocalTs,
+    ) -> Option<SessionOutcome> {
         if decoded.events.is_empty() {
             self.subscribe_failures += 1;
             if self.subscribe_failures >= MAX_SUBSCRIBE_FAILURES {
@@ -168,7 +174,7 @@ impl Actor {
         }
         self.subscribe_failures = 0;
         for event in &decoded.events {
-            self.session.events.send_exec(*event);
+            self.session.events.send_exec(received_ts_us, *event);
         }
         self.start_resync();
         None
@@ -185,13 +191,13 @@ impl Actor {
                 let mut outgoing = Vec::new();
                 self.note_event(&event);
                 self.session.fold(&event, 0, &mut outgoing);
-                self.session.events.send_exec(event);
+                self.session.events.send_exec(now, event);
                 let ended = self.dispatch(outgoing, Some(writer)).await;
                 self.session.arm_readiness(self.control.clock.now());
                 ended
             }
             Ok(StreamEvent::Account(chunks)) => {
-                self.session.events.send_account(chunks);
+                self.session.events.send_account(now, chunks);
                 None
             }
             // A lost delta is resynced by taking a fresh snapshot.

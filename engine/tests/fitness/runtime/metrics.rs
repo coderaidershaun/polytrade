@@ -13,7 +13,9 @@ use engine::link::{
 };
 use engine::msg::exec::{ExecEvent, ExecKind};
 use engine::msg::ids::{ClientOrderId, InstrumentId, QueueId, Side};
-use engine::msg::inbound::{BookChunk, InboundMessage, KlineEvent, TradeEvent};
+use engine::msg::inbound::{
+    BookChunk, InboundMessage, KlineEvent, MessageBody, MessageHeader, TradeEvent,
+};
 use engine::msg::latency::{
     Category, CommandKind, CounterSample, EngineCounters, Stage, StageSample, WireSample,
 };
@@ -385,6 +387,11 @@ const BACKFILLED_CANDLE_AGE_US: i64 = 6 * 60 * 60 * 1_000_000;
 fn stamped_messages() -> Vec<InboundMessage> {
     let stamped = |when: i64| (ts(RECEIVED_US), ts(QUEUED_US), when);
     let (received_ts_us, queued_ts_us, _) = stamped(0);
+    let header = MessageHeader {
+        received_ts_us,
+        queued_ts_us,
+    };
+    let message = |body| InboundMessage { header, body };
     let candle = kline(
         0,
         KlineInterval::OneMinute,
@@ -396,8 +403,6 @@ fn stamped_messages() -> Vec<InboundMessage> {
         kind,
         exchange_ts_us: venue_ts(venue_us),
         request_sent_ts_us: request.map(ts),
-        received_ts_us,
-        queued_ts_us,
         ..exec_event(
             InstrumentId(0),
             ClientOrderId(client),
@@ -407,45 +412,37 @@ fn stamped_messages() -> Vec<InboundMessage> {
         )
     };
     vec![
-        InboundMessage::Trade(TradeEvent {
+        message(MessageBody::Trade(TradeEvent {
             exchange_ts_us: venue_ts(VENUE_MATCH_US),
             exchange_sent_ts_us: Some(venue_ts(VENUE_SENT_US)),
-            received_ts_us,
-            queued_ts_us,
             ..trade(0, 100 * ONE, ONE, Side::Buy, RECEIVED_US)
-        }),
-        InboundMessage::Book(BookChunk {
+        })),
+        message(MessageBody::Book(BookChunk {
             exchange_ts_us: Some(venue_ts(RECEIVED_US - 1_500)),
-            received_ts_us,
-            queued_ts_us,
             ..delta_chunk(0, Side::Buy, &[(100 * ONE, ONE)], RECEIVED_US)
-        }),
-        InboundMessage::Exec(answer(
+        })),
+        message(MessageBody::Exec(answer(
             ExecKind::ReportNew,
             1,
             RECEIVED_US - 4_000,
             Some(RECEIVED_US - 8_000),
-        )),
-        InboundMessage::Exec(answer(
+        ))),
+        message(MessageBody::Exec(answer(
             ExecKind::PlaceNotSent,
             2,
             RECEIVED_US - 60_000,
             None,
-        )),
-        InboundMessage::Kline(KlineEvent {
+        ))),
+        message(MessageBody::Kline(KlineEvent {
             exchange_ts_us: venue_ts(RECEIVED_US - 2_500),
             exchange_sent_ts_us: Some(venue_ts(RECEIVED_US - 2_500)),
-            received_ts_us,
-            queued_ts_us,
             ..candle
-        }),
-        InboundMessage::Kline(KlineEvent {
+        })),
+        message(MessageBody::Kline(KlineEvent {
             exchange_ts_us: venue_ts(RECEIVED_US - BACKFILLED_CANDLE_AGE_US),
             exchange_sent_ts_us: None,
-            received_ts_us,
-            queued_ts_us,
             ..candle
-        }),
+        })),
     ]
 }
 
@@ -747,7 +744,7 @@ fn latency_report_reaches_the_workstation_feed() {
         ..detached_setup(&instruments, Box::new(Idle))
     });
     for seq in 0..3 {
-        engine.dispatch(&InboundMessage::SpinTick(spin(seq, 700 + seq as i64)));
+        engine.dispatch(&spin(seq, 700 + seq as i64));
     }
     let teed: Vec<UiEvent> = std::iter::from_fn(|| events.pop().ok()).collect();
     assert!(

@@ -25,7 +25,7 @@
 
 use engine::hot::strategy::StrategyConfig;
 use engine::msg::ids::{Price, Side};
-use engine::msg::inbound::InboundMessage;
+use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::persist::{FeatureId, FeatureRow, PersistRecord};
 use engine::msg::time::DurationUs;
 use engine::runtime::config::{IntensitySpec, KlineInterval, RecordedTables, TableKind};
@@ -34,7 +34,7 @@ use engine::runtime::registry::InstrumentRow;
 use crate::engine_support::{
     FillPen, LinkedEngine, LinkedSetup, ONE, book_reset, delta_chunk, engine_view,
     engine_with_link, idle_at, instrument_row, kline, recorder_spec, run_control, running_at,
-    snapshot_pair, spin, tracker_spec_all, trade,
+    snapshot_pair, spin, tracker_spec_all, trade, ts,
 };
 use crate::micro_strategy::features::FEATURE_NAMES;
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
@@ -214,9 +214,9 @@ fn seed_book(linked: &mut LinkedEngine, when: i64, rows: &mut Vec<FeatureRow>) {
         when + 1,
     );
     for message in [
-        InboundMessage::BookReset(book_reset(0, when)),
-        InboundMessage::Book(bids),
-        InboundMessage::Book(asks),
+        book_reset(0, when),
+        InboundMessage::new(ts(when + 1), MessageBody::Book(bids)),
+        InboundMessage::new(ts(when + 1), MessageBody::Book(asks)),
     ] {
         dispatch(linked, &message, rows);
     }
@@ -226,39 +226,54 @@ fn seed_book(linked: &mut LinkedEngine, when: i64, rows: &mut Vec<FeatureRow>) {
 /// the ask, depth churn either side of it, a closed candle, and the spin that emits.
 fn message(index: i64, when: i64) -> InboundMessage {
     match index % 6 {
-        0 => InboundMessage::Trade(trade(
-            0,
-            101 * ONE + (index % 4) * TICK,
-            1_000_000,
-            Side::Buy,
-            when,
-        )),
-        1 => InboundMessage::Book(delta_chunk(
-            0,
-            Side::Buy,
-            &[(100 * ONE, (1 + index % 5) * ONE)],
-            when,
-        )),
-        2 => InboundMessage::Book(delta_chunk(
-            0,
-            Side::Buy,
-            &[(99 * ONE, (1 + index % 5) * ONE)],
-            when,
-        )),
-        3 => InboundMessage::Book(delta_chunk(
-            0,
-            Side::Sell,
-            &[(102 * ONE, (1 + index % 5) * ONE)],
-            when,
-        )),
-        4 => InboundMessage::Kline(kline(
-            0,
-            KlineInterval::OneMinute,
-            (100 * ONE, 101 * ONE, 99 * ONE, (100 + index % 5) * ONE),
-            true,
-            when,
-        )),
-        _ => InboundMessage::SpinTick(spin(index as u64, when)),
+        0 => InboundMessage::new(
+            ts(when),
+            MessageBody::Trade(trade(
+                0,
+                101 * ONE + (index % 4) * TICK,
+                1_000_000,
+                Side::Buy,
+                when,
+            )),
+        ),
+        1 => InboundMessage::new(
+            ts(when),
+            MessageBody::Book(delta_chunk(
+                0,
+                Side::Buy,
+                &[(100 * ONE, (1 + index % 5) * ONE)],
+                when,
+            )),
+        ),
+        2 => InboundMessage::new(
+            ts(when),
+            MessageBody::Book(delta_chunk(
+                0,
+                Side::Buy,
+                &[(99 * ONE, (1 + index % 5) * ONE)],
+                when,
+            )),
+        ),
+        3 => InboundMessage::new(
+            ts(when),
+            MessageBody::Book(delta_chunk(
+                0,
+                Side::Sell,
+                &[(102 * ONE, (1 + index % 5) * ONE)],
+                when,
+            )),
+        ),
+        4 => InboundMessage::new(
+            ts(when),
+            MessageBody::Kline(kline(
+                0,
+                KlineInterval::OneMinute,
+                (100 * ONE, 101 * ONE, 99 * ONE, (100 + index % 5) * ONE),
+                true,
+                when,
+            )),
+        ),
+        _ => spin(index as u64, when),
     }
 }
 

@@ -76,7 +76,6 @@ pub fn decode_stream_event(
             let stamps = ChunkStamps {
                 venue_update_ts_ms: position.last_update_ms.max(0) as u64,
                 exchange_ts_us: clamp_exchange_ts(position.event_ts_ms, context.received_ts_us),
-                received_ts_us: context.received_ts_us,
             };
             let chunks = account_chunks(AccountChunkKind::Update, &balances, stamps);
             Ok(StreamEvent::Account(chunks))
@@ -112,7 +111,6 @@ pub fn account_snapshot_chunks(
     let stamps = ChunkStamps {
         venue_update_ts_ms: venue_update_ts_ms.max(0) as u64,
         exchange_ts_us: clamp_exchange_ts(venue_update_ts_ms, context.received_ts_us),
-        received_ts_us: context.received_ts_us,
     };
     Ok(account_chunks(AccountChunkKind::Snapshot, &parsed, stamps))
 }

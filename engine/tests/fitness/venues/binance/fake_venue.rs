@@ -2,7 +2,7 @@
 
 use engine::msg::exec::{ExecEvent, OrderStyle, VenueOrderStatus};
 use engine::msg::ids::{AssetId, ClientOrderId, Price, Qty, Side, TradeId, VenueOrderId};
-use engine::msg::inbound::InboundMessage;
+use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::time::LocalTs;
 use engine::runtime::config::RunIdentity;
 use engine::runtime::registry::{AssetDictionary, Registry};
@@ -403,8 +403,8 @@ fn settlement_of(order: &SimOrder, last_qty: Qty, quote_before: i64) -> FillSett
 pub fn exec_events(messages: &[InboundMessage]) -> Vec<ExecEvent> {
     messages
         .iter()
-        .filter_map(|message| match message {
-            InboundMessage::Exec(event) => Some(*event),
+        .filter_map(|message| match &message.body {
+            MessageBody::Exec(event) => Some(*event),
             _ => None,
         })
         .collect()

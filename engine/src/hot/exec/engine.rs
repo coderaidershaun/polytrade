@@ -9,19 +9,17 @@ use crate::hot::strategy::Actions;
 use crate::log::{hot_error, hot_warn};
 use crate::msg::exec::{AccountChunk, CancelReason, ExecCommand, ExecEvent, ExecKind, Provenance};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Qty, Side};
-use crate::msg::persist::OrderTransition;
 use crate::msg::time::{DurationUs, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 use crate::runtime::registry::InstrumentRow;
 
 use super::account::{AccountTable, Balance};
-use super::audit::bank_engine_driven;
 use super::budget::{BudgetMeter, OrderBudget};
 use super::desired::QuoteLevel;
 use super::event::PriorRunOrders;
 use super::flatten::FeeModel;
 use super::gates::{ExecHalt, HaltReason, Readiness, RefusalLatch};
-use super::order::{OrderSlot, OrderTable, ReconcilePass};
+use super::order::{OrderSlot, OrderTable};
 use super::reconcile::{ExecLimits, RejectReason, RestingOrder, TickGrid};
 use super::view::{ExecCallback, OrderReject, OrderView, WorkingOrderView};
 
@@ -279,32 +277,33 @@ impl ExecEngine {
     pub(crate) fn on_exec_event(
         &mut self,
         event: &ExecEvent,
+        received_ts_us: LocalTs,
         ledger: &mut PositionLedger,
         bank: &mut Actions,
     ) -> ExecCallback {
         self.spins_since_exec_event = 0;
         match event.kind {
-            ExecKind::StreamReset => return self.on_stream_reset(event.received_ts_us, bank),
+            ExecKind::StreamReset => return self.on_stream_reset(received_ts_us, bank),
             ExecKind::StreamReady => {
                 self.readiness.observe_stream_ready();
                 return ExecCallback::None;
             }
-            ExecKind::SnapshotEnd => return self.on_snapshot_end(event, bank),
+            ExecKind::SnapshotEnd => return self.on_snapshot_end(event, received_ts_us, bank),
             _ => {}
         }
         match event.provenance {
             Provenance::Foreign => return ExecCallback::None,
             Provenance::PriorRun => {
-                self.cancel_prior_run(event);
-                self.apply_to_prior_run(event, ledger, bank);
+                self.cancel_prior_run(event, received_ts_us);
+                self.apply_to_prior_run(event, received_ts_us, ledger, bank);
                 return ExecCallback::None;
             }
             Provenance::Mine => {}
         }
-        let Some(index) = self.locate(event) else {
+        let Some(index) = self.locate(event, received_ts_us) else {
             return ExecCallback::None;
         };
-        self.apply_to_slot(index, event, ledger, bank)
+        self.apply_to_slot(index, event, received_ts_us, ledger, bank)
     }
 
     /// Absolute balances only — see [`AccountChunk`] for why a delta may never reach here.
@@ -346,49 +345,14 @@ impl ExecEngine {
         self.cancel_all(CancelReason::Halt);
     }
 
-    #[cold]
-    fn on_stream_reset(&mut self, at: LocalTs, bank: &mut Actions) -> ExecCallback {
-        hot_warn!(
-            "execution stream reset — every open order is unknown until a reconciliation lands"
-        );
-        self.readiness.observe_stream_reset();
-        // Every reason the pass last reported was derived from order state that is now a memory, so
-        // the next refusal is news again rather than a repeat the latch would swallow.
-        self.refusals.forget();
-        self.orders.invalidate_all(&mut |slot, previous| {
-            let transition = OrderTransition::StreamReset;
-            bank_engine_driven(bank, slot, transition, previous.into(), at);
-        });
-        ExecCallback::None
-    }
-
-    #[cold]
-    fn on_snapshot_end(&mut self, event: &ExecEvent, bank: &mut Actions) -> ExecCallback {
-        let Some(instrument) = event.instrument else {
-            return ExecCallback::None;
-        };
-        let pass = ReconcilePass {
-            instrument,
-            recon_seq: event.recon_seq,
-            recon_ts_us: event.received_ts_us,
-        };
-        self.orders.sweep_unseen(pass, &mut |slot, previous| {
-            swept_warning(slot, pass.recon_seq);
-            let transition = OrderTransition::SweepClosed;
-            bank_engine_driven(bank, slot, transition, previous.into(), pass.recon_ts_us);
-        });
-        self.readiness.observe_open_orders_snapshot();
-        ExecCallback::None
-    }
-
     /// Finds the slot an event belongs to, adopting one the venue knows about that this
     /// table does not.
-    fn locate(&mut self, event: &ExecEvent) -> Option<usize> {
+    fn locate(&mut self, event: &ExecEvent, received_ts_us: LocalTs) -> Option<usize> {
         if let Some(index) = self.orders.find(event.client_id) {
             return Some(index);
         }
         if event.kind == ExecKind::SnapshotOrder
-            && let Some(index) = self.orders.adopt(event)
+            && let Some(index) = self.orders.adopt(event, received_ts_us)
         {
             return Some(index);
         }
@@ -412,7 +376,7 @@ impl ExecEngine {
     /// the inherited order asks again — latching first would make one full bank the last word on an
     /// order still resting on the venue.
     #[cold]
-    fn cancel_prior_run(&mut self, event: &ExecEvent) {
+    fn cancel_prior_run(&mut self, event: &ExecEvent, received_ts_us: LocalTs) {
         let Some(instrument) = event.instrument else {
             return;
         };
@@ -421,7 +385,7 @@ impl ExecEngine {
             return;
         }
         let command = ExecCommand::CancelPriorRun { instrument };
-        if !self.bank_or_halt(command, event.received_ts_us) {
+        if !self.bank_or_halt(command, received_ts_us) {
             return;
         }
         self.instruments[index].is_prior_run_cancel_sent = true;
@@ -440,19 +404,6 @@ fn unswept_error(instrument: InstrumentId) {
     hot_error!(
         "the command bank is full, so the sweep of every order this run owns on instrument {} could not be sent — they may still be resting on the venue",
         instrument.0
-    );
-}
-
-/// A reconciliation retiring a working order is the engine LOSING one, not routine housekeeping: the
-/// venue was asked what it holds and did not mention an order this table believed in. It is logged
-/// as a warning because otherwise a duplicate resting on the venue is the first anyone hears of it.
-#[cold]
-fn swept_warning(slot: &OrderSlot, recon_seq: u64) {
-    hot_warn!(
-        "reconciliation pass {} did not name order {:x} on instrument {} — closing it as gone",
-        recon_seq,
-        slot.client_id.0,
-        slot.instrument.0
     );
 }
 

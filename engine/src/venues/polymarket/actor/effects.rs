@@ -97,7 +97,7 @@ impl Actor {
     fn handle_effect(&mut self, effect: DriverEffect) -> Option<ws::WsCommand> {
         match effect {
             DriverEffect::Emit(mut message) => {
-                message.set_queued_ts_us(self.clock.now());
+                message.header.queued_ts_us = self.clock.now();
                 self.producer.push(message);
                 None
             }

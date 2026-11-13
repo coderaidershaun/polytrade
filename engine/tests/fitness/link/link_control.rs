@@ -12,7 +12,7 @@
 
 use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
 use engine::msg::ids::{InstrumentId, Side};
-use engine::msg::inbound::{InboundMessage, SpinTick, TradeEvent};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick, TradeEvent};
 use engine::msg::persist::{FeatureId, LinkRowKind, PersistRecord};
 use engine::msg::run_state::RunAssertion;
 use engine::msg::run_state::RunState;
@@ -22,6 +22,7 @@ use engine::runtime::config::{RecordedTables, TableKind};
 use crate::engine_support::{
     LinkedEngine, LinkedSetup, ONE, call_codes, delta_chunk, drain_persist, engine_with_link,
     idle_at, instrument_row, run_control, running_at, snapshot_pair, spin, tracker_spec_all, trade,
+    ts,
 };
 
 /// One `call` feature per callback, so the drained stream encodes exactly which callbacks fired —
@@ -78,17 +79,26 @@ fn linked_with_warmup(warmup: DurationUs) -> LinkedEngine {
 fn control_sequence() -> Vec<InboundMessage> {
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, 2 * ONE)], &[(101 * ONE, ONE)], 1);
     vec![
-        InboundMessage::Book(bids),
-        InboundMessage::Book(asks),
-        InboundMessage::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 2)),
-        InboundMessage::SpinTick(spin(1, 3)),
+        InboundMessage::new(ts(1), MessageBody::Book(bids)),
+        InboundMessage::new(ts(1), MessageBody::Book(asks)),
+        InboundMessage::new(
+            ts(2),
+            MessageBody::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 2)),
+        ),
+        spin(1, 3),
         run_control(idle_at(1), 4),
         // Parked: neither of these may reach the strategy.
-        InboundMessage::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 5)),
-        InboundMessage::SpinTick(spin(2, 6)),
+        InboundMessage::new(
+            ts(5),
+            MessageBody::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 5)),
+        ),
+        spin(2, 6),
         run_control(running_at(2), 7),
-        InboundMessage::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 8)),
-        InboundMessage::SpinTick(spin(3, 9)),
+        InboundMessage::new(
+            ts(8),
+            MessageBody::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 8)),
+        ),
+        spin(3, 9),
     ]
 }
 
@@ -234,11 +244,17 @@ fn resuming_resets_derived_state_and_rearms_warmup() {
     let mut linked = linked_with_warmup(DurationUs::from_micros(WARMUP_US));
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, 2 * ONE)], &[(101 * ONE, ONE)], 0);
     for message in [
-        InboundMessage::Book(bids),
-        InboundMessage::Book(asks),
-        InboundMessage::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 5 * ONE)], 2)),
-        InboundMessage::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 9 * ONE)], 3)),
-        InboundMessage::SpinTick(spin(1, 20)),
+        InboundMessage::new(ts(0), MessageBody::Book(bids)),
+        InboundMessage::new(ts(0), MessageBody::Book(asks)),
+        InboundMessage::new(
+            ts(2),
+            MessageBody::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 5 * ONE)], 2)),
+        ),
+        InboundMessage::new(
+            ts(3),
+            MessageBody::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 9 * ONE)], 3)),
+        ),
+        spin(1, 20),
     ] {
         linked.engine.dispatch(&message);
     }
@@ -250,7 +266,7 @@ fn resuming_resets_derived_state_and_rearms_warmup() {
     for message in [
         run_control(idle_at(1), 30),
         run_control(running_at(2), 40),
-        InboundMessage::SpinTick(spin(2, 45)),
+        spin(2, 45),
     ] {
         linked.engine.dispatch(&message);
     }
@@ -259,9 +275,7 @@ fn resuming_resets_derived_state_and_rearms_warmup() {
         "warmup re-armed on the resume, so the spin 5us later reaches no callback"
     );
 
-    linked
-        .engine
-        .dispatch(&InboundMessage::SpinTick(spin(3, 60)));
+    linked.engine.dispatch(&spin(3, 60));
     let past_warmup = drain_persist(&mut linked);
     assert_eq!(
         call_codes(&past_warmup),

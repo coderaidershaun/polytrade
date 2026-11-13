@@ -149,7 +149,7 @@ impl SimActor {
             received_ts_us,
         };
         for mut message in step(driver, context) {
-            message.set_queued_ts_us(engine_clock.now());
+            message.header.queued_ts_us = engine_clock.now();
             producer.push(message);
         }
     }

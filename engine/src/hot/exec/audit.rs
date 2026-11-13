@@ -69,7 +69,13 @@ fn bank_order(bank: &mut Actions, audit: OrderAudit<'_>) {
 }
 
 /// Delta = booked cumulative (diverges from event on lost report).
-pub(super) fn bank_fill(bank: &mut Actions, slot: &OrderSlot, event: &ExecEvent, delta: FillDelta) {
+pub(super) fn bank_fill(
+    bank: &mut Actions,
+    slot: &OrderSlot,
+    event: &ExecEvent,
+    delta: FillDelta,
+    received_ts_us: LocalTs,
+) {
     bank.push_persist(PersistRecord::Fill(FillRow {
         instrument: slot.instrument,
         trade_id: event.trade_id,
@@ -86,7 +92,7 @@ pub(super) fn bank_fill(bank: &mut Actions, slot: &OrderSlot, event: &ExecEvent,
         commission: delta.commission,
         commission_asset: event.commission_asset,
         exchange_ts_us: event.exchange_ts_us,
-        received_ts_us: event.received_ts_us,
+        received_ts_us,
     }));
 }
 
@@ -97,6 +103,7 @@ pub(super) fn bank_event_rows(
     event: &ExecEvent,
     previous_state: OrderLifecycle,
     fill: FillDelta,
+    received_ts_us: LocalTs,
 ) {
     let Some(transition) = transition_of(event.kind) else {
         return;
@@ -114,11 +121,11 @@ pub(super) fn bank_event_rows(
             reject: event.reject,
             reject_code: event.reject_code,
             exchange_ts_us: event.exchange_ts_us,
-            received_ts_us: event.received_ts_us,
+            received_ts_us,
         },
     );
     if !fill.is_empty() {
-        bank_fill(bank, slot, event, fill);
+        bank_fill(bank, slot, event, fill, received_ts_us);
     }
 }
 

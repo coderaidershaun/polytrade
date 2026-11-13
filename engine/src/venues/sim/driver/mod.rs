@@ -9,9 +9,9 @@ use account::has_account_update;
 use correlation::request_matches_answer;
 use summary::SimRunSummary;
 
-use crate::msg::exec::{CancelReason, ExecEvent, StampedExecCommand};
+use crate::msg::exec::{CancelReason, StampedExecCommand};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId};
-use crate::msg::inbound::InboundMessage;
+use crate::msg::inbound::{InboundMessage, MessageBody};
 use crate::msg::time::LocalTs;
 use crate::runtime::registry::AssetDictionary;
 use crate::runtime::shutdown::FatalSignal;
@@ -47,7 +47,7 @@ impl EffectStamp {
 }
 
 pub struct SimExecDriver {
-    session: ExecSession<Vec<ExecEvent>>,
+    session: ExecSession<Vec<InboundMessage>>,
     venue: SimVenue,
     schedule: DeliverySchedule,
     wire: VenueWire,
@@ -113,10 +113,7 @@ impl SimExecDriver {
             summary.observe(emission);
             schedule.accept(emission);
         }
-        let mut forwarded: Vec<InboundMessage> = std::mem::take(&mut self.session.events)
-            .into_iter()
-            .map(InboundMessage::Exec)
-            .collect();
+        let mut forwarded = std::mem::take(&mut self.session.events);
         let mut due = std::mem::take(&mut self.due);
         self.schedule.advance_to(horizon, &mut due);
         for answer in &due {
@@ -210,7 +207,7 @@ impl SimExecDriver {
     fn fold(&mut self, messages: &[InboundMessage], stamp: EffectStamp) {
         let mut outgoing = Vec::new();
         for message in messages {
-            let InboundMessage::Exec(event) = message else {
+            let MessageBody::Exec(event) = &message.body else {
                 continue;
             };
             self.session.fold(event, 0, &mut outgoing);
@@ -232,15 +229,14 @@ impl SimExecDriver {
                 stream_messages(&[payload], decode)
             }
             VenueVoice::Synthesised(SynthesisedEvent::StreamReset) => {
-                vec![InboundMessage::Exec(stream_reset(at_ts_us))]
+                vec![InboundMessage::new(
+                    at_ts_us,
+                    MessageBody::Exec(stream_reset(at_ts_us)),
+                )]
             }
             VenueVoice::Synthesised(SynthesisedEvent::PlaceNotSent(order)) => {
-                vec![InboundMessage::Exec(place_not_sent(
-                    self.instrument,
-                    order.client_id,
-                    order.side,
-                    at_ts_us,
-                ))]
+                let event = place_not_sent(self.instrument, order.client_id, order.side, at_ts_us);
+                vec![InboundMessage::new(at_ts_us, MessageBody::Exec(event))]
             }
             VenueVoice::Synthesised(SynthesisedEvent::StreamSubscribed) => Vec::new(),
         }
@@ -271,7 +267,7 @@ impl SimExecDriver {
             },
         );
         for message in &mut messages {
-            if let InboundMessage::Exec(event) = message {
+            if let MessageBody::Exec(event) = &mut message.body {
                 event.request_sent_ts_us = Some(held.sent_at);
             }
         }

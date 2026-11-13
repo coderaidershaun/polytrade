@@ -33,7 +33,7 @@ use crate::hot::sink::SampleSink;
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::msg::exec::{AccountChunk, CancelReason, ExecEvent, ExecLaneItem};
 use crate::msg::ids::QueueId;
-use crate::msg::inbound::InboundMessage;
+use crate::msg::inbound::{InboundMessage, MessageBody};
 use crate::msg::latency::WireSample;
 use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, EngineClock, LocalTs, Stamper};
@@ -276,9 +276,12 @@ impl EventFunnel {
         Self { producer, clock }
     }
 
-    pub(crate) fn send_account(&mut self, chunks: Vec<AccountChunk>) {
+    pub(crate) fn send_account(&mut self, received_ts_us: LocalTs, chunks: Vec<AccountChunk>) {
         for chunk in chunks {
-            self.send(InboundMessage::Account(chunk));
+            self.send(InboundMessage::new(
+                received_ts_us,
+                MessageBody::Account(chunk),
+            ));
         }
     }
 
@@ -287,14 +290,17 @@ impl EventFunnel {
         reason = "the session chassis stamps queued time and paces reconnects by wall time"
     )]
     pub(crate) fn send(&mut self, mut message: InboundMessage) {
-        message.set_queued_ts_us(self.clock.now());
+        message.header.queued_ts_us = self.clock.now();
         self.producer.push(message);
     }
 }
 
 impl EventSink for EventFunnel {
-    fn send_exec(&mut self, event: ExecEvent) {
-        self.send(InboundMessage::Exec(event));
+    fn send_exec(&mut self, received_ts_us: LocalTs, event: ExecEvent) {
+        self.send(InboundMessage::new(
+            received_ts_us,
+            MessageBody::Exec(event),
+        ));
     }
 }
 

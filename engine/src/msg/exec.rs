@@ -9,8 +9,7 @@ use crate::msg::ids::{
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::time::{LocalTs, Tick, VenueTs};
 
-/// A normalised order-lifecycle transition. Stream-lifecycle kinds carry only their kind
-/// and their stamps.
+/// A normalised order-lifecycle transition. Stream-lifecycle kinds carry only their kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExecEvent {
     /// A configured instrument; the edge drops any symbol that isn't configured. Balances
@@ -54,8 +53,6 @@ pub struct ExecEvent {
     /// stream event, a plain REST read, or a synthesised event, since none of those answer
     /// a timed request.
     pub request_sent_ts_us: Option<LocalTs>,
-    pub received_ts_us: LocalTs,
-    pub queued_ts_us: LocalTs,
 }
 
 impl ExecEvent {
@@ -224,8 +221,6 @@ pub struct AccountChunk {
     /// read and frees one before the money moved.
     pub venue_update_ts_ms: u64,
     pub exchange_ts_us: VenueTs,
-    pub received_ts_us: LocalTs,
-    pub queued_ts_us: LocalTs,
 }
 
 impl AccountChunk {

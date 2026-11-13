@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use engine::msg::ids::{InstrumentId, Price, Qty};
-use engine::msg::inbound::{BookChunkKind, InboundMessage, Level};
+use engine::msg::inbound::{BookChunkKind, Level, MessageBody};
 use engine::venues::polymarket::actor::{DriverEffect, PolyDriverCore, SlotLegs};
 use engine::venues::polymarket::discovery::PolySchedule;
 use engine::venues::polymarket::parse::{PolyBook, PolyFrame};
@@ -176,14 +176,14 @@ fn tag(effect: &DriverEffect) -> Tag {
             Tag::BindExecution(assignment.up.token.as_str().to_owned())
         }
         DriverEffect::PersistRotation(row) => Tag::PersistRotation(row.instrument.0),
-        DriverEffect::Emit(message) => match message {
-            InboundMessage::MarketRotation(rotation) => Tag::Rotation(rotation.instrument.0),
-            InboundMessage::BookReset(reset) => Tag::BookReset(reset.instrument.0),
-            InboundMessage::Book(chunk) => match chunk.kind {
+        DriverEffect::Emit(message) => match &message.body {
+            MessageBody::MarketRotation(rotation) => Tag::Rotation(rotation.instrument.0),
+            MessageBody::BookReset(reset) => Tag::BookReset(reset.instrument.0),
+            MessageBody::Book(chunk) => match chunk.kind {
                 BookChunkKind::Snapshot => Tag::Snapshot(chunk.instrument.0),
                 BookChunkKind::Delta => Tag::Delta(chunk.instrument.0),
             },
-            InboundMessage::Trade(trade) => Tag::Trade(trade.instrument.0),
+            MessageBody::Trade(trade) => Tag::Trade(trade.instrument.0),
             other => panic!("unexpected emitted message: {other:?}"),
         },
     }

@@ -200,16 +200,17 @@ impl Strategy for MicroRecorder {
         model.is_dirty = true;
     }
 
-    fn on_trade(&mut self, _ctx: &mut StrategyCtx<'_>, event: &TradeEvent) {
+    fn on_trade(&mut self, ctx: &mut StrategyCtx<'_>, event: &TradeEvent) {
         let Some(model) = self.recorded_mut(event.instrument) else {
             return;
         };
-        model.markouts.on_trade(event);
+        let received_ts_us = ctx.event_ts();
+        model.markouts.on_trade(event, received_ts_us);
         let hawkes = match event.side {
             Side::Buy => &mut model.hawkes_ask,
             Side::Sell => &mut model.hawkes_bid,
         };
-        hawkes.on_arrival(event.exchange_ts_us, event.received_ts_us);
+        hawkes.on_arrival(event.exchange_ts_us, received_ts_us);
     }
 
     fn on_book_update(&mut self, ctx: &mut StrategyCtx<'_>, chunk: &BookChunk) {
