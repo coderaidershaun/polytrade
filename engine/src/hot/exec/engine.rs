@@ -18,7 +18,7 @@ use super::budget::{BudgetMeter, OrderBudget};
 use super::capacity::ExecCapacity;
 use super::desired::QuoteLevel;
 use super::flatten::FeeModel;
-use super::gates::{ExecHalt, HaltReason, Readiness, RefusalLatch};
+use super::gates::{ExecHalt, HaltReason, LossSums, Readiness, RefusalLatch};
 use super::order::{OrderSlot, OrderTable, PriorRunOrders};
 use super::reconcile::{ExecLimits, RejectReason, RestingOrder, TickGrid};
 use super::view::{ExecCallback, OrderReject, OrderView, WorkingOrderView};
@@ -142,6 +142,7 @@ pub struct ExecEngine {
     /// The PnL baseline at the first honest valuation; the session loss gate compares
     /// against this. `None` until that first mark.
     pub(super) pnl_at_baseline: Vec<Option<Notional>>,
+    pub(super) loss_sums: LossSums,
 }
 
 digest_by_hash!(ExecSettings);
@@ -156,6 +157,10 @@ digest_fields! {
         orders, prior_orders, account, pending, sink, halt, readiness, refusals, reject_streak,
         budget, instruments, settings, spins_since_exec_event, recon_seq, incidents,
         pnl_at_baseline,
+    }
+    not_state {
+        // Summed again from the ledger and the instruments before each read.
+        loss_sums,
     }
 }
 
@@ -209,6 +214,7 @@ impl ExecEngine {
             recon_seq: 0,
             incidents: IncidentCounts::default(),
             pnl_at_baseline: vec![None; setup.instruments.len()],
+            loss_sums: LossSums::new(&capacity),
         }
     }
 

@@ -15,7 +15,7 @@ use crate::runtime::config::MAX_QUOTE_LEVELS;
 use super::budget::QuotePermit;
 use super::desired::{DesiredBook, DesiredQuote, QuoteLevel};
 use super::engine::{ExecEngine, FoldStamps, resting_of};
-use super::gates::{ExposureCheck, HaltReason, QuotePermission, assess_exposure};
+use super::gates::{ExposureCheck, HaltReason, LossVerdict, QuotePermission, assess_exposure};
 use super::order::OrderState;
 use super::reconcile::{
     BookTop, FundsView, ReconcileInput, ReconcileOutcome, RejectReason, reconcile_side,
@@ -108,15 +108,22 @@ impl ExecEngine {
         }
     }
 
+    /// A realised loss of a quote asset at the budget halts quoting before any side is decided, and
+    /// then each instrument quotes the sides that its own loss permission leaves open.
     fn quote_pass(&mut self, input: &mut SpinInput<'_>) {
-        let session = self.session_permission(input.ledger);
-        if session == QuotePermission::Neither && !self.halt.is_halted() {
+        self.sum_realised_losses(input.ledger);
+        let is_spent = (0..self.instruments.len()).any(|index| {
+            let verdict = self.loss_verdict(InstrumentId(index as u16), input.ledger);
+            verdict == LossVerdict::Realised
+        });
+        if is_spent && !self.halt.is_halted() {
             self.halt(HaltReason::RealisedLoss, input.now.as_local());
         }
         for index in 0..self.instruments.len() {
             let instrument = InstrumentId(index as u16);
+            let permission = self.loss_permission(instrument, input.ledger);
             for side in [Side::Buy, Side::Sell] {
-                let reason = self.reconcile_ladder(instrument, side, session, input);
+                let reason = self.reconcile_ladder(instrument, side, permission, input);
                 self.record_refusal(instrument, side, reason, input);
             }
         }
@@ -359,8 +366,8 @@ pub struct SpinInput<'a> {
     /// Per instrument, the window the venue last rotated it into. `None` where the venue does not
     /// rotate, which is what makes the quote-window gate inert everywhere it does not belong.
     pub windows: &'a [Option<WindowInfo>],
-    /// Per instrument, whether its market is live. A market that warms has the quote permission
-    /// `Neither`, joined after the session permission, so a warming market never halts the session.
+    /// Per instrument, whether its market is live. A market that warms quotes nothing, and that is
+    /// judged after the loss permission, so a warming market never halts quoting.
     pub(crate) gates: &'a [StrategyGate],
     pub(crate) ledger: &'a PositionLedger,
     pub(crate) bank: &'a mut Actions,
