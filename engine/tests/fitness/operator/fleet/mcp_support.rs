@@ -44,10 +44,11 @@ pub const MARKERS: &str =
 pub const EXITS_THREE: &str = "#!/bin/sh\necho \"config refused\" >&2\nexit 3\n";
 
 pub const LINK_BIND: &str = "127.0.0.1:9399";
-pub const MODE_OFF: &str = "execution:\n  mode: off\nlink:\n  bind: \"127.0.0.1:9399\"\n";
-pub const MODE_SIM: &str = "execution:\n  mode: sim\n";
+pub const MODE_OFF: &str =
+    "sources:\n  - execution:\n      mode: off\nlink:\n  bind: \"127.0.0.1:9399\"\n";
+pub const MODE_SIM: &str = "sources:\n  - execution:\n      mode: sim\n";
 pub const NO_EXECUTION: &str = "engine:\n  spin_interval_us: 1000\n";
-pub const UNPARSEABLE: &str = "execution: [mode: off\n";
+pub const UNPARSEABLE: &str = "sources:\n  - execution: [mode: off\n";
 
 pub struct EngineTree {
     dir: TempDir,

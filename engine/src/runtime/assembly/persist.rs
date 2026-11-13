@@ -70,11 +70,7 @@ fn run_meta<P>(setup: &PersistBringUpSetup<'_, P>) -> RunMeta {
     RunMeta {
         strategy_id: setup.identity.strategy_id.clone(),
         te_id: setup.identity.te_id.clone(),
-        execution_mode: setup
-            .config
-            .execution
-            .as_ref()
-            .map(|execution| execution.mode),
+        execution_mode: setup.config.execution_mode(),
         fixed_scale: FIXED_SCALE,
         engine_version: env!("CARGO_PKG_VERSION").into(),
         feature_names: setup.feature_names.to_vec(),

@@ -209,9 +209,9 @@ pub(crate) fn order_client_timeout(source: &SourceSpec) -> (&'static str, Durati
 
 pub(crate) fn tap_heartbeat<P>(config: &Config<P>) -> Duration {
     let sim = config
-        .execution
-        .as_ref()
-        .and_then(|execution| execution.sim)
+        .sources
+        .iter()
+        .find_map(|source| source.execution.as_ref()?.sim)
         .unwrap_or_default();
     Duration::from_millis(sim.heartbeat_ms)
 }

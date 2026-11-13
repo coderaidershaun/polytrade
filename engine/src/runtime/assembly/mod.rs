@@ -294,15 +294,14 @@ impl Engine {
 
         let drain_deadline = Duration::from_millis(config.engine.drain_deadline_ms);
         let spin_interval = config.engine.spin_interval();
+        let armed = config
+            .armed_sources()
+            .next()
+            .map(|(.., execution)| execution);
         let CommandLane {
             wiring: exec_wiring,
             edge: planned_edge,
-        } = open_command_lane(
-            execution_plan,
-            config.execution.as_ref(),
-            spin_interval,
-            &stamper,
-        );
+        } = open_command_lane(execution_plan, armed, spin_interval, &stamper);
 
         let (link_wiring, link_feed) = match &bound_link {
             None => (None, None),
@@ -381,7 +380,7 @@ impl Engine {
             lease: execution_lease,
         } = exec_bring_up(ExecBringUpSetup {
             edge: planned_edge,
-            execution: config.execution.as_ref(),
+            execution: armed,
             registry: &registry,
             producer: exec_producer,
             groups: &mut group_producers,

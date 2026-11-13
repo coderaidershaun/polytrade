@@ -26,7 +26,7 @@ use proptest::prelude::*;
 
 use super::config_guards::{
     BINANCE_KLINES_VOLUME_BARS, BINANCE_PERP_SOURCE, BINANCE_SPOT_SOURCE, POLY_SOURCE, SIM_BLOCK,
-    config_with_execution_on, config_with_source, execution_block_with, link_block,
+    config_with_execution_on, config_with_source, execution_block_with, link_block, sources_of,
 };
 use crate::engine_support::Idle;
 use crate::parquet_readback::TempDir;
@@ -457,10 +457,9 @@ fn refused_documents() -> [RefusedDocument; 9] {
 queues:
   input_capacity: 65536
   persistence_capacity: 65536
-source:
 "
     .to_owned()
-        + BINANCE_PERP_SOURCE
+        + &sources_of(BINANCE_PERP_SOURCE)
         + "strategy:\n  instruments: all\npersistence:\n  dir: ./data\nlogging:\n  dir: ./logs\n";
     [
         (

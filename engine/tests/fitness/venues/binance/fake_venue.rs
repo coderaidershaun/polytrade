@@ -421,13 +421,14 @@ fn spot_registry() -> Registry {
 queues:
   input_capacity: 65536
   persistence_capacity: 65536
-source:
-  exchange: binance
-  max_exposure_quote: 500
-  market: spot
-  base: BTC
-  quote: USDT
-  tracker: {}
+sources:
+  - feed:
+      exchange: binance
+      max_exposure_quote: 500
+      market: spot
+      base: BTC
+      quote: USDT
+      tracker: {}
 strategy:
   instruments: all
 persistence:

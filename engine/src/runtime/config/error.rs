@@ -81,6 +81,36 @@ pub enum ConfigError {
         "the config needs at least {count} input queues, and one hot thread reads at most {max}"
     )]
     TooManyInputQueues { count: usize, max: usize },
+    #[error("sources: the list is empty; name one source or more")]
+    NoSource,
+    #[error(
+        "sources: items {first} and {second} both name {venue}, with another venue between them; \
+         put the sources of one venue next to each other"
+    )]
+    VenueSourcesApart {
+        venue: &'static str,
+        first: usize,
+        second: usize,
+    },
+    #[error(
+        "sources: items {first} and {second} of {venue} both hold an execution block; a venue has \
+         one edge and one lease, so one of its sources holds the block"
+    )]
+    VenueExecutionRepeated {
+        venue: &'static str,
+        first: usize,
+        second: usize,
+    },
+    #[error(
+        "sources: item {first} sends orders in mode {mode}, and item {second} in mode {other}; the \
+         mode names the files of a run, so each source that sends orders uses one mode"
+    )]
+    SourceModesDiffer {
+        first: usize,
+        mode: &'static str,
+        second: usize,
+        other: &'static str,
+    },
 }
 
 impl ConfigError {
@@ -101,7 +131,11 @@ impl ConfigError {
             | ConfigError::ExecutionModeUnsupported { .. }
             | ConfigError::SimulatedExecutionMarket { .. }
             | ConfigError::SimulatedExecutionSubscriptions { .. }
-            | ConfigError::TooManyInputQueues { .. } => FailureClass::Halt(Halt::Start),
+            | ConfigError::TooManyInputQueues { .. }
+            | ConfigError::NoSource
+            | ConfigError::VenueSourcesApart { .. }
+            | ConfigError::VenueExecutionRepeated { .. }
+            | ConfigError::SourceModesDiffer { .. } => FailureClass::Halt(Halt::Start),
         }
     }
 }

@@ -25,6 +25,11 @@ pub enum StartError {
         detail: &'static str,
     },
     #[error(
+        "sources: items {first} and {second} both send orders, and this build starts the edge of \
+         one venue; set the execution mode of one of them to off"
+    )]
+    ExecutionOnSeveralSources { first: usize, second: usize },
+    #[error(
         "the {table} table needs {needed} entries and a client order id addresses {addressable} — an engine that cannot tell its own orders apart must not place any"
     )]
     ExecutionCapacity {
@@ -127,6 +132,7 @@ impl StartError {
             | StartError::Exposure(_)
             | StartError::Venue(_)
             | StartError::ExecutionNotWired { .. }
+            | StartError::ExecutionOnSeveralSources { .. }
             | StartError::ExecutionCapacity { .. }
             | StartError::ExecutionFieldInert { .. }
             | StartError::ExecutionBaseFloorOnPosition { .. }

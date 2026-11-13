@@ -364,11 +364,12 @@ pub(crate) fn build_poly_registry() -> Registry {
 queues:
   input_capacity: 65536
   persistence_capacity: 65536
-source:
-  exchange: polymarket
-  max_exposure_quote: 500
-  series: btc-updown-5m
-  tracker: {}
+sources:
+  - feed:
+      exchange: polymarket
+      max_exposure_quote: 500
+      series: btc-updown-5m
+      tracker: {}
 strategy:
   instruments: all
 persistence:
@@ -492,6 +493,10 @@ fn poly_preflight_accepts_the_venue_ticks_and_stamps_the_accepted_grid() {
 /// A registry carrying one binance spot source, BTC/USDT. `env_line` goes into the source block, so
 /// a caller can pin what an omitted `env:` means as well as an explicit one.
 fn build_binance_registry(env_line: &str) -> Registry {
+    let env_line: String = env_line
+        .lines()
+        .map(|line| format!("    {line}\n"))
+        .collect();
     let yaml = format!(
         "engine:
   hot_core_id: 0
@@ -499,13 +504,14 @@ fn build_binance_registry(env_line: &str) -> Registry {
 queues:
   input_capacity: 65536
   persistence_capacity: 65536
-source:
-  exchange: binance
-  market: spot
-{env_line}  base: BTC
-  quote: USDT
-  max_exposure_quote: 500
-  tracker: {{}}
+sources:
+  - feed:
+      exchange: binance
+      market: spot
+{env_line}      base: BTC
+      quote: USDT
+      max_exposure_quote: 500
+      tracker: {{}}
 strategy:
   instruments: all
 persistence:

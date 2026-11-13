@@ -13,6 +13,7 @@ use engine::runtime::exposure::{
 };
 use engine::runtime::registry::Registry;
 
+use super::config_guards::sources_of;
 use crate::parquet_readback::TempDir;
 
 pub const BINANCE_SOURCE: &str = "  exchange: binance
@@ -32,6 +33,7 @@ pub const POLY_SOURCE: &str = "  exchange: polymarket
 ";
 
 pub fn registry_for(source_block: &str) -> Registry {
+    let sources = sources_of(source_block);
     let yaml = format!(
         "engine:
   hot_core_id: 0
@@ -39,8 +41,7 @@ pub fn registry_for(source_block: &str) -> Registry {
 queues:
   input_capacity: 65536
   persistence_capacity: 65536
-source:
-{source_block}strategy:
+{sources}strategy:
   instruments: all
 logging:
   dir: ./logs

@@ -48,7 +48,7 @@ pub fn load_harness_config(path: &Path) -> Result<Config<NoParams>, ProbeError> 
         path: path.to_path_buf(),
         source,
     })?;
-    let mode = config.execution.as_ref().map(|execution| execution.mode);
+    let mode = config.execution_mode();
     if mode == Some(ExecutionMode::Live) {
         return Err(ProbeError::LiveExecution {
             path: path.to_path_buf(),

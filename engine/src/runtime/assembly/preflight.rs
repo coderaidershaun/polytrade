@@ -4,7 +4,8 @@
 use crate::hot::exec::ExecCapacity;
 use crate::hot::strategy::Strategy;
 use crate::info;
-use crate::runtime::config::{Config, ExecutionMode, RunIdentity, SourceSpec};
+use crate::msg::ids::VenueId;
+use crate::runtime::config::{Config, ExecutionConfig, ExecutionMode, RunIdentity, SourceSpec};
 use crate::runtime::exposure::{self, ExposureState};
 use crate::runtime::registry::{InstrumentRow, Registry};
 use crate::venues::edge::rest_quiet::SharedRestQuiet;
@@ -61,12 +62,14 @@ impl<P> Preflight<'_, P> {
             config,
             strategy,
         } = self;
-        let mode = config.execution.as_ref().map(|execution| execution.mode);
+        let mode = config.execution_mode();
         let mut registry = Registry::build(config)?;
+        let armed = one_armed_source(config)?;
         if let Some(core_id) = config.engine.hot_core_id {
             validate_core_id(core_id)?;
         }
-        if let (Some(source), Some(execution)) = (live_execution_source(config), &config.execution)
+        if let Some((_, source, execution)) =
+            armed.filter(|(.., execution)| execution.mode.needs_credentials())
         {
             check_order_client_timeout(source, execution)?;
         }
@@ -74,19 +77,23 @@ impl<P> Preflight<'_, P> {
         // constant, so a production run is checked against the production grid.
         port.read_scales(&registry)?.stamp(&mut registry);
         ExecCapacity::of(registry.instruments())?;
-        if let Some(execution) = &config.execution {
-            check_execution_order_capacity(&registry, execution.max_orders_per_side)?;
+        for (index, source) in config.sources.iter().enumerate() {
+            if let Some(execution) = &source.execution {
+                let venue = VenueId(index as u8);
+                check_execution_order_capacity(&registry, venue, execution.max_orders_per_side)?;
+            }
         }
         let exposure = exposure::load(&config.exposure.dir, identity, &registry, mode)?;
         let rest_quiet = SharedRestQuiet::new();
         // One signed call that proves the key can trade, before a strategy quotes with no
         // permission.
-        let probed = live_execution_source(config)
-            .map(|source| port.probe(source, &registry, &rest_quiet))
+        let probed = armed
+            .filter(|(.., execution)| execution.mode.needs_credentials())
+            .map(|(_, source, _)| port.probe(source, &registry, &rest_quiet))
             .transpose()?;
         let link = link_bring_up(config, identity, strategy, &registry)?;
         let execution = check_execution(ExecCheck {
-            execution: config.execution.as_ref(),
+            armed: armed.map(|(venue, _, execution)| (venue, execution)),
             venue: probed.map(|probed| probed.0),
             registry: &registry,
             identity,
@@ -128,13 +135,23 @@ impl StartPlan {
     }
 }
 
-/// The source whose venue this run will place orders on, or None when nothing is armed for live.
-fn live_execution_source<P>(config: &Config<P>) -> Option<&SourceSpec> {
-    config
-        .execution
-        .as_ref()
-        .filter(|execution| execution.mode.needs_credentials())
-        .map(|_| &config.source)
+/// The source whose venue this run places orders on. This build starts one execution edge, so a
+/// second source that sends orders is refused before any check reads a venue.
+///
+/// # Errors
+/// [`StartError::ExecutionOnSeveralSources`] when two sources send orders.
+fn one_armed_source<P>(
+    config: &Config<P>,
+) -> Result<Option<(VenueId, &SourceSpec, &ExecutionConfig)>, StartError> {
+    let mut armed = config.armed_sources();
+    let first = armed.next();
+    match (first, armed.next()) {
+        (Some((first, ..)), Some((second, ..))) => Err(StartError::ExecutionOnSeveralSources {
+            first: usize::from(first.0),
+            second: usize::from(second.0),
+        }),
+        _ => Ok(first),
+    }
 }
 
 /// Confirms the configured ladder fits every instrument's venue order ceiling before any thread
@@ -144,9 +161,14 @@ fn live_execution_source<P>(config: &Config<P>) -> Option<&SourceSpec> {
 /// [`StartError::ExecutionOrderCapacity`] on the first instrument whose ladder overruns.
 fn check_execution_order_capacity(
     registry: &Registry,
+    venue: VenueId,
     max_orders_per_side: u32,
 ) -> Result<(), StartError> {
-    for row in registry.instruments() {
+    for row in registry
+        .instruments()
+        .iter()
+        .filter(|row| row.venue == venue)
+    {
         check_symbol_order_capacity(row, max_orders_per_side)?;
     }
     Ok(())

@@ -8,14 +8,16 @@ mod validate;
 
 use crate::msg::ids::{AssetId, InstrumentId, Notional, Price, Qty, QueueId, VenueId};
 use crate::runtime::config::{
-    BinanceEnv, Config, ConfigError, KlineInterval, Subscriptions, TrackerSpec, VenueMarket,
+    BinanceEnv, Config, ConfigError, KlineInterval, SourceConfig, Subscriptions, TrackerSpec,
+    VenueMarket,
 };
 
 pub use assets::AssetDictionary;
 pub use grouping::{ConnectionCategory, ProducerGroup};
 
+use assets::intern_assets;
 use grouping::group_producers;
-use rows::{binance_env, build_instrument_rows, check_strategy_instruments};
+use rows::{binance_env, check_strategy_instruments, push_source_rows};
 
 #[derive(Debug, Clone)]
 pub struct InstrumentRow {
@@ -128,9 +130,10 @@ pub struct Registry {
     timer_queue_id: QueueId,
     /// `None` when the config carries no `link:` block.
     link_queue_id: Option<QueueId>,
-    /// Acks and stream reports share one queue: their relative order can race over the
-    /// network, but sharing one queue keeps that order deterministic for replay.
-    exec_queue_id: Option<QueueId>,
+    /// The queue of each venue, by its [`VenueId`]: `None` for a venue that takes no orders. The
+    /// acks and stream reports of one venue share one queue: their relative order can race over
+    /// the network, but sharing one queue keeps that order deterministic for replay.
+    exec_queue_ids: Vec<Option<QueueId>>,
     /// `None` unless execution is armed: a writer that gives up halts quoting, and with execution
     /// off no quote can halt.
     writer_status_queue_id: Option<QueueId>,
@@ -142,39 +145,61 @@ impl Registry {
     /// A strategy instrument that names no row, a tracker block the source cannot serve, or more
     /// input queues than one hot thread reads.
     pub fn build<P>(config: &Config<P>) -> Result<Registry, ConfigError> {
-        let venue = VenueId::default();
-        let (instruments, assets) = build_instrument_rows(&config.source, venue)?;
+        let venues = config.source_venues();
+        let mut instruments = Vec::new();
+        let mut source_rows = Vec::with_capacity(config.sources.len());
+        for (source, &venue) in config.sources.iter().zip(&venues) {
+            let first = instruments.len();
+            push_source_rows(&source.feed, venue, &mut instruments)?;
+            source_rows.push(first..instruments.len());
+        }
+        let assets = intern_assets(&mut instruments);
         check_strategy_instruments(&config.strategy.instruments, &instruments)?;
 
-        let producer_groups = group_producers(&instruments)?;
+        let producer_groups = group_producers(&instruments, &source_rows)?;
         let timer_queue_id = queue_id_at(producer_groups.len())?;
         let link_queue_id = config
             .link
             .as_ref()
             .map(|_| queue_id_at(timer_queue_id.index() + 1))
             .transpose()?;
-        // Exec and then the writer status are appended last: queue ids are recorded on messages,
-        // and shifting one would re-attribute an entire recorded tape.
-        let exec_queue_id = execution_queue_id(config, link_queue_id.unwrap_or(timer_queue_id))?;
-        let writer_status_queue_id = exec_queue_id
-            .map(|exec| queue_id_at(exec.index() + 1))
+        // The queue of each venue that takes orders, in venue order, and then the writer status
+        // are appended last: queue ids are recorded on messages, and shifting one would
+        // re-attribute an entire recorded tape.
+        let mut last_queue_id = link_queue_id.unwrap_or(timer_queue_id);
+        let mut exec_queue_ids = Vec::new();
+        let mut venue_names = Vec::new();
+        for (index, (source, &venue)) in config.sources.iter().zip(&venues).enumerate() {
+            if index == 0 || venues[index - 1] != venue {
+                venue_names.push(source.feed.venue());
+                exec_queue_ids.push(None);
+            }
+            let queue = execution_queue_id(source, last_queue_id)?;
+            last_queue_id = queue.unwrap_or(last_queue_id);
+            if let (Some(queue), Some(slot)) = (queue, exec_queue_ids.last_mut()) {
+                *slot = Some(queue);
+            }
+        }
+        let writer_status_queue_id = exec_queue_ids
+            .iter()
+            .any(Option::is_some)
+            .then(|| queue_id_at(last_queue_id.index() + 1))
             .transpose()?;
-        let last_queue_id = writer_status_queue_id
-            .or(exec_queue_id)
-            .or(link_queue_id)
-            .unwrap_or(timer_queue_id);
-        let input_queue_count = last_queue_id.index() + 1;
+        let input_queue_count = writer_status_queue_id.unwrap_or(last_queue_id).index() + 1;
 
         Ok(Registry {
             instruments,
-            venue_names: vec![config.source.venue()],
+            venue_names,
             assets,
-            binance_env: binance_env(&config.source),
+            binance_env: config
+                .sources
+                .iter()
+                .find_map(|source| binance_env(&source.feed)),
             order_rate_limits: Vec::new(),
             producer_groups,
             timer_queue_id,
             link_queue_id,
-            exec_queue_id,
+            exec_queue_ids,
             writer_status_queue_id,
             input_queue_count,
         })
@@ -273,8 +298,19 @@ impl Registry {
         self.link_queue_id
     }
 
-    pub fn exec_queue_id(&self) -> Option<QueueId> {
-        self.exec_queue_id
+    pub fn exec_queue_id(&self, venue: VenueId) -> Option<QueueId> {
+        self.exec_queue_ids
+            .get(usize::from(venue.0))
+            .copied()
+            .flatten()
+    }
+
+    /// The execution queue of each venue that takes orders, in venue order.
+    pub(crate) fn exec_queues(&self) -> impl Iterator<Item = (VenueId, QueueId)> + '_ {
+        self.exec_queue_ids
+            .iter()
+            .enumerate()
+            .filter_map(|(venue, queue)| Some((VenueId(venue as u8), (*queue)?)))
     }
 
     pub fn writer_status_queue_id(&self) -> Option<QueueId> {
@@ -285,14 +321,14 @@ impl Registry {
 // An armed mode owns an input queue exactly when its venue has an edge to feed one. Config
 // validation refuses the other combinations first; this stays the structural answer, so a queue is
 // never allocated for an edge that will not exist.
-fn execution_queue_id<P>(
-    config: &Config<P>,
+fn execution_queue_id(
+    source: &SourceConfig,
     previous: QueueId,
 ) -> Result<Option<QueueId>, ConfigError> {
-    let Some(execution) = config.execution.as_ref() else {
+    let Some(execution) = source.armed_execution() else {
         return Ok(None);
     };
-    let is_fed = execution.mode.is_enabled() && config.source.supports_execution(execution.mode);
+    let is_fed = source.feed.supports_execution(execution.mode);
     is_fed
         .then(|| queue_id_at(previous.index() + 1))
         .transpose()

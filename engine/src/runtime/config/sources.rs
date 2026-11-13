@@ -1,14 +1,34 @@
-//! The `source:` block: which venue an engine reads, which instruments, and which streams. It also
-//! holds `VenueMarket`, the venue plus its sub-market, so one registry can hold Binance and
-//! Polymarket rows without either venue's wire words leaking into the other.
+//! One item of the `sources:` list: which venue an engine reads, which instruments, which streams,
+//! and the orders it sends there. It also holds `VenueMarket`, the venue plus its sub-market, so one
+//! registry can hold Binance and Polymarket rows without either venue's wire words leaking into the
+//! other.
 
 use serde::Deserialize;
 
 use super::ConfigError;
-use super::execution::{ExecutionMode, check_money};
+use super::execution::{ExecutionConfig, ExecutionMode, check_money};
 use super::tracker::TrackerSpec;
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::time::DurationUs;
+
+/// The feed sits in its own key: an execution block beside the tag of the feed would be read through
+/// the tag's buffer, which reads the bare word `off` as a boolean.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SourceConfig {
+    pub feed: SourceSpec,
+    #[serde(default)]
+    pub execution: Option<ExecutionConfig>,
+}
+
+impl SourceConfig {
+    /// The execution block of this source when its mode sends orders.
+    pub fn armed_execution(&self) -> Option<&ExecutionConfig> {
+        self.execution
+            .as_ref()
+            .filter(|execution| execution.mode.is_enabled())
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "exchange", rename_all = "lowercase", deny_unknown_fields)]

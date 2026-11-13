@@ -89,8 +89,9 @@ impl RingPlan {
             timer: (registry.timer_queue_id(), SourceId(group_count)),
             link: registry.link_queue_id(),
             exec: registry
-                .exec_queue_id()
-                .map(|queue_id| (queue_id, SourceId(group_count + 1))),
+                .exec_queues()
+                .next()
+                .map(|(_, queue_id)| (queue_id, SourceId(group_count + 1))),
             writer_status: registry
                 .writer_status_queue_id()
                 .map(|queue_id| (queue_id, SourceId(group_count + 2))),

@@ -14,7 +14,7 @@ use crate::hot::sink::{ExecLaneBudget, ExecSink, SampleSink, exec_lane_capacity}
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::info;
 use crate::msg::exec::ExecLaneItem;
-use crate::msg::ids::{Notional, Qty, QueueId};
+use crate::msg::ids::{Notional, Qty, QueueId, VenueId};
 use crate::msg::latency::WireSample;
 use crate::msg::time::{DurationUs, EngineClock, Stamper};
 use crate::runtime::config::{
@@ -66,7 +66,8 @@ pub(super) struct ExecPlan {
 }
 
 pub(super) struct ExecCheck<'a> {
-    pub(super) execution: Option<&'a ExecutionConfig>,
+    /// The venue that sends orders, with its execution block. `None` when no source does.
+    pub(super) armed: Option<(VenueId, &'a ExecutionConfig)>,
     /// The venue the permission probe passed. `None` when execution is disarmed or absent, since the
     /// probe never ran.
     pub(super) venue: Option<ExecutionVenue>,
@@ -85,11 +86,11 @@ pub(super) struct ExecCheck<'a> {
 /// input queue that arming implies, [`StartError::Venue`] when the venue refuses the config or its
 /// own bring-up, and `ExecutionIdentity*` when the lease cannot be taken.
 pub(super) fn check_execution(check: ExecCheck<'_>) -> Result<Option<ExecPlan>, StartError> {
-    let Some(execution) = check.execution.filter(|config| config.mode.is_enabled()) else {
+    let Some((venue_id, execution)) = check.armed else {
         return Ok(None);
     };
     let mode = execution.mode.as_str();
-    let Some(queue) = check.registry.exec_queue_id() else {
+    let Some(queue) = check.registry.exec_queue_id(venue_id) else {
         return Err(StartError::ExecutionNotWired {
             mode,
             detail: "the registry allocated no execution input queue",
