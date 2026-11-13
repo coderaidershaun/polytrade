@@ -11,6 +11,7 @@ mod exec_prior_run;
 mod exec_reconcile;
 mod exec_resync;
 mod exec_window;
+mod fills;
 mod loss_gate;
 mod order_table;
 mod risk_gate;
