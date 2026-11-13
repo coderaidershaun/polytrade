@@ -67,7 +67,7 @@ Each block of an engine's `config.yaml` refuses a key it does not know. Each key
 - `logging:` `dir`, `ring_capacity`, `drain_deadline_ms`, `reopen_limit`. `drain_deadline_ms` must be below `engine.drain_deadline_ms`.
 - `queues:` `timer_capacity`, `link_capacity`, `execution_capacity`. `input_capacity` sizes the market-data rings only. A full timer or execution ring halts the engine. A full link ring drops the frame.
 - `persistence:` `seal_try_limit`: the tries of a waiting seal before quoting halts.
-- `otlp:` `collector`: the loopback address and port of an OTLP/HTTP collector, for example `127.0.0.1:4318`. Only a build with feature `otlp` reads the block, and a build without it refuses the block. With the block, `logging.drain_deadline_ms` + 1,000 must be below `engine.drain_deadline_ms`.
+- `otlp:` `collector`: a loopback address (`127.0.0.0/8` or `[::1]`) and the port of an OTLP/HTTP collector, for example `127.0.0.1:4318`. Only a build with feature `otlp` reads the block, and a build without it refuses the block. With the block, `logging.drain_deadline_ms` + 1,000 must be below the half of `engine.drain_deadline_ms` that the exit sweep leaves. The default deadlines (5,000 and 2,000) do not fit: set a longer `engine.drain_deadline_ms` or a shorter `logging.drain_deadline_ms`.
 
 ## Limits
 

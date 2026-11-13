@@ -116,10 +116,17 @@ The start:
 ### Amended 2026-11-13: the OTLP check and the exporter
 
 WHY: the export adds one start check and one thread, and neither may change the order of the pins.
+The stop of the exporter must end before the watchdog of the drain, after the exit sweep.
 
 - [ ] Preflight checks the `otlp:` block (feature `otlp`) after the core id and before the scale
-  read: a collector on loopback, and room for the stop of the exporter inside
-  `engine.drain_deadline_ms`. It starts nothing, and it reads no network.
+  read: a collector on a loopback address (`127.0.0.0/8` or `[::1]`), and room for the stop of the
+  exporter. It starts nothing, and it reads no network.
+- [ ] The watchdog of the drain starts with `engine.drain_deadline_ms`, and the exit sweep can take
+  its share first: `engine.drain_deadline_ms / SWEEP_SHARE_OF_DRAIN`, rounded up, half today. So
+  preflight refuses an `otlp:` block unless `logging.drain_deadline_ms` + 1,000 is below the rest.
+  The 1,000 ms are the stop of the exporter. The default deadlines (5,000 and 2,000) do not fit:
+  a config that exports sets a longer `engine.drain_deadline_ms` or a shorter
+  `logging.drain_deadline_ms`.
 - [ ] The exporter thread does not pin, so it is not in the pin order. Its lanes open right after
   the log starts. The thread starts last, after the link, when no refusal can follow. So no refused
   start has an exporter to stop.
