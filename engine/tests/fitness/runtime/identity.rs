@@ -2,15 +2,19 @@
 //! name or a wrong key lets a run mint client order ids that a venue has already seen.
 
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-use engine::runtime::config::{BinanceEnv, RunIdentity};
-use engine::runtime::{ExecutionLease, StartError};
+use engine::msg::failure::{FailureClass, Halt};
+use engine::runtime::config::{BinanceEnv, Config, NoParams, RunIdentity};
+use engine::runtime::{ExecutionLease, Preflight, StartError, StartPlan};
 use engine::venues::binance::exec as binance_exec;
 use engine::venues::exec::{LeaseNamespace, TeTag};
 use engine::venues::polymarket::exec as polymarket_exec;
 use engine::venues::sim;
 
+use super::preflight::{Scales, StandInVenue, sim_document};
+use crate::engine_support::Idle;
 use crate::parquet_readback::TempDir;
 
 const STRATEGY: &str = "strat-identity";
@@ -18,8 +22,12 @@ const SIGNER: &str = "0x0d09aEC2D10F396fB59482644708CBd353798b87";
 
 /// Each test of this module has its own engine identity, so tests that run at the same time never
 /// share a host lock.
+fn identity(te_id: &str) -> RunIdentity {
+    RunIdentity::new(STRATEGY, te_id).expect("a valid identity")
+}
+
 fn te_tag(te_id: &str) -> TeTag {
-    TeTag::of(&RunIdentity::new(STRATEGY, te_id).expect("a valid identity"))
+    TeTag::of(&identity(te_id))
 }
 
 /// The run nonce that one start gets. The lease is released again before this returns.
@@ -34,6 +42,23 @@ fn is_refused_as_held(state: &Path, tag: TeTag, namespace: &LeaseNamespace<'_>) 
         ExecutionLease::acquire(state, tag, namespace),
         Err(StartError::ExecutionIdentityInUse { .. })
     )
+}
+
+/// Preflight of a simulated engine whose state folder is `state`. The venue stand-in passes each
+/// check before the lease.
+fn preflight(state: &Path) -> Result<StartPlan, StartError> {
+    let config = Config::<NoParams>::from_yaml(&sim_document(state, ""))
+        .expect("the document passes config");
+    Preflight {
+        identity: &identity("te-empty-nonce"),
+        config: &config,
+        strategy: &Idle,
+    }
+    .run_with(&mut StandInVenue {
+        scales: Scales::Stamped {
+            max_num_orders: 200,
+        },
+    })
 }
 
 fn file_names(state: &Path) -> Vec<String> {
@@ -119,4 +144,61 @@ fn nonce_file_names_and_keys_are_exact() {
     );
     assert_eq!(run_nonce(state, tag, &polymarket), 2);
     assert_eq!(run_nonce(state, tag, &testnet), 3);
+}
+
+/// FITNESS: a run that stopped while it wrote its nonce file must not let the next run count from 0
+/// again. That run would mint client order ids that the venue has already seen, and the answers for
+/// an order of the earlier run would land on an order of this one. So an empty file refuses the
+/// start and stays as it is, for a person to fill in. A missing file is a first run, and each new
+/// nonce replaces the file by a rename, so a stop in the middle leaves the old nonce or the new one.
+#[test]
+fn empty_nonce_file_refuses_start() {
+    let root = TempDir::new("empty-nonce");
+    let state = root.path().join("state");
+    let nonce = state.join(".exec-sim-0ad70317.nonce");
+    fs::create_dir_all(&state).expect("the test makes the state folder");
+    fs::write(&nonce, "").expect("the test writes an empty nonce file");
+
+    let refused = preflight(&state)
+        .err()
+        .expect("an empty nonce file refuses the start");
+    let StartError::ExecutionNonceEmpty { path } = &refused else {
+        panic!("an empty nonce file refuses with its own variant, got {refused}");
+    };
+    assert_eq!(path, &nonce);
+    assert!(
+        refused.to_string().contains(&nonce.display().to_string()),
+        "the refusal names the file: {refused}"
+    );
+    assert_eq!(refused.failure_class(), FailureClass::Halt(Halt::Start));
+    assert_eq!(
+        fs::read(&nonce).expect("the nonce file stays").len(),
+        0,
+        "a refused start leaves the file as it found it"
+    );
+
+    fs::remove_file(&nonce).expect("the test removes the nonce file");
+    drop(preflight(&state).expect("no nonce file is the first run"));
+    assert_eq!(
+        fs::read_to_string(&nonce).expect("the first run wrote its nonce"),
+        "1\n"
+    );
+    assert_eq!(
+        file_names(&state),
+        [".exec-sim-0ad70317.nonce"],
+        "no temporary file stays"
+    );
+
+    fs::write(&nonce, "41\n").expect("the test writes the last nonce");
+    let replaced = fs::metadata(&nonce).expect("the nonce file exists").ino();
+    drop(preflight(&state).expect("the run after nonce 41 starts"));
+    assert_eq!(
+        fs::read_to_string(&nonce).expect("the run wrote its nonce"),
+        "42\n"
+    );
+    assert_ne!(
+        fs::metadata(&nonce).expect("the nonce file exists").ino(),
+        replaced,
+        "the new nonce replaces the file by a rename, never in place"
+    );
 }

@@ -91,7 +91,7 @@ fn identity() -> RunIdentity {
 }
 
 /// A simulated Binance spot engine on one instrument, whose state folder is `state`.
-fn sim_document(state: &Path, execution_extra: &str) -> String {
+pub(super) fn sim_document(state: &Path, execution_extra: &str) -> String {
     let execution = execution_block_with("sim", &format!("{execution_extra}{SIM_BLOCK}"));
     with_state(
         config_with_execution_on(BINANCE_SPOT_SOURCE, &execution),
@@ -300,6 +300,25 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         matches!(exhausted, StartError::ExecutionIdentityExhausted { .. }),
         "{exhausted}"
     );
+
+    // The nonce file is empty, because a run stopped while it wrote the file. Then a folder stands
+    // where the file should be, so the file cannot be read. Each leaves the last nonce unknown.
+    let last_nonce = fs::read(&nonce).expect("the nonce file reads");
+    fs::write(&nonce, "").expect("the test empties the nonce file");
+    let empty_nonce = refusal(&sim_document(&state, ""), stamped, &state);
+    assert!(
+        matches!(&empty_nonce, StartError::ExecutionNonceEmpty { path } if *path == nonce),
+        "{empty_nonce}"
+    );
+    fs::remove_file(&nonce).expect("the test removes the nonce file");
+    fs::create_dir(&nonce).expect("the test puts a folder at the nonce path");
+    let nonce_folder = refusal(&sim_document(&state, ""), stamped, &state);
+    assert!(
+        matches!(&nonce_folder, StartError::ExecutionIdentityIo { path, .. } if *path == nonce),
+        "{nonce_folder}"
+    );
+    fs::remove_dir(&nonce).expect("the test removes the folder");
+    fs::write(&nonce, last_nonce).expect("the test restores the nonce file");
 
     // E1 and E2: the nine documents that config or the registry refuses, by the field named.
     for (case, document, is_expected) in refused_documents() {

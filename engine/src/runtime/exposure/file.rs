@@ -113,7 +113,7 @@ pub(super) fn read(path: &Path) -> Result<Option<ExposureDocument>, ExposureErro
         })
 }
 
-/// Write: serialize + flush + atomic rename (temp carries PID to block interleaving).
+/// Serialises the document and writes it whole, so a crash never leaves half a file.
 pub(super) fn write_atomically(
     path: &Path,
     document: &ExposureDocument,

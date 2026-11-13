@@ -33,25 +33,27 @@ pub(super) fn write(path: &Path, body: &[u8]) -> Result<(), WriteError> {
         remove_temporary(&temporary);
         return Err(error);
     }
-    flush_directory(directory);
+    flush_directory(path, directory);
     Ok(())
 }
 
 fn write_then_rename(temporary: &Path, path: &Path, body: &[u8]) -> Result<(), WriteError> {
     let mut file = File::create(temporary).map_err(WriteError::at(temporary))?;
     file.write_all(body).map_err(WriteError::at(temporary))?;
-    // Fsync before rename: rename publishes, don't publish unflushed bytes.
+    // The rename makes the new bytes visible, so they reach the disk first.
     file.sync_all().map_err(WriteError::at(temporary))?;
     std::fs::rename(temporary, path).map_err(WriteError::at(path))
 }
 
-/// Dir fsync needed for rename durability; failure warns (prior file still exists, one write stale).
-fn flush_directory(directory: &Path) {
+/// A rename survives a power cut only once its folder is synced. A failed sync only warns, because
+/// the file is whole either way: at worst a power cut brings back its previous version.
+fn flush_directory(path: &Path, directory: &Path) {
     let flushed = File::open(directory).and_then(|handle| handle.sync_all());
     if let Err(error) = flushed {
         warn!(
-            "exposure: could not flush directory {} ({error}) — the file is written, its directory entry is not yet durable",
-            directory.display()
+            "could not flush directory {} ({error}) — {} is written, its directory entry is not yet durable",
+            directory.display(),
+            path.display()
         );
     }
 }
@@ -61,12 +63,13 @@ fn remove_temporary(temporary: &Path) {
         && error.kind() != std::io::ErrorKind::NotFound
     {
         warn!(
-            "exposure: could not remove partial file {} ({error})",
+            "could not remove partial file {} ({error})",
             temporary.display()
         );
     }
 }
 
+/// The process id keeps two processes from writing one temporary file.
 fn temporary_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_os_string();
     name.push(format!(".{}.tmp", std::process::id()));
