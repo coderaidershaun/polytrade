@@ -760,26 +760,33 @@ fn trade(
 const GET_FLAT_SPIN: u64 = 9;
 const HALF: Qty = Qty::from_mantissa(ONE / 2);
 
-/// Holds a bid and an offer of half a unit. From spin 9 it still quotes the bid, then asks to
-/// get flat. It keeps the position that it reads at each spin.
-struct Exiter {
-    positions: Arc<Mutex<Vec<Qty>>>,
+/// The order of the calls in a spin that gets flat.
+#[derive(Debug, Clone, Copy)]
+enum CallOrder {
+    /// The bid is quoted, then the market gets flat.
+    QuoteThenFlatten,
+    /// The market gets flat, then the bid and the offer are quoted.
+    FlattenThenQuote,
 }
 
-impl Strategy for Exiter {
-    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, tick: &SpinTick) {
-        let position = ctx.position_base(INSTRUMENT);
-        self.positions.lock().expect("positions").push(position);
+/// Holds a bid and an offer of half a unit. From spin 9 it also asks to get flat, in `order`. It
+/// keeps the position that it reads at each spin.
+struct Exiter {
+    positions: Arc<Mutex<Vec<Qty>>>,
+    order: CallOrder,
+}
+
+impl Exiter {
+    fn quote_bid(ctx: &mut StrategyCtx<'_>) {
         ctx.quote(
             INSTRUMENT,
             Side::Buy,
             QuoteLevel::ZERO,
             want(BID, HALF.mantissa()),
         );
-        if tick.seq >= GET_FLAT_SPIN {
-            ctx.flatten(INSTRUMENT);
-            return;
-        }
+    }
+
+    fn quote_ask(ctx: &mut StrategyCtx<'_>) {
         ctx.quote(
             INSTRUMENT,
             Side::Sell,
@@ -789,12 +796,43 @@ impl Strategy for Exiter {
     }
 }
 
+impl Strategy for Exiter {
+    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, tick: &SpinTick) {
+        let position = ctx.position_base(INSTRUMENT);
+        self.positions.lock().expect("positions").push(position);
+        if tick.seq < GET_FLAT_SPIN {
+            Self::quote_bid(ctx);
+            Self::quote_ask(ctx);
+            return;
+        }
+        match self.order {
+            CallOrder::QuoteThenFlatten => {
+                Self::quote_bid(ctx);
+                ctx.flatten(INSTRUMENT);
+            }
+            CallOrder::FlattenThenQuote => {
+                ctx.flatten(INSTRUMENT);
+                Self::quote_bid(ctx);
+                Self::quote_ask(ctx);
+            }
+        }
+    }
+}
+
 /// CONTRACT: a market that gets flat holds no quote. Its resting quotes are cancelled in the spin
 /// that declares it, the marketable order goes out once the side is free, and a partial fill sends
 /// what is left in the next spin. A quote left resting while the engine sells out of a position
-/// can fill and open the position again.
+/// can fill and open the position again. A quote declared before or after the call to get flat,
+/// in the same spin, is dropped.
 #[test]
 fn get_flat_withdraws_each_quote_of_its_market() {
+    for order in [CallOrder::QuoteThenFlatten, CallOrder::FlattenThenQuote] {
+        gets_flat(order);
+    }
+    flatten_values_hold();
+}
+
+fn gets_flat(order: CallOrder) {
     let positions = Arc::new(Mutex::new(Vec::new()));
     let QuotingEngine {
         mut engine,
@@ -804,6 +842,7 @@ fn get_flat_withdraws_each_quote_of_its_market() {
         instrument_row(0, TrackerSpec::default(), 64),
         Box::new(Exiter {
             positions: Arc::clone(&positions),
+            order,
         }),
         exec_settings(),
     );
@@ -832,7 +871,7 @@ fn get_flat_withdraws_each_quote_of_its_market() {
     assert!(
         sent.len() == 2 && cancelled.contains(&bid) && cancelled.contains(&ask),
         "getting flat cancels the bid and the ask in its spin, and sends no marketable order \
-         while the offer still rests: {sent:?}"
+         while the offer still rests ({order:?}): {sent:?}"
     );
     for order in [(bid, Side::Buy), (ask, Side::Sell)] {
         answer(&mut engine, order, ExecKind::AckCanceled, 95);
@@ -848,7 +887,7 @@ fn get_flat_withdraws_each_quote_of_its_market() {
         ..
     } = take
     else {
-        panic!("getting flat from a long sends one marketable sell, got {take:?}");
+        panic!("getting flat from a long sends one marketable sell ({order:?}), got {take:?}");
     };
     assert_eq!(qty, HALF, "the whole position");
     engine.dispatch(&trade(
@@ -863,7 +902,7 @@ fn get_flat_withdraws_each_quote_of_its_market() {
     spin_at(&mut engine, GET_FLAT_SPIN + 2, 110);
     assert!(
         drain_commands(&mut commands).is_empty(),
-        "a flat market that gets flat sends nothing, and quotes nothing"
+        "a flat market that gets flat sends nothing, and quotes nothing ({order:?})"
     );
     let positions = positions.lock().expect("positions");
     let at_spin = |seq: u64| positions[usize::try_from(seq - 1).expect("a spin of the test")];
@@ -877,8 +916,6 @@ fn get_flat_withdraws_each_quote_of_its_market() {
         Qty::from_mantissa(0),
         "{positions:?}"
     );
-
-    flatten_values_hold();
 }
 
 /// Spin 1 places a bid and an offer of half a unit. The bid fills whole, and spin 2 places it

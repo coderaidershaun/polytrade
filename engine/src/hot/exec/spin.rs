@@ -12,6 +12,7 @@ use crate::msg::persist::OrderTransition;
 use crate::msg::time::{FoldTime, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 
+use super::budget::QuotePermit;
 use super::desired::{DesiredBook, DesiredQuote, QuoteLevel};
 use super::engine::{ExecEngine, FoldStamps, resting_of};
 use super::gates::{ExposureCheck, HaltReason, QuotePermission, assess_exposure};
@@ -180,30 +181,28 @@ impl ExecEngine {
         else {
             return ladder.resolve();
         };
-        if matches!(outcome, ReconcileOutcome::Place(_))
-            && let Some(reason) = self.place_refusal(instrument, side)
-        {
-            ladder.refusal.get_or_insert(reason);
-            return ladder.refusal;
-        }
         if let Some(reason) = self.act_on(instrument, side, level, outcome, input) {
             ladder.refusal.get_or_insert(reason);
         }
         ladder.resolve()
     }
 
-    /// Why this side may not mint a placement this spin. Checks how many orders it already
-    /// has out, then the venue's account-wide placement budget.
+    /// The permit to place a quote on this side this spin: a free order on the side, then the
+    /// venue's account-wide placement budget.
     ///
-    /// The budget refuses QUOTES only — the flatten pass never asks. A quote can wait a spin and
-    /// lose nothing but a spread; an order that sheds a position cannot, and starving it locally
-    /// would be the engine choosing to stay exposed. Refusing quotes early is how the headroom that
-    /// exit needs is still there, since the quotes are what spend it.
-    fn place_refusal(&self, instrument: InstrumentId, side: Side) -> Option<RejectReason> {
+    /// Only a quote asks. A quote can wait a spin and lose a spread, while the order that gets a
+    /// market flat cannot wait, and a local refusal of it would be the engine choosing to stay
+    /// exposed. Quotes are what spend the budget, so refusing them early leaves the headroom that
+    /// the way out needs.
+    pub(super) fn admit_quote_placement(
+        &self,
+        instrument: InstrumentId,
+        side: Side,
+    ) -> Result<QuotePermit, RejectReason> {
         if self.orders.possibly_live_count(instrument, side) >= self.settings.max_orders_per_side {
-            return Some(RejectReason::OrderLimit);
+            return Err(RejectReason::OrderLimit);
         }
-        (!self.budget.admits_place()).then_some(RejectReason::RateBudget)
+        self.budget.admit_quote()
     }
 
     /// What the strategy wants on this side once every gate has had its say, level by level.

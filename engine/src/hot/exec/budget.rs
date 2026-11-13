@@ -8,6 +8,8 @@
 use crate::hot::digest::digest_fields;
 use crate::msg::time::{DurationUs, LocalTs};
 
+use super::reconcile::RejectReason;
+
 /// The venues wired so far declare at most two order buckets per market. Four leaves room for one
 /// that declares more without the meter's memory depending on anything but this constant.
 pub const MAX_ORDER_BUDGET_WINDOWS: usize = 4;
@@ -84,7 +86,7 @@ impl BudgetMeter {
         }
     }
 
-    /// The only place message time enters, which is what leaves [`BudgetMeter::admits_place`] a
+    /// The only place message time enters, which is what leaves [`BudgetMeter::admit_quote`] a
     /// pure read: every placement in a spin is judged against the same stamp.
     pub(super) fn observe_spin(&mut self, now: LocalTs) {
         for window in &mut self.windows[..self.len] {
@@ -92,19 +94,36 @@ impl BudgetMeter {
         }
     }
 
+    /// The permit that a quote placement needs, or `RateBudget` once a window is spent.
     #[inline]
-    pub(super) fn admits_place(&self) -> bool {
-        self.windows[..self.len]
+    pub(super) fn admit_quote(&self) -> Result<QuotePermit, RejectReason> {
+        let has_headroom = self.windows[..self.len]
             .iter()
-            .all(WindowMeter::has_headroom)
+            .all(WindowMeter::has_headroom);
+        if has_headroom { Ok(QuotePermit(())) } else { Err(RejectReason::RateBudget) }
     }
 
-    pub(super) fn record_place(&mut self) {
+    pub(super) fn spend_quote(&mut self, _permit: QuotePermit) {
+        self.record_place();
+    }
+
+    /// The order that gets a market flat is never refused, and it still spends the budget, so that
+    /// the quotes after it are refused by this count before the venue refuses anything.
+    pub(super) fn spend_flatten(&mut self) {
+        self.record_place();
+    }
+
+    fn record_place(&mut self) {
         for window in &mut self.windows[..self.len] {
             window.record_place();
         }
     }
 }
+
+/// Permission to place one quote. Only [`BudgetMeter::admit_quote`] gives one, and a quote cannot
+/// be placed without it, so no quote goes out past the budget.
+#[must_use = "a permit that is not spent places nothing"]
+pub(super) struct QuotePermit(());
 
 #[derive(Clone, Copy)]
 struct WindowMeter {
