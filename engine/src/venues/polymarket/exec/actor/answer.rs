@@ -3,6 +3,8 @@
 //! and where the frames held waiting for it are released.
 
 use crate::msg::exec::ExecEvent;
+use crate::runtime::shutdown::FatalReason;
+use crate::venues::edge::EdgeDriver;
 use crate::venues::edge::http::TransportError;
 use crate::venues::exec::{ExecRequest, Outgoing, PlaceNotSentReason, SessionOutcome};
 use crate::{error, info, warn};
@@ -292,9 +294,9 @@ impl Actor {
             error!(
                 "polymarket execution cannot record venue order {venue_order_id} ({error}) — it can never be cancelled"
             );
-            self.control
-                .fatal
-                .trip(format!("polymarket execution correlation: {error}"));
+            self.control.fatal.trip(FatalReason::OrderIndexFull {
+                venue: self.venue(),
+            });
         }
     }
 

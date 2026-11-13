@@ -29,7 +29,7 @@ impl Actor {
         }
         self.retry_sweep(Some(writer)).await;
         self.control
-            .finished_exit(now, self.venue(), self.session.core.mirror().len())
+            .finished_exit(now, self.venue(), self.session.core.mirror())
     }
 
     async fn expire_requests(&mut self, now: TsUs, writer: &mut Writer) -> Option<SessionOutcome> {

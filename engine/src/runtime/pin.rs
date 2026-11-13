@@ -3,7 +3,7 @@
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
-use crate::runtime::shutdown::FatalSignal;
+use crate::runtime::shutdown::{FatalReason, FatalSignal};
 use crate::{error, warn};
 
 /// A thread that could not pin itself to its core on Linux, where a pin is a promise.
@@ -26,9 +26,7 @@ pub(crate) fn pin_current_thread(core_id: usize, fatal: &FatalSignal) {
     }
     if !pinned {
         error!("hot thread failed to pin to core {core_id} — pinning is mandatory on linux");
-        fatal.trip(format!(
-            "hot thread failed to pin to core {core_id} — pinning is mandatory on linux"
-        ));
+        fatal.trip(FatalReason::HotPinRefused { core: core_id });
     }
 }
 

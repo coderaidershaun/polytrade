@@ -11,11 +11,11 @@ use crate::msg::inbound::InboundMessage;
 use crate::msg::run_state::RunState;
 use crate::msg::time::{EngineClock, TsUs};
 use crate::runtime::registry::AssetDictionary;
-use crate::runtime::shutdown::{FatalSignal, RunStateCell};
+use crate::runtime::shutdown::{FatalReason, FatalSignal, RunStateCell};
 use crate::venues::IDLE_POLL;
 use crate::venues::binance::exec::{DecodeContext, SymbolTable};
 use crate::venues::exec::{EdgeHandle, EngineIdentity, ExecStop};
-use crate::{info, warn};
+use crate::{error, info, warn};
 
 use super::core::latency::{LatencyBudget, rewound, shifted};
 use super::core::market::ResetReason;
@@ -236,7 +236,7 @@ impl SimActor {
         };
         self.driver.log_summary();
         match is_settled {
-            true => self.stop.settled.notify_one(),
+            true => self.stop.settle(None),
             false => warn!(
                 "simulated venue could not resolve every order in {SWEEP_PASSES} sweep passes — the handle's deadline ends the run with them invalidated"
             ),
@@ -292,7 +292,10 @@ impl SimActor {
                         .commands_due
                         .try_push(self.latency.arrival(stamped.issued_ts_us), stamped)
                     {
-                        self.fatal.trip(format!("exchange simulator: {error}"));
+                        error!("exchange simulator: {error}");
+                        self.fatal.trip(FatalReason::SimulatorCommandLaneFull {
+                            capacity: error.capacity,
+                        });
                         return;
                     }
                 }

@@ -5,8 +5,10 @@ use std::process::ExitCode;
 mod strategy;
 
 fn main() -> ExitCode {
-    engine::runtime::run_trading_engine::<strategy::MicroRecorder>(
+    let exit = engine::runtime::run_trading_engine::<strategy::MicroRecorder>(
         "strat-micro-recorder",
         "te-binance-spot-btcusdt",
-    )
+        |code| std::process::exit(code),
+    );
+    ExitCode::from(exit.code())
 }

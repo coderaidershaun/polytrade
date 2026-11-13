@@ -102,19 +102,13 @@ const TEXT_WORDS: [&str; 9] = [
     "{:?}",
 ];
 
-/// Each place in those folders that may still format text, and why. Neither runs on the hot thread.
-const TEXT_EXCEPTIONS: [(&str, &str, &str); 2] = [
-    (
-        "engine/src/hot/exec/reconcile.rs",
-        "write!",
-        "renders a reject reason of a hot record into text, which only the log drain thread does",
-    ),
-    (
-        "engine/src/hot/spawn.rs",
-        "format!",
-        "the fatal reason of a full input queue, built on the producer's edge thread as the engine stops",
-    ),
-];
+/// Each place in those folders that may still format text, and why. It does not run on the hot
+/// thread.
+const TEXT_EXCEPTIONS: [(&str, &str, &str); 1] = [(
+    "engine/src/hot/exec/reconcile.rs",
+    "write!",
+    "renders a reject reason of a hot record into text, which only the log drain thread does",
+)];
 
 #[test]
 fn hot_path_holds_no_text_macro() {

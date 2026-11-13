@@ -21,7 +21,7 @@ use crate::msg::run_state::RunState;
 use crate::msg::time::{EngineClock, TsUs};
 use crate::runtime::config::PolySeries;
 use crate::runtime::registry::{InstrumentRow, ProducerGroup};
-use crate::runtime::shutdown::{FatalSignal, RunStateCell, TaskHandle};
+use crate::runtime::shutdown::{FatalReason, FatalSignal, RunStateCell, TaskHandle};
 use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::lane::{Flow, Lane, LaneSpec, SessionEnd, run_lane};
 use crate::venues::edge::rest_quiet::RestQuiet;
@@ -240,8 +240,9 @@ impl Actor {
             }
             Err(error) if error.is_fatal() => {
                 error!("polymarket adapter {} fatal parse: {error}", self.label);
-                self.fatal
-                    .trip(format!("polymarket {}: {error}", self.label));
+                self.fatal.trip(FatalReason::MarketDataUnreadable {
+                    source_id: self.producer.source_id(),
+                });
                 Flow::Reconnect
             }
             Err(error) => {

@@ -286,7 +286,9 @@ fn a_refused_placement_releases_only_this_runs_reservation_and_trips_only_on_cor
         );
         if is_fatal {
             assert!(
-                fatal.reason().is_some_and(|text| text.contains(VENUE)),
+                fatal
+                    .reason()
+                    .is_some_and(|reason| reason.to_string().contains(VENUE)),
                 "{reason:?} stopped the run without naming the venue"
             );
         }

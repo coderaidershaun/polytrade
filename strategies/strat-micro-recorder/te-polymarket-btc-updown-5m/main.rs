@@ -5,8 +5,10 @@ use std::process::ExitCode;
 mod strategy;
 
 fn main() -> ExitCode {
-    engine::runtime::run_trading_engine::<strategy::PolyUpPublisher>(
+    let exit = engine::runtime::run_trading_engine::<strategy::PolyUpPublisher>(
         "strat-micro-recorder",
         "te-polymarket-btc-updown-5m",
-    )
+        |code| std::process::exit(code),
+    );
+    ExitCode::from(exit.code())
 }

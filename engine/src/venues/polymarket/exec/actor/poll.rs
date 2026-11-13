@@ -46,7 +46,7 @@ impl Actor {
         }
         self.retry_sweep(Some(writer)).await;
         self.control
-            .finished_exit(now, self.venue(), self.session.core.mirror().len())
+            .finished_exit(now, self.venue(), self.session.core.mirror())
     }
 
     fn clear_park(&mut self, now: TsUs) {

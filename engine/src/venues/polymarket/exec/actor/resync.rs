@@ -12,6 +12,8 @@
 use crate::msg::exec::{ExecCommand, ExecEvent, ExecKind, Provenance};
 use crate::msg::ids::{ClientOrderId, InstrumentId};
 use crate::msg::time::TsUs;
+use crate::runtime::shutdown::FatalReason;
+use crate::venues::edge::EdgeDriver;
 use crate::venues::exec::{MirroredOrder, Outgoing, ResyncPoll, SessionOutcome, blank};
 use crate::{error, info, warn};
 
@@ -126,9 +128,9 @@ impl Actor {
                     "polymarket execution cannot retain venue order {:016x} in its possibly-live set ({error:?}) — quoting is disabled",
                     mirrored.client_id.0
                 );
-                self.control.fatal.trip(format!(
-                    "polymarket execution possibly-live mirror failed: {error:?}"
-                ));
+                self.control.fatal.trip(FatalReason::MirrorRetainFailed {
+                    venue: self.venue(),
+                });
                 self.fail_orders_read(read);
                 return None;
             }

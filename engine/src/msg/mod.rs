@@ -5,6 +5,7 @@
 pub(crate) mod labelled_enum;
 
 pub mod exec;
+pub mod failure;
 pub mod ids;
 pub mod inbound;
 pub mod latency;

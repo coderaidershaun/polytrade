@@ -5,7 +5,9 @@
 use tokio_tungstenite::tungstenite::{Error as ProtocolError, Message};
 
 use crate::msg::exec::ExecEvent;
+use crate::runtime::shutdown::{AnswerPart, FatalReason};
 use crate::venues::binance::ws;
+use crate::venues::edge::EdgeDriver;
 use crate::venues::exec::{
     EventSink, ExecRequest, InFlightRequest, RequestId, SessionOutcome, TimeoutFallout,
 };
@@ -88,9 +90,10 @@ impl Actor {
             Err(error) if error.is_fatal() => {
                 error!("binance execution fatal decode: {error}");
                 self.session.mark_in_doubt(entry.request, now);
-                self.control
-                    .fatal
-                    .trip(format!("binance execution: {error}"));
+                self.control.fatal.trip(FatalReason::UndecodableAnswer {
+                    venue: self.venue(),
+                    part: AnswerPart::Response,
+                });
                 Some(SessionOutcome::Reconnect)
             }
             Err(error) => {
@@ -154,9 +157,10 @@ impl Actor {
                     "binance execution could not subscribe to the account stream {} times — refusing to quote without one",
                     self.subscribe_failures
                 );
-                self.control
-                    .fatal
-                    .trip("binance execution: userDataStream.subscribe rejected repeatedly");
+                self.control.fatal.trip(FatalReason::SubscribeRefused {
+                    venue: self.venue(),
+                    failures: self.subscribe_failures,
+                });
             } else {
                 warn!("binance execution subscribe rejected — reconnecting");
             }
@@ -204,9 +208,10 @@ impl Actor {
             }
             Err(error) if error.is_fatal() => {
                 error!("binance execution fatal stream decode: {error}");
-                self.control
-                    .fatal
-                    .trip(format!("binance execution: {error}"));
+                self.control.fatal.trip(FatalReason::UndecodableAnswer {
+                    venue: self.venue(),
+                    part: AnswerPart::Stream,
+                });
                 Some(SessionOutcome::Reconnect)
             }
             Err(error) => {
