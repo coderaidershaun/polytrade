@@ -1,14 +1,12 @@
 //! Durable on-disk document: temp write + fsync + atomic rename protects against kill-mid-write.
 
-use std::fs::File;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use crate::msg::ids::FIXED_SCALE;
 use crate::runtime::config::RunIdentity;
-use crate::warn;
+use crate::runtime::durable_file;
 
 use super::ExposureError;
 
@@ -124,51 +122,8 @@ pub(super) fn write_atomically(
         path: path.to_path_buf(),
         source: std::io::Error::other(error),
     })?;
-    let directory = path.parent().unwrap_or(Path::new("."));
-    std::fs::create_dir_all(directory).map_err(ExposureError::write_at(directory))?;
-    let temporary = temporary_path(path);
-    if let Err(error) = write_then_rename(&temporary, path, &body) {
-        remove_temporary(&temporary);
-        return Err(error);
-    }
-    flush_directory(directory);
-    Ok(())
-}
-
-fn write_then_rename(temporary: &Path, path: &Path, body: &[u8]) -> Result<(), ExposureError> {
-    let mut file = File::create(temporary).map_err(ExposureError::write_at(temporary))?;
-    file.write_all(body)
-        .map_err(ExposureError::write_at(temporary))?;
-    // Fsync before rename: rename publishes, don't publish unflushed bytes.
-    file.sync_all()
-        .map_err(ExposureError::write_at(temporary))?;
-    std::fs::rename(temporary, path).map_err(ExposureError::write_at(path))
-}
-
-/// Dir fsync needed for rename durability; failure warns (prior file still exists, one write stale).
-fn flush_directory(directory: &Path) {
-    let flushed = File::open(directory).and_then(|handle| handle.sync_all());
-    if let Err(error) = flushed {
-        warn!(
-            "exposure: could not flush directory {} ({error}) — the file is written, its directory entry is not yet durable",
-            directory.display()
-        );
-    }
-}
-
-fn remove_temporary(temporary: &Path) {
-    if let Err(error) = std::fs::remove_file(temporary)
-        && error.kind() != std::io::ErrorKind::NotFound
-    {
-        warn!(
-            "exposure: could not remove partial file {} ({error})",
-            temporary.display()
-        );
-    }
-}
-
-fn temporary_path(path: &Path) -> PathBuf {
-    let mut name = path.as_os_str().to_os_string();
-    name.push(format!(".{}.tmp", std::process::id()));
-    PathBuf::from(name)
+    durable_file::write(path, &body).map_err(|error| ExposureError::Write {
+        path: error.path,
+        source: error.source,
+    })
 }
