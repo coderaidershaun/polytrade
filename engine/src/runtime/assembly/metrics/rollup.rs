@@ -311,14 +311,15 @@ impl LatencyRollup {
                 dropped_total: self.drop_totals[sink_kind as usize],
             }));
         }
-        for queue in 0..self.settings.queue_count.min(MAX_INPUT_QUEUES) {
-            let Some(ema) = self.backlog_queues[queue] else {
+        let queue_ids = (0..self.settings.queue_count).map_while(|index| QueueId::new(index).ok());
+        for queue_id in queue_ids {
+            let Some(ema) = self.backlog_queues[queue_id.index()] else {
                 continue;
             };
             sink.write(RollupRow::Backlog(BacklogRow {
                 interval_end_ts_us,
-                queue: QueueId(queue as u8),
-                max: self.backlog_max[queue],
+                queue: queue_id,
+                max: self.backlog_max[queue_id.index()],
                 ema: ema.value,
             }));
         }

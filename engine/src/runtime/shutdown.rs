@@ -46,11 +46,11 @@ impl FatalSignal {
 /// writes before it trips.
 #[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FatalReason {
-    #[error("input queue {} full at capacity {capacity} — engine cannot keep up", queue.0)]
+    #[error("input queue {} full at capacity {capacity} — engine cannot keep up", queue.index())]
     InputQueueFull { queue: QueueId, capacity: usize },
     #[error(
         "market tap ring for input queue {} full at capacity {capacity} — simulator cannot keep up",
-        queue.0
+        queue.index()
     )]
     MarketTapFull { queue: QueueId, capacity: usize },
     #[error("hot thread failed to pin to core {core} — pinning is mandatory on linux")]

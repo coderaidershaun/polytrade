@@ -128,18 +128,7 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
             1..=MAX_OPERATIONAL_DURATION_MS,
             "1..=86400000 (24h operational ceiling)",
         )?;
-        check_range(
-            "queues.input_capacity",
-            self.queues.input_capacity as u64,
-            1..=u64::MAX,
-            "greater than 0",
-        )?;
-        check_range(
-            "queues.persistence_capacity",
-            self.queues.persistence_capacity as u64,
-            1..=u64::MAX,
-            "greater than 0",
-        )?;
+        self.queues.validate()?;
         if let Some(persistence) = &self.persistence {
             check_range(
                 "persistence.retention_hours",
@@ -206,13 +195,46 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
     }
 }
 
+/// The slots of each ring. Each kind of input queue has its own capacity, because a full timer or
+/// execution ring halts the engine while a full link ring drops a frame.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueuesConfig {
+    /// The input ring of each market-data connection.
     #[serde(default = "default_input_capacity")]
     pub input_capacity: usize,
+    /// `None` takes the spins of one `engine.drain_deadline_ms`, and 16 slots at least.
+    #[serde(default)]
+    pub timer_capacity: Option<usize>,
+    #[serde(default = "default_link_capacity")]
+    pub link_capacity: usize,
+    /// `None` takes the capacity of the command lane, so the edge can answer each command that the
+    /// lane holds.
+    #[serde(default)]
+    pub execution_capacity: Option<usize>,
     #[serde(default = "default_persistence_capacity")]
     pub persistence_capacity: usize,
+}
+
+impl QueuesConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        let capacities = [
+            ("queues.input_capacity", Some(self.input_capacity)),
+            ("queues.timer_capacity", self.timer_capacity),
+            ("queues.link_capacity", Some(self.link_capacity)),
+            ("queues.execution_capacity", self.execution_capacity),
+            (
+                "queues.persistence_capacity",
+                Some(self.persistence_capacity),
+            ),
+        ];
+        for (field, capacity) in capacities {
+            if let Some(capacity) = capacity {
+                check_range(field, capacity as u64, 1..=u64::MAX, "greater than 0")?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -321,6 +343,10 @@ fn check_range(
 
 fn default_input_capacity() -> usize {
     65_536
+}
+
+fn default_link_capacity() -> usize {
+    1_024
 }
 
 fn default_persistence_capacity() -> usize {

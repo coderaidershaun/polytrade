@@ -8,7 +8,8 @@
 use std::path::Path;
 
 use engine::hot::strategy::{EngineView, StrategyConfig};
-use engine::msg::ids::{FIXED_SCALE, Notional};
+use engine::msg::failure::{FailureClass, Halt};
+use engine::msg::ids::{FIXED_SCALE, Notional, QueueId, QueueIdError};
 use engine::msg::time::DurationUs;
 use engine::runtime::config::{
     BinanceMarket, ConfigError, ExecutionMode, NoParams, PolySeries, TableKind, VenueMarket,
@@ -714,6 +715,75 @@ fn a_public_link_bind_is_a_startup_error_unless_allowed() {
     }
 }
 
+/// FITNESS: no queue id at or past the cap of 20 exists, and each registry numbers its input queues
+/// 0 to n - 1, with the timer, the link and the execution edge after the producer groups. The hot
+/// thread sizes its tables by that cap and a tape records each queue id, so an id past the cap, a
+/// gap or a shifted id would fold an order other than the one that the run recorded.
+#[test]
+fn twenty_one_input_queues_are_refused() {
+    for index in 0..=255_usize {
+        match QueueId::new(index) {
+            Ok(queue_id) if index < 20 => assert_eq!(queue_id.index(), index),
+            Err(refused) if index >= 20 => {
+                assert_eq!(refused, QueueIdError { index, max: 20 });
+            }
+            other => panic!("queue index {index} gave {other:?}"),
+        }
+    }
+
+    let refusal = ConfigError::TooManyInputQueues { count: 21, max: 20 };
+    assert_eq!(
+        refusal.failure_class(),
+        FailureClass::Halt(Halt::Start),
+        "a config over the cap refuses the start"
+    );
+    let text = refusal.to_string();
+    assert!(
+        text.contains("21") && text.contains("20"),
+        "the refusal names the count and the cap: {text}"
+    );
+
+    let mut registries = vec![
+        Registry::build(&load::<MicroRecorderParams>(
+            "../strategies/strat-micro-recorder/te-binance-spot-btcusdt/config.yaml",
+        ))
+        .expect("the shipped binance registry builds"),
+        Registry::build(&load::<PolyUpParams>(
+            "../strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/config.yaml",
+        ))
+        .expect("the shipped polymarket registry builds"),
+    ];
+    let modes = [
+        (BINANCE_PERP_SOURCE, "off", ""),
+        (BINANCE_PERP_SOURCE, "live", ""),
+        (BINANCE_SPOT_SOURCE, "sim", SIM_BLOCK),
+        (POLY_SOURCE, "off", ""),
+        (POLY_SOURCE, "live", ""),
+    ];
+    for (source, mode, extra) in modes {
+        let blocks = link_block("127.0.0.1:9310", "") + &execution_block_with(mode, extra);
+        registries.push(build_from(&config_with_execution_on(source, &blocks)));
+    }
+
+    for registry in &registries {
+        let mut ids: Vec<usize> = registry
+            .producer_groups()
+            .iter()
+            .map(|group| group.queue_id.index())
+            .collect();
+        ids.push(registry.timer_queue_id().index());
+        ids.extend(registry.link_queue_id().map(QueueId::index));
+        ids.extend(registry.exec_queue_id().map(QueueId::index));
+        let count = registry.input_queue_count();
+        assert!(count <= 20, "{count} input queues");
+        assert_eq!(
+            ids,
+            (0..count).collect::<Vec<usize>>(),
+            "the ids are dense, and the timer, the link and the execution edge follow the groups"
+        );
+    }
+}
+
 /// The link's input queue exists only when its actor does, and it lands after the timer — a queue id
 /// is a position in the ingress list, and `wire` zips producers back against exactly that order.
 #[test]
@@ -732,12 +802,12 @@ fn the_link_adds_one_input_queue_only_when_configured() {
 
     let with = build_from(&config_with_link(&link_block("127.0.0.1:9310", "")));
     assert_eq!(
-        with.timer_queue_id().0,
+        with.timer_queue_id().index(),
         3,
         "the timer still follows the three producer groups"
     );
     assert_eq!(
-        with.link_queue_id().map(|id| id.0),
+        with.link_queue_id().map(|id| id.index()),
         Some(4),
         "the link takes the queue after the timer"
     );

@@ -18,11 +18,11 @@ const REQUESTS: [&str; 3] = ["SIGTERM", "SIGINT", "shutdown request"];
 fn each_fatal_reason() -> [FatalReason; 16] {
     [
         FatalReason::InputQueueFull {
-            queue: QueueId(0),
+            queue: QueueId::new(0).unwrap(),
             capacity: 65_536,
         },
         FatalReason::MarketTapFull {
-            queue: QueueId(1),
+            queue: QueueId::new(1).unwrap(),
             capacity: 1_024,
         },
         FatalReason::HotPinRefused { core: 3 },

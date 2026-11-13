@@ -56,7 +56,7 @@ use metrics::{
 };
 use persist::{PersistBringUp, PersistBringUpSetup, persist_bring_up};
 use prepare::{Prepared, prepare};
-use queues::{InputQueues, build_input_queues};
+use queues::{InputQueues, QueueCapacities, build_input_queues};
 use timer::spawn_timer;
 
 pub use drain::{DrainWatchdog, ForcedExit};
@@ -269,7 +269,7 @@ impl Engine {
             LaneReader::new(strategy_log_consumer, strategy_log_sink.drops_handle()),
         );
 
-        let queues = build_input_queues(&registry, config.queues.input_capacity, &fatal);
+        let queues = build_input_queues(&registry, &QueueCapacities::of(&config), &fatal);
         let InputQueues {
             ingress,
             groups: mut group_producers,

@@ -46,13 +46,13 @@ proptest! {
         }
 
         let mut ingress = IngressQueues::new(consumers);
-        let mut popped: Vec<(i64, u8, u64)> = Vec::new();
+        let mut popped: Vec<(i64, usize, u64)> = Vec::new();
         while let Some((queue_id, message)) = ingress.pop_next() {
             let received = message.header.received_ts_us.micros();
             let MessageBody::SpinTick(tick) = message.body else {
                 unreachable!("only spin ticks were pushed");
             };
-            popped.push((received, queue_id.0, tick.seq));
+            popped.push((received, queue_id.index(), tick.seq));
         }
 
         // No loss / duplication (the no-starvation half): every id popped exactly once.
@@ -73,7 +73,12 @@ proptest! {
 fn full_input_queue_trips_fatal() {
     let (producer, _consumer) = RingBuffer::<InboundMessage>::new(2);
     let fatal = FatalSignal::new();
-    let mut queue_producer = QueueProducer::new(producer, fatal.clone(), QueueId(0), SourceId(0));
+    let mut queue_producer = QueueProducer::new(
+        producer,
+        fatal.clone(),
+        QueueId::new(0).unwrap(),
+        SourceId(0),
+    );
 
     assert!(!fatal.is_tripped());
     queue_producer.push(spin(0, 0));
