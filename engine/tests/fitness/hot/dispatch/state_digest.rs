@@ -704,6 +704,22 @@ fn placing_steps() -> Vec<Step> {
     .to_vec()
 }
 
+/// The placing sequence, then a fill: the first answer seats an order that an earlier run left
+/// resting on market 0, and the second fills it.
+fn placing_and_filling_steps() -> Vec<Step> {
+    let prior_fill = Step {
+        draw: Draw::Exec(ExecDraw {
+            market: 0,
+            side: Side::Buy,
+            answer: Answer::PriorFill { offset: 0, lots: 1 },
+        }),
+        gap_us: 1_000,
+    };
+    let mut steps = placing_steps();
+    steps.extend([prior_fill, prior_fill]);
+    steps
+}
+
 /// What a drawn sequence keeps from one message to the next: message time, the next spin and peer
 /// frame numbers, the run epoch, and the fills of the order an earlier run left on each market.
 struct Builder {
@@ -1046,8 +1062,22 @@ fn fold_twice_gives_equal_digest_at_each_message() {
         .unwrap_or_else(|difference| panic!("two folds of the feed sequence part: {difference}"));
     assert_feed_reaches_each_kind(&feed);
 
+    let filling = two_folds_agree(
+        Start::TwoMarkets,
+        &Builder::sequence(&placing_and_filling_steps()),
+    )
+    .unwrap_or_else(|difference| {
+        panic!("two folds of the placing and filling sequence part: {difference}")
+    });
+    assert!(
+        filling.places() > 0 && filling.fills() > 0,
+        "the placing and filling sequence placed {} orders and folded {} fills",
+        filling.places(),
+        filling.fills()
+    );
+
     let kinds = Cell::new([0_u64; KINDS.len()]);
-    let (places, fills) = (Cell::new(0), Cell::new(0));
+    let (places, fills) = (Cell::new(filling.places()), Cell::new(filling.fills()));
     let outcome = runner(64).run(&steps(), |steps| {
         let sequence = Builder::sequence(&steps);
         let mut seen = kinds.get();
