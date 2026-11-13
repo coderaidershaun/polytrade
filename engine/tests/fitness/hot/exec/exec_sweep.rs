@@ -1,5 +1,5 @@
-//! FITNESS: reconciliation may retire only orders that predate its question, and conservative side
-//! occupancy must halt rather than admit a quote beyond the configured cap.
+//! Reconciliation may retire only orders older than its question, and a cautious count of the
+//! orders on a side must halt rather than admit a quote past the configured cap.
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{

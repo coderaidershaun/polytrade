@@ -1,4 +1,4 @@
-//! FITNESS: on a venue whose markets EXPIRE, an order must never be resting when one does.
+//! On a venue whose markets EXPIRE, no order may rest when one does.
 //!
 //! Every other gate in the engine protects against a price or a size. This one protects against a
 //! clock, and it is the only gate whose failure cannot be traded out of afterwards: a fill taken in
@@ -6,10 +6,10 @@
 //! at everything, with no book left to place an order into. The strategy is expected to withdraw
 //! first; this is what holds when it does not.
 //!
-//! Both halves are pinned, and the second is why the first is not enough. Refusing new declarations
-//! stops the ladder GROWING, and the reconciler then withdraws what is already there — one order per
-//! side per spin, so a full ladder comes down over eight of them. The sweep takes the whole thing in
-//! one pass.
+//! Both halves are checked, and the second is why the first is not enough. Refusing new
+//! declarations stops the ladder GROWING, and the reconciler then withdraws what is already there,
+//! one order per side per spin, so a full ladder comes down over eight spins. The sweep takes it
+//! all in one pass.
 //!
 //! The gate is driven entirely by message stamps: the window comes from a `MarketRotation` and the
 //! instant from the spin tick, so a replay refuses and sweeps at exactly the same points.

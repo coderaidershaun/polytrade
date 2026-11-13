@@ -1,6 +1,5 @@
-//! The account band and the status strip above it. The strip holds the halt latch and the last
-//! refusal and never scrolls, so they stay in view whatever the pane height. Each value the band
-//! projects can be absent on its own.
+//! The account band, and the status strip above it that never scrolls, so the halt latch and the
+//! last refusal stay in view at any pane height. Each value of the band can be absent on its own.
 
 use eframe::egui;
 

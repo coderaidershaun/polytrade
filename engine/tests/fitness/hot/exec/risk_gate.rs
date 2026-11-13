@@ -1,10 +1,10 @@
-//! Risk-gate fitness: the exposure ceiling must never trap a position it cannot unwind.
+//! The exposure ceiling must never trap a position that it cannot unwind.
 //!
 //! A gate that withdrew both sides would deadlock: nothing quoting means nothing fills, and nothing
-//! filling means the position never comes down. Exposure is marked to market, so a price move alone
-//! can carry it past the ceiling with no fill at all, and only a test that moves the mark apart from
-//! the fills can see that. The engine's own ceiling and its consecutive-reject kill switch live here
-//! too, because they are the controls a strategy bug cannot bypass.
+//! filling means the position never comes down. Exposure is marked to market, so a price move
+//! alone can carry it past the ceiling with no fill at all, and only a test that moves the mark
+//! apart from the fills can see that. The engine's own ceiling and its kill switch on rejects in a
+//! row are checked here too, because a strategy bug cannot get past them.
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{

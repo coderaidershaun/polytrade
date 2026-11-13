@@ -381,18 +381,16 @@ fn teed_features(events: &mut Consumer<UiEvent>) -> Vec<(u64, FeatureId, f64)> {
         .collect()
 }
 
-/// A WIRED engine tees the kill switch and both complete OMS sides every spin, whether or not
-/// anything about them changed. Absolute state, for the reason a panel exists: a halt an operator
-/// learns about from a log is a halt they learn about late, while an order terminal transition lost
-/// to a full ring would otherwise leave the band reading `OPEN` forever.
+/// A WIRED engine sends the kill switch and both full order sides at each spin, whether or not
+/// anything about them changed. It sends absolute state because that is what a panel is for: a halt
+/// that an operator learns of from a log is learned late, and a final order state lost to a full
+/// ring would leave the band reading `OPEN` forever.
 ///
-/// FITNESS: an engine with no command ring says NOTHING about the gate, on the same case-by-case
-/// dispatch as the wired one. [`UiHalt`] is the kill-switch LATCH, not the wired state, so `Armed`
-/// on a run that has no ring means only "nothing has tripped". The band renders it under the heading
-/// `gate` as `ARMED` in the positive colour, which an operator reads as "armed to trade". The run
-/// where that costs money is not the recorder: it is a `mode: live` config whose preflight or queue
-/// is missing, which WARNs once and disarms execution for the rest of the run (`runtime::exec`).
-/// Nothing can ever be sent, and a green ARMED is the only thing on screen.
+/// An engine with no command ring says NOTHING about the gate, on the same case-by-case dispatch as
+/// the wired one. [`UiHalt`] is the kill-switch LATCH, not the wired state, so `Armed` from a run
+/// with no ring would mean only "nothing has tripped". The band would show it under the heading
+/// `gate` as a green `ARMED`, which an operator reads as "armed to trade" on a run that can send
+/// nothing.
 ///
 /// `exec.sink` is the OUTBOUND command ring and nothing else, which is why the plain engine can fold
 /// real venue fills without one: a fill is money whether or not this engine is the one quoting. So

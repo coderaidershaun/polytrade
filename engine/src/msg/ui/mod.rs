@@ -17,7 +17,8 @@ pub use latency::{
     LATENCY_REPORT_CELLS, LatencyCell, LatencyFlow, LatencyReading, LatencyReport, Percentile,
 };
 
-/// The kill switch as a workstation reads it: the halt stamp is a peer stamp there.
+/// The kill switch as a workstation reads it. The halt stamp is a `VenueTs` there, because the
+/// workstation did not read it from its own clock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UiHalt {
     Armed,
