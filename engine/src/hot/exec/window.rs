@@ -46,7 +46,7 @@ impl ExecEngine {
     #[inline]
     pub(super) fn admits_window(&self, instrument: InstrumentId, input: &SpinInput<'_>) -> bool {
         input.windows[usize::from(instrument.0)].is_none_or(|window| {
-            window.admits_quote_at(input.received_ts_us, self.settings.quote_stop_margin)
+            window.admits_quote_at(input.now.as_local(), self.settings.quote_stop_margin)
         })
     }
 
@@ -55,7 +55,7 @@ impl ExecEngine {
     /// edge to sweep and shut down, wrong for a routine rotation every few minutes that must leave the
     /// next window quotable. Runs every spin past the stop; refused cancels re-read as Live.
     pub(super) fn sweep_closing_windows(&mut self, input: &mut SpinInput<'_>) {
-        let at = input.received_ts_us;
+        let at = input.now.as_local();
         let margin = self.settings.quote_stop_margin;
         for index in 0..self.instruments.len() {
             let is_closing =

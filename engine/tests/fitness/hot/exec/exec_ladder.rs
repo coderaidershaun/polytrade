@@ -142,13 +142,22 @@ fn acknowledge(
 }
 
 fn place_and_ack(engine: &mut HotEngine, commands: &mut Consumer<ExecLaneItem>) -> ExecCommand {
-    make_ready(engine, 0);
-    for message in reseat_book(BID, ASK, 1) {
+    place_and_ack_at(engine, commands, 0)
+}
+
+/// [`place_and_ack`] with each stamp `start` later.
+fn place_and_ack_at(
+    engine: &mut HotEngine,
+    commands: &mut Consumer<ExecLaneItem>,
+    start: i64,
+) -> ExecCommand {
+    make_ready(engine, start);
+    for message in reseat_book(BID, ASK, start + 1) {
         engine.dispatch(&message);
     }
-    spin_at(engine, 1, 10);
+    spin_at(engine, 1, start + 10);
     let place = only(commands);
-    acknowledge(engine, place, ExecKind::AckPlaced, 11);
+    acknowledge(engine, place, ExecKind::AckPlaced, start + 11);
     place
 }
 
@@ -357,12 +366,9 @@ fn balance_sweep(settled_through: SettlementWatermark) -> Vec<AccountChunk> {
     )
 }
 
-fn feed(engine: &mut HotEngine, chunks: Vec<AccountChunk>) {
+fn feed(engine: &mut HotEngine, chunks: Vec<AccountChunk>, at: LocalTs) {
     for chunk in chunks {
-        engine.dispatch(&InboundMessage::new(
-            RECEIVED_AT,
-            MessageBody::Account(chunk),
-        ));
+        engine.dispatch(&InboundMessage::new(at, MessageBody::Account(chunk)));
     }
 }
 
@@ -375,15 +381,18 @@ fn feed(engine: &mut HotEngine, chunks: Vec<AccountChunk>) {
 fn a_filled_reservation_waits_for_the_venues_own_settlement() {
     let observed = Arc::new(Mutex::new(Vec::new()));
     let (mut engine, mut commands) = non_locking_reservation_engine(Arc::clone(&observed));
-    let client_id = client_id_of(place_and_ack(&mut engine, &mut commands));
+    // The order rests a minute before the balance reads, so each message arrives in stamp order.
+    let start = RECEIVED_AT.micros() - 60_000_000;
+    let after_read = |micros: i64| RECEIVED_AT.micros() + micros;
+    let client_id = client_id_of(place_and_ack_at(&mut engine, &mut commands, start));
 
-    spin_at(&mut engine, 2, 20);
+    spin_at(&mut engine, 2, start + 20);
     let one_order = observed.lock().expect("reservation probe")[1];
     assert!(one_order > 0, "a placed order reserves its funds");
 
     let size = Qty::from_mantissa(ONE / 10);
     engine.dispatch(&InboundMessage::new(
-        ts(25),
+        ts(start + 25),
         MessageBody::Exec(ExecEvent {
             kind: ExecKind::ReportTrade,
             status: Some(VenueOrderStatus::Filled),
@@ -392,14 +401,18 @@ fn a_filled_reservation_waits_for_the_venues_own_settlement() {
             last_qty: size,
             cumulative_qty: size,
             cumulative_quote: Price::from_mantissa(BID).notional(size),
-            ..exec_event(INSTRUMENT, client_id, Side::Buy, BID, 25)
+            ..exec_event(INSTRUMENT, client_id, Side::Buy, BID, start + 25)
         }),
     ));
     // The edge re-reads balances the moment it reports the fill. Nothing has settled yet, so the
     // chunk it builds carries no evidence of moved money and must free nothing.
-    feed(&mut engine, balance_sweep(SettlementWatermark::NONE));
+    feed(
+        &mut engine,
+        balance_sweep(SettlementWatermark::NONE),
+        RECEIVED_AT,
+    );
 
-    spin_at(&mut engine, 3, 30);
+    spin_at(&mut engine, 3, after_read(30));
     assert_eq!(
         observed.lock().expect("reservation probe")[2],
         one_order,
@@ -415,9 +428,9 @@ fn a_filled_reservation_waits_for_the_venues_own_settlement() {
     // carrying money the venue has actually moved.
     let mut settled = SettlementWatermark::NONE;
     assert!(settled.advance_to(SETTLED_AT));
-    feed(&mut engine, balance_sweep(settled));
+    feed(&mut engine, balance_sweep(settled), ts(after_read(35)));
 
-    spin_at(&mut engine, 4, 40);
+    spin_at(&mut engine, 4, after_read(40));
     assert_eq!(
         observed.lock().expect("reservation probe")[3],
         one_order,

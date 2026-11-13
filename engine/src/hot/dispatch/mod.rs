@@ -24,7 +24,7 @@ use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
 use crate::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use crate::msg::run_state::RunAssertion;
-use crate::msg::time::LocalTs;
+use crate::msg::time::{FoldTime, LocalTs};
 use crate::msg::ui::{DomQuote, UI_QUOTE_LEVELS};
 use crate::runtime::config::RecordedTables;
 use crate::runtime::exposure::{ExposureSnapshot, MAX_EXPOSURE_INSTRUMENTS};
@@ -50,6 +50,8 @@ struct HotState {
     published_exposure: ExposureSnapshot,
     /// Spin of current declarations (on state for single-arg ctx building).
     spin_seq: u64,
+    /// The latest received stamp folded so far: the time that deadlines and the strategy read.
+    fold_time: FoldTime,
     /// Beside ledger not inside (fill moves both, one owner per state).
     exec: ExecEngine,
     /// Outside exec (callback &mut desired + & exec, can't coexist in same struct).
@@ -83,6 +85,7 @@ impl HotState {
             desired: &mut self.desired,
             actions: &mut self.actions,
             event_ts,
+            fold_time: self.fold_time,
             spin_seq: self.spin_seq,
             declared_link_topics: self.declared_link_topics,
         }
@@ -139,6 +142,7 @@ impl HotEngine {
                 exposure: exposure.sink,
                 published_exposure: restored_snapshot(exposure.restored),
                 spin_seq: 0,
+                fold_time: FoldTime::BEFORE_FIRST,
                 exec: ExecEngine::new(ExecWiring::engine_setup(exec, instruments)),
                 desired: DesiredBook::new(instruments.len()),
                 actions: Actions::new(ActionsSetup {
@@ -164,21 +168,55 @@ impl HotEngine {
         &self.feature_names
     }
 
+    /// The fold time advances before anything reads it, so each deadline and each callback of the
+    /// message reads it, while the records that the message writes keep its own stamp.
     pub fn dispatch(&mut self, message: &InboundMessage) {
         let received_ts_us = message.header.received_ts_us;
+        self.state.fold_time = self.state.fold_time.advanced_to(received_ts_us);
         crate::log::set_message_time(received_ts_us);
-        if self.warmup.observe(received_ts_us) {
+        if self.warmup.observe(self.state.fold_time) {
             self.log_warmup_complete();
         }
-        self.handle(&message.body, received_ts_us);
+        self.fold_message(message, received_ts_us);
+    }
+
+    /// The work of one message: the handler of its kind, the exposure that it moved, and the drain
+    /// of what it banked. A spin runs its own steps instead.
+    fn fold_message(&mut self, message: &InboundMessage, received_ts_us: LocalTs) {
+        match &message.body {
+            MessageBody::SpinTick(tick) => return self.fold_spin(tick, received_ts_us),
+            MessageBody::Trade(event) => self.on_trade(event, received_ts_us),
+            MessageBody::Book(chunk) => self.on_book(chunk, received_ts_us),
+            MessageBody::BookReset(reset) => self.on_book_reset(reset, received_ts_us),
+            MessageBody::MarketRotation(rotation) => {
+                self.on_market_rotation(rotation, received_ts_us);
+            }
+            MessageBody::Kline(event) => self.on_kline(event, received_ts_us),
+            MessageBody::Link(frame) => self.on_link(frame, received_ts_us),
+            MessageBody::RunControl(control) => self.on_run_control(control, received_ts_us),
+            MessageBody::Exec(event) => self.on_exec(event, received_ts_us),
+            MessageBody::Account(chunk) => self.on_account(chunk),
+        }
         if moves_position(message) {
             self.state.publish_exposure(received_ts_us);
         }
         self.drain_actions();
-        if let MessageBody::SpinTick(tick) = &message.body {
-            self.exec_spin(tick, received_ts_us);
-            self.emit_positions(received_ts_us);
-        }
+    }
+
+    /// The steps of one spin, in the order that each relies on: the strategy reads the trackers
+    /// that sampled this spin, the execution pass sees the declarations of this spin, and the
+    /// execution state and the positions go out after the drain. The driver snapshots the
+    /// counters after this returns.
+    fn fold_spin(&mut self, tick: &SpinTick, received_ts_us: LocalTs) {
+        self.state.spin_seq = tick.seq;
+        self.sample_trackers();
+        self.retry_latched_writes();
+        self.spin_strategy(tick, received_ts_us);
+        self.drain_actions();
+        self.run_execution_pass(tick);
+        self.emit_refusals();
+        self.emit_execution_state(tick, received_ts_us);
+        self.emit_positions(received_ts_us);
     }
 
     /// Post-drain per-spin (fills folded). Ahead of live gate (corrects late-attach UI).
@@ -205,32 +243,16 @@ impl HotEngine {
         });
     }
 
-    fn handle(&mut self, body: &MessageBody, received_ts_us: LocalTs) {
-        match body {
-            MessageBody::Trade(event) => self.on_trade(event, received_ts_us),
-            MessageBody::Book(chunk) => self.on_book(chunk, received_ts_us),
-            MessageBody::BookReset(reset) => self.on_book_reset(reset, received_ts_us),
-            MessageBody::MarketRotation(rotation) => {
-                self.on_market_rotation(rotation, received_ts_us);
-            }
-            MessageBody::Kline(event) => self.on_kline(event, received_ts_us),
-            MessageBody::SpinTick(tick) => self.on_spin(tick, received_ts_us),
-            MessageBody::Link(frame) => self.on_link(frame, received_ts_us),
-            MessageBody::RunControl(control) => self.on_run_control(control, received_ts_us),
-            MessageBody::Exec(event) => self.on_exec(event, received_ts_us),
-            MessageBody::Account(chunk) => self.on_account(chunk),
-        }
-    }
-
     /// Apply ungated (fills during warmup = money). Callback gated only.
     fn on_exec(&mut self, event: &ExecEvent, received_ts_us: LocalTs) {
         let HotState {
             exec,
             ledger,
             actions,
+            fold_time,
             ..
         } = &mut self.state;
-        let callback = exec.on_exec_event(event, received_ts_us, ledger, actions);
+        let callback = exec.on_exec_event(event, *fold_time, ledger, actions);
         // Tee ahead of live gate (operator sees fill/transition/refusal).
         match callback {
             ExecCallback::None => {}
@@ -262,14 +284,20 @@ impl HotEngine {
         self.state.exec.on_account(chunk);
     }
 
-    fn on_spin(&mut self, tick: &SpinTick, received_ts_us: LocalTs) {
-        self.state.spin_seq = tick.seq;
+    fn sample_trackers(&mut self) {
         for tracker in &mut self.state.trackers {
             tracker.on_spin();
         }
-        // Timer ticks parked (retry latched writes).
+    }
+
+    /// A parked run seals its files through a spin, so a seal or a snapshot that the ring refused
+    /// is tried again on each spin.
+    fn retry_latched_writes(&mut self) {
         self.state.retry_pending_seal();
         self.state.exposure.retry_pending();
+    }
+
+    fn spin_strategy(&mut self, tick: &SpinTick, received_ts_us: LocalTs) {
         if !self.is_strategy_live() {
             return;
         }
@@ -277,8 +305,8 @@ impl HotEngine {
         self.strategy.on_spin(&mut ctx, tick);
     }
 
-    /// After strategy drain (reconciler sees declarations). Separate (runs parked/warming).
-    fn exec_spin(&mut self, tick: &SpinTick, received_ts_us: LocalTs) {
+    /// Runs parked and warming too, so the engine still answers for the orders that it holds.
+    fn run_execution_pass(&mut self, tick: &SpinTick) {
         let HotState {
             books,
             ledger,
@@ -286,25 +314,31 @@ impl HotEngine {
             windows,
             exec,
             actions,
+            fold_time,
             ..
         } = &mut self.state;
         exec.on_spin(SpinInput {
             tick,
-            received_ts_us,
+            now: *fold_time,
             books,
             desired,
             windows,
             ledger,
             bank: actions,
         });
-        // Refusals banked, drain separate (state-first, not ring-first).
+    }
+
+    /// The pass banks its refusals, and they go out only after it, so each one reads the state that
+    /// the pass left.
+    fn emit_refusals(&mut self) {
         let ui = &mut self.ui;
-        exec.drain_refusals(&mut |reject| ui.emit_reject(reject));
-        self.emit_exec_state(tick, received_ts_us);
+        self.state
+            .exec
+            .drain_refusals(&mut |reject| ui.emit_reject(reject));
     }
 
     /// Halt/balances/desired every spin (corrects late-attach). Desired expires this spin.
-    fn emit_exec_state(&mut self, tick: &SpinTick, at: LocalTs) {
+    fn emit_execution_state(&mut self, tick: &SpinTick, at: LocalTs) {
         let is_execution_wired = if let Some(halt) = self.state.exec.halt_state() {
             self.ui.emit_execution(halt, at);
             true

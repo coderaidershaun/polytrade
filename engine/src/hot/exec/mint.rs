@@ -26,7 +26,7 @@ impl ExecEngine {
         outcome: ReconcileOutcome,
         input: &mut SpinInput<'_>,
     ) {
-        let at = input.received_ts_us;
+        let at = input.now.as_local();
         match outcome {
             ReconcileOutcome::Nothing | ReconcileOutcome::Reject(_) => {}
             ReconcileOutcome::Place(intent) => {

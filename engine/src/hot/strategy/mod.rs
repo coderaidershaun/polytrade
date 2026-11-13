@@ -16,7 +16,7 @@ use crate::hot::quant::volatility::EwmaVol;
 use crate::hot::tracker::MicroTracker;
 use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::{BookChunk, KlineEvent, MarketRotation, SpinTick, TradeEvent};
-use crate::msg::time::{DurationUs, LocalTs, VenueTs};
+use crate::msg::time::{DurationUs, FoldTime, LocalTs, VenueTs};
 use crate::runtime::config::{Instruments, StrategySpec};
 
 pub use crate::hot::exec::{
@@ -174,6 +174,7 @@ pub struct StrategyCtx<'a> {
     pub(crate) desired: &'a mut DesiredBook,
     pub(crate) actions: &'a mut Actions,
     pub(crate) event_ts: LocalTs,
+    pub(crate) fold_time: FoldTime,
     /// Declaration's current spin (see quote).
     pub(crate) spin_seq: u64,
     /// How many topics [`Strategy::link_topics`] declared — the range `link_send` accepts.

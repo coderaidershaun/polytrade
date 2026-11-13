@@ -268,7 +268,7 @@ impl ExecEngine {
                     side,
                     QuoteLevel::ZERO,
                     intent,
-                    input.received_ts_us,
+                    input.now.as_local(),
                     input.bank,
                 );
             }

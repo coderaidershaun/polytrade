@@ -9,7 +9,7 @@ use crate::hot::strategy::Actions;
 use crate::log::{hot_error, hot_warn};
 use crate::msg::exec::{AccountChunk, CancelReason, ExecCommand, ExecEvent, ExecKind, Provenance};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Qty, Side};
-use crate::msg::time::{DurationUs, LocalTs};
+use crate::msg::time::{DurationUs, FoldTime, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 use crate::runtime::registry::InstrumentRow;
 
@@ -266,10 +266,10 @@ impl ExecEngine {
         current.chain(prior)
     }
 
-    /// The staleness gate keys on this commit stamp, never on a clock read.
+    /// The staleness gate keys on the fold time of this commit, never on a clock read.
     #[inline]
-    pub fn on_book_commit(&mut self, instrument: InstrumentId, at: LocalTs) {
-        self.instruments[usize::from(instrument.0)].last_commit_ts_us = at;
+    pub fn on_book_commit(&mut self, instrument: InstrumentId, at: FoldTime) {
+        self.instruments[usize::from(instrument.0)].last_commit_ts_us = at.as_local();
     }
 
     /// Folds one venue event and answers which callback it earned. See the module header for why
@@ -277,33 +277,34 @@ impl ExecEngine {
     pub(crate) fn on_exec_event(
         &mut self,
         event: &ExecEvent,
-        received_ts_us: LocalTs,
+        now: FoldTime,
         ledger: &mut PositionLedger,
         bank: &mut Actions,
     ) -> ExecCallback {
+        let now = now.as_local();
         self.spins_since_exec_event = 0;
         match event.kind {
-            ExecKind::StreamReset => return self.on_stream_reset(received_ts_us, bank),
+            ExecKind::StreamReset => return self.on_stream_reset(now, bank),
             ExecKind::StreamReady => {
                 self.readiness.observe_stream_ready();
                 return ExecCallback::None;
             }
-            ExecKind::SnapshotEnd => return self.on_snapshot_end(event, received_ts_us, bank),
+            ExecKind::SnapshotEnd => return self.on_snapshot_end(event, now, bank),
             _ => {}
         }
         match event.provenance {
             Provenance::Foreign => return ExecCallback::None,
             Provenance::PriorRun => {
-                self.cancel_prior_run(event, received_ts_us);
-                self.apply_to_prior_run(event, received_ts_us, ledger, bank);
+                self.cancel_prior_run(event, now);
+                self.apply_to_prior_run(event, now, ledger, bank);
                 return ExecCallback::None;
             }
             Provenance::Mine => {}
         }
-        let Some(index) = self.locate(event, received_ts_us) else {
+        let Some(index) = self.locate(event, now) else {
             return ExecCallback::None;
         };
-        self.apply_to_slot(index, event, received_ts_us, ledger, bank)
+        self.apply_to_slot(index, event, now, ledger, bank)
     }
 
     /// Absolute balances only — see [`AccountChunk`] for why a delta may never reach here.
@@ -347,12 +348,12 @@ impl ExecEngine {
 
     /// Finds the slot an event belongs to, adopting one the venue knows about that this
     /// table does not.
-    fn locate(&mut self, event: &ExecEvent, received_ts_us: LocalTs) -> Option<usize> {
+    fn locate(&mut self, event: &ExecEvent, now: LocalTs) -> Option<usize> {
         if let Some(index) = self.orders.find(event.client_id) {
             return Some(index);
         }
         if event.kind == ExecKind::SnapshotOrder
-            && let Some(index) = self.orders.adopt(event, received_ts_us)
+            && let Some(index) = self.orders.adopt(event, now)
         {
             return Some(index);
         }
@@ -376,7 +377,7 @@ impl ExecEngine {
     /// the inherited order asks again — latching first would make one full bank the last word on an
     /// order still resting on the venue.
     #[cold]
-    fn cancel_prior_run(&mut self, event: &ExecEvent, received_ts_us: LocalTs) {
+    fn cancel_prior_run(&mut self, event: &ExecEvent, now: LocalTs) {
         let Some(instrument) = event.instrument else {
             return;
         };
@@ -385,7 +386,7 @@ impl ExecEngine {
             return;
         }
         let command = ExecCommand::CancelPriorRun { instrument };
-        if !self.bank_or_halt(command, received_ts_us) {
+        if !self.bank_or_halt(command, now) {
             return;
         }
         self.instruments[index].is_prior_run_cancel_sent = true;

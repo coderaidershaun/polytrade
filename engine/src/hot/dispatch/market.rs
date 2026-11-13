@@ -87,7 +87,7 @@ impl HotEngine {
             // Message stamp (replay-exact, not clock).
             self.state
                 .exec
-                .on_book_commit(chunk.instrument, received_ts_us);
+                .on_book_commit(chunk.instrument, self.state.fold_time);
             self.ui
                 .emit_book(chunk.instrument, &self.state.books, received_ts_us);
         }

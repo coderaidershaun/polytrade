@@ -10,7 +10,7 @@ use crate::msg::inbound::RunControl;
 use crate::msg::persist::{LinkFrameRow, LinkRowKind, PersistRecord};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::run_state::RunState;
-use crate::msg::time::{DurationUs, LocalTs};
+use crate::msg::time::{DurationUs, FoldTime, LocalTs};
 use crate::runtime::shutdown::RunStateCell;
 
 use super::HotEngine;
@@ -33,12 +33,13 @@ impl Warmup {
 
     /// True on message ending warmup (same message delivered, logs once).
     #[inline]
-    pub(super) fn observe(&mut self, received_ts: LocalTs) -> bool {
+    pub(super) fn observe(&mut self, now: FoldTime) -> bool {
         if self.is_complete {
             return false;
         }
-        let first = *self.first_message_ts.get_or_insert(received_ts);
-        self.is_complete = received_ts.diff(first) >= self.span;
+        let now = now.as_local();
+        let first = *self.first_message_ts.get_or_insert(now);
+        self.is_complete = now.diff(first) >= self.span;
         self.is_complete
     }
 

@@ -23,11 +23,7 @@ pub struct Applied {
     pub is_resurrection: bool,
 }
 
-pub fn apply_exec_event(
-    slot: &mut OrderSlot,
-    event: &ExecEvent,
-    received_ts_us: LocalTs,
-) -> Applied {
+pub fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent, now: LocalTs) -> Applied {
     if slot.state == OrderState::Free {
         return Applied {
             fill: FillDelta::NONE,
@@ -129,9 +125,9 @@ pub fn apply_exec_event(
     if let Some(id) = event.venue_order_id {
         slot.venue_order_id = Some(id);
     }
-    slot.last_event_ts_us = received_ts_us;
+    slot.last_event_ts_us = now;
     if matches!(next, OrderState::Closed(_)) && !matches!(previous_state, OrderState::Closed(_)) {
-        slot.closed_ts_us = received_ts_us;
+        slot.closed_ts_us = now;
     }
     Applied {
         fill,

@@ -43,7 +43,7 @@ impl ExecEngine {
     pub(super) fn on_snapshot_end(
         &mut self,
         event: &ExecEvent,
-        received_ts_us: LocalTs,
+        now: LocalTs,
         bank: &mut Actions,
     ) -> ExecCallback {
         let Some(instrument) = event.instrument else {
@@ -52,7 +52,7 @@ impl ExecEngine {
         let pass = ReconcilePass {
             instrument,
             recon_seq: event.recon_seq,
-            recon_ts_us: received_ts_us,
+            recon_ts_us: now,
         };
         self.orders.sweep_unseen(pass, &mut |slot, previous| {
             swept_warning(slot, pass.recon_seq);
@@ -78,12 +78,12 @@ impl ExecEngine {
         &mut self,
         index: usize,
         event: &ExecEvent,
-        received_ts_us: LocalTs,
+        now: LocalTs,
         ledger: &mut PositionLedger,
         bank: &mut Actions,
     ) -> ExecCallback {
         let previous_state = OrderLifecycle::from(self.orders.slot(index).state);
-        let applied = apply_exec_event(self.orders.slot_mut(index), event, received_ts_us);
+        let applied = apply_exec_event(self.orders.slot_mut(index), event, now);
         if applied.is_resurrection {
             self.resurrection_error(event);
         }
@@ -95,15 +95,8 @@ impl ExecEngine {
         } else {
             self.release_reservation(index);
         }
-        self.record_outcome(event, applied.state, received_ts_us);
-        bank_event_rows(
-            bank,
-            &slot,
-            event,
-            previous_state,
-            applied.fill,
-            received_ts_us,
-        );
+        self.record_outcome(event, applied.state, now);
+        bank_event_rows(bank, &slot, event, previous_state, applied.fill, now);
 
         if !applied.fill.is_empty() {
             return ExecCallback::Fill(Fill {
@@ -119,7 +112,7 @@ impl ExecEngine {
                 liquidity: event.liquidity,
                 trade_id: event.trade_id,
                 state: applied.state,
-                event_ts_us: received_ts_us,
+                event_ts_us: now,
             });
         }
         if let Some(class) = event.reject {
@@ -132,10 +125,10 @@ impl ExecEngine {
                     class,
                     code: event.reject_code,
                 },
-                event_ts_us: received_ts_us,
+                event_ts_us: now,
             });
         }
-        ExecCallback::Update(view_of(&slot).updated_at(received_ts_us))
+        ExecCallback::Update(view_of(&slot).updated_at(now))
     }
 
     /// Prior-run order event: no reservation release, no reject count, no callback (position already in ledger).
@@ -143,29 +136,22 @@ impl ExecEngine {
     pub(super) fn apply_to_prior_run(
         &mut self,
         event: &ExecEvent,
-        received_ts_us: LocalTs,
+        now: LocalTs,
         ledger: &mut PositionLedger,
         bank: &mut Actions,
     ) {
         // SMELL: when every prior-run slot is taken, this event is logged and dropped, so a fill of
         // an order from the earlier run never reaches the ledger and the position stays wrong. A
         // full table should halt the engine instead.
-        let Some(index) = self.prior_orders.find_or_seat(event, received_ts_us) else {
+        let Some(index) = self.prior_orders.find_or_seat(event, now) else {
             self.prior_run_overflow_error(event);
             return;
         };
         let previous_state = OrderLifecycle::from(self.prior_orders.slot(index).state);
-        let applied = apply_exec_event(self.prior_orders.slot_mut(index), event, received_ts_us);
+        let applied = apply_exec_event(self.prior_orders.slot_mut(index), event, now);
         let slot = *self.prior_orders.slot(index);
         self.book_fill(&slot, event, applied.fill, ledger);
-        bank_event_rows(
-            bank,
-            &slot,
-            event,
-            previous_state,
-            applied.fill,
-            received_ts_us,
-        );
+        bank_event_rows(bank, &slot, event, previous_state, applied.fill, now);
     }
 
     /// Fee + fill. No-op on empty (duplicates already folded).
@@ -276,7 +262,7 @@ impl ExecEngine {
     /// `Refused`: the two share venue code `-2010` and only the reject REASON separates them. Both
     /// Binance decoders split on the message, and an unrecognised `-2010` classifies `Fatal`, which
     /// parks the engine loudly rather than letting it place orders it cannot fund.
-    fn record_outcome(&mut self, event: &ExecEvent, state: OrderState, received_ts_us: LocalTs) {
+    fn record_outcome(&mut self, event: &ExecEvent, state: OrderState, now: LocalTs) {
         let Some(class) = event.reject else {
             // One order the venue accepts shows the requests are not wrong in kind, so it ends the
             // streak, and only the venue can do that. The kinds the EDGE synthesises for a request
@@ -293,7 +279,7 @@ impl ExecEngine {
         match class {
             RejectClass::Fatal => {
                 self.fatal_reject_error(event);
-                self.halt(HaltReason::FatalReject, received_ts_us);
+                self.halt(HaltReason::FatalReject, now);
             }
             // The ordinary cost of quoting post-only. It must never touch the hard-reject streak: a
             // maker earns these all day, and counting them parks the engine exactly when the market
@@ -305,7 +291,7 @@ impl ExecEngine {
             RejectClass::StillLive | RejectClass::Ambiguous => {
                 self.reject_streak += 1;
                 if self.reject_streak >= self.settings.max_consecutive_rejects {
-                    self.halt(HaltReason::RejectStreak, received_ts_us);
+                    self.halt(HaltReason::RejectStreak, now);
                 }
             }
         }
@@ -380,11 +366,7 @@ impl PriorRunOrders {
         })
     }
 
-    pub(super) fn find_or_seat(
-        &mut self,
-        event: &ExecEvent,
-        received_ts_us: LocalTs,
-    ) -> Option<usize> {
+    pub(super) fn find_or_seat(&mut self, event: &ExecEvent, now: LocalTs) -> Option<usize> {
         if let Some(index) = self.find(event.client_id) {
             return Some(index);
         }
@@ -397,7 +379,7 @@ impl PriorRunOrders {
             instrument: event.instrument?,
             price: event.price,
             qty: event.qty,
-            last_event_ts_us: received_ts_us,
+            last_event_ts_us: now,
             ..OrderSlot::EMPTY
         };
         Some(index)

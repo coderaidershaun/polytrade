@@ -8,7 +8,7 @@ use crate::link::TopicId;
 use crate::log::{Callsite, HotRecord, LogArgs};
 use crate::msg::ids::{AssetId, InstrumentId, Notional, Qty, Side};
 use crate::msg::persist::{BookEventRow, FeatureId, FeatureRow, KlineRow, PersistRecord, TradeRow};
-use crate::msg::time::LocalTs;
+use crate::msg::time::{FoldTime, LocalTs};
 
 use super::{StrategyCtx, WindowInfo};
 
@@ -107,10 +107,18 @@ impl StrategyCtx<'_> {
         self.ledger.row(instrument).has_mark()
     }
 
-    /// `received_ts_us` of the message being processed — the deterministic stamp for emitted features.
+    /// The received stamp of the message under fold: the stamp of a row that the strategy builds
+    /// itself, as [`Self::emit`] stamps its rows. To decide by time, read [`Self::now`].
     #[inline]
     pub fn event_ts(&self) -> LocalTs {
         self.event_ts
+    }
+
+    /// The time of the fold, the latest received stamp so far. Unlike [`Self::event_ts`] it never
+    /// steps back, so a strategy that paces or ages by it decides as the engine's own deadlines do.
+    #[inline]
+    pub fn now(&self) -> FoldTime {
+        self.fold_time
     }
 
     /// Always reaches the UI monitor; reaches Parquet only when `strategy.tables` names `features`.

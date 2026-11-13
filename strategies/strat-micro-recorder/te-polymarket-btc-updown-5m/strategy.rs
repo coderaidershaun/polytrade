@@ -153,7 +153,7 @@ impl Strategy for PolyUpPublisher {
     }
 
     fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
-        let now = ctx.event_ts();
+        let now = ctx.now().as_local();
         self.publish(ctx, now);
         self.trade_the_open_window(ctx, now);
     }

@@ -103,6 +103,27 @@ impl VenueTs {
     }
 }
 
+/// The time of the fold: the latest received stamp of the messages folded so far. A tick stamped
+/// at its slot can pop after a newer message, and then this time stays where it is, so no deadline
+/// is read at an earlier time than the one before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FoldTime(LocalTs);
+
+impl FoldTime {
+    /// Before the first message: each stamp is later.
+    pub(crate) const BEFORE_FIRST: FoldTime = FoldTime(LocalTs(i64::MIN));
+
+    #[inline]
+    pub(crate) fn advanced_to(self, received: LocalTs) -> FoldTime {
+        FoldTime(self.0.max(received))
+    }
+
+    #[inline]
+    pub const fn as_local(self) -> LocalTs {
+        self.0
+    }
+}
+
 /// UTC calendar breakdown of an instant, for the display paths that spell a timestamp out. Held
 /// apart from the stamp types because nothing downstream of it is a timestamp any more.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -170,7 +170,7 @@ impl Strategy for MicroRecorder {
         let Some(features) = self.features else {
             return;
         };
-        let now = ctx.event_ts();
+        let now = ctx.now().as_local();
         let cfg = SpinCfg {
             features,
             gueant: self.gueant,
@@ -204,7 +204,7 @@ impl Strategy for MicroRecorder {
         let Some(model) = self.recorded_mut(event.instrument) else {
             return;
         };
-        let received_ts_us = ctx.event_ts();
+        let received_ts_us = ctx.now().as_local();
         model.markouts.on_trade(event, received_ts_us);
         let hawkes = match event.side {
             Side::Buy => &mut model.hawkes_ask,
@@ -224,7 +224,7 @@ impl Strategy for MicroRecorder {
             return;
         }
         let mid = ctx.tracker(chunk.instrument).mid();
-        model.feed_markout_mid(ctx.event_ts(), mid);
+        model.feed_markout_mid(ctx.now().as_local(), mid);
     }
 
     fn on_book_reset(&mut self, _ctx: &mut StrategyCtx<'_>, instrument: InstrumentId) {
