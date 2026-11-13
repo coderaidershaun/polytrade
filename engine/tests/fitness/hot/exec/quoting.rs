@@ -731,7 +731,8 @@ fn answer(engine: &mut HotEngine, order: (ClientOrderId, Side), kind: ExecKind, 
     ));
 }
 
-/// A trade of `qty` at `price` that fills the order whole, or in part when `status` says so.
+/// One trade report of an order of `order_qty`: the fill at its price, and a status that says
+/// whether the order is filled whole or in part.
 fn trade(
     client_id: ClientOrderId,
     side: Side,
@@ -865,9 +866,15 @@ fn get_flat_withdraws_each_quote_of_its_market() {
         "a flat market that gets flat sends nothing, and quotes nothing"
     );
     let positions = positions.lock().expect("positions");
+    let at_spin = |seq: u64| positions[usize::try_from(seq - 1).expect("a spin of the test")];
     assert_eq!(
-        positions.last(),
-        Some(&Qty::from_mantissa(0)),
+        at_spin(GET_FLAT_SPIN),
+        HALF,
+        "the market is long half a unit when it gets flat"
+    );
+    assert_eq!(
+        at_spin(GET_FLAT_SPIN + 2),
+        Qty::from_mantissa(0),
         "{positions:?}"
     );
 
