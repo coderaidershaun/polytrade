@@ -50,7 +50,9 @@ impl ExecCore {
         if !is_possibly_live || self.is_mirrored(event.client_id) {
             return Ok(());
         }
-        let mut order = MirroredOrder::observed(event);
+        let Some(mut order) = MirroredOrder::observed(event) else {
+            return Ok(());
+        };
         if !self.has_opened_quoting {
             order.provenance = Provenance::PriorRun;
         }

@@ -25,7 +25,7 @@ const TICK: i64 = 1_000_000;
 
 fn event(kind: ExecKind, client_id: ClientOrderId) -> ExecEvent {
     ExecEvent {
-        instrument: InstrumentId(0),
+        instrument: Some(InstrumentId(0)),
         client_id,
         venue_order_id: Some(VenueOrderId(77)),
         trade_id: None,

@@ -364,8 +364,11 @@ impl ExecEngine {
 
     #[cold]
     fn on_snapshot_end(&mut self, event: &ExecEvent, bank: &mut Actions) -> ExecCallback {
+        let Some(instrument) = event.instrument else {
+            return ExecCallback::None;
+        };
         let pass = ReconcilePass {
-            instrument: event.instrument,
+            instrument,
             recon_seq: event.recon_seq,
             recon_ts_us: event.received_ts_us,
         };
@@ -410,20 +413,21 @@ impl ExecEngine {
     /// order still resting on the venue.
     #[cold]
     fn cancel_prior_run(&mut self, event: &ExecEvent) {
-        let index = usize::from(event.instrument.0);
+        let Some(instrument) = event.instrument else {
+            return;
+        };
+        let index = usize::from(instrument.0);
         if self.instruments[index].is_prior_run_cancel_sent {
             return;
         }
-        let command = ExecCommand::CancelPriorRun {
-            instrument: event.instrument,
-        };
+        let command = ExecCommand::CancelPriorRun { instrument };
         if !self.bank_or_halt(command, event.received_ts_us) {
             return;
         }
         self.instruments[index].is_prior_run_cancel_sent = true;
         hot_warn!(
             "an earlier run of this trading engine left orders resting on instrument {} — cancelling them",
-            event.instrument.0
+            instrument.0
         );
     }
 }

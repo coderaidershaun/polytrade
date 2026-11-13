@@ -164,7 +164,7 @@ fn decode_execution_report(
         // the amends left, so the code and the amend budget keep their unknown defaults.
         ..blank(
             kind,
-            instrument,
+            Some(instrument),
             ownership.client_id,
             context.received_ts_us,
         )

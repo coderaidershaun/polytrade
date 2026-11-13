@@ -145,7 +145,7 @@ fn decode_order_event(
         // A resting order fills at its own limit, exactly.
         cumulative_quote: price.notional(filled),
         exchange_ts_us: venue_stamp(&event.timestamp, 1, context),
-        ..blank_event(kind, instrument, known.client_id, context)
+        ..blank_event(kind, Some(instrument), known.client_id, context)
     }))
 }
 

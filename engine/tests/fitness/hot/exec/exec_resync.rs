@@ -133,7 +133,7 @@ fn a_cold_start_quotes_only_once_the_resync_marker_lands() {
 fn the_resync_marker_can_retire_no_slot() {
     let marker = open_orders_snapshot_end(INSTRUMENT, LocalTs::from_micros(1_000));
     assert_eq!(marker.kind, ExecKind::SnapshotEnd);
-    assert_eq!(marker.instrument, INSTRUMENT);
+    assert_eq!(marker.instrument, Some(INSTRUMENT));
 
     let mut orders = OrderTable::new(0);
     let (index, _) = orders
@@ -152,7 +152,9 @@ fn the_resync_marker_can_retire_no_slot() {
     let mut closed = 0;
     orders.sweep_unseen(
         ReconcilePass {
-            instrument: marker.instrument,
+            instrument: marker
+                .instrument
+                .expect("a snapshot end names its instrument"),
             recon_seq: marker.recon_seq,
             recon_ts_us: marker.received_ts_us,
         },

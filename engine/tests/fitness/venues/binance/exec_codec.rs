@@ -1169,3 +1169,35 @@ fn a_post_only_cross_is_a_different_class_from_every_other_gone() {
         assert_eq!(event.reject, Some(RejectClass::Fatal));
     }
 }
+
+/// FITNESS: an event of the account stream names no instrument. Instrument ids are issued from zero,
+/// so a stand-in id would attribute the subscribe answer, or its refusal, to the first instrument.
+#[test]
+fn account_event_never_touches_instrument_zero() {
+    let venue = venue();
+    let subscribed = decoded(
+        fixture!("ack_order_cancel"),
+        ExecRequest::SubscribeUserStream,
+        &venue,
+    );
+    let refused = decoded(
+        fixture!("error_1021_timestamp_outside_recv_window"),
+        ExecRequest::SubscribeUserStream,
+        &venue,
+    );
+    let kinds: Vec<(ExecKind, Option<InstrumentId>)> = subscribed
+        .events
+        .iter()
+        .map(|event| (event.kind, event.instrument))
+        .collect();
+    assert_eq!(
+        kinds,
+        [(ExecKind::StreamReady, None)],
+        "the subscribe answer names no instrument"
+    );
+    assert!(
+        refused.events.is_empty(),
+        "a refused subscribe raises no order event, so it has nothing to attribute: {:?}",
+        refused.events
+    );
+}

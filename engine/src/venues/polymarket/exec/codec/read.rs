@@ -109,7 +109,12 @@ pub fn decode_orders_page(
     // Push end marker even on empty page: an account with nothing resting still finishes resync.
     decoded.events.push(ExecEvent {
         recon_seq,
-        ..blank_event(ExecKind::SnapshotEnd, instrument, ClientOrderId(0), context)
+        ..blank_event(
+            ExecKind::SnapshotEnd,
+            Some(instrument),
+            ClientOrderId(0),
+            context,
+        )
     });
     Ok(VenueAnswer::Answered(decoded))
 }
@@ -163,7 +168,7 @@ fn decode_order_record(
             record.created_at.saturating_mul(1_000),
             context.received_ts_us,
         ),
-        ..blank_event(kind, instrument, known.client_id, context)
+        ..blank_event(kind, Some(instrument), known.client_id, context)
     }))
 }
 

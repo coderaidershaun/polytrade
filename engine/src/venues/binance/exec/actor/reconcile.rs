@@ -131,13 +131,12 @@ impl Actor {
         if !event.status.is_some_and(VenueOrderStatus::is_terminal) {
             // Still resting, so the cancel latch is re-armed; leaving it would strand the order.
             core.re_arm_cancel(client_id);
-            if core
-                .mirrored(client_id)
-                .is_some_and(|order| order.provenance == Provenance::PriorRun)
+            if let Some(instrument) = event.instrument
+                && core
+                    .mirrored(client_id)
+                    .is_some_and(|order| order.provenance == Provenance::PriorRun)
             {
-                let command = ExecCommand::CancelPriorRun {
-                    instrument: event.instrument,
-                };
+                let command = ExecCommand::CancelPriorRun { instrument };
                 core.on_command(command, &mut Outgoing::sink(&mut outgoing, recon_seq));
                 self.dispatch(outgoing, writer).await;
             }
@@ -194,7 +193,10 @@ impl Actor {
         if event.provenance == Provenance::Foreign {
             warn!(
                 "binance execution: order {venue_order_id} on {} is not this engine's — its fills are somebody else's and are left alone",
-                self.symbols.symbol(event.instrument).unwrap_or("?")
+                event
+                    .instrument
+                    .and_then(|instrument| self.symbols.symbol(instrument))
+                    .unwrap_or("?")
             );
             return;
         }

@@ -373,7 +373,7 @@ impl OrderTable {
             state: OrderState::Unknown,
             side: event.side,
             level: level_of_slot(index),
-            instrument: event.instrument,
+            instrument: event.instrument?,
             price: event.price,
             qty: event.qty,
             generation: ClientIdLayout::generation_of(event.client_id),

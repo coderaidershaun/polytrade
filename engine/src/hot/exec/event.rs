@@ -317,7 +317,7 @@ impl PriorRunOrders {
             venue_order_id: event.venue_order_id,
             state: OrderState::Unknown,
             side: event.side,
-            instrument: event.instrument,
+            instrument: event.instrument?,
             price: event.price,
             qty: event.qty,
             last_event_ts_us: event.received_ts_us,

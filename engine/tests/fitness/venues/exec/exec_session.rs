@@ -128,7 +128,7 @@ fn prior_run_order(client_id: u64) -> MirroredOrder {
 /// A venue report of a resting order the codec attributed to this run by its client id.
 fn resting_report(client_id: u64) -> ExecEvent {
     ExecEvent {
-        instrument: INSTRUMENT,
+        instrument: Some(INSTRUMENT),
         client_id: ClientOrderId(client_id),
         venue_order_id: None,
         trade_id: None,
@@ -568,7 +568,7 @@ fn readiness_arms_once_after_the_pass_finishes_with_one_snapshot_end_per_instrum
 
     assert!(session.arm_readiness(NOW));
     assert_eq!(session.core.phase(), Phase::Quoting);
-    let ends: Vec<(ExecKind, InstrumentId, VenueTs)> = session
+    let ends: Vec<(ExecKind, Option<InstrumentId>, VenueTs)> = session
         .events
         .iter()
         .map(|event| (event.kind, event.instrument, event.exchange_ts_us))
@@ -576,10 +576,14 @@ fn readiness_arms_once_after_the_pass_finishes_with_one_snapshot_end_per_instrum
     assert_eq!(
         ends,
         [
-            (ExecKind::SnapshotEnd, INSTRUMENT, NOW.as_venue_calendar()),
             (
                 ExecKind::SnapshotEnd,
-                OTHER_INSTRUMENT,
+                Some(INSTRUMENT),
+                NOW.as_venue_calendar()
+            ),
+            (
+                ExecKind::SnapshotEnd,
+                Some(OTHER_INSTRUMENT),
                 NOW.as_venue_calendar()
             ),
         ]

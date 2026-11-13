@@ -83,11 +83,9 @@ fn decode_single(
             context,
         ),
         ExecRequest::OpenOrders { instrument } => decode_open_orders(result, instrument, context),
-        ExecRequest::SubscribeUserStream => Ok(vec![lifecycle_event(
-            ExecKind::StreamReady,
-            InstrumentId::NOT_APPLICABLE,
-            context,
-        )]),
+        ExecRequest::SubscribeUserStream => {
+            Ok(vec![lifecycle_event(ExecKind::StreamReady, None, context)])
+        }
     }
 }
 
@@ -106,7 +104,11 @@ fn decode_open_orders(
             &context.decode,
         )?);
     }
-    events.push(lifecycle_event(ExecKind::SnapshotEnd, instrument, context));
+    events.push(lifecycle_event(
+        ExecKind::SnapshotEnd,
+        Some(instrument),
+        context,
+    ));
     Ok(events)
 }
 
@@ -141,11 +143,14 @@ fn order_answer(
     kind: ExecKind,
     context: &ResponseContext<'_>,
 ) -> Result<Vec<ExecEvent>, WireError> {
-    let instrument = context
+    let Some(instrument) = context
         .decode
         .symbols
         .instrument(&record.symbol)
-        .unwrap_or_else(|| request_instrument(context.request));
+        .or_else(|| request_instrument(context.request))
+    else {
+        return Ok(Vec::new());
+    };
     let event = order_event(record, kind, instrument, context.recon_seq, &context.decode)?;
     Ok(vec![event])
 }
@@ -183,7 +188,7 @@ fn order_event(
         exchange_ts_us: clamp_or_receipt(venue_ms, context.received_ts_us),
         ..blank(
             kind,
-            instrument,
+            Some(instrument),
             ownership.client_id,
             context.received_ts_us,
         )
@@ -192,7 +197,7 @@ fn order_event(
 
 fn lifecycle_event(
     kind: ExecKind,
-    instrument: InstrumentId,
+    instrument: Option<InstrumentId>,
     context: &ResponseContext<'_>,
 ) -> ExecEvent {
     ExecEvent {
@@ -207,14 +212,14 @@ fn lifecycle_event(
     }
 }
 
-fn request_instrument(request: ExecRequest) -> InstrumentId {
+fn request_instrument(request: ExecRequest) -> Option<InstrumentId> {
     match request {
         ExecRequest::Place { instrument, .. }
         | ExecRequest::Cancel { instrument, .. }
         | ExecRequest::AmendQty { instrument, .. }
         | ExecRequest::OrderStatus { instrument, .. }
-        | ExecRequest::OpenOrders { instrument } => instrument,
-        ExecRequest::SubscribeUserStream => InstrumentId::NOT_APPLICABLE,
+        | ExecRequest::OpenOrders { instrument } => Some(instrument),
+        ExecRequest::SubscribeUserStream => None,
     }
 }
 

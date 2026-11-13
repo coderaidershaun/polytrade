@@ -118,7 +118,9 @@ impl Actor {
             .filter(|event| event.kind != ExecKind::SnapshotEnd)
             .collect();
         for event in &events {
-            let mut mirrored = MirroredOrder::observed(event);
+            let Some(mut mirrored) = MirroredOrder::observed(event) else {
+                continue;
+            };
             if !self.session.core.has_opened_quoting() {
                 mirrored.provenance = Provenance::PriorRun;
             }
@@ -326,7 +328,12 @@ impl Actor {
             cumulative_qty: unmapped.filled,
             cumulative_quote: unmapped.price.notional(unmapped.filled),
             amends_remaining: ExecEvent::AMENDS_EXHAUSTED,
-            ..blank(ExecKind::SnapshotOrder, unmapped.instrument, client_id, now)
+            ..blank(
+                ExecKind::SnapshotOrder,
+                Some(unmapped.instrument),
+                client_id,
+                now,
+            )
         }
     }
 

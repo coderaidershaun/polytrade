@@ -706,7 +706,7 @@ pub fn exec_event(
     when: i64,
 ) -> ExecEvent {
     ExecEvent {
-        instrument,
+        instrument: Some(instrument),
         client_id,
         venue_order_id: None,
         trade_id: None,

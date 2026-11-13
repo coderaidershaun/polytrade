@@ -5,13 +5,6 @@ use crate::msg::labelled_enum::labelled_enum;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstrumentId(pub u16);
 
-impl InstrumentId {
-    /// For messages that name no instrument. Ids are issued from zero, so this is NOT a reserved
-    /// value — it aliases the first configured instrument, and only a consumer that branches on
-    /// message kind before reading the field may use it.
-    pub const NOT_APPLICABLE: Self = Self(0);
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceId(pub u16);
 

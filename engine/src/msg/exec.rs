@@ -14,8 +14,9 @@ use crate::msg::time::{LocalTs, Tick, VenueTs};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExecEvent {
     /// A configured instrument; the edge drops any symbol that isn't configured. Balances
-    /// instead carry an UNKNOWN asset when this happens.
-    pub instrument: InstrumentId,
+    /// instead carry an UNKNOWN asset when this happens. `None` for an event of the account
+    /// stream itself, which names no instrument.
+    pub instrument: Option<InstrumentId>,
     pub client_id: ClientOrderId,
     pub venue_order_id: Option<VenueOrderId>,
     pub trade_id: Option<TradeId>,

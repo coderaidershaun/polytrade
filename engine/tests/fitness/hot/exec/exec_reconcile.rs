@@ -87,7 +87,7 @@ fn amending_slot(qty: i64) -> OrderSlot {
 /// One venue answer about that order.
 fn amend_answer(kind: ExecKind, qty: i64) -> ExecEvent {
     ExecEvent {
-        instrument: InstrumentId(0),
+        instrument: Some(InstrumentId(0)),
         client_id: ClientOrderId(1),
         venue_order_id: Some(VenueOrderId(9)),
         trade_id: None,

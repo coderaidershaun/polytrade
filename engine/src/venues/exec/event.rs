@@ -19,7 +19,7 @@ pub(crate) fn request_timed_out(
     ExecEvent {
         reject: Some(RejectClass::Ambiguous),
         side,
-        ..blank(ExecKind::AckFailed, instrument, client_id, at)
+        ..blank(ExecKind::AckFailed, Some(instrument), client_id, at)
     }
 }
 
@@ -33,7 +33,7 @@ pub(crate) fn place_not_sent(
 ) -> ExecEvent {
     ExecEvent {
         side,
-        ..blank(ExecKind::PlaceNotSent, instrument, client_id, at)
+        ..blank(ExecKind::PlaceNotSent, Some(instrument), client_id, at)
     }
 }
 
@@ -44,31 +44,26 @@ pub(crate) fn amend_not_sent(
     client_id: ClientOrderId,
     at: LocalTs,
 ) -> ExecEvent {
-    blank(ExecKind::AmendNotSent, instrument, client_id, at)
+    blank(ExecKind::AmendNotSent, Some(instrument), client_id, at)
 }
 
 // Ends an open-orders resync. The engine stays unready until it sees one.
 pub fn open_orders_snapshot_end(instrument: InstrumentId, at: LocalTs) -> ExecEvent {
-    blank(ExecKind::SnapshotEnd, instrument, ClientOrderId(0), at)
+    blank(
+        ExecKind::SnapshotEnd,
+        Some(instrument),
+        ClientOrderId(0),
+        at,
+    )
 }
 
 // Live and simulated order streams both raise this once they subscribe.
 pub(crate) fn stream_ready(at: LocalTs) -> ExecEvent {
-    blank(
-        ExecKind::StreamReady,
-        InstrumentId::NOT_APPLICABLE,
-        ClientOrderId(0),
-        at,
-    )
+    blank(ExecKind::StreamReady, None, ClientOrderId(0), at)
 }
 
 pub(crate) fn stream_reset(at: LocalTs) -> ExecEvent {
-    blank(
-        ExecKind::StreamReset,
-        InstrumentId::NOT_APPLICABLE,
-        ClientOrderId(0),
-        at,
-    )
+    blank(ExecKind::StreamReset, None, ClientOrderId(0), at)
 }
 
 /// Sets identity and stamps and leaves every other field at a default, which the caller overrides
@@ -79,7 +74,7 @@ pub(crate) fn stream_reset(at: LocalTs) -> ExecEvent {
 /// default to unknown, so a venue that cannot amend must say so itself.
 pub(crate) fn blank(
     kind: ExecKind,
-    instrument: InstrumentId,
+    instrument: Option<InstrumentId>,
     client_id: ClientOrderId,
     at: LocalTs,
 ) -> ExecEvent {
