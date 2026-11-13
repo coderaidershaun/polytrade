@@ -48,7 +48,8 @@ const SELL_THROUGH_TICKS: i64 = 20;
 /// order id, and prints each request with each secret field shown as `<redacted>`. IF the buy has
 /// no fill, because its time ends or because the venue refuses it as a buy that would cross, THEN
 /// after the venue shows that no buy of the tests rests, one buy of the same size at the best ask,
-/// which lives for one match, gives the trade report that U-M3 needs.
+/// which lives for one match, gives a trade report that shows how the venue reports the fee of each
+/// trade.
 #[ignore = "real funds on live binance: only the live-runner role of a job runs it, by the runbook of its job and the live policy"]
 #[tokio::test]
 async fn records_a_small_order_lifecycle_on_binance() {

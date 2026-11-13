@@ -1,5 +1,5 @@
-//! Asset dictionary: base + quote across instruments, interned to dense [`AssetId`] at build. A venue
-//! names its own assets, so USDT at two venues is two assets with two balance rows.
+//! The assets of the run, each with one dense [`AssetId`] given at start. A venue names its own
+//! assets, so USDT at two venues is two assets.
 
 use crate::msg::ids::{AssetId, VenueId};
 
@@ -12,7 +12,8 @@ pub struct AssetDictionary {
 }
 
 impl AssetDictionary {
-    /// Case-insensitive lookup among the assets of `venue`; [`AssetId::UNKNOWN`] if not found.
+    /// Finds an asset of `venue` by its name, in any case. A name that the venue does not hold
+    /// gives [`AssetId::UNKNOWN`].
     pub fn id(&self, venue: VenueId, name: &str) -> AssetId {
         self.entries
             .iter()

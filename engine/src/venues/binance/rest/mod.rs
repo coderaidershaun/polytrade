@@ -20,7 +20,8 @@ use crate::venues::edge::http::{self, Deadlines, HttpClient, TransportError};
 
 use weight::{OrderCountBudget, WeightBudget, weight_budget};
 
-/// Re-exported for the adapters. The config owns the choice of deployment.
+/// Re-exported so that the callers of the REST client name it here. The config owns the choice of
+/// deployment.
 pub use crate::runtime::config::BinanceEnv;
 
 pub use payload::{

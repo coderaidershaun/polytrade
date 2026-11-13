@@ -22,8 +22,8 @@ pub use crate::hot::exec::{
     Balance, DesiredQuote, Fill, MAX_QUOTE_LEVELS, OrderReject, OrderUpdate, OrderView, QuoteLevel,
     TickGrid,
 };
-/// The strategy-facing DOM quote type; re-exported so a strategy names it through this seam rather
-/// than reaching into `msg::ui`.
+/// The quote type of the depth-of-market view. It is re-exported here, so that a strategy does not
+/// reach into `msg::ui` for it.
 pub use crate::msg::ui::DomQuote;
 
 /// Types a strategy must name to work this seam — a callback argument, a registration slot, a

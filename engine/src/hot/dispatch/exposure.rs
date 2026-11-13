@@ -23,8 +23,9 @@ pub(super) fn moves_position(message: &InboundMessage) -> bool {
     )
 }
 
-/// Boot state as publishable snapshot (same rows as publisher); mismatched seed -> spurious first
-/// write. It has room for each instrument, so a publish fills it in place.
+/// The restored position as a snapshot with the rows that the publisher writes. A seed with other
+/// rows would make the first publish write a change that never happened. It has room for each
+/// instrument, so a publish fills it in place.
 pub(super) fn restored_snapshot(
     instruments: usize,
     restored: &[InstrumentExposure],
