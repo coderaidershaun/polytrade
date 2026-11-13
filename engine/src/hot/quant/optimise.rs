@@ -141,12 +141,7 @@ impl<const N: usize> NelderMead<N> {
             simplex[worst] = reflected;
             values[worst] = reflected_value;
         } else if reflected_value < values[0] {
-            let mut expanded = centroid;
-            for dimension in 0..N {
-                expanded[dimension] +=
-                    Self::EXPANSION * (reflected[dimension] - centroid[dimension]);
-            }
-            self.clamp(&mut expanded);
+            let expanded = self.toward(&centroid, &reflected, Self::EXPANSION);
             let expanded_value = score(&expanded);
             if expanded_value < reflected_value {
                 simplex[worst] = expanded;
@@ -156,12 +151,7 @@ impl<const N: usize> NelderMead<N> {
                 values[worst] = reflected_value;
             }
         } else if reflected_value < values[worst] {
-            let mut outside = centroid;
-            for dimension in 0..N {
-                outside[dimension] +=
-                    Self::CONTRACTION * (reflected[dimension] - centroid[dimension]);
-            }
-            self.clamp(&mut outside);
+            let outside = self.toward(&centroid, &reflected, Self::CONTRACTION);
             let outside_value = score(&outside);
             if outside_value <= reflected_value {
                 simplex[worst] = outside;
@@ -170,12 +160,7 @@ impl<const N: usize> NelderMead<N> {
                 self.shrink(simplex, values, score);
             }
         } else {
-            let mut inside = centroid;
-            for dimension in 0..N {
-                inside[dimension] +=
-                    Self::CONTRACTION * (simplex[worst][dimension] - centroid[dimension]);
-            }
-            self.clamp(&mut inside);
+            let inside = self.toward(&centroid, &simplex[worst], Self::CONTRACTION);
             let inside_value = score(&inside);
             if inside_value < values[worst] {
                 simplex[worst] = inside;
@@ -194,12 +179,19 @@ impl<const N: usize> NelderMead<N> {
     ) {
         let best = simplex[0];
         for vertex in 1..SIMPLEX {
-            for (value, base) in simplex[vertex].iter_mut().zip(best) {
-                *value = base + Self::SHRINK * (*value - base);
-            }
-            self.clamp(&mut simplex[vertex]);
+            simplex[vertex] = self.toward(&best, &simplex[vertex], Self::SHRINK);
             values[vertex] = score(&simplex[vertex]);
         }
+    }
+
+    /// The point `from + coefficient * (to - from)`, clamped into the bounds.
+    fn toward(&self, from: &[f64; N], to: &[f64; N], coefficient: f64) -> [f64; N] {
+        let mut point = *from;
+        for dimension in 0..N {
+            point[dimension] += coefficient * (to[dimension] - from[dimension]);
+        }
+        self.clamp(&mut point);
+        point
     }
 
     fn clamp(&self, point: &mut [f64; N]) {
