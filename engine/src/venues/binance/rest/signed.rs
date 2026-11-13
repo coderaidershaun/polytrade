@@ -12,13 +12,13 @@ use crate::venues::binance::exec::{
     ClockOffset, ORDER_REQUEST_TIMEOUT, RecvWindow, RequestParams, RequestSigner,
 };
 use crate::venues::edge::backoff::BackoffCaps;
-use crate::venues::edge::http::Deadlines;
+use crate::venues::edge::http::{Deadlines, TransportError};
 use crate::venues::edge::rest_quiet::SharedRestQuiet;
 use crate::warn;
 
 use super::{
-    AccountInfo, AccountTrade, BinanceEnv, FailureVerdict, Fetched, OrderRecord, Prepared,
-    RestClient, RestError, RestRequest, decode,
+    AccountInfo, AccountTrade, BinanceEnv, FailureVerdict, Fetched, HttpMethod, OrderRecord,
+    Prepared, RestClient, RestError, RestRequest, decode,
 };
 
 // The venue's code for a stale timestamp. Each retry resyncs the clock at most once, because more
@@ -234,7 +234,19 @@ impl SignedRestClient {
                 return outcome;
             };
             attempt += 1;
-            if failure.verdict() != FailureVerdict::Retry || attempt >= self.config.max_attempts {
+            // A request that acts on an order may have run at the venue when its answer was lost,
+            // so it is never sent again: only a read is safe to repeat. The caller reads it back.
+            let may_have_run = !matches!(plan.method, HttpMethod::Get)
+                && matches!(
+                    failure,
+                    RestError::Transport(
+                        TransportError::Request { .. } | TransportError::Timeout { .. }
+                    )
+                );
+            if may_have_run
+                || failure.verdict() != FailureVerdict::Retry
+                || attempt >= self.config.max_attempts
+            {
                 return Err(failure);
             }
             self.wait_before_retry(&failure, plan.endpoint, attempt)
