@@ -30,8 +30,8 @@ use crate::venues::edge::{
     RECONCILE_INTERVAL,
 };
 use crate::venues::exec::{
-    EngineIdentity, ExecCore, ExecEffect, ExecSession, ExecStop, Outgoing, SessionOutcome,
-    SessionSetup,
+    EngineIdentity, ExecCore, ExecEffect, ExecSession, ExecStop, Outgoing, RequestId,
+    SessionOutcome, SessionSetup,
 };
 use crate::{info, warn};
 
@@ -201,6 +201,7 @@ impl Actor {
             actor: self,
             writer,
             batch: Vec::new(),
+            fed: Vec::new(),
         };
         sender.drain(&mut transport).await
     }
@@ -208,12 +209,15 @@ impl Actor {
 
 /// How the shared sender reaches this venue. The core decides each command as it is handed over,
 /// and the requests of one wake are fed to the socket and flushed once, because the venue has no
-/// batch endpoint. A request that then fails to encode was counted as fed: the venue answers it as
-/// not sent and logs an error, and its wire sample is wrong.
+/// batch endpoint. A request that is fed enters the in-flight table, and one that fails to encode
+/// is answered as not sent instead, so after the flush that table tells which commands reached the
+/// wire.
 struct SocketTransport<'a> {
     actor: &'a mut Actor,
     writer: &'a mut Writer,
     batch: Vec<Outgoing>,
+    /// The requests of each command handed over as fed, in the order it was handed over.
+    fed: Vec<Vec<RequestId>>,
 }
 
 impl CommandTransport for SocketTransport<'_> {
@@ -223,10 +227,18 @@ impl CommandTransport for SocketTransport<'_> {
             command,
             &mut Outgoing::sink(&mut self.batch, command.recon_seq()),
         );
-        let is_sent = self.batch[decided..]
+        let requests: Vec<RequestId> = self.batch[decided..]
             .iter()
-            .any(|outgoing| matches!(outgoing.effect, ExecEffect::Send { .. }));
-        Ok(if is_sent { Handover::Fed } else { Handover::NotSent })
+            .filter_map(|outgoing| match outgoing.effect {
+                ExecEffect::Send { request_id, .. } => Some(request_id),
+                _ => None,
+            })
+            .collect();
+        if requests.is_empty() {
+            return Ok(Handover::NotSent);
+        }
+        self.fed.push(requests);
+        Ok(Handover::Fed)
     }
 
     async fn flush(&mut self) -> Result<(), SessionOutcome> {
@@ -235,6 +247,13 @@ impl CommandTransport for SocketTransport<'_> {
             Some(ended) => Err(ended),
             None => Ok(()),
         }
+    }
+
+    fn has_reached_wire(&self, fed: usize) -> bool {
+        let inflight = &self.actor.session.inflight;
+        self.fed
+            .get(fed)
+            .is_some_and(|requests| requests.iter().any(|&request| inflight.holds(request)))
     }
 }
 

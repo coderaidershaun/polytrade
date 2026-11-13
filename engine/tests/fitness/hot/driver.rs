@@ -592,8 +592,10 @@ fn tape(shipped: Shipped) -> Vec<InboundMessage> {
     }
 }
 
-/// The engine of `shipped`, armed with a command lane, and the readers of every lane it writes.
-fn armed_engine(shipped: Shipped, rows: &[InstrumentRow], log_lane: usize) -> (HotEngine, Lanes) {
+/// The engine of `shipped`, armed with a command lane whose bank stamps with `stamper`, and the
+/// readers of every lane it writes.
+fn armed_engine(shipped: Shipped, log_lane: usize, stamper: Stamper) -> (HotEngine, Lanes) {
+    let rows = rows(shipped);
     let (persistence, persist) = persist_ring_for(OUTPUT_RING, all_tables());
     let (strategy_log_sink, strategy_log) = strategy_log_ring(log_lane);
     let strategy_log_drops = strategy_log_sink.drops_handle();
@@ -607,7 +609,7 @@ fn armed_engine(shipped: Shipped, rows: &[InstrumentRow], log_lane: usize) -> (H
         ui_book_sink,
         ui_event_sink,
         exec: Some(ExecWiring {
-            sink: ExecSink::new(commands_producer, Stamper::Off),
+            sink: ExecSink::new(commands_producer, stamper),
             settings: exec_settings(shipped),
             run_nonce: 0,
         }),
@@ -615,7 +617,7 @@ fn armed_engine(shipped: Shipped, rows: &[InstrumentRow], log_lane: usize) -> (H
             restored: &[],
             sink: exposure_sink,
         },
-        ..detached_setup(rows, strategy(shipped))
+        ..detached_setup(&rows, strategy(shipped))
     });
     let lanes = Lanes {
         persist,
@@ -663,8 +665,11 @@ fn drive_on_this_thread(shipped: Shipped, observation: Observation) -> (Outputs,
     const INTERVAL_US: i64 = 60_000_000;
     let mut hot_log = open_hot_lane(observation.log_lane);
     let mut text_log = open_text_lane(observation.log_lane);
-    let rows = rows(shipped);
-    let (engine, mut lanes) = armed_engine(shipped, &rows, observation.log_lane);
+    let stamper = match observation.stage_ring {
+        Some(_) => Stamper::Counter(quanta::Clock::new()),
+        None => Stamper::Off,
+    };
+    let (engine, mut lanes) = armed_engine(shipped, observation.log_lane, stamper.clone());
     let (samples, mut metrics) = match observation.stage_ring {
         Some(capacity) => {
             let Harness {
@@ -674,7 +679,7 @@ fn drive_on_this_thread(shipped: Shipped, observation: Observation) -> (Outputs,
                 stages, counters, ..
             } = samples;
             let samples = DriverSamples {
-                stamper: Stamper::Counter(quanta::Clock::new()),
+                stamper,
                 stages,
                 counters,
             };
@@ -816,7 +821,9 @@ fn backlog_counts_each_queue_and_not_the_popped_message() {
 }
 
 /// FITNESS: measurement on and off fold the same messages into the same outputs. The first run
-/// reads a real counter into a stage ring too small for its samples, the second reads none.
+/// reads a real counter in the driver and in the command bank, as an engine start wires them, into
+/// a stage ring too small for its samples. The second reads none. Only the tick of each command is
+/// left out of the comparison.
 #[test]
 fn measurement_on_and_off_give_same_state_and_orders() {
     let measured = Observation {
@@ -900,8 +907,8 @@ fn drive_with_budget_on_this_thread(shipped: Shipped, budget: LatencyBudgets) ->
     const INTERVAL_US: i64 = 60_000_000;
     let mut hot_log = open_hot_lane(OUTPUT_RING);
     let mut text_log = open_text_lane(OUTPUT_RING);
-    let rows = rows(shipped);
-    let (engine, mut lanes) = armed_engine(shipped, &rows, OUTPUT_RING);
+    let stamper = Stamper::Counter(quanta::Clock::new());
+    let (engine, mut lanes) = armed_engine(shipped, OUTPUT_RING, stamper.clone());
     let Harness {
         mut metrics,
         samples,
@@ -911,7 +918,7 @@ fn drive_with_budget_on_this_thread(shipped: Shipped, budget: LatencyBudgets) ->
         stages, counters, ..
     } = samples;
     let samples = DriverSamples {
-        stamper: Stamper::Counter(quanta::Clock::new()),
+        stamper,
         stages,
         counters,
     };

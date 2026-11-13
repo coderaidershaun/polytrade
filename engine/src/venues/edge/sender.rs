@@ -74,6 +74,12 @@ pub trait CommandTransport: Send {
     /// # Errors
     /// The [`SessionOutcome`] of a connection that ended during the flush.
     fn flush(&mut self) -> impl Future<Output = Result<(), SessionOutcome>> + Send;
+
+    /// Asked after a flush that went through, for each command that this wake handed over as
+    /// [`Handover::Fed`], numbered from zero in the order they were handed over: whether a request
+    /// of that command reached the wire. One that failed to encode was answered as not sent, and it
+    /// gets no wire sample.
+    fn has_reached_wire(&self, fed: usize) -> bool;
 }
 
 pub struct SenderSetup<K> {
@@ -156,9 +162,11 @@ impl<K: TickSource> Sender<K> {
         }
         let wire_tick = self.stamper.stamp();
         let mut fed = std::mem::take(&mut self.fed);
-        for command in fed.drain(..) {
-            let sample = self.sample(&command.stamped, command.pop_tick, wire_tick);
-            self.wires.push(sample);
+        for (index, command) in fed.drain(..).enumerate() {
+            if transport.has_reached_wire(index) {
+                let sample = self.sample(&command.stamped, command.pop_tick, wire_tick);
+                self.wires.push(sample);
+            }
         }
         self.fed = fed;
         None
