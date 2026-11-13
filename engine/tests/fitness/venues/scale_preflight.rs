@@ -2,7 +2,7 @@
 //! and a missing or bad bound refuses, so a renamed field never lets a range pass.
 
 use engine::hot::exec::{MAX_ORDER_BUDGET_WINDOWS, OrderBudgetWindow};
-use engine::msg::ids::{AssetId, Notional, Price, Qty};
+use engine::msg::ids::{AssetId, Notional, Price, Qty, VenueId};
 use engine::msg::time::{DurationUs, VenueTs};
 use engine::runtime::config::{BinanceEnv, BinanceMarket, VenueMarket};
 use engine::runtime::registry::{InstrumentRow, OrderRateLimit, RateInterval, Registry};
@@ -713,8 +713,8 @@ fn asset_dictionary_interns_every_leg_and_is_stable_across_builds() {
 
     // How a venue cases its asset codes is its choice; an asset NO instrument names must resolve to
     // the sentinel, so its balance is counted and ignored rather than landing on a real one.
-    assert_eq!(first.assets().id("usdt"), row.quote_asset);
-    assert_eq!(first.assets().id("BNB"), AssetId::UNKNOWN);
+    assert_eq!(first.assets().id(VenueId(0), "usdt"), row.quote_asset);
+    assert_eq!(first.assets().id(VenueId(0), "BNB"), AssetId::UNKNOWN);
     assert_eq!(first.assets().name(AssetId::UNKNOWN), None);
 
     // Four polymarket slots are four DIFFERENT conditional tokens over one shared collateral, so

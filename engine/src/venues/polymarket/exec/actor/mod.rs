@@ -20,7 +20,7 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::msg::exec::{AssetBalance, CancelReason, ExecCommand};
 use crate::msg::ids::{AssetId, InstrumentId};
 use crate::msg::time::{DurationUs, LocalTs};
-use crate::runtime::registry::InstrumentRow;
+use crate::runtime::registry::{InstrumentRow, venue_of_rows};
 use crate::venues::edge::sender::{CommandTransport, Handover};
 use crate::venues::edge::socket::{Reader, Writer};
 use crate::venues::edge::{
@@ -182,7 +182,7 @@ impl Actor {
                 venue: "polymarket",
                 core: ExecCore::with_limits(edge.max_orders_per_side, mirror_capacity),
                 instruments: instruments.iter().map(|row| row.instrument_id).collect(),
-                events: EventFunnel::new(producer, edge.clock.clone()),
+                events: EventFunnel::new(producer, edge.clock.clone(), venue_of_rows(&instruments)),
                 inflight_timeout: edge.inflight_timeout,
             }),
             tokens: TokenTable::with_retired_capacity(RETIRED_BINDINGS),

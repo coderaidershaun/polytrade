@@ -1,7 +1,7 @@
 //! `SourceSpec` -> instrument rows: one venue's config block becomes the dense, frozen rows every
 //! later stage addresses by [`InstrumentId`]. Row order fixes those ids, so it is replay-visible.
 
-use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Notional};
+use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Notional, VenueId};
 use crate::runtime::config::{
     BinanceEnv, ConfigError, Instruments, KlineInterval, SourceSpec, Subscriptions, TrackerSpec,
     VenueMarket, validated_mantissa,
@@ -37,6 +37,7 @@ pub(super) fn check_strategy_instruments(
 
 pub(super) fn build_instrument_rows(
     source: &SourceSpec,
+    venue: VenueId,
 ) -> Result<(Vec<InstrumentRow>, AssetDictionary), ConfigError> {
     let mut instruments = Vec::new();
     match source {
@@ -109,6 +110,9 @@ pub(super) fn build_instrument_rows(
             }
         }
     }
+    for row in &mut instruments {
+        row.venue = venue;
+    }
     let assets = intern_assets(&mut instruments);
     Ok((instruments, assets))
 }
@@ -144,6 +148,7 @@ impl SourceRowSpec {
         let instrument_id = issue_instrument_id(instruments);
         instruments.push(InstrumentRow {
             instrument_id,
+            venue: VenueId::default(),
             market: self.market,
             venue_symbol: names.venue_symbol,
             display: names.display,

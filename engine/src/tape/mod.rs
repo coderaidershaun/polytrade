@@ -32,8 +32,8 @@ pub struct RunMeta {
     pub engine_version: Box<str>,
     pub feature_names: Vec<Box<str>>,
     pub instrument_symbols: Vec<Box<str>>,
-    // Wrong reconciliation if not decoded.
-    pub asset_symbols: Vec<Box<str>>,
+    // Wrong reconciliation if not decoded. The venue name and the asset name of each asset id.
+    pub asset_symbols: Vec<(Box<str>, Box<str>)>,
 }
 
 #[derive(thiserror::Error, Debug)]

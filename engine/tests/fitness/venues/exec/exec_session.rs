@@ -6,7 +6,7 @@ use engine::msg::exec::{
     VenueOrderStatus,
 };
 use engine::msg::failure::{FailureClass, Halt};
-use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side};
+use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, VenueId};
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::runtime::shutdown::FatalSignal;
 use engine::venues::exec::{
@@ -136,6 +136,7 @@ fn prior_run_order(client_id: u64) -> MirroredOrder {
 /// A venue report of a resting order the codec attributed to this run by its client id.
 fn resting_report(client_id: u64) -> ExecEvent {
     ExecEvent {
+        venue: VenueId(0),
         instrument: Some(INSTRUMENT),
         client_id: ClientOrderId(client_id),
         venue_order_id: None,

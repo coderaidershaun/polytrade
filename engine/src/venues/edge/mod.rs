@@ -46,7 +46,7 @@ use crate::venues::exec::{
 };
 use crate::{info, warn};
 
-pub(crate) use funnel::EventFunnel;
+pub(crate) use funnel::{EventFunnel, stamp_venue};
 
 // Checks the exit latches and deadlines often enough that a stop is acted on within milliseconds.
 pub(crate) const HOUSEKEEPING: Duration = Duration::from_millis(20);

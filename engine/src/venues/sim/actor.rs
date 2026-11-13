@@ -7,6 +7,7 @@ use tokio::runtime::Handle;
 
 use crate::hot::spawn::QueueProducer;
 use crate::msg::exec::{CancelReason, ExecLaneItem, StampedExecCommand};
+use crate::msg::ids::VenueId;
 use crate::msg::inbound::InboundMessage;
 use crate::msg::run_state::RunState;
 use crate::msg::time::{EngineClock, LocalTs};
@@ -14,6 +15,7 @@ use crate::runtime::registry::AssetDictionary;
 use crate::runtime::shutdown::{FatalReason, FatalSignal, RunStateCell};
 use crate::venues::IDLE_POLL;
 use crate::venues::binance::exec::{DecodeContext, SymbolTable};
+use crate::venues::edge::stamp_venue;
 use crate::venues::exec::{EdgeHandle, EngineIdentity, ExecStop};
 use crate::{error, info, warn};
 
@@ -35,6 +37,7 @@ pub(super) struct SimActor {
     pub(super) producer: QueueProducer,
     pub(super) engine_clock: EngineClock,
     pub(super) assets: AssetDictionary,
+    pub(super) venue: VenueId,
     pub(super) symbols: SymbolTable,
     pub(super) identity: EngineIdentity,
     pub(super) latency: LatencyBudget,
@@ -137,6 +140,7 @@ impl SimActor {
             driver,
             symbols,
             assets,
+            venue,
             identity,
             producer,
             engine_clock,
@@ -145,10 +149,12 @@ impl SimActor {
         let context = DecodeContext {
             symbols,
             assets,
+            venue: *venue,
             identity: *identity,
             received_ts_us,
         };
         for mut message in step(driver, context) {
+            stamp_venue(&mut message, *venue);
             message.header.queued_ts_us = engine_clock.now();
             producer.push(message);
         }

@@ -18,9 +18,9 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::msg::exec::{CancelReason, ExecCommand};
-use crate::msg::ids::{ClientOrderId, InstrumentId, TradeId, VenueOrderId};
+use crate::msg::ids::{ClientOrderId, InstrumentId, TradeId, VenueId, VenueOrderId};
 use crate::msg::time::{DurationUs, LocalTs};
-use crate::runtime::registry::AssetDictionary;
+use crate::runtime::registry::{AssetDictionary, venue_of_rows};
 use crate::venues::binance::rest::BinanceEnv;
 use crate::venues::binance::ws;
 use crate::venues::edge::sender::{CommandTransport, Handover};
@@ -78,6 +78,7 @@ struct Actor {
     session: ExecSession<EventFunnel>,
     symbols: SymbolTable,
     assets: AssetDictionary,
+    venue: VenueId,
     identity: EngineIdentity,
     env: BinanceEnv,
     control: EdgeControl,
@@ -144,10 +145,11 @@ impl Actor {
                 venue: "binance",
                 core: ExecCore::with_limits(edge.max_orders_per_side, mirror_capacity),
                 instruments: instruments.iter().map(|row| row.instrument_id).collect(),
-                events: EventFunnel::new(producer, edge.clock.clone()),
+                events: EventFunnel::new(producer, edge.clock.clone(), venue_of_rows(&instruments)),
                 inflight_timeout: edge.inflight_timeout,
             }),
             symbols,
+            venue: venue_of_rows(&instruments),
             assets,
             identity,
             env,
@@ -182,6 +184,7 @@ impl Actor {
         DecodeContext {
             symbols: &self.symbols,
             assets: &self.assets,
+            venue: self.venue,
             identity: self.identity,
             received_ts_us,
         }

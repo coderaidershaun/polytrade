@@ -1,8 +1,9 @@
-//! What a venue edge hands the hot thread goes through one funnel, which stamps each message as it
-//! is queued.
+//! What a venue edge hands the hot thread goes through one funnel, which stamps each message with
+//! its venue and the time it is queued.
 
 use crate::hot::spawn::QueueProducer;
 use crate::msg::exec::{AccountChunk, ExecEvent};
+use crate::msg::ids::VenueId;
 use crate::msg::inbound::{InboundMessage, MessageBody};
 use crate::msg::time::{EngineClock, LocalTs};
 use crate::venues::exec::EventSink;
@@ -12,11 +13,16 @@ use crate::venues::exec::EventSink;
 pub(crate) struct EventFunnel {
     producer: QueueProducer,
     clock: EngineClock,
+    venue: VenueId,
 }
 
 impl EventFunnel {
-    pub(crate) fn new(producer: QueueProducer, clock: EngineClock) -> Self {
-        Self { producer, clock }
+    pub(crate) fn new(producer: QueueProducer, clock: EngineClock, venue: VenueId) -> Self {
+        Self {
+            producer,
+            clock,
+            venue,
+        }
     }
 
     pub(crate) fn send_account(&mut self, received_ts_us: LocalTs, chunks: Vec<AccountChunk>) {
@@ -33,6 +39,7 @@ impl EventFunnel {
         reason = "the session chassis stamps queued time and paces reconnects by wall time"
     )]
     pub(crate) fn send(&mut self, mut message: InboundMessage) {
+        stamp_venue(&mut message, self.venue);
         message.header.queued_ts_us = self.clock.now();
         self.producer.push(message);
     }
@@ -44,5 +51,15 @@ impl EventSink for EventFunnel {
             received_ts_us,
             MessageBody::Exec(event),
         ));
+    }
+}
+
+/// The edge of a venue names it on each event and balance that it queues, so the fold reads the venue
+/// from the message, never from the queue that carried it.
+pub(crate) fn stamp_venue(message: &mut InboundMessage, venue: VenueId) {
+    match &mut message.body {
+        MessageBody::Exec(event) => event.venue = venue,
+        MessageBody::Account(chunk) => chunk.venue = venue,
+        _ => {}
     }
 }

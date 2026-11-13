@@ -234,7 +234,7 @@ fn run_meta(registry: &Registry) -> RunMeta {
             .iter()
             .map(|row| row.venue_symbol.clone())
             .collect(),
-        asset_symbols: registry.assets().names().to_vec(),
+        asset_symbols: registry.asset_symbols(),
     }
 }
 

@@ -27,6 +27,7 @@ use engine::link::{
 use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, VenueOrderStatus,
 };
+use engine::msg::ids::VenueId;
 use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
 };
@@ -140,6 +141,7 @@ fn poly_rows() -> Vec<InstrumentRow> {
         .enumerate()
         .map(|(index, symbol)| InstrumentRow {
             instrument_id: InstrumentId(index as u16),
+            venue: VenueId(0),
             market: VenueMarket::Polymarket(PolySeries::BtcUpDown5m),
             venue_symbol: (*symbol).into(),
             display: (*symbol).into(),

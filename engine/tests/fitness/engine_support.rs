@@ -21,6 +21,7 @@ use engine::msg::exec::{
     AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind, ExecLaneItem, Liquidity,
     Provenance, VenueOrderStatus,
 };
+use engine::msg::ids::VenueId;
 use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
 };
@@ -265,6 +266,7 @@ pub const TEST_MAX_EXPOSURE_QUOTE: i64 = 1_000_000 * FIXED_SCALE;
 pub fn instrument_row(id: u16, tracker: TrackerSpec, book_capacity: usize) -> InstrumentRow {
     InstrumentRow {
         instrument_id: InstrumentId(id),
+        venue: VenueId(0),
         market: VenueMarket::Binance(BinanceMarket::Perpetual),
         venue_symbol: "btcusdt".into(),
         display: "BTC/USDT perpetual".into(),
@@ -725,6 +727,7 @@ pub fn exec_event(
     when: i64,
 ) -> ExecEvent {
     ExecEvent {
+        venue: VenueId(0),
         instrument: Some(instrument),
         client_id,
         venue_order_id: None,

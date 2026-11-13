@@ -9,6 +9,7 @@ use engine::msg::exec::{
     AccountChunkKind, ExecEvent, ExecKind, Liquidity, OrderStyle, Provenance, RejectClass,
     VenueOrderStatus,
 };
+use engine::msg::ids::VenueId;
 use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
 };
@@ -741,7 +742,7 @@ fn account_and_edge_case_decodes() {
         assert_eq!(base_fee.commission, 6, "0.00000006 BTC at 1e-8");
         assert_eq!(
             base_fee.commission_asset,
-            venue.assets().id("BTC"),
+            venue.assets().id(VenueId(0), "BTC"),
             "a buy is charged in the asset received"
         );
         assert_ne!(base_fee.commission_asset, AssetId::UNKNOWN);
@@ -776,10 +777,10 @@ fn account_and_edge_case_decodes() {
         assert_eq!(chunks[0].active_balances().len(), 4);
 
         let balances = chunks[0].active_balances();
-        assert_eq!(balances[0].asset, venue.assets().id("BTC"));
+        assert_eq!(balances[0].asset, venue.assets().id(VenueId(0), "BTC"));
         assert_eq!(balances[0].free, 135_871);
         assert_eq!(balances[0].locked, 10_000);
-        assert_eq!(balances[1].asset, venue.assets().id("USDT"));
+        assert_eq!(balances[1].asset, venue.assets().id(VenueId(0), "USDT"));
         assert_eq!(balances[1].free, 17_114_535_000, "171.14535 USDT at 1e-8");
         assert_eq!(
             (balances[2].asset, balances[3].asset),

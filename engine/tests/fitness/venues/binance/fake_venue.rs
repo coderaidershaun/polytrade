@@ -1,6 +1,7 @@
 //! Deterministic Binance Spot scenarios over the production simulator.
 
 use engine::msg::exec::{ExecEvent, OrderStyle, VenueOrderStatus};
+use engine::msg::ids::VenueId;
 use engine::msg::ids::{AssetId, ClientOrderId, Notional, Price, Qty, Side, TradeId, VenueOrderId};
 use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::time::LocalTs;
@@ -157,6 +158,7 @@ impl FakeVenue {
         DecodeContext {
             symbols: &self.symbols,
             assets: self.registry.assets(),
+            venue: VenueId(0),
             identity: self.identity,
             received_ts_us: at,
         }

@@ -11,7 +11,7 @@ use crate::hot::digest::digest_fields;
 use crate::msg::failure::{FailureClass, Halt};
 use crate::msg::ids::{AssetId, InstrumentId, Qty};
 use crate::msg::time::LocalTs;
-use crate::runtime::config::{ExecutionMode, RunIdentity, VenueMarket};
+use crate::runtime::config::{ExecutionMode, RunIdentity};
 use crate::runtime::registry::Registry;
 use crate::warn;
 
@@ -281,7 +281,8 @@ pub fn load(
     let mut instruments = Vec::with_capacity(document.instruments.len());
     for entry in &document.instruments {
         let Some(row) = registry.instruments().iter().find(|row| {
-            venue_of(row.market) == entry.venue && row.venue_symbol.as_ref() == entry.symbol
+            registry.venue_name(row.venue) == entry.venue
+                && row.venue_symbol.as_ref() == entry.symbol
         }) else {
             if entry.is_zero() {
                 continue;
@@ -313,14 +314,6 @@ pub fn load(
         instruments,
         assets,
     })
-}
-
-/// The venue half of the key of a row: a symbol names an instrument only within its venue.
-pub(super) fn venue_of(market: VenueMarket) -> &'static str {
-    match market {
-        VenueMarket::Binance(_) => "binance",
-        VenueMarket::Polymarket(_) => "polymarket",
-    }
 }
 
 /// Fold cost basis into per-asset amounts: position = BASE amount, cash = signed QUOTE amount. Exact even with shared assets.

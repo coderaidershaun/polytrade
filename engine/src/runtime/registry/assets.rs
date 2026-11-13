@@ -1,55 +1,64 @@
-//! Asset dictionary: base + quote across instruments, interned to dense [`AssetId`] at build.
+//! Asset dictionary: base + quote across instruments, interned to dense [`AssetId`] at build. A venue
+//! names its own assets, so USDT at two venues is two assets with two balance rows.
 
-use crate::msg::ids::AssetId;
+use crate::msg::ids::{AssetId, VenueId};
 
 use super::InstrumentRow;
 
 /// Handed to adapter at spawn: balances and commissions as STRINGS; inward compares indices.
 #[derive(Debug, Clone, Default)]
 pub struct AssetDictionary {
-    names: Vec<Box<str>>,
+    entries: Vec<(VenueId, Box<str>)>,
 }
 
 impl AssetDictionary {
-    /// Case-insensitive lookup; [`AssetId::UNKNOWN`] if not found.
-    pub fn id(&self, name: &str) -> AssetId {
-        self.names
+    /// Case-insensitive lookup among the assets of `venue`; [`AssetId::UNKNOWN`] if not found.
+    pub fn id(&self, venue: VenueId, name: &str) -> AssetId {
+        self.entries
             .iter()
-            .position(|known| known.eq_ignore_ascii_case(name))
+            .position(|(known_venue, known)| {
+                *known_venue == venue && known.eq_ignore_ascii_case(name)
+            })
             .map_or(AssetId::UNKNOWN, |index| AssetId(index as u16))
     }
 
     pub fn name(&self, id: AssetId) -> Option<&str> {
-        self.names.get(usize::from(id.0)).map(Box::as_ref)
+        self.entries
+            .get(usize::from(id.0))
+            .map(|(_, name)| name.as_ref())
+    }
+
+    pub fn venue(&self, id: AssetId) -> Option<VenueId> {
+        self.entries.get(usize::from(id.0)).map(|(venue, _)| *venue)
     }
 
     /// Dictionary in id order; persisted in footer for deserialization.
-    pub fn names(&self) -> &[Box<str>] {
-        &self.names
+    pub fn entries(&self) -> &[(VenueId, Box<str>)] {
+        &self.entries
     }
 
     pub fn len(&self) -> usize {
-        self.names.len()
+        self.entries.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.names.is_empty()
+        self.entries.is_empty()
     }
 
-    fn intern(&mut self, name: &str) -> AssetId {
-        let known = self.id(name);
+    fn intern(&mut self, venue: VenueId, name: &str) -> AssetId {
+        let known = self.id(venue, name);
         if known != AssetId::UNKNOWN {
             return known;
         }
         // A handful of assets per source (one per leg plus the shared quote) -> cannot hit the
         // sentinel unless interning is buggy.
         debug_assert!(
-            self.names.len() < usize::from(AssetId::UNKNOWN.0),
+            self.entries.len() < usize::from(AssetId::UNKNOWN.0),
             "{} assets interned, the id space stops below the UNKNOWN sentinel",
-            self.names.len() + 1
+            self.entries.len() + 1
         );
-        self.names.push(name.into());
-        AssetId((self.names.len() - 1) as u16)
+        self.entries.push((venue, name.into()));
+        AssetId((self.entries.len() - 1) as u16)
     }
 }
 
@@ -57,8 +66,8 @@ impl AssetDictionary {
 pub(super) fn intern_assets(instruments: &mut [InstrumentRow]) -> AssetDictionary {
     let mut assets = AssetDictionary::default();
     for row in instruments {
-        row.base_asset = assets.intern(&row.base);
-        row.quote_asset = assets.intern(&row.quote);
+        row.base_asset = assets.intern(row.venue, &row.base);
+        row.quote_asset = assets.intern(row.venue, &row.quote);
     }
     assets
 }

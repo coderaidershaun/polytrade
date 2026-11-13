@@ -84,6 +84,6 @@ fn run_meta<P>(setup: &PersistBringUpSetup<'_, P>) -> RunMeta {
             .iter()
             .map(|row| row.venue_symbol.clone())
             .collect(),
-        asset_symbols: setup.registry.assets().names().to_vec(),
+        asset_symbols: setup.registry.asset_symbols(),
     }
 }

@@ -18,9 +18,7 @@ use crate::runtime::shutdown::WriterThread;
 use crate::{error, info};
 
 use super::file::{self, AssetEntry, ExposureDocument, FORMAT_VERSION, InstrumentEntry};
-use super::{
-    ExposureError, ExposureSnapshot, ExposureState, add_amount, asset_amounts, file_path, venue_of,
-};
+use super::{ExposureError, ExposureSnapshot, ExposureState, add_amount, asset_amounts, file_path};
 
 /// Ring capacity: absorb burst between polls (absolute state, sink keeps newest).
 const RING_CAPACITY: usize = 16;
@@ -94,13 +92,18 @@ impl ExposureWriterConfig {
                 .instruments()
                 .iter()
                 .map(|row| InstrumentFacts {
-                    venue: venue_of(row.market),
+                    venue: registry.venue_name(row.venue),
                     symbol: row.venue_symbol.clone(),
                     base_asset: row.base_asset,
                     quote_asset: row.quote_asset,
                 })
                 .collect(),
-            asset_names: registry.assets().names().to_vec(),
+            asset_names: registry
+                .assets()
+                .entries()
+                .iter()
+                .map(|(_, name)| name.clone())
+                .collect(),
             status,
         }
     }

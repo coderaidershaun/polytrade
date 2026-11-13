@@ -2,7 +2,7 @@
 //! order id the venue shows for it.
 
 use engine::msg::exec::{CancelReason, ExecKind, Provenance};
-use engine::msg::ids::InstrumentId;
+use engine::msg::ids::{InstrumentId, VenueId};
 use engine::msg::time::LocalTs;
 use engine::runtime::config::RunIdentity;
 use engine::runtime::registry::AssetDictionary;
@@ -92,6 +92,7 @@ proptest! {
         let context = DecodeContext {
             symbols: &symbols,
             assets: &assets,
+            venue: VenueId(0),
             identity,
             received_ts_us: RECEIVED,
         };

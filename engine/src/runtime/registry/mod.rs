@@ -6,7 +6,7 @@ mod grouping;
 mod rows;
 mod validate;
 
-use crate::msg::ids::{AssetId, InstrumentId, Notional, Price, Qty, QueueId};
+use crate::msg::ids::{AssetId, InstrumentId, Notional, Price, Qty, QueueId, VenueId};
 use crate::runtime::config::{
     BinanceEnv, Config, ConfigError, KlineInterval, Subscriptions, TrackerSpec, VenueMarket,
 };
@@ -20,6 +20,7 @@ use rows::{binance_env, build_instrument_rows, check_strategy_instruments};
 #[derive(Debug, Clone)]
 pub struct InstrumentRow {
     pub instrument_id: InstrumentId,
+    pub venue: VenueId,
     pub market: VenueMarket,
     pub venue_symbol: Box<str>,
     pub display: Box<str>,
@@ -47,6 +48,11 @@ pub struct InstrumentRow {
     /// time.
     pub max_exposure_quote: Notional,
     pub tracker: TrackerSpec,
+}
+
+/// Each edge serves the rows of one source, so the venue of its first row is the venue of each.
+pub(crate) fn venue_of_rows(rows: &[InstrumentRow]) -> VenueId {
+    rows.first().map_or(VenueId::default(), |row| row.venue)
 }
 
 /// Binance scale-preflight limits, as `exchangeInfo` publishes them.
@@ -112,6 +118,8 @@ impl RateInterval {
 #[derive(Debug, Clone)]
 pub struct Registry {
     instruments: Vec<InstrumentRow>,
+    /// The name of each venue, by its [`VenueId`]: the one place that the registry reads it from.
+    venue_names: Vec<&'static str>,
     assets: AssetDictionary,
     binance_env: Option<BinanceEnv>,
     /// Empty until the Binance scale preflight runs.
@@ -134,7 +142,8 @@ impl Registry {
     /// A strategy instrument that names no row, a tracker block the source cannot serve, or more
     /// input queues than one hot thread reads.
     pub fn build<P>(config: &Config<P>) -> Result<Registry, ConfigError> {
-        let (instruments, assets) = build_instrument_rows(&config.source)?;
+        let venue = VenueId::default();
+        let (instruments, assets) = build_instrument_rows(&config.source, venue)?;
         check_strategy_instruments(&config.strategy.instruments, &instruments)?;
 
         let producer_groups = group_producers(&instruments)?;
@@ -158,6 +167,7 @@ impl Registry {
 
         Ok(Registry {
             instruments,
+            venue_names: vec![config.source.venue()],
             assets,
             binance_env: binance_env(&config.source),
             order_rate_limits: Vec::new(),
@@ -168,6 +178,22 @@ impl Registry {
             writer_status_queue_id,
             input_queue_count,
         })
+    }
+
+    /// # Panics
+    /// Out-of-range id. Ids are dense and registry-issued, so this can only mean a bug.
+    pub fn venue_name(&self, venue: VenueId) -> &'static str {
+        self.venue_names[usize::from(venue.0)]
+    }
+
+    /// The asset dictionary as the tape footer holds it: the venue name and the asset name of each
+    /// asset id, in id order.
+    pub fn asset_symbols(&self) -> Vec<(Box<str>, Box<str>)> {
+        self.assets
+            .entries()
+            .iter()
+            .map(|(venue, name)| (self.venue_name(*venue).into(), name.clone()))
+            .collect()
     }
 
     /// # Panics

@@ -6,7 +6,7 @@ use crate::msg::ids::{InstrumentId, Notional, Qty};
 use crate::msg::run_state::RunState;
 use crate::msg::time::DurationUs;
 use crate::runtime::config::{SimConfig, validated_mantissa};
-use crate::runtime::registry::InstrumentRow;
+use crate::runtime::registry::{InstrumentRow, venue_of_rows};
 use crate::venues::binance::exec::SymbolTable;
 use crate::venues::edge::{EdgeCheck, EdgeInputs, VenueEdge};
 use crate::venues::exec::{ExecCore, ExecStop};
@@ -172,6 +172,7 @@ pub(crate) fn bring_up(plan: SimPlan, inputs: EdgeInputs<'_>) -> VenueEdge {
         producer,
         engine_clock: settings.clock,
         assets: registry.assets().clone(),
+        venue: venue_of_rows(registry.instruments()),
         symbols: SymbolTable::from_registry(registry),
         identity,
         latency,
