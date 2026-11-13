@@ -169,6 +169,9 @@ variant there, and a dependency-allowlist amendment if signing needs a new crate
 1. `mod.rs` — credential env-var names, `capabilities()`, `lease_namespace(...)`.
 2. `handle.rs` — the setup and `bring_up(...) -> VenueEdge`, which builds the setup from
    the runtime's `EdgeInputs` and defers the `EdgeHandle::spawn` until the hot thread runs.
+   The bring-up cannot refuse: each check of the config and the registry that it needs runs
+   in preflight first, through `ExecutionVenue::check` with an `EdgeCheck`, before the lease
+   spends a run nonce. The checked venue carries what the check computed into the build.
 3. `actor/` — the `EdgeDriver` impl. The actor composes `ExecSession` and `EdgeControl` and
    writes only its transport, its resync read set, its answer handlers and the order of its
    housekeeping steps. Same filename for the same concept as the existing adapters.
@@ -182,14 +185,18 @@ variant there, and a dependency-allowlist amendment if signing needs a new crate
    SDK, never from our implementation — crypto has no local failure mode.
 6. `probe` + preflight — a read-only account report proving credentials, permissions,
    clocks and venue facts before any order-mutating code exists, and a startup gate that
-   refuses a run the probe would have refused.
+   refuses a run the probe would have refused. The gate is reached only through the venue
+   port (`VenuePort::probe` in `src/venues/port.rs`): the network port runs it, with its read of
+   `.env`, and a test gives a stand-in port that needs no key.
 7. `fixtures/<venue>/exec/` — committed real venue payloads with a non-Rust generator, the
    independent statement of the venue's wire.
 8. `tests/fitness/venues/<venue>/<venue>_exec_codec.rs` — goldens over those fixtures: the full
    kind/status table, the reject table plus an unknown-input-halts proptest, id round-trip
    or correlation-policy pins, exactly-one-snapshot-end, byte-exact signed bodies.
-9. Registry stamps: scales, order caps, amend budget, order-rate buckets, written by the
-   venue's startup scale preflight in `src/venues/<venue>/preflight.rs`.
+9. Registry stamps: scales, order caps, amend budget, order-rate buckets. The venue's
+   startup scale preflight in `src/venues/<venue>/preflight.rs` reads and checks them and
+   returns them in `VenueScales`, through the venue port (`VenuePort::read_scales`); preflight
+   stamps them onto the registry, so a stand-in port can give them in a test.
 
 The simulator is Binance-shaped and stays that way; a new venue's determinism evidence is
 its codec goldens plus a test double driven through its real codec, delivery-permutation

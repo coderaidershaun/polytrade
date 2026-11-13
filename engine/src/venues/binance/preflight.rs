@@ -5,12 +5,14 @@
 
 use crate::hot::exec::{MAX_ORDER_BUDGET_WINDOWS, OrderBudget, OrderBudgetWindow};
 use crate::info;
-use crate::msg::ids::{DecimalError, InstrumentId, Notional, Price, Qty};
+use crate::msg::ids::{DecimalError, Notional, Price, Qty};
 use crate::msg::time::DurationUs;
 use crate::runtime::config::{BinanceMarket, VenueMarket};
 use crate::runtime::registry::{
     BinanceLimits, InstrumentRow, OrderRateLimit, RateInterval, Registry,
 };
+
+use crate::venues::port::VenueScales;
 
 use super::rest::{BinanceEnv, ExchangeInfo, RestClient, RestError, SymbolFilter};
 
@@ -92,15 +94,15 @@ pub enum ScaleError {
 }
 
 pub(crate) async fn preflight_scales(
-    registry: &mut Registry,
+    registry: &Registry,
     env: BinanceEnv,
-) -> Result<(), ScaleError> {
+) -> Result<VenueScales, ScaleError> {
+    let mut found = VenueScales::default();
     for binance_market in [BinanceMarket::Spot, BinanceMarket::Perpetual] {
-        let members: Vec<InstrumentId> = registry
+        let members: Vec<&InstrumentRow> = registry
             .instruments()
             .iter()
             .filter(|row| row.market == VenueMarket::Binance(binance_market))
-            .map(|row| row.instrument_id)
             .collect();
         if members.is_empty() {
             continue;
@@ -110,23 +112,22 @@ pub(crate) async fn preflight_scales(
                 market: binance_market.as_str(),
                 source,
             })?;
-        for id in members {
-            let row = registry.instrument(id);
+        for row in members {
             let info = client
                 .exchange_info(&row.venue_symbol)
                 .await
                 .map_err(|source| exchange_info_failure(row, binance_market, source))?;
-            let scales = check_symbol_scale(row, &info)?;
-            registry.set_scales(id, scales.tick_size, scales.step_size);
-            registry.set_binance_limits(id, scales.limits);
-            registry.set_order_rate_limits(check_order_rate_limits(binance_market, &info)?);
+            found
+                .binance
+                .push((row.instrument_id, check_symbol_scale(row, &info)?));
+            found.order_rate_limits = check_order_rate_limits(binance_market, &info)?;
         }
     }
     info!(
         "scale preflight ok on binance {} — every instrument fits the i64 1e-8 range",
         env.as_str()
     );
-    Ok(())
+    Ok(found)
 }
 
 /// The trading grid and order limits the scale preflight parsed from one instrument's

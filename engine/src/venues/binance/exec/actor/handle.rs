@@ -11,7 +11,7 @@ use crate::venues::binance::rest::{BinanceEnv, SignedRestClient};
 use crate::venues::edge::{EdgeInputs, EdgeLane, EdgeSettings, VenueEdge, run_edge};
 use crate::venues::exec::{EdgeHandle, EngineIdentity};
 
-use super::super::{ExecutionPreflight, RecvWindow, SignError};
+use super::super::{ExecutionPreflight, RecvWindow};
 use super::Actor;
 
 pub(super) struct BinanceExecAdapterSetup {
@@ -31,13 +31,13 @@ pub(super) struct BinanceExecAdapterSetup {
     pub(super) edge: EdgeSettings,
 }
 
-/// # Errors
-/// [`SignError`] when `execution.recv_window_ms` is outside what the venue signs inside.
+/// `recv_window` is the one that preflight checked against what the venue signs inside.
 pub(crate) fn bring_up(
     gate: ExecutionPreflight,
     env: BinanceEnv,
+    recv_window: RecvWindow,
     inputs: EdgeInputs<'_>,
-) -> Result<VenueEdge, SignError> {
+) -> VenueEdge {
     let EdgeInputs {
         registry,
         execution,
@@ -56,15 +56,15 @@ pub(crate) fn bring_up(
         producer,
         env,
         identity,
-        recv_window: RecvWindow::from_millis(execution.recv_window_ms)?,
+        recv_window,
         loud_clock_skew: DurationUs::from_millis(execution.max_clock_skew_ms as i64),
         edge: settings,
     };
     let lane = EdgeLane { commands, sender };
-    Ok(VenueEdge {
+    VenueEdge {
         spawn: Box::new(move |runtime: &Handle| spawn(setup, lane, runtime)),
         tap_gate: None,
-    })
+    }
 }
 
 fn spawn(setup: BinanceExecAdapterSetup, lane: EdgeLane, rt: &Handle) -> EdgeHandle {

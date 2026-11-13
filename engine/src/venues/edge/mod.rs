@@ -75,6 +75,16 @@ pub(crate) struct EdgeSettings {
     pub(crate) max_orders_per_side: usize,
 }
 
+/// What preflight checks a venue's bring-up against, before any thread starts or the lease spends a
+/// run nonce.
+#[derive(Clone, Copy)]
+pub(crate) struct EdgeCheck<'a> {
+    pub(crate) registry: &'a Registry,
+    pub(crate) execution: &'a ExecutionConfig,
+    pub(crate) spin_interval: DurationUs,
+    pub(crate) input_capacity: usize,
+}
+
 /// What the runtime hands every venue's bring-up, whichever venue it is.
 pub(crate) struct EdgeInputs<'a> {
     pub(crate) registry: &'a Registry,
@@ -87,7 +97,6 @@ pub(crate) struct EdgeInputs<'a> {
     /// market attaches its taps here before the adapters that own these producers start.
     pub(crate) groups: &'a mut Vec<QueueProducer>,
     pub(crate) lane_capacity: usize,
-    pub(crate) spin_interval: DurationUs,
     pub(crate) input_capacity: usize,
     /// A simulated venue reads its lane itself and has no sender.
     pub(crate) sender: SenderSettings,

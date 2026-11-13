@@ -58,16 +58,16 @@ pub enum ScaleError {
 }
 
 /// Resolves the current and next btc-updown-5m windows through Gamma, confirms both quote on an
-/// accepted tick, and stamps the current grid onto every Polymarket row. A run with no Polymarket
-/// source returns at once. The stamp is taken once and a tick change mid-run is not re-stamped, so
+/// accepted tick, and returns the current one, whose grid preflight stamps onto every Polymarket
+/// row. A run with no Polymarket source returns `None` at once. The stamp is taken once and a tick change mid-run is not re-stamped, so
 /// a price off that grid shows as invalid rather than being silently rounded.
 #[expect(
     clippy::disallowed_methods,
     reason = "a start preflight reads the wall clock once, before any message exists"
 )]
-pub(crate) async fn preflight_poly(registry: &mut Registry) -> Result<(), ScaleError> {
+pub(crate) async fn preflight_poly(registry: &Registry) -> Result<Option<GammaMarket>, ScaleError> {
     let Some(series) = poly_series(registry) else {
-        return Ok(());
+        return Ok(None);
     };
     let rest = PolyRest::new(series).map_err(|error| classify_poly_resolve(series, error))?;
     let now = EngineClock::start().now();
@@ -77,14 +77,13 @@ pub(crate) async fn preflight_poly(registry: &mut Registry) -> Result<(), ScaleE
         .map_err(|error| classify_poly_resolve(series, error))?;
     check_poly_market(&current)?;
     check_poly_market(&next)?;
-    stamp_poly_scales(registry, &current);
     info!(
         "polymarket preflight ok — {} current tick {} next tick {} (current grid stamped on all slots)",
         series.as_str(),
         current.tick_size.to_f64(),
         next.tick_size.to_f64()
     );
-    Ok(())
+    Ok(Some(current))
 }
 
 /// Stamps the trading grid and order limits onto every Polymarket row, one grid across all slots.

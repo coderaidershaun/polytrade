@@ -3,7 +3,7 @@
 
 use engine::msg::time::EngineClock;
 use engine::runtime::metrics::{MetricsThread, MetricsThreadSetup};
-use engine::runtime::{EngineError, PinnedSenders};
+use engine::runtime::{PinnedSenders, StartError};
 
 use crate::runtime::metrics::Harness;
 
@@ -23,7 +23,7 @@ fn housekeeping_pin_failure_refuses_start() {
         assert!(
             matches!(
                 spawned,
-                Err(EngineError::HousekeepingPin {
+                Err(StartError::HousekeepingPin {
                     core_id: UNUSABLE_CORE,
                     thread: "metrics"
                 })
@@ -44,7 +44,7 @@ fn sender_pin_failure_refuses_start() {
         assert!(
             matches!(
                 refusal,
-                Some(EngineError::SenderPin {
+                Some(StartError::SenderPin {
                     core_id: UNUSABLE_CORE
                 })
             ),

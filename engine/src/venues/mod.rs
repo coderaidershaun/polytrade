@@ -7,6 +7,7 @@ pub mod binance;
 pub mod edge;
 pub mod exec;
 pub mod polymarket;
+pub mod port;
 pub mod sim;
 pub(crate) mod venue;
 

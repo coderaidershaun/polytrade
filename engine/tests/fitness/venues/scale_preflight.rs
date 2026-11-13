@@ -10,7 +10,7 @@ use engine::msg::ids::{AssetId, Notional, Price, Qty};
 use engine::msg::time::{DurationUs, VenueTs};
 use engine::runtime::config::{BinanceEnv, BinanceMarket, VenueMarket};
 use engine::runtime::registry::{InstrumentRow, OrderRateLimit, RateInterval, Registry};
-use engine::runtime::{EngineError, check_symbol_order_capacity};
+use engine::runtime::{StartError, check_symbol_order_capacity};
 use engine::venues::binance::preflight::{
     ScaleError, check_order_rate_limits, check_symbol_scale, order_budget,
 };
@@ -122,7 +122,7 @@ fn configured_two_sided_ladder_must_fit_the_symbol_order_limit() {
     match check_symbol_order_capacity(&row, 8)
         .expect_err("the requested steady-state ladder cannot fit")
     {
-        EngineError::ExecutionOrderCapacity {
+        StartError::ExecutionOrderCapacity {
             configured_per_side,
             required_total,
             venue_max,

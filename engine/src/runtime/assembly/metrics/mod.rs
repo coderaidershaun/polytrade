@@ -23,7 +23,7 @@ use crate::runtime::config::LatencyConfig;
 use crate::runtime::pin::spawn_pinned;
 use crate::{warn, warn_repeating};
 
-use super::EngineError;
+use super::StartError;
 
 pub use error::MetricsError;
 pub use ring::{SampleProducers, SampleRing};
@@ -186,10 +186,10 @@ pub(super) struct MetricsBringUpSetup<'a> {
 }
 
 /// # Errors
-/// [`EngineError::HousekeepingPin`] when the thread cannot pin itself to its core on Linux.
+/// [`StartError::HousekeepingPin`] when the thread cannot pin itself to its core on Linux.
 pub(super) fn metrics_bring_up(
     setup: MetricsBringUpSetup<'_>,
-) -> Result<MetricsBringUp, EngineError> {
+) -> Result<MetricsBringUp, StartError> {
     let stamper = setup.stamper.clone();
     let first = read_anchor(setup.clock, &stamper).0;
     std::thread::sleep(FIRST_ANCHOR_GAP);
@@ -250,8 +250,8 @@ impl MetricsThread {
     /// The thread pins itself to its core first, and runs nothing if the pin is refused.
     ///
     /// # Errors
-    /// [`EngineError::HousekeepingPin`] when the thread cannot pin itself to `core_id` on Linux.
-    pub fn spawn(setup: MetricsThreadSetup) -> Result<MetricsThread, EngineError> {
+    /// [`StartError::HousekeepingPin`] when the thread cannot pin itself to `core_id` on Linux.
+    pub fn spawn(setup: MetricsThreadSetup) -> Result<MetricsThread, StartError> {
         let MetricsThreadSetup {
             metrics,
             clock,
@@ -263,7 +263,7 @@ impl MetricsThread {
         let join = spawn_pinned("polysim-metrics", core_id, move || {
             run(metrics, &clock, &stamper, &stop_flag);
         })
-        .map_err(|refused| EngineError::HousekeepingPin {
+        .map_err(|refused| StartError::HousekeepingPin {
             core_id: refused.core_id,
             thread: "metrics",
         })?;

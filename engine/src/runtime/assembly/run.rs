@@ -9,6 +9,7 @@ use crate::runtime::config::{Config, RunIdentity};
 use super::Engine;
 use super::drain::ForcedExit;
 use super::exit::Exit;
+use super::preflight::Preflight;
 
 /// Run strategy S as trading engine, drain on SIGINT/SIGTERM/fatal. Config from --config or default path.
 /// Each failure is printed before it returns; the binary exits with [`Exit::code`]. `forced_exit`
@@ -58,7 +59,19 @@ where
         spin_interval: config.engine.spin_interval(),
     };
     let strategy = Box::new(S::from_spec(&config.strategy, engine_view));
-    match Engine::start(identity, config, strategy) {
+    let preflight = Preflight {
+        identity: &identity,
+        config: &config,
+        strategy: strategy.as_ref(),
+    };
+    let plan = match preflight.run() {
+        Ok(plan) => plan,
+        Err(error) => {
+            print_error(&label, &error);
+            return None;
+        }
+    };
+    match Engine::start(config, strategy, plan) {
         Ok(engine) => Some(engine),
         Err(error) => {
             print_error(&label, &error);

@@ -5,13 +5,13 @@
 
 use crate::hot::exec::MAX_ORDER_INSTRUMENTS;
 use crate::info;
-use crate::msg::ids::{Notional, Qty};
+use crate::msg::ids::{InstrumentId, Notional, Qty};
 use crate::msg::run_state::RunState;
 use crate::msg::time::DurationUs;
 use crate::runtime::config::{SimConfig, validated_mantissa};
 use crate::runtime::registry::InstrumentRow;
 use crate::venues::binance::exec::SymbolTable;
-use crate::venues::edge::{EdgeInputs, VenueEdge};
+use crate::venues::edge::{EdgeCheck, EdgeInputs, VenueEdge};
 use crate::venues::exec::{ExecCore, ExecStop};
 
 use super::actor::SimActor;
@@ -29,32 +29,30 @@ use super::wire::VenueWire;
 
 const ANSWER_CAPACITY: usize = 4_096;
 
+/// What a simulated venue needs from the run, checked in preflight so its bring-up cannot refuse.
+pub(crate) struct SimPlan {
+    venue: SimVenue,
+    instrument: InstrumentId,
+    latency: LatencyBudget,
+    market_inbox_capacity: usize,
+    verdict_retention: DurationUs,
+    worst_case: DurationUs,
+}
+
 /// # Errors
 /// [`SimVenueError`] when the run is not wired for a simulated venue, when it configures other than
 /// one instrument, when the opening account cannot be spent from, or when the configured latencies
 /// leave no room to answer a command before it times out.
-///
-/// # Panics
-/// If the producer groups do not hold exactly one Binance Spot trades lane and one depth lane.
-pub(crate) fn bring_up(inputs: EdgeInputs<'_>) -> Result<VenueEdge, SimVenueError> {
-    let EdgeInputs {
+pub(crate) fn plan(check: EdgeCheck<'_>) -> Result<SimPlan, SimVenueError> {
+    let EdgeCheck {
         registry,
         execution,
-        identity,
-        commands,
-        producer,
-        settings,
-        groups,
-        lane_capacity,
         spin_interval,
         input_capacity,
-        sender: _,
-    } = inputs;
+    } = check;
     let sim = execution.sim.as_ref().ok_or(SimVenueError::NotWired {
         detail: "the sim: block is absent, and config validation should have refused that",
     })?;
-    let (tapped, taps) = attach_market_taps(registry, input_capacity, std::mem::take(groups));
-    *groups = tapped;
     let instruments = registry.instruments();
     let [row] = instruments else {
         return Err(SimVenueError::OneInstrument {
@@ -87,23 +85,61 @@ pub(crate) fn bring_up(inputs: EdgeInputs<'_>) -> Result<VenueEdge, SimVenueErro
         limits,
         wallet: wallet_setup(row, sim)?,
     })?;
+    let worst_case = startup_budget(sim, spin_interval, inflight_timeout).check()?;
+    Ok(SimPlan {
+        venue,
+        instrument: row.instrument_id,
+        latency,
+        market_inbox_capacity,
+        verdict_retention,
+        worst_case,
+    })
+}
+
+/// # Panics
+/// If the producer groups do not hold exactly one Binance Spot trades lane and one depth lane.
+pub(crate) fn bring_up(plan: SimPlan, inputs: EdgeInputs<'_>) -> VenueEdge {
+    let EdgeInputs {
+        registry,
+        execution,
+        identity,
+        commands,
+        producer,
+        settings,
+        groups,
+        lane_capacity,
+        input_capacity,
+        sender: _,
+    } = inputs;
+    let SimPlan {
+        venue,
+        instrument,
+        latency,
+        market_inbox_capacity,
+        verdict_retention,
+        worst_case,
+    } = plan;
+    let (tapped, taps) = attach_market_taps(registry, input_capacity, std::mem::take(groups));
+    *groups = tapped;
+    let sim = execution
+        .sim
+        .as_ref()
+        .expect("preflight refuses a simulated run with no sim: block");
     info!(
         "simulated venue on {}: market inbox {market_inbox_capacity} events, order table \
          {ORDER_TABLE_CAPACITY} rows, verdict retention {}s — every one of them fatal on exhaustion",
-        row.venue_symbol,
+        registry.instrument(instrument).venue_symbol,
         verdict_retention.to_secs()
     );
     info!(
         "simulated venue latencies: entry {}ms, ack {}ms, hard market-data bound {}ms",
         sim.order_entry_latency_ms, sim.ack_latency_ms, sim.max_market_data_delay_ms
     );
-    let worst_case = startup_budget(sim, spin_interval, inflight_timeout).check()?;
     info!(
         "simulated venue worst legal round trip {}ms inside a {}ms in-flight timeout",
         worst_case.micros() / 1_000,
-        inflight_timeout.micros() / 1_000
+        DurationUs::from_millis(execution.inflight_timeout_ms as i64).micros() / 1_000
     );
-
     let MarketTaps {
         trades,
         depth,
@@ -117,7 +153,7 @@ pub(crate) fn bring_up(inputs: EdgeInputs<'_>) -> Result<VenueEdge, SimVenueErro
             answer_capacity: ANSWER_CAPACITY,
         }),
         wire: VenueWire::new(identity),
-        instrument: row.instrument_id,
+        instrument,
         fatal: settings.fatal.clone(),
     });
     let actor = SimActor {
@@ -143,10 +179,10 @@ pub(crate) fn bring_up(inputs: EdgeInputs<'_>) -> Result<VenueEdge, SimVenueErro
         fatal: settings.fatal,
         sweep_deadline: settings.sweep_deadline,
     };
-    Ok(VenueEdge {
+    VenueEdge {
         spawn: Box::new(move |runtime: &tokio::runtime::Handle| actor.spawn(runtime)),
         tap_gate: Some(gate),
-    })
+    }
 }
 
 fn instrument_limits(row: &InstrumentRow) -> Result<InstrumentLimits, SimVenueError> {
