@@ -206,8 +206,8 @@ pub enum AccountChunkKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AccountChunk {
     pub kind: AccountChunkKind,
-    pub balances: [AssetBalance; ACCOUNT_CHUNK_ASSETS],
-    pub len: u8,
+    balances: [AssetBalance; ACCOUNT_CHUNK_ASSETS],
+    len: u8,
     pub is_last_chunk: bool,
     /// The venue's own stamp on the evidence that these balances moved, in whole milliseconds —
     /// never a sequence, an id, or a reading of a local clock. The hot side holds a balance
@@ -222,15 +222,34 @@ pub struct AccountChunk {
 }
 
 impl AccountChunk {
-    /// The filled prefix of the balances array; the `len` invariant is asserted here.
+    /// A chunk with no balance yet, not the last of its snapshot.
+    pub fn new(kind: AccountChunkKind, venue_update_ts_ms: u64, exchange_ts_us: VenueTs) -> Self {
+        Self {
+            kind,
+            balances: [AssetBalance {
+                asset: AssetId::UNKNOWN,
+                free: 0,
+                locked: 0,
+            }; ACCOUNT_CHUNK_ASSETS],
+            len: 0,
+            is_last_chunk: false,
+            venue_update_ts_ms,
+            exchange_ts_us,
+        }
+    }
+
+    /// Takes the balances in order until the chunk is full, and returns how many it took.
+    pub fn push_balances(&mut self, balances: &[AssetBalance]) -> usize {
+        let start = usize::from(self.len);
+        let taken = balances.len().min(ACCOUNT_CHUNK_ASSETS - start);
+        self.balances[start..start + taken].copy_from_slice(&balances[..taken]);
+        self.len += taken as u8;
+        taken
+    }
+
     #[inline]
     pub fn active_balances(&self) -> &[AssetBalance] {
-        debug_assert!(
-            self.len as usize <= ACCOUNT_CHUNK_ASSETS,
-            "chunk len {} exceeds capacity {ACCOUNT_CHUNK_ASSETS}",
-            self.len
-        );
-        &self.balances[..self.len as usize]
+        &self.balances[..usize::from(self.len)]
     }
 }
 

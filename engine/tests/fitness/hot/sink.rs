@@ -16,9 +16,7 @@ use engine::hot::strategy::{
 };
 use engine::link::{LinkFrame, LinkHash, LinkOrigin, LinkPayload, OutboundLink, TopicId};
 use engine::log::{HotRecord, LaneReader, TextRecord, open_hot_lane, open_text_lane};
-use engine::msg::exec::{
-    AccountChunk, ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus,
-};
+use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus};
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BookChunk, InboundMessage, MessageBody, SpinTick, TradeEvent};
 use engine::msg::persist::{FeatureId, PersistRecord};
@@ -615,9 +613,10 @@ impl Market {
                 let venue_update_ts_ms = u64::try_from(when / 1_000).expect("time is positive");
                 InboundMessage::new(
                     ts(when),
-                    MessageBody::Account(AccountChunk {
-                        venue_update_ts_ms,
-                        ..account_chunk(&balances, when)
+                    MessageBody::Account({
+                        let mut chunk = account_chunk(&balances, when);
+                        chunk.venue_update_ts_ms = venue_update_ts_ms;
+                        chunk
                     }),
                 )
             }

@@ -50,10 +50,10 @@ fn assert_event_chunks(
         };
         assert_eq!(chunk.kind, kind);
         assert_eq!(chunk.update_id, update_id);
-        assert!(chunk.len as usize <= BOOK_CHUNK_LEVELS);
+        assert!(chunk.active_levels().len() <= BOOK_CHUNK_LEVELS);
         match chunk.side {
-            Side::Buy => buy += chunk.len as usize,
-            Side::Sell => sell += chunk.len as usize,
+            Side::Buy => buy += chunk.active_levels().len(),
+            Side::Sell => sell += chunk.active_levels().len(),
         }
         if chunk.is_last_chunk {
             last_flags += 1;

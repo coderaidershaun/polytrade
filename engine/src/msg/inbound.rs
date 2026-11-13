@@ -122,8 +122,8 @@ pub struct BookChunk {
     pub instrument: InstrumentId,
     pub kind: BookChunkKind,
     pub side: Side,
-    pub levels: [Level; BOOK_CHUNK_LEVELS],
-    pub len: u8,
+    levels: [Level; BOOK_CHUNK_LEVELS],
+    len: u8,
     pub is_last_chunk: bool,
     pub update_id: u64,
     /// The moment this stamps differs by venue: the send, the transaction, or the publication. It is
@@ -132,14 +132,35 @@ pub struct BookChunk {
 }
 
 impl BookChunk {
+    /// A chunk with no level yet, not the last of its update, with no update id and no venue stamp.
+    pub fn new(instrument: InstrumentId, kind: BookChunkKind, side: Side) -> Self {
+        Self {
+            instrument,
+            kind,
+            side,
+            levels: [Level {
+                price: Price::from_mantissa(0),
+                qty: Qty::from_mantissa(0),
+            }; BOOK_CHUNK_LEVELS],
+            len: 0,
+            is_last_chunk: false,
+            update_id: 0,
+            exchange_ts_us: None,
+        }
+    }
+
+    /// Takes the levels in order until the chunk is full, and returns how many it took.
+    pub fn push_levels(&mut self, levels: &[Level]) -> usize {
+        let start = usize::from(self.len);
+        let taken = levels.len().min(BOOK_CHUNK_LEVELS - start);
+        self.levels[start..start + taken].copy_from_slice(&levels[..taken]);
+        self.len += taken as u8;
+        taken
+    }
+
     #[inline]
     pub fn active_levels(&self) -> &[Level] {
-        debug_assert!(
-            self.len as usize <= BOOK_CHUNK_LEVELS,
-            "chunk len {} exceeds capacity {BOOK_CHUNK_LEVELS}",
-            self.len
-        );
-        &self.levels[..self.len as usize]
+        &self.levels[..usize::from(self.len)]
     }
 }
 

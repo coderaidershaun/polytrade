@@ -13,9 +13,7 @@ use engine::link::{
 };
 use engine::msg::exec::{ExecEvent, ExecKind};
 use engine::msg::ids::{ClientOrderId, InstrumentId, QueueId, Side};
-use engine::msg::inbound::{
-    BookChunk, InboundMessage, KlineEvent, MessageBody, MessageHeader, TradeEvent,
-};
+use engine::msg::inbound::{InboundMessage, KlineEvent, MessageBody, MessageHeader, TradeEvent};
 use engine::msg::latency::{
     Category, CommandKind, CounterSample, EngineCounters, Stage, StageSample, WireSample,
 };
@@ -417,9 +415,10 @@ fn stamped_messages() -> Vec<InboundMessage> {
             exchange_sent_ts_us: Some(venue_ts(VENUE_SENT_US)),
             ..trade(0, 100 * ONE, ONE, Side::Buy, RECEIVED_US)
         })),
-        message(MessageBody::Book(BookChunk {
-            exchange_ts_us: Some(venue_ts(RECEIVED_US - 1_500)),
-            ..delta_chunk(0, Side::Buy, &[(100 * ONE, ONE)], RECEIVED_US)
+        message(MessageBody::Book({
+            let mut chunk = delta_chunk(0, Side::Buy, &[(100 * ONE, ONE)], RECEIVED_US);
+            chunk.exchange_ts_us = Some(venue_ts(RECEIVED_US - 1_500));
+            chunk
         })),
         message(MessageBody::Exec(answer(
             ExecKind::ReportNew,

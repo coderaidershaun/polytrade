@@ -16,15 +16,15 @@ use engine::hot::strategy::{EngineView, Strategy, StrategyConfig};
 use engine::link::OutboundLink;
 use engine::log::HotRecord;
 use engine::msg::exec::{
-    ACCOUNT_CHUNK_ASSETS, AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind,
-    ExecLaneItem, Liquidity, Provenance, VenueOrderStatus,
+    AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind, ExecLaneItem, Liquidity,
+    Provenance, VenueOrderStatus,
 };
 use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
 };
 use engine::msg::inbound::{
-    BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, BookReset, InboundMessage, KlineEvent, Level,
-    MarketRotation, MessageBody, RunControl, SpinTick, TradeEvent,
+    BookChunk, BookChunkKind, BookReset, InboundMessage, KlineEvent, Level, MarketRotation,
+    MessageBody, RunControl, SpinTick, TradeEvent,
 };
 use engine::msg::persist::{FeatureId, FillRow, OrderRow, PersistRecord};
 use engine::msg::run_state::RunAssertion;
@@ -73,26 +73,16 @@ fn chunk(
     is_last_chunk: bool,
     when: i64,
 ) -> BookChunk {
-    let mut filled = [Level {
-        price: Price::from_mantissa(0),
-        qty: Qty::from_mantissa(0),
-    }; BOOK_CHUNK_LEVELS];
-    for (slot, &(price, qty)) in filled.iter_mut().zip(levels) {
-        *slot = Level {
+    let mut chunk = BookChunk::new(InstrumentId(instrument), kind, side);
+    for &(price, qty) in levels {
+        chunk.push_levels(&[Level {
             price: Price::from_mantissa(price),
             qty: Qty::from_mantissa(qty),
-        };
+        }]);
     }
-    BookChunk {
-        instrument: InstrumentId(instrument),
-        kind,
-        side,
-        levels: filled,
-        len: levels.len() as u8,
-        is_last_chunk,
-        update_id: when as u64,
-        exchange_ts_us: None,
-    }
+    chunk.is_last_chunk = is_last_chunk;
+    chunk.update_id = when as u64;
+    chunk
 }
 
 /// Bids-not-last then asks-last; each side as its own last chunk would trip the implicit reset.
@@ -744,26 +734,16 @@ pub fn stream_ready(instrument: InstrumentId, when: i64) -> InboundMessage {
 
 /// A whole-account snapshot in one chunk with nothing locked, all three stamps at `when`.
 pub fn account_chunk(balances: &[(AssetId, i64)], when: i64) -> AccountChunk {
-    let mut slots = [AssetBalance {
-        asset: AssetId::UNKNOWN,
-        free: 0,
-        locked: 0,
-    }; ACCOUNT_CHUNK_ASSETS];
-    for (slot, &(asset, free)) in balances.iter().enumerate() {
-        slots[slot] = AssetBalance {
+    let mut chunk = AccountChunk::new(AccountChunkKind::Snapshot, 1, venue_ts(when));
+    for &(asset, free) in balances {
+        chunk.push_balances(&[AssetBalance {
             asset,
             free,
             locked: 0,
-        };
+        }]);
     }
-    AccountChunk {
-        kind: AccountChunkKind::Snapshot,
-        balances: slots,
-        len: u8::try_from(balances.len()).expect("a chunk holds a handful of balances"),
-        is_last_chunk: true,
-        venue_update_ts_ms: 1,
-        exchange_ts_us: venue_ts(when),
-    }
+    chunk.is_last_chunk = true;
+    chunk
 }
 
 pub fn local_refusals(ui_events: &mut Consumer<UiEvent>) -> Vec<RejectReason> {

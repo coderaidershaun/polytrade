@@ -162,10 +162,11 @@ fn place_and_ack_at(
 fn restate_free_balance(engine: &mut HotEngine, venue_update_ts_ms: u64, when: i64) {
     engine.dispatch(&InboundMessage::new(
         ts(when),
-        MessageBody::Account(AccountChunk {
-            kind: AccountChunkKind::Update,
-            venue_update_ts_ms,
-            ..account_chunk(&[(AssetId(1), 1_000_000 * ONE)], when)
+        MessageBody::Account({
+            let mut chunk = account_chunk(&[(AssetId(1), 1_000_000 * ONE)], when);
+            chunk.kind = AccountChunkKind::Update;
+            chunk.venue_update_ts_ms = venue_update_ts_ms;
+            chunk
         }),
     ));
 }

@@ -1,7 +1,7 @@
 //! One rule that cuts each venue's book into chunks of a fixed size, so where a side splits is
 //! decided once. The caller's sink adds the venue's continuity data.
 
-use crate::msg::ids::{InstrumentId, Price, Qty, Side};
+use crate::msg::ids::{InstrumentId, Side};
 use crate::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, Level};
 use crate::msg::time::{LocalTs, VenueTs};
 
@@ -96,20 +96,11 @@ impl ChunkEmitter {
         group: &[Level],
         is_last_chunk: bool,
     ) -> BookChunk {
-        let mut filled = [Level {
-            price: Price::from_mantissa(0),
-            qty: Qty::from_mantissa(0),
-        }; BOOK_CHUNK_LEVELS];
-        filled[..group.len()].copy_from_slice(group);
-        BookChunk {
-            instrument: self.instrument,
-            kind: plan.kind,
-            side,
-            levels: filled,
-            len: group.len() as u8,
-            is_last_chunk,
-            update_id: plan.update_id,
-            exchange_ts_us: plan.exchange_ts_us,
-        }
+        let mut chunk = BookChunk::new(self.instrument, plan.kind, side);
+        chunk.push_levels(group);
+        chunk.is_last_chunk = is_last_chunk;
+        chunk.update_id = plan.update_id;
+        chunk.exchange_ts_us = plan.exchange_ts_us;
+        chunk
     }
 }

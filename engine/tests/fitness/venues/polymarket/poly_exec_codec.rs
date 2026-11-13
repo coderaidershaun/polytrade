@@ -727,11 +727,11 @@ fn account_snapshot_chunks_arm_readiness_and_stamp_from_settlement() {
         let chunks = account_snapshot(&balances, AccountChunkKind::Snapshot, stamps(NONE));
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].is_last_chunk);
-        assert_eq!(chunks[0].len, 3);
+        assert_eq!(chunks[0].active_balances().len(), 3);
         let empty = account_snapshot(&[], AccountChunkKind::Snapshot, stamps(NONE));
         assert_eq!(empty.len(), 1);
         assert!(empty[0].is_last_chunk);
-        assert_eq!(empty[0].len, 0);
+        assert_eq!(empty[0].active_balances().len(), 0);
     }
 
     // A balance chunk is stamped by settlement, not by our clock.
