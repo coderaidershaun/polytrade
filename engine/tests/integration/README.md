@@ -50,15 +50,16 @@ Only `live-runner` runs this test, by the runbook of its job.
   1. It places one post-only buy of about 10 USDT at the best bid, under the tag of the tests.
   2. It records each answer, and each execution report of the user data stream, in `recording/` of the run folder.
   3. It waits up to 5 minutes for a fill. Then it cancels what rests, by its client order id.
-  4. IF the resting buy has no fill, THEN, after the venue shows its cancel, the test sends one buy of the same size at the best ask, with time in force IOC. It sends this buy once, on the same connection. The buy lives for one match and never rests. The test records its answer and its trade reports in the same way.
+     - IF the venue refuses the buy because the buy would cross (HTTP 400, code -2010, `Order would immediately match and take.`), THEN no order rests. The test does not wait, and it sends no cancel. It prints `the venue refused the post-only buy, because it would cross: no fill`. The line `placed:` and the line of that order under `what the venue gave:` then show `unknown (...)` with code -2013, `Order does not exist.`: the venue holds no such order.
+  4. IF the buy has no fill, THEN the test reads the touch, the account and the open orders again. The buy has no fill when its 5 minutes end and the venue shows its cancel, or when the venue refuses it as in step 3. IF a buy of the tests rests, or a cap refuses, THEN the test stops and sends nothing. ELSE the test sends one buy of the same size at the best ask, with time in force IOC. It sends this buy once, on the same connection. The buy lives for one match and never rests. The test records its answer and its trade reports in the same way.
 - **Expected outcome:**
-  - A resting order is placed and cancelled, or it fills. Then there is at most one taker fill.
+  - A resting order is placed and cancelled, or it fills, or the venue refuses it because it would cross. Then there is at most one taker fill.
   - The run ends inside 10 minutes.
   - At no time does more than one order of the tests rest on a side. At the end, no order of the tests rests.
   - The test prints what the venue gave, and the fee fields `t`, `l`, `z`, `n`, `N` of each trade report.
   - No payload file holds a key, a signature, a listen key, an account id, or a balance event.
 - **Expected cost:** one taker fee and the spread on about 10 USDT. The rollback then sells the base back to `before`, within one lot.
-- **Check at the venue:** the order history of the account shows the buy of the tests (filled or cancelled), and at most one taker buy of the tests.
+- **Check at the venue:** the order history of the account shows the buy of the tests (filled or cancelled), and at most one taker buy of the tests. A buy that the venue refused because it would cross can be missing there.
 - **Kill switch:** `cancels_only_the_orders_of_the_tests`. **Rollback:** `sells_back_the_base_above_before`. Run the rollback after each fill.
 
 The test refuses each of these in code, before it sends an order:

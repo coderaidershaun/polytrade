@@ -159,7 +159,7 @@ async fn the_public_client_refuses_a_private_request() {
 #[test]
 fn venue_failure_classification() {
     let status = |code: Option<i64>, message: Option<&str>| RestError::Status {
-        url: "https://api.binance.com/api/v3/order".to_owned(),
+        target: "GET /api/v3/order".to_owned(),
         status: 400,
         code,
         message: message.map(str::to_owned),
@@ -245,7 +245,7 @@ fn venue_failure_classification() {
         (
             "rejected key (Unauthorized variant)",
             RestError::Unauthorized {
-                url: "https://api.binance.com/api/v3/account".to_owned(),
+                target: "GET /api/v3/account".to_owned(),
                 status: 401,
                 code: Some(-2015),
                 message: None,
@@ -255,7 +255,7 @@ fn venue_failure_classification() {
         (
             "timed out reading the body (Timeout variant)",
             RestError::Transport(TransportError::Timeout {
-                url: "https://api.binance.com/api/v3/exchangeInfo".to_owned(),
+                target: "GET /api/v3/exchangeInfo".to_owned(),
                 phase: "reading the response body",
                 limit_secs: 10,
             }),
@@ -264,7 +264,7 @@ fn venue_failure_classification() {
         (
             "rate limited (RateLimited variant)",
             RestError::RateLimited {
-                url: "https://api.binance.com/api/v3/account".to_owned(),
+                target: "GET /api/v3/account".to_owned(),
                 status: 429,
                 retry_after_secs: Some(5),
                 code: None,

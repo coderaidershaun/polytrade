@@ -45,9 +45,10 @@ const SELL_THROUGH_TICKS: i64 = 20;
 
 /// Places one post-only buy of about 10 USDT at the best bid, records each answer and each
 /// execution report of the user data stream, waits for a fill, cancels what rests by its client
-/// order id, and prints each request with each secret field shown as `<redacted>`. IF the resting
-/// buy has no fill, THEN after its cancel is confirmed at the venue, one buy of the same size at
-/// the best ask, which lives for one match, gives the trade report that U-M3 needs.
+/// order id, and prints each request with each secret field shown as `<redacted>`. IF the buy has
+/// no fill, because its time ends or because the venue refuses it as a buy that would cross, THEN
+/// after the venue shows that no buy of the tests rests, one buy of the same size at the best ask,
+/// which lives for one match, gives the trade report that U-M3 needs.
 #[ignore = "real funds on live binance: only the live-runner role of a job runs it, by the runbook of its job and the live policy"]
 #[tokio::test]
 async fn records_a_small_order_lifecycle_on_binance() {
@@ -185,6 +186,10 @@ async fn record_order_lifecycle(sending: Sending) {
     let client_order_id = format_client_order_id(identity.te_tag, buy_id);
     let placed_status = status_of(&placed, &client_order_id, &mut client).await;
     println!("  placed: {placed_status}");
+    let refused_for_crossing = is_refused_for_crossing(&placed);
+    if refused_for_crossing {
+        println!("  the venue refused the post-only buy, because it would cross: no fill");
+    }
 
     if placed_status.is_open() {
         lane.listen(FILL_WAIT).await;
@@ -199,7 +204,7 @@ async fn record_order_lifecycle(sending: Sending) {
     let mut reports = lane.take_reports();
     let has_traded = reports.iter().any(|report| report["x"] == "TRADE");
     let mut taker_after = None;
-    if !has_traded && after.is_cancelled() {
+    if !has_traded && (after.is_cancelled() || refused_for_crossing) {
         let taker_order_id = format_client_order_id(identity.te_tag, taker_id);
         let status = take_the_ask(&mut lane, &mut client, identity, &before, taker_id).await;
         println!("    taker buy {taker_order_id}: {status}");
@@ -522,6 +527,19 @@ async fn take_the_ask(
     lane.listen(Duration::from_secs(3)).await;
     let taker_order_id = format_client_order_id(identity.te_tag, taker_id);
     status_of(&answer, &taker_order_id, client).await
+}
+
+/// Whether the venue refused a post-only buy because it would match at once: HTTP 400 with code
+/// -2010 and the message of a match. A -2010 with any other message, such as a short balance, is
+/// not this refusal, and gets no taker buy.
+fn is_refused_for_crossing(answer: &Answer) -> bool {
+    let Answer::Given(frame) = answer else { return false };
+    let error = &frame["error"];
+    frame["status"] == 400
+        && error["code"] == -2010
+        && error["msg"]
+            .as_str()
+            .is_some_and(|message| message.contains("immediately match"))
 }
 
 fn cancel(id: engine::msg::ids::ClientOrderId) -> ExecRequest {
