@@ -77,20 +77,27 @@ impl PendingCommands {
     /// False = bank full; caller must unwind (command not sent).
     #[inline]
     #[must_use]
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the command sink stamps each banked command for its latency, and the fold gets nothing back"
-    )]
     pub(crate) fn bank(&mut self, command: ExecCommand) -> bool {
         if self.banked.len() == self.banked.capacity() {
             return false;
         }
         self.banked.push(BankedCommand {
             command,
-            issue_tick: self.stamper.stamp(),
+            issue_tick: self.issue_tick(),
         });
         self.banked_total += 1;
         true
+    }
+
+    /// The one counter read of the bank. It lives apart from `bank`, so a clock read added to the
+    /// bank's own logic fails the clock lint.
+    #[inline]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the command sink stamps each banked command for its latency, and the fold gets nothing back"
+    )]
+    fn issue_tick(&self) -> Tick {
+        self.stamper.stamp()
     }
 
     /// Pushes FIFO and appends a watermark only when every command was accepted.

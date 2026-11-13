@@ -14,9 +14,19 @@ disallowed-methods = [
     { path = "tokio::time::Instant::now", reason = "a clock read; only a permitted site may read one", allow-invalid = true },
     # The browser build has no tokio clock, so the path resolves only in a native build.
     { path = "tokio::time::Instant::elapsed", reason = "a clock read; only a permitted site may read one", allow-invalid = true },
+    # Each call of the counter crate that reads a clock, builds a counter clock or turns its ticks
+    # into time. Arithmetic on readings already taken reads nothing and stays open.
+    { path = "quanta::Clock::new", reason = "builds and calibrates a counter clock; the process has one" },
     { path = "quanta::Clock::raw", reason = "a counter read; only a permitted site may read one" },
     { path = "quanta::Clock::now", reason = "a counter read; only a permitted site may read one" },
+    { path = "quanta::Clock::recent", reason = "a clock read; only a permitted site may read one" },
+    { path = "quanta::Clock::scaled", reason = "turns ticks into time; only the metrics thread may" },
+    { path = "quanta::Clock::delta", reason = "turns ticks into time; only the metrics thread may" },
+    { path = "quanta::Clock::delta_as_nanos", reason = "turns ticks into time; only the metrics thread may" },
     { path = "quanta::Instant::now", reason = "a counter read; only a permitted site may read one" },
+    { path = "quanta::Instant::recent", reason = "a clock read; only a permitted site may read one" },
+    { path = "quanta::Instant::elapsed", reason = "a clock read; only a permitted site may read one" },
+    { path = "quanta::Upkeep::start", reason = "starts a thread that reads the clock; only a permitted site may" },
     { path = "engine::msg::time::EngineClock::start", reason = "starts a clock; the process has one" },
     { path = "engine::msg::time::EngineClock::now", reason = "a clock read; only a permitted site may read one" },
     { path = "engine::msg::time::boot_stamp_us", reason = "a clock read; only a permitted site may read one" },

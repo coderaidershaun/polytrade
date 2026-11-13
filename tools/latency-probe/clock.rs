@@ -15,6 +15,10 @@ pub struct Probe {
 
 impl Probe {
     /// Building the clock calibrates it, so it is built once, before the first region.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the harness builds its own counter clock to time its regions, off any engine thread"
+    )]
     pub fn new() -> Probe {
         Probe {
             clock: quanta::Clock::new(),
@@ -31,6 +35,10 @@ impl Probe {
     }
 
     /// `None` when `end` reads before `start`: the pair ran backward.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the harness turns its own counter reads into time to report its regions"
+    )]
     pub fn nanos(&self, start: u64, end: u64) -> Option<u64> {
         (end >= start).then(|| self.clock.delta_as_nanos(start, end))
     }
@@ -76,6 +84,15 @@ pub fn now(clock: &EngineClock) -> TsUs {
 )]
 pub fn stamp(stamper: &Stamper) -> Tick {
     stamper.stamp()
+}
+
+/// The counter that the engine stamps with, built and calibrated once for the harness's engine.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the harness is a process of its own, and its one counter clock stamps what it times"
+)]
+pub fn counter_stamper() -> Stamper {
+    Stamper::Counter(quanta::Clock::new())
 }
 
 /// The scale between two anchors a few milliseconds apart, which the metrics core needs before it
