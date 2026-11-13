@@ -2,13 +2,14 @@
 //! is clamped to the one before it, because each recursion here needs time that never runs back.
 
 use crate::hot::series::FastQueue;
-use crate::msg::time::{DurationUs, LocalTs};
+use crate::msg::time::LocalTs;
 
 /// Event times as seconds since the first event; a full window evicts the oldest.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HawkesEvents {
     times: FastQueue<f64>,
     origin: Option<LocalTs>,
+    last_ts: Option<LocalTs>,
     last_secs: f64,
     out_of_order: u64,
 }
@@ -21,6 +22,7 @@ impl HawkesEvents {
         Self {
             times: FastQueue::new(max_events, 2),
             origin: None,
+            last_ts: None,
             last_secs: 0.0,
             out_of_order: 0,
         }
@@ -35,6 +37,7 @@ impl HawkesEvents {
             self.out_of_order += 1;
         } else {
             self.last_secs = secs;
+            self.last_ts = Some(ts);
         }
         self.times.push(self.last_secs);
     }
@@ -43,6 +46,7 @@ impl HawkesEvents {
     pub fn clear(&mut self) {
         self.times.clear();
         self.origin = None;
+        self.last_ts = None;
         self.last_secs = 0.0;
     }
 
@@ -71,11 +75,8 @@ impl HawkesEvents {
         Some(now.diff(origin).to_secs().max(last))
     }
 
-    /// The absolute stamp of the newest retained event, reconstructed from the origin — exact,
-    /// because the stored seconds came from an integral µs difference.
+    /// The stamp of the newest event, after any clamp.
     pub(super) fn last_ts(&self) -> Option<LocalTs> {
-        let last = self.times.last()?;
-        let origin = self.origin?;
-        Some(origin + DurationUs::from_micros((last * 1e6).round() as i64))
+        self.last_ts
     }
 }
