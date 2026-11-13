@@ -4,7 +4,7 @@ use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::msg::exec::{AccountChunk, AccountChunkKind, AssetBalance};
 use crate::msg::ids::{AssetId, Spend};
 
-const MAX_ASSETS: usize = 16;
+use super::capacity::ExecCapacity;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct AccountRow {
@@ -42,12 +42,12 @@ impl Balance {
     }
 }
 
-#[derive(Default)]
+/// One row for each asset of the run, indexed by its id.
 pub struct AccountTable {
-    rows: [AccountRow; MAX_ASSETS],
-    reserved: [i64; MAX_ASSETS],
+    rows: Box<[AccountRow]>,
+    reserved: Box<[i64]>,
     /// Distinguishes 0 balance from unknown asset.
-    is_known: [bool; MAX_ASSETS],
+    is_known: Box<[bool]>,
     watermark: AccountWatermark,
     has_snapshot: bool,
 }
@@ -57,8 +57,15 @@ digest_fields! { AccountRow { free, locked } }
 digest_fields! { AccountTable { rows, reserved, is_known, watermark, has_snapshot } }
 
 impl AccountTable {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(capacity: &ExecCapacity) -> Self {
+        let assets = capacity.assets();
+        Self {
+            rows: vec![AccountRow::default(); assets].into_boxed_slice(),
+            reserved: vec![0; assets].into_boxed_slice(),
+            is_known: vec![false; assets].into_boxed_slice(),
+            watermark: AccountWatermark::ZERO,
+            has_snapshot: false,
+        }
     }
 
     /// Snapshot consumed (readiness gate component).
@@ -69,7 +76,7 @@ impl AccountTable {
 
     #[inline]
     pub fn balance(&self, asset: AssetId) -> Balance {
-        let Some(index) = Self::index_of(asset) else {
+        let Some(index) = self.index_of(asset) else {
             return Balance::default();
         };
         Balance {
@@ -95,7 +102,7 @@ impl AccountTable {
     fn apply_balance(&mut self, balance: AssetBalance) {
         // An asset no configured instrument names — dust, or a fee asset like BNB. Ignored rather
         // than misattributed to an asset we do trade.
-        let Some(index) = Self::index_of(balance.asset) else {
+        let Some(index) = self.index_of(balance.asset) else {
             return;
         };
         self.rows[index] = AccountRow {
@@ -107,7 +114,7 @@ impl AccountTable {
 
     /// Fixed-length, borrow-only (allocator-free on restatement).
     pub fn balances(&self) -> impl Iterator<Item = (AssetId, Balance)> + '_ {
-        (0..MAX_ASSETS)
+        (0..self.rows.len())
             .filter(|index| self.is_known[*index])
             .map(|index| {
                 let asset = AssetId(index as u16);
@@ -118,7 +125,7 @@ impl AccountTable {
     /// Returns the watermark that decides when this reservation may be released.
     #[inline]
     pub fn reserve(&mut self, asset: AssetId, amount: Spend) -> AccountWatermark {
-        if let Some(index) = Self::index_of(asset) {
+        if let Some(index) = self.index_of(asset) {
             self.reserved[index] += amount.mantissa();
         }
         self.watermark
@@ -137,7 +144,7 @@ impl AccountTable {
         if self.watermark <= reserved_at {
             return ReleaseOutcome::Held;
         }
-        let Some(index) = Self::index_of(asset) else {
+        let Some(index) = self.index_of(asset) else {
             return ReleaseOutcome::Released;
         };
         self.debit_reservation(index, amount.mantissa(), "released");
@@ -147,7 +154,7 @@ impl AccountTable {
     /// No account update needed (venue never saw this).
     #[inline]
     pub fn release_unsent(&mut self, asset: AssetId, amount: Spend) {
-        if let Some(index) = Self::index_of(asset) {
+        if let Some(index) = self.index_of(asset) {
             self.debit_reservation(index, amount.mantissa(), "released unsent");
         }
     }
@@ -165,10 +172,10 @@ impl AccountTable {
         self.reserved[index] = remaining;
     }
 
-    /// Out-of-range -> not accounted (same as UNKNOWN).
+    /// An asset that no row of the run names is not accounted, the same as UNKNOWN.
     #[inline]
-    fn index_of(asset: AssetId) -> Option<usize> {
-        (usize::from(asset.0) < MAX_ASSETS).then_some(usize::from(asset.0))
+    fn index_of(&self, asset: AssetId) -> Option<usize> {
+        (usize::from(asset.0) < self.rows.len()).then_some(usize::from(asset.0))
     }
 }
 

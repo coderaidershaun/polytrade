@@ -19,7 +19,7 @@ use engine::msg::ids::{
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use proptest::prelude::*;
 
-use crate::engine_support::account_chunk;
+use crate::engine_support::{account_chunk, exec_capacity};
 
 const RUN_NONCE: u32 = 0x5EED_1234;
 const TICK: i64 = 1_000_000;
@@ -235,7 +235,7 @@ fn a_client_id_addresses_only_the_slot_and_generation_it_was_encoded_for() {
         }
     }
 
-    let mut table = OrderTable::new(RUN_NONCE);
+    let mut table = OrderTable::new(&exec_capacity(1), RUN_NONCE);
     let (index, first) = table
         .claim(buy_claim(QuoteLevel::ZERO, 0, 0))
         .expect("a fresh side has free slots");
@@ -274,7 +274,7 @@ fn a_client_id_addresses_only_the_slot_and_generation_it_was_encoded_for() {
 /// that may still be resting or still be live.
 #[test]
 fn side_level_bookkeeping_stays_conservative_until_a_terminal_fact_proves_otherwise() {
-    let mut awaiting_table = OrderTable::new(RUN_NONCE);
+    let mut awaiting_table = OrderTable::new(&exec_capacity(1), RUN_NONCE);
     let level_zero = buy_claim(QuoteLevel::ZERO, 100 * TICK, 10);
     let level_one = buy_claim(QuoteLevel::new(1).expect("level one"), 100 * TICK, 10);
     let (live, _) = awaiting_table
@@ -302,7 +302,7 @@ fn side_level_bookkeeping_stays_conservative_until_a_terminal_fact_proves_otherw
         "both legs are resolved, so the side may quote again"
     );
 
-    let mut count_table = OrderTable::new(RUN_NONCE);
+    let mut count_table = OrderTable::new(&exec_capacity(1), RUN_NONCE);
     let mut indexes = Vec::new();
     for level_index in 0..3u8 {
         let (index, _) = count_table
@@ -350,7 +350,7 @@ fn side_level_bookkeeping_stays_conservative_until_a_terminal_fact_proves_otherw
 /// gone, and it is the venue, not the strategy, that decides how much got bought.
 #[test]
 fn a_pending_cancel_answer_never_resolves_the_cancel_it_was_asked_about() {
-    let mut table = OrderTable::new(RUN_NONCE);
+    let mut table = OrderTable::new(&exec_capacity(1), RUN_NONCE);
     let (index, client_id) = table
         .claim(buy_claim(QuoteLevel::ZERO, 100 * TICK, 10))
         .expect("a fresh side has free slots");
@@ -441,7 +441,7 @@ fn a_pending_cancel_answer_never_resolves_the_cancel_it_was_asked_about() {
 #[test]
 fn a_reservation_releases_only_on_terminal_proof_from_either_direction() {
     let quote = AssetId(1);
-    let mut account = AccountTable::new();
+    let mut account = AccountTable::new(&exec_capacity(1));
     account.apply(&balances(quote, 1_000, 1, AccountChunkKind::Snapshot));
 
     let four_hundred = Spend::Quote(Notional::from_mantissa(400));
@@ -463,7 +463,7 @@ fn a_reservation_releases_only_on_terminal_proof_from_either_direction() {
     );
     assert_eq!(account.balance(quote).spendable(), 600);
 
-    let mut unsent_account = AccountTable::new();
+    let mut unsent_account = AccountTable::new(&exec_capacity(1));
     unsent_account.apply(&balances(quote, 1_000, 1, AccountChunkKind::Snapshot));
     unsent_account.reserve(quote, four_hundred);
     let mut slot = OrderSlot {

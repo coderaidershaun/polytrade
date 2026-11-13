@@ -8,8 +8,8 @@ use crate::msg::ids::{InstrumentId, Notional, Price, Qty, Side};
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::time::LocalTs;
 
+use super::capacity::ExecCapacity;
 use super::engine::ExecEngine;
-use super::order::MAX_ORDER_INSTRUMENTS;
 use super::reconcile::RejectReason;
 use super::spin::SpinInput;
 use super::view::{OrderReject, RejectOrigin};
@@ -214,17 +214,16 @@ labelled_enum! {
 }
 
 const SIDES: usize = 2;
-const MAX_REFUSALS: usize = MAX_ORDER_INSTRUMENTS * SIDES;
 
 /// Why a side is not quoting, reported when the answer CHANGES rather than every spin. A refusal
 /// usually persists, so reporting each one-second spin would bury the transitions that matter, and
 /// reporting once forever would leave the panel showing a reason that has since changed. The latch
 /// reports the first spin of a reason and of its replacement, and clears when the side quotes.
 /// Nothing here reads a clock, so a replay reports the same reasons in the same order.
-#[derive(Default)]
 pub struct RefusalLatch {
-    current: [[Option<RejectReason>; SIDES]; MAX_ORDER_INSTRUMENTS],
-    pending: [Option<OrderReject>; MAX_REFUSALS],
+    current: Box<[[Option<RejectReason>; SIDES]]>,
+    /// One for each side of each instrument: a spin reports at most one reason for each.
+    pending: Box<[Option<OrderReject>]>,
     len: usize,
 }
 
@@ -232,6 +231,15 @@ digest_by_hash!(ExecHalt, Readiness);
 digest_fields! { RefusalLatch { current, pending, len } }
 
 impl RefusalLatch {
+    pub(super) fn new(capacity: &ExecCapacity) -> Self {
+        let instruments = capacity.instruments();
+        Self {
+            current: vec![[None; SIDES]; instruments].into_boxed_slice(),
+            pending: vec![None; instruments * SIDES].into_boxed_slice(),
+            len: 0,
+        }
+    }
+
     fn observe(
         &mut self,
         instrument: InstrumentId,
@@ -270,7 +278,7 @@ impl RefusalLatch {
     }
 
     pub fn forget(&mut self) {
-        self.current = [[None; SIDES]; MAX_ORDER_INSTRUMENTS];
+        self.current.fill([None; SIDES]);
     }
 
     fn slot_mut(
@@ -283,7 +291,7 @@ impl RefusalLatch {
     }
 
     fn push(&mut self, reject: OrderReject) {
-        if self.len >= MAX_REFUSALS {
+        if self.len >= self.pending.len() {
             return;
         }
         self.pending[self.len] = Some(reject);

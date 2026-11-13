@@ -9,16 +9,13 @@ use crate::msg::exec::{ExecEvent, ExecKind, RejectClass};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Side};
 use crate::msg::persist::{OrderLifecycle, OrderTransition};
 use crate::msg::time::LocalTs;
-use crate::runtime::config::MAX_QUOTE_LEVELS;
 
 use super::account::ReleaseOutcome;
 use super::audit::{bank_engine_driven, bank_event_rows};
+use super::capacity::ExecCapacity;
 use super::engine::{ExecEngine, FoldStamps, view_of};
 use super::gates::HaltReason;
-use super::order::{
-    FillDelta, MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS, OrderSlot, OrderState, ReconcilePass,
-    free_or_oldest_closed,
-};
+use super::order::{FillDelta, OrderSlot, OrderState, ReconcilePass, free_or_oldest_closed};
 use super::transition::apply_exec_event;
 use super::view::{ExecCallback, Fill, OrderReject, RejectOrigin};
 
@@ -65,7 +62,7 @@ impl ExecEngine {
 
     /// Retry releases that beat account update. Fixed-slot scan, no alloc.
     pub(super) fn retry_reservation_releases(&mut self) {
-        for index in 0..MAX_ORDER_SLOTS {
+        for index in self.orders.slot_indices() {
             let slot = self.orders.slot(index);
             if slot.reserved_amount.is_none() || slot.state == OrderState::PendingNew {
                 continue;
@@ -194,7 +191,7 @@ impl ExecEngine {
         hot_error!(
             "prior-run order {:x} has nowhere to fold — all {} entries are still working, so its fills cannot reach the ledger",
             event.client_id.0,
-            PRIOR_RUN_SLOTS
+            self.prior_orders.capacity()
         );
     }
 
@@ -339,8 +336,6 @@ fn swept_warning(slot: &OrderSlot, recon_seq: u64) {
     );
 }
 
-const PRIOR_RUN_SLOTS: usize = MAX_QUOTE_LEVELS * 2 * MAX_ORDER_INSTRUMENTS;
-
 /// Orders an EARLIER run of this trading engine left resting on the venue. They are cancelled on
 /// sight, but the cancel takes hundreds of milliseconds and whatever rests fills in the meantime.
 /// Those are real executions on this account, so they move the ledger and earn audit rows exactly
@@ -352,7 +347,7 @@ const PRIOR_RUN_SLOTS: usize = MAX_QUOTE_LEVELS * 2 * MAX_ORDER_INSTRUMENTS;
 /// lose the fill to the orphan path, decided by nothing but arrival order. Keeping them apart also
 /// keeps a cancel answered "unknown order", this path's ordinary outcome, out of the reject streak.
 pub(super) struct PriorRunOrders {
-    slots: Box<[OrderSlot; PRIOR_RUN_SLOTS]>,
+    slots: Box<[OrderSlot]>,
 }
 
 digest_fields! { PriorRunOrders { slots } }
@@ -365,10 +360,15 @@ pub(super) enum Unseated {
 }
 
 impl PriorRunOrders {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(capacity: &ExecCapacity) -> Self {
         Self {
-            slots: Box::new([OrderSlot::EMPTY; PRIOR_RUN_SLOTS]),
+            slots: vec![OrderSlot::EMPTY; capacity.prior_run_slots()].into_boxed_slice(),
         }
+    }
+
+    #[inline]
+    pub(super) fn capacity(&self) -> usize {
+        self.slots.len()
     }
 
     #[inline]

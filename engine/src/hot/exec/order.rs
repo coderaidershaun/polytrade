@@ -16,13 +16,15 @@ use crate::msg::time::{DurationUs, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 
 use super::account::AccountWatermark;
+use super::capacity::ExecCapacity;
 use super::desired::QuoteLevel;
 
 const SLOTS_PER_LEVEL: usize = 4;
 const SLOTS_PER_SIDE: usize = MAX_QUOTE_LEVELS * SLOTS_PER_LEVEL;
-const SLOTS_PER_INSTRUMENT: usize = 2 * SLOTS_PER_SIDE;
-pub const MAX_ORDER_INSTRUMENTS: usize = 16;
-pub const MAX_ORDER_SLOTS: usize = MAX_ORDER_INSTRUMENTS * SLOTS_PER_INSTRUMENT;
+pub(super) const SLOTS_PER_INSTRUMENT: usize = 2 * SLOTS_PER_SIDE;
+
+/// The most order slots a client order id can address: the id holds 16 bits of slot index.
+pub const MAX_ORDER_SLOTS: usize = 1 << 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ClientIdLayout {
@@ -31,12 +33,13 @@ pub struct ClientIdLayout {
 
 impl ClientIdLayout {
     /// # Panics
-    /// When `slot_index` is past the slot table.
+    /// When `slot_index` is past the slots that a client order id addresses. The start refuses an
+    /// order table that large, so this is a bug.
     #[inline]
     pub fn encode(self, slot_index: usize, generation: u16) -> ClientOrderId {
         assert!(
             slot_index < MAX_ORDER_SLOTS,
-            "slot index {slot_index} beyond the table of {MAX_ORDER_SLOTS} slots"
+            "slot index {slot_index} beyond the {MAX_ORDER_SLOTS} slots a client order id addresses"
         );
         ClientOrderId(
             (u64::from(self.run_nonce) << 32)
@@ -263,7 +266,7 @@ impl FillDelta {
 }
 
 pub struct OrderTable {
-    slots: Box<[OrderSlot; MAX_ORDER_SLOTS]>,
+    slots: Box<[OrderSlot]>,
     layout: ClientIdLayout,
 }
 
@@ -271,9 +274,9 @@ digest_by_hash!(ClientIdLayout, OrderSlot);
 digest_fields! { OrderTable { slots, layout } }
 
 impl OrderTable {
-    pub fn new(run_nonce: u32) -> Self {
+    pub fn new(capacity: &ExecCapacity, run_nonce: u32) -> Self {
         Self {
-            slots: Box::new([OrderSlot::EMPTY; MAX_ORDER_SLOTS]),
+            slots: vec![OrderSlot::EMPTY; capacity.order_slots()].into_boxed_slice(),
             layout: ClientIdLayout { run_nonce },
         }
     }
@@ -281,6 +284,12 @@ impl OrderTable {
     #[inline]
     pub fn slot(&self, index: usize) -> &OrderSlot {
         &self.slots[index]
+    }
+
+    /// Each slot index of the table, for a pass that visits every slot by index.
+    #[inline]
+    pub(super) fn slot_indices(&self) -> Range<usize> {
+        0..self.slots.len()
     }
 
     #[inline]

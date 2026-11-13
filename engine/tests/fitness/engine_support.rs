@@ -7,7 +7,8 @@ use engine::hot::dispatch::{
     ExecWiring, ExposureWiring, HotEngine, HotEngineSetup, LinkWiring, PersistWiring,
 };
 use engine::hot::exec::{
-    BookTop, ClientIdLayout, ExecSettings, FundsView, RejectOrigin, RejectReason, side_base,
+    BookTop, ClientIdLayout, ExecCapacity, ExecSettings, FundsView, RejectOrigin, RejectReason,
+    side_base,
 };
 use engine::hot::sink::{
     ExecSink, ExposureSink, LinkSink, PersistSink, StrategyLogSink, UiBookSink, UiEventSink,
@@ -284,6 +285,15 @@ pub fn instrument_row(id: u16, tracker: TrackerSpec, book_capacity: usize) -> In
         max_exposure_quote: Notional::from_mantissa(TEST_MAX_EXPOSURE_QUOTE),
         tracker,
     }
+}
+
+/// The size of each execution table for `instruments` rows of [`instrument_row`], whose assets are
+/// 0 and 1.
+pub fn exec_capacity(instruments: u16) -> ExecCapacity {
+    let rows: Vec<InstrumentRow> = (0..instruments)
+        .map(|id| instrument_row(id, TrackerSpec::default(), 8))
+        .collect();
+    ExecCapacity::of(&rows).expect("a test engine stays within the slots a client id addresses")
 }
 
 /// All instruments, all-default params. Generic over `P` so the one builder serves strategies with

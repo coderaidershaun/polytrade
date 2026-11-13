@@ -9,7 +9,7 @@ use rtrb::{Consumer, RingBuffer};
 use tokio::sync::mpsc;
 
 use crate::hot::dispatch::ExecWiring;
-use crate::hot::exec::{ExecLimits, ExecSettings, FeeModel, MAX_ORDER_INSTRUMENTS};
+use crate::hot::exec::{ExecLimits, ExecSettings, FeeModel};
 use crate::hot::sink::{ExecLaneBudget, ExecSink, SampleSink, exec_lane_capacity};
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::info;
@@ -82,8 +82,7 @@ pub(super) struct ExecCheck<'a> {
 ///
 /// # Errors
 /// [`StartError::ExecutionNotWired`] when an armed config reaches here without the probe or the
-/// input queue that arming implies, [`StartError::ExecutionTooManyInstruments`] when the order
-/// table cannot address every row, [`StartError::Venue`] when the venue refuses the config or its
+/// input queue that arming implies, [`StartError::Venue`] when the venue refuses the config or its
 /// own bring-up, and `ExecutionIdentity*` when the lease cannot be taken.
 pub(super) fn check_execution(check: ExecCheck<'_>) -> Result<Option<ExecPlan>, StartError> {
     let Some(execution) = check.execution.filter(|config| config.mode.is_enabled()) else {
@@ -96,13 +95,6 @@ pub(super) fn check_execution(check: ExecCheck<'_>) -> Result<Option<ExecPlan>, 
             detail: "the registry allocated no execution input queue",
         });
     };
-    let instruments = check.registry.instruments();
-    if instruments.len() > MAX_ORDER_INSTRUMENTS {
-        return Err(StartError::ExecutionTooManyInstruments {
-            found: instruments.len(),
-            max: MAX_ORDER_INSTRUMENTS,
-        });
-    }
     // Each venue's physics come from the venue's own module. Read here, where the venue is known,
     // and carried into `settings` — the hot engine stays venue-neutral and never names one.
     let venue = match execution.mode {

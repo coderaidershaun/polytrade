@@ -4,25 +4,9 @@
 use rtrb::Producer;
 
 use crate::hot::digest::{Digest, Digester, digest_fields};
-use crate::hot::exec::{MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS};
 use crate::msg::exec::{ExecCommand, ExecLaneItem, StampedExecCommand};
 use crate::msg::failure::{FailureClass, Halt};
 use crate::msg::time::{DurationUs, LocalTs, Stamper, Tick};
-
-/// Commands one spin can produce for an instrument beyond the order table itself: an open-orders
-/// request, a flatten, one action per side, the sweep a halt issues, and a prior-run cancel.
-const COMMANDS_PER_INSTRUMENT_PER_SPIN: usize = 6;
-
-/// Sized so a single spin can never fill it. Every producer banks at most one command per order
-/// slot — a timeout chases a slot, a closing window pulls it, and no slot can be both at once —
-/// plus [`COMMANDS_PER_INSTRUMENT_PER_SPIN`]. Anything smaller turns an ordinary busy spin, such as
-/// a window closing on a full ladder, into a halt.
-///
-/// Anything larger buys nothing. Past one spin the bank holds whatever the lane below refused, so
-/// an edge that stays stalled fills any bank there is — and THAT is the designed capacity event:
-/// the engine halts rather than dropping a command whose state transition it has already applied.
-pub(crate) const COMMAND_BANK_CAPACITY: usize =
-    MAX_ORDER_SLOTS + COMMANDS_PER_INSTRUMENT_PER_SPIN * MAX_ORDER_INSTRUMENTS;
 
 const COMMAND_SLOTS: usize = 1_024;
 
@@ -73,12 +57,14 @@ struct BankedCommand {
 
 pub(crate) struct PendingCommands {
     banked: Vec<BankedCommand>,
+    /// The bank is full at this many commands, never at the capacity of its `Vec`.
+    capacity: usize,
     banked_total: u64,
     stamper: Stamper,
 }
 
 digest_fields! {
-    PendingCommands { banked_total }
+    PendingCommands { capacity, banked_total }
     not_state {
         // The commands that the lane has not taken yet: how many wait depends on how fast the edge
         // reads, and the latency tick of each is a clock reading.
@@ -98,9 +84,10 @@ impl PendingCommands {
 
     /// The bank reads the counter of the sink it drains into. With no sink no command is ever sent,
     /// so it reads none.
-    pub(crate) fn for_sink(sink: Option<&ExecSink>) -> Self {
+    pub(crate) fn for_sink(sink: Option<&ExecSink>, capacity: usize) -> Self {
         Self {
-            banked: Vec::with_capacity(COMMAND_BANK_CAPACITY),
+            banked: Vec::with_capacity(capacity),
+            capacity,
             banked_total: 0,
             stamper: sink.map_or(Stamper::Off, |sink| sink.stamper.clone()),
         }
@@ -110,7 +97,7 @@ impl PendingCommands {
     #[inline]
     #[must_use]
     pub(crate) fn bank(&mut self, command: ExecCommand, at: LocalTs) -> bool {
-        if self.banked.len() == COMMAND_BANK_CAPACITY {
+        if self.banked.len() == self.capacity {
             return false;
         }
         self.banked.push(BankedCommand {

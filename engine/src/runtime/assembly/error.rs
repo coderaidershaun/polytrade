@@ -23,9 +23,13 @@ pub enum StartError {
         detail: &'static str,
     },
     #[error(
-        "{found} instruments exceed the {max}-instrument order table — an engine that cannot track its own orders must not place any"
+        "the {table} table needs {needed} entries and a client order id addresses {addressable} — an engine that cannot tell its own orders apart must not place any"
     )]
-    ExecutionTooManyInstruments { found: usize, max: usize },
+    ExecutionCapacity {
+        table: &'static str,
+        needed: usize,
+        addressable: usize,
+    },
     #[error(
         "execution.{field} is {value}, but {venue_fact} — the setting reaches nothing on this venue, and a config that appears to tune one is worse than one that leaves it out"
     )]
@@ -109,7 +113,7 @@ impl StartError {
             | StartError::Exposure(_)
             | StartError::Venue(_)
             | StartError::ExecutionNotWired { .. }
-            | StartError::ExecutionTooManyInstruments { .. }
+            | StartError::ExecutionCapacity { .. }
             | StartError::ExecutionFieldInert { .. }
             | StartError::ExecutionBaseFloorOnPosition { .. }
             | StartError::ExecutionOrderCapacity { .. }

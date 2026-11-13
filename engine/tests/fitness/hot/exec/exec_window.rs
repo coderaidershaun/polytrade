@@ -16,8 +16,8 @@
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
-    DesiredQuote, ExecSettings, HaltReason, MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS, OrderSlot,
-    OrderState, QuoteLevel, RejectReason,
+    DesiredQuote, ExecCapacity, ExecSettings, HaltReason, OrderSlot, OrderState, QuoteLevel,
+    RejectReason,
 };
 use engine::hot::strategy::{Strategy, StrategyCtx, WindowInfo};
 use engine::msg::exec::{
@@ -247,14 +247,6 @@ fn a_sweep_pulls_resting_quotes_and_never_a_marketable_order() {
     );
 }
 
-/// One reconciliation request a spin, against a bank sized to the order table plus a few commands
-/// per instrument, behind a lane that takes two items a spin until it is full: twice the order table
-/// outlasts both.
-const JAM_SPINS: i64 = 2 * MAX_ORDER_SLOTS as i64;
-
-/// The bank holds the order table and six commands for each instrument it can quote.
-const COMMAND_BANK_CAPACITY: usize = MAX_ORDER_SLOTS + 6 * MAX_ORDER_INSTRUMENTS;
-
 /// CONTRACT: a bank that holds its whole capacity refuses the next command and halts quoting, and a
 /// cancel that it refuses never reaches the lane, so the order it would have pulled stays `Live`,
 /// also when the window closes after the halt. A cancel marked as sent but never banked would leave
@@ -274,6 +266,12 @@ fn full_command_bank_halts_and_leaves_the_order_live() {
         run_nonce: 0,
     });
     let (mut engine, mut commands, mut ui_events) = (built.engine, built.commands, built.ui_events);
+    let bank = ExecCapacity::of(&[row_with_ceiling(CEILING)])
+        .expect("one instrument is addressable")
+        .command_bank();
+    // Each spin asks the venue for its open orders. Until the lane is full each spin puts at least
+    // one item into it, and after that at least one command into the bank, so the halt comes in time.
+    let jam_spins = (commands.buffer().capacity() + bank) as i64;
     make_ready(&mut engine, OPEN);
     engine.dispatch(&rotation(0, OPEN, CLOSE, OPEN));
     for message in reseat_book(BID, ASK, OPEN) {
@@ -290,7 +288,7 @@ fn full_command_bank_halts_and_leaves_the_order_live() {
 
     let jammed_from = OPEN + 2_000_000;
     let mut screen = (None, Vec::new());
-    for step in 0..JAM_SPINS {
+    for step in 0..jam_spins {
         spin_at(&mut engine, 2 + step as u64, jammed_from + step * 10_000);
         screen = read_screen(&mut ui_events);
         if screen.0.is_some_and(UiHalt::is_halted) {
@@ -314,7 +312,7 @@ fn full_command_bank_halts_and_leaves_the_order_live() {
         "the refused cancels leave both orders live"
     );
 
-    spin_at(&mut engine, 2 + JAM_SPINS as u64, CLOSE - MARGIN.micros());
+    spin_at(&mut engine, 2 + jam_spins as u64, CLOSE - MARGIN.micros());
     let (_, working) = read_screen(&mut ui_events);
     assert_eq!(
         working,
@@ -333,7 +331,7 @@ fn full_command_bank_halts_and_leaves_the_order_live() {
     let banked = engine.counters().orders_submitted as usize;
     assert_eq!(
         banked - placed.len() - lane.len(),
-        COMMAND_BANK_CAPACITY,
+        bank,
         "the bank refused only once it held its whole capacity"
     );
 }

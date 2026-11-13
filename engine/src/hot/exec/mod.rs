@@ -8,6 +8,7 @@
 mod account;
 mod audit;
 mod budget;
+mod capacity;
 mod desired;
 mod engine;
 mod event;
@@ -25,6 +26,7 @@ pub use crate::runtime::config::MAX_QUOTE_LEVELS;
 
 pub use account::{AccountTable, AccountWatermark, Balance, ReleaseOutcome};
 pub use budget::{MAX_ORDER_BUDGET_WINDOWS, OrderBudget, OrderBudgetWindow};
+pub use capacity::ExecCapacity;
 pub use desired::{DesiredBook, DesiredQuote, QuoteLevel};
 pub(crate) use engine::FoldStamps;
 pub use engine::{ExecEngine, ExecEngineSetup, ExecSettings};
@@ -34,8 +36,8 @@ pub use gates::{
     assess_exposure, assess_loss,
 };
 pub use order::{
-    ClientIdLayout, CloseReason, FillDelta, MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS, OrderClaim,
-    OrderSlot, OrderState, OrderTable, ReconcilePass, level_of_slot, side_base,
+    ClientIdLayout, CloseReason, FillDelta, MAX_ORDER_SLOTS, OrderClaim, OrderSlot, OrderState,
+    OrderTable, ReconcilePass, level_of_slot, side_base,
 };
 pub use reconcile::{
     BookTop, ExecLimits, FundsView, PlaceIntent, ReconcileInput, ReconcileOutcome, RejectReason,

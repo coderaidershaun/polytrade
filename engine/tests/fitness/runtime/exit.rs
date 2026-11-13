@@ -107,7 +107,11 @@ fn each_start_refusal() -> Vec<StartError> {
             mode: "live",
             detail: "the startup permission probe was never run",
         },
-        StartError::ExecutionTooManyInstruments { found: 17, max: 16 },
+        StartError::ExecutionCapacity {
+            table: "order slots",
+            needed: 65_600,
+            addressable: 65_536,
+        },
         StartError::ExecutionFieldInert {
             field: "quote_stop_margin_ms",
             value: "9000".into(),
@@ -165,7 +169,7 @@ fn start_variant_index(error: &StartError) -> usize {
         StartError::Exposure(_) => 1,
         StartError::Venue(_) => 2,
         StartError::ExecutionNotWired { .. } => 3,
-        StartError::ExecutionTooManyInstruments { .. } => 4,
+        StartError::ExecutionCapacity { .. } => 4,
         StartError::ExecutionFieldInert { .. } => 5,
         StartError::ExecutionBaseFloorOnPosition { .. } => 6,
         StartError::ExecutionOrderCapacity { .. } => 7,

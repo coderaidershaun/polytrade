@@ -1,6 +1,7 @@
 //! The start checks of a run, each before any thread: a refused start has nothing to stop, spends
 //! no run nonce, and writes no file. The lease is the last check.
 
+use crate::hot::exec::ExecCapacity;
 use crate::hot::strategy::Strategy;
 use crate::info;
 use crate::runtime::config::{Config, ExecutionMode, RunIdentity, SourceSpec};
@@ -68,6 +69,7 @@ impl<P> Preflight<'_, P> {
         // Every venue's grid is checked against the deployment the registry names rather than a
         // constant, so a production run is checked against the production grid.
         port.read_scales(&registry)?.stamp(&mut registry);
+        ExecCapacity::of(registry.instruments())?;
         if let Some(execution) = &config.execution {
             check_execution_order_capacity(&registry, execution.max_orders_per_side)?;
         }

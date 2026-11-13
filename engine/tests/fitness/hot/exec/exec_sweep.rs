@@ -16,7 +16,7 @@ use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::{RecordedTables, TableKind};
 use rtrb::Consumer;
 
-use crate::engine_support::{ONE, exec_event, ts};
+use crate::engine_support::{ONE, exec_capacity, exec_event, ts};
 use crate::exec_support::{
     BID, CEILING, INSTRUMENT, QuotingEngine, QuotingSetup, TwoSidedQuoter, built_quoting_engine,
     drain_commands, exec_settings, make_ready, reseat_book, row_with_ceiling, spin_at,
@@ -69,7 +69,7 @@ fn sweep(orders: &mut OrderTable, instrument: InstrumentId, recon_seq: u64) -> u
 
 #[test]
 fn a_sweep_retires_what_predates_the_pass_and_spares_what_does_not() {
-    let mut orders = OrderTable::new(0);
+    let mut orders = OrderTable::new(&exec_capacity(2), 0);
     let placed_under = claim_at(&mut orders, INSTRUMENT, QuoteLevel::ZERO, 7);
     assert_eq!(sweep(&mut orders, INSTRUMENT, 7), 0);
     assert!(orders.slot(placed_under).state.is_working());
@@ -120,7 +120,7 @@ fn resurrected_slot(orders: &mut OrderTable, recon_seq: u64) -> usize {
 /// what makes a slot eligible for retirement, and what scopes retirement in the first place.
 #[test]
 fn a_later_pass_retires_an_unknown_slot_it_does_not_name_and_stays_within_its_instrument() {
-    let mut orders = OrderTable::new(0);
+    let mut orders = OrderTable::new(&exec_capacity(2), 0);
     let index = resurrected_slot(&mut orders, 5);
     assert_eq!(orders.slot(index).state, OrderState::Unknown);
     assert_eq!(sweep(&mut orders, INSTRUMENT, 5), 0);
@@ -135,7 +135,7 @@ fn a_later_pass_retires_an_unknown_slot_it_does_not_name_and_stays_within_its_in
 
 #[test]
 fn a_probe_refused_at_the_gateway_leaves_the_doubt_standing() {
-    let mut orders = OrderTable::new(0);
+    let mut orders = OrderTable::new(&exec_capacity(2), 0);
     let index = resurrected_slot(&mut orders, 5);
     let client_id = orders.slot(index).client_id;
     apply_exec_event(

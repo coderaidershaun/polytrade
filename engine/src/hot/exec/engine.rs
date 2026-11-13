@@ -14,6 +14,7 @@ use crate::runtime::registry::InstrumentRow;
 
 use super::account::{AccountTable, Balance};
 use super::budget::{BudgetMeter, OrderBudget};
+use super::capacity::ExecCapacity;
 use super::desired::QuoteLevel;
 use super::event::PriorRunOrders;
 use super::flatten::FeeModel;
@@ -164,6 +165,7 @@ impl ExecEngine {
                 || (1..=MAX_QUOTE_LEVELS).contains(&setup.settings.max_orders_per_side),
             "max_orders_per_side must be within 1..={MAX_QUOTE_LEVELS} when execution is wired"
         );
+        let capacity = ExecCapacity::sized_for(setup.instruments);
         let instruments = setup
             .instruments
             .iter()
@@ -190,14 +192,14 @@ impl ExecEngine {
             })
             .collect();
         Self {
-            orders: OrderTable::new(setup.run_nonce),
-            prior_orders: PriorRunOrders::new(),
-            account: AccountTable::new(),
-            pending: PendingCommands::for_sink(setup.sink.as_ref()),
+            orders: OrderTable::new(&capacity, setup.run_nonce),
+            prior_orders: PriorRunOrders::new(&capacity),
+            account: AccountTable::new(&capacity),
+            pending: PendingCommands::for_sink(setup.sink.as_ref(), capacity.command_bank()),
             sink: setup.sink,
             halt: ExecHalt::Armed,
             readiness: Readiness::default(),
-            refusals: RefusalLatch::default(),
+            refusals: RefusalLatch::new(&capacity),
             reject_streak: 0,
             budget: BudgetMeter::new(setup.settings.order_budget),
             instruments,

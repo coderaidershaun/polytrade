@@ -1,7 +1,6 @@
 //! Builds a simulated venue from the run's config: its taps, matching model, schedule, wire and
 //! core, so the runtime hands over its inputs and never learns how the venue is built.
 
-use crate::hot::exec::MAX_ORDER_INSTRUMENTS;
 use crate::info;
 use crate::msg::ids::{InstrumentId, Notional, Qty};
 use crate::msg::run_state::RunState;
@@ -35,6 +34,9 @@ pub(crate) struct SimPlan {
     market_inbox_capacity: usize,
     verdict_retention: DurationUs,
     worst_case: DurationUs,
+    /// The orders the venue lets rest for this run, so the mirror can hold each one, as on a live
+    /// venue.
+    mirror_capacity: usize,
 }
 
 /// # Errors
@@ -73,6 +75,9 @@ pub(crate) fn plan(check: EdgeCheck<'_>) -> Result<SimPlan, SimVenueError> {
     let inflight_timeout = DurationUs::from_millis(execution.inflight_timeout_ms as i64);
     let market_inbox_capacity = input_capacity.saturating_mul(2);
     let limits = instrument_limits(row)?;
+    let mirror_capacity = row
+        .max_num_orders
+        .map_or(0, |limit| usize::try_from(limit).unwrap_or(usize::MAX));
 
     let latency = latency_budget(sim);
     let venue = SimVenue::new(SimVenueSetup {
@@ -91,6 +96,7 @@ pub(crate) fn plan(check: EdgeCheck<'_>) -> Result<SimPlan, SimVenueError> {
         market_inbox_capacity,
         verdict_retention,
         worst_case,
+        mirror_capacity,
     })
 }
 
@@ -116,6 +122,7 @@ pub(crate) fn bring_up(plan: SimPlan, inputs: EdgeInputs<'_>) -> VenueEdge {
         market_inbox_capacity,
         verdict_retention,
         worst_case,
+        mirror_capacity,
     } = plan;
     let (tapped, taps) = attach_market_taps(registry, input_capacity, std::mem::take(groups));
     *groups = tapped;
@@ -144,7 +151,7 @@ pub(crate) fn bring_up(plan: SimPlan, inputs: EdgeInputs<'_>) -> VenueEdge {
         gate,
     } = taps;
     let driver = SimExecDriver::new(SimExecDriverSetup {
-        core: ExecCore::with_limits(settings.max_orders_per_side, MAX_ORDER_INSTRUMENTS),
+        core: ExecCore::with_limits(settings.max_orders_per_side, mirror_capacity),
         venue,
         schedule: DeliverySchedule::new(DeliveryLimits {
             ack_latency: latency.ack,

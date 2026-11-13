@@ -15,7 +15,7 @@ use crate::runtime::config::MAX_QUOTE_LEVELS;
 use super::desired::{DesiredBook, DesiredQuote, QuoteLevel};
 use super::engine::{ExecEngine, FoldStamps, resting_of};
 use super::gates::{ExposureCheck, HaltReason, QuotePermission, assess_exposure};
-use super::order::{MAX_ORDER_SLOTS, OrderState};
+use super::order::OrderState;
 use super::reconcile::{
     BookTop, FundsView, ReconcileInput, ReconcileOutcome, RejectReason, reconcile_side,
 };
@@ -46,7 +46,7 @@ impl ExecEngine {
     }
 
     fn sweep_timeouts(&mut self, stamps: FoldStamps, bank: &mut Actions) {
-        for index in 0..MAX_ORDER_SLOTS {
+        for index in self.orders.slot_indices() {
             if self
                 .orders
                 .is_timed_out(index, stamps.fold, self.settings.inflight_timeout)
@@ -78,8 +78,10 @@ impl ExecEngine {
     fn detect_silence(&mut self, now: LocalTs) {
         self.spins_since_exec_event += 1;
         let is_silent = self.spins_since_exec_event >= self.settings.exec_silence_spins;
-        let has_working =
-            (0..MAX_ORDER_SLOTS).any(|index| self.orders.slot(index).state.is_working());
+        let has_working = self
+            .orders
+            .slot_indices()
+            .any(|index| self.orders.slot(index).state.is_working());
         if is_silent && has_working {
             self.request_open_orders(now);
         }
