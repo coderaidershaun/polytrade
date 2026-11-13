@@ -85,7 +85,7 @@ Step 2 of the gate also reads the clock lint of `clippy.toml`: a call that reads
 
 ## Config keys
 
-Each trading engine reads its `config.yaml`. Each block refuses a key that it does not know. The keys in the table below have defaults. The blocks `latency:` and `senders:` can be left out. The code is in `engine/src/runtime/config/`.
+Each trading engine reads its `config.yaml`. Each block refuses a key that it does not know. The keys in the table below have defaults, except `otlp.collector`. The blocks `latency:`, `senders:` and `otlp:` can be left out. The code is in `engine/src/runtime/config/`.
 
 | Key | Default | What it sets |
 | --- | --- | --- |
@@ -110,6 +110,7 @@ Each trading engine reads its `config.yaml`. Each block refuses a key that it do
 | `logging.ring_capacity` | `8192` | Records that each log lane of a thread and the strategy lane hold before they drop. |
 | `logging.drain_deadline_ms` | `2000` | How long the log drain writes at shutdown. It must be below `engine.drain_deadline_ms`, or the start is refused. |
 | `logging.reopen_limit` | `3` | Failed reopens of the log file in a row before log lines go to stderr. |
+| `otlp.collector` | none | The address and port of an OTLP/HTTP collector on this host: `127.0.0.1` or `"[::1]"`, for example `127.0.0.1:4318`. Each second the exporter sends the log lines and the latency rows that wait, one time each, with no retry and no redirect. Only a build with the feature `otlp` reads the block (`cargo build --features engine/otlp …`), and a build without it refuses the block. With the block, `logging.drain_deadline_ms` + 1,000 must be below `engine.drain_deadline_ms`, or the start is refused. |
 
 The environment variable `POLYSIM_METRICS_SUMMARY_SECS` is gone: `latency.interval_secs` sets the interval.
 
