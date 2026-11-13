@@ -16,7 +16,9 @@ use gate::MarketGates;
 
 use crate::hot::book::Book;
 use crate::hot::dispatch::ui_emit::UiEmitter;
-use crate::hot::exec::{DesiredBook, ExecCallback, ExecEngine, HaltReason, QuoteLevel, SpinInput};
+use crate::hot::exec::{
+    DesiredBook, ExecCallback, ExecEngine, FoldStamps, HaltReason, QuoteLevel, SpinInput,
+};
 use crate::hot::ledger::PositionLedger;
 use crate::hot::sink::{ExposureSink, LinkSink, PersistSink, StrategyLogSink};
 use crate::hot::strategy::{Actions, ActionsSetup, DrainSinks, Strategy, StrategyCtx, WindowInfo};
@@ -212,7 +214,7 @@ impl HotEngine {
         self.retry_latched_writes();
         self.spin_strategy(tick, received_ts_us);
         self.drain_actions();
-        self.run_execution_pass(tick);
+        self.run_execution_pass(tick, received_ts_us);
         self.emit_refusals();
         self.emit_execution_state(tick, received_ts_us);
         self.emit_positions(received_ts_us);
@@ -252,7 +254,11 @@ impl HotEngine {
             fold_time,
             ..
         } = &mut self.state;
-        let callback = exec.on_exec_event(event, *fold_time, ledger, actions);
+        let stamps = FoldStamps {
+            fold: fold_time.as_local(),
+            received: received_ts_us,
+        };
+        let callback = exec.on_exec_event(event, stamps, ledger, actions);
         // Tee ahead of live gate (operator sees fill/transition/refusal).
         match callback {
             ExecCallback::None => {}
@@ -319,7 +325,7 @@ impl HotEngine {
     }
 
     /// Runs parked and warming too, so the engine still answers for the orders that it holds.
-    fn run_execution_pass(&mut self, tick: &SpinTick) {
+    fn run_execution_pass(&mut self, tick: &SpinTick, received_ts_us: LocalTs) {
         let HotState {
             books,
             ledger,
@@ -334,6 +340,7 @@ impl HotEngine {
         exec.on_spin(SpinInput {
             tick,
             now: *fold_time,
+            received: received_ts_us,
             books,
             desired,
             windows,

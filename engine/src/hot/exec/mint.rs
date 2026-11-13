@@ -9,7 +9,7 @@ use crate::msg::time::LocalTs;
 
 use super::audit::bank_engine_driven;
 use super::desired::QuoteLevel;
-use super::engine::ExecEngine;
+use super::engine::{ExecEngine, FoldStamps};
 use super::gates::HaltReason;
 use super::order::{CloseReason, OrderClaim, OrderState};
 use super::reconcile::{PlaceIntent, ReconcileOutcome};
@@ -24,15 +24,16 @@ impl ExecEngine {
         outcome: ReconcileOutcome,
         input: &mut SpinInput<'_>,
     ) {
-        let at = input.now.as_local();
+        let stamps = input.stamps();
+        let at = stamps.fold;
         match outcome {
             ReconcileOutcome::Nothing | ReconcileOutcome::Reject(_) => {}
             ReconcileOutcome::Place(intent) => {
-                self.place(instrument, side, level, intent, at, input.bank)
+                self.place(instrument, side, level, intent, stamps, input.bank)
             }
             ReconcileOutcome::Cancel => {
                 if let Some(index) = self.resting_index(instrument, side, level) {
-                    self.cancel_slot(index, at, input.bank);
+                    self.cancel_slot(index, stamps, input.bank);
                 }
             }
             ReconcileOutcome::AmendQty(qty) => {
@@ -47,7 +48,14 @@ impl ExecEngine {
                 };
                 if self.bank_or_halt(command, at) {
                     let next = OrderState::AmendInFlight;
-                    self.move_slot(index, next, OrderTransition::AmendSent, at, input.bank);
+                    let received = stamps.received;
+                    self.move_slot(
+                        index,
+                        next,
+                        OrderTransition::AmendSent,
+                        received,
+                        input.bank,
+                    );
                 }
             }
         }
@@ -66,7 +74,13 @@ impl ExecEngine {
 
     /// The slot moves to cancel-in-flight only once the cancel is banked: a slot waiting on an answer
     /// is one the engine stops asking about, so a cancel that never left must leave it as it was.
-    pub(super) fn cancel_slot(&mut self, index: usize, at: LocalTs, bank: &mut Actions) -> bool {
+    pub(super) fn cancel_slot(
+        &mut self,
+        index: usize,
+        stamps: FoldStamps,
+        bank: &mut Actions,
+    ) -> bool {
+        let at = stamps.fold;
         let slot = self.orders.slot(index);
         let command = ExecCommand::Cancel {
             instrument: slot.instrument,
@@ -75,7 +89,13 @@ impl ExecEngine {
         let is_sent = self.bank_or_halt(command, at);
         if is_sent {
             let next = OrderState::CancelInFlight;
-            self.move_slot(index, next, OrderTransition::CancelSent, at, bank);
+            self.move_slot(
+                index,
+                next,
+                OrderTransition::CancelSent,
+                stamps.received,
+                bank,
+            );
         }
         is_sent
     }
@@ -85,13 +105,13 @@ impl ExecEngine {
         index: usize,
         next: OrderState,
         transition: OrderTransition,
-        at: LocalTs,
+        received: LocalTs,
         bank: &mut Actions,
     ) {
         let slot = self.orders.slot_mut(index);
         let previous = OrderLifecycle::from(slot.state);
         slot.state = next;
-        bank_engine_driven(bank, slot, transition, previous, at);
+        bank_engine_driven(bank, slot, transition, previous, received);
     }
 
     /// Every placement the engine mints passes through here, so every one of them spends the venue
@@ -103,9 +123,10 @@ impl ExecEngine {
         side: Side,
         level: QuoteLevel,
         intent: PlaceIntent,
-        at: LocalTs,
+        stamps: FoldStamps,
         bank: &mut Actions,
     ) {
+        let at = stamps.fold;
         let Some((index, client_id)) = self.claim(instrument, side, level, intent, at) else {
             return;
         };
@@ -121,7 +142,7 @@ impl ExecEngine {
             at,
         );
         if !is_banked {
-            self.unwind(index, at, bank);
+            self.unwind(index, stamps, bank);
             return;
         }
         self.budget.record_place();
@@ -130,7 +151,7 @@ impl ExecEngine {
             self.orders.slot(index),
             OrderTransition::Placed,
             OrderLifecycle::Free,
-            at,
+            stamps.received,
         );
     }
 
@@ -165,11 +186,13 @@ impl ExecEngine {
     }
 
     #[cold]
-    fn unwind(&mut self, index: usize, at: LocalTs, bank: &mut Actions) {
+    fn unwind(&mut self, index: usize, stamps: FoldStamps, bank: &mut Actions) {
+        let at = stamps.fold;
         self.release_unsent_reservation(index);
         self.orders.slot_mut(index).closed_ts_us = at;
         let next = OrderState::Closed(CloseReason::Rejected);
-        self.move_slot(index, next, OrderTransition::SendAbandoned, at, bank);
+        let received = stamps.received;
+        self.move_slot(index, next, OrderTransition::SendAbandoned, received, bank);
         self.halt(HaltReason::CommandBankOverflow, at);
     }
 

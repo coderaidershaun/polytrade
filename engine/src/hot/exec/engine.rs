@@ -22,6 +22,16 @@ use super::order::{OrderSlot, OrderTable};
 use super::reconcile::{ExecLimits, RejectReason, RestingOrder, TickGrid};
 use super::view::{ExecCallback, OrderReject, OrderView, WorkingOrderView};
 
+/// The two times of the message under fold. The fold time stamps what the engine decides: a slot, a
+/// deadline, a halt, and the bank stamp of a command. The received stamp of the message stamps each
+/// row that it writes and each value that it hands the strategy, because the tape keeps the raw
+/// stamp of each message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FoldStamps {
+    pub(crate) fold: LocalTs,
+    pub(crate) received: LocalTs,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExecSettings {
     pub limits: ExecLimits,
@@ -276,26 +286,26 @@ impl ExecEngine {
     pub(crate) fn on_exec_event(
         &mut self,
         event: &ExecEvent,
-        now: FoldTime,
+        stamps: FoldStamps,
         ledger: &mut PositionLedger,
         bank: &mut Actions,
     ) -> ExecCallback {
-        let now = now.as_local();
+        let now = stamps.fold;
         self.spins_since_exec_event = 0;
         match event.kind {
-            ExecKind::StreamReset => return self.on_stream_reset(now, bank),
+            ExecKind::StreamReset => return self.on_stream_reset(stamps.received, bank),
             ExecKind::StreamReady => {
                 self.readiness.observe_stream_ready();
                 return ExecCallback::None;
             }
-            ExecKind::SnapshotEnd => return self.on_snapshot_end(event, now, bank),
+            ExecKind::SnapshotEnd => return self.on_snapshot_end(event, stamps, bank),
             _ => {}
         }
         match event.provenance {
             Provenance::Foreign => return ExecCallback::None,
             Provenance::PriorRun => {
                 self.cancel_prior_run(event, now);
-                self.apply_to_prior_run(event, now, ledger, bank);
+                self.apply_to_prior_run(event, stamps, ledger, bank);
                 return ExecCallback::None;
             }
             Provenance::Mine => {}
@@ -303,7 +313,7 @@ impl ExecEngine {
         let Some(index) = self.locate(event, now) else {
             return ExecCallback::None;
         };
-        self.apply_to_slot(index, event, now, ledger, bank)
+        self.apply_to_slot(index, event, stamps, ledger, bank)
     }
 
     /// Absolute balances only — see [`AccountChunk`] for why a delta may never reach here.

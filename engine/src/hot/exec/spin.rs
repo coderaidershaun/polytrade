@@ -13,7 +13,7 @@ use crate::msg::time::{FoldTime, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 
 use super::desired::{DesiredBook, DesiredQuote, QuoteLevel};
-use super::engine::{ExecEngine, resting_of};
+use super::engine::{ExecEngine, FoldStamps, resting_of};
 use super::gates::{ExposureCheck, HaltReason, QuotePermission, assess_exposure};
 use super::order::{MAX_ORDER_SLOTS, OrderState};
 use super::reconcile::{
@@ -28,7 +28,7 @@ impl ExecEngine {
         let now = input.now.as_local();
         self.budget.observe_spin(now);
         self.orders.reap(now, self.settings.order_reap_window);
-        self.sweep_timeouts(now, input.bank);
+        self.sweep_timeouts(input.stamps(), input.bank);
         self.detect_silence(now);
         self.observe_pnl_baseline(input.ledger);
         self.enforce_resting_limit(now);
@@ -45,13 +45,13 @@ impl ExecEngine {
         }
     }
 
-    fn sweep_timeouts(&mut self, now: LocalTs, bank: &mut Actions) {
+    fn sweep_timeouts(&mut self, stamps: FoldStamps, bank: &mut Actions) {
         for index in 0..MAX_ORDER_SLOTS {
             if self
                 .orders
-                .is_timed_out(index, now, self.settings.inflight_timeout)
+                .is_timed_out(index, stamps.fold, self.settings.inflight_timeout)
             {
-                self.chase_timed_out(index, now, bank);
+                self.chase_timed_out(index, stamps, bank);
             }
         }
     }
@@ -59,12 +59,13 @@ impl ExecEngine {
     /// The venue never answered this order's request, so its state is unknown until the venue is
     /// asked about the order directly.
     #[cold]
-    fn chase_timed_out(&mut self, index: usize, now: LocalTs, bank: &mut Actions) {
+    fn chase_timed_out(&mut self, index: usize, stamps: FoldStamps, bank: &mut Actions) {
+        let now = stamps.fold;
         let slot = self.orders.slot_mut(index);
         slot.last_event_ts_us = now;
         let (instrument, client_id) = (slot.instrument, slot.client_id);
         let next = OrderState::Unknown;
-        self.move_slot(index, next, OrderTransition::Timeout, now, bank);
+        self.move_slot(index, next, OrderTransition::Timeout, stamps.received, bank);
         self.recon_seq += 1;
         let command = ExecCommand::ReconcileOrder {
             instrument,
@@ -341,6 +342,8 @@ pub struct SpinInput<'a> {
     pub tick: &'a SpinTick,
     /// The time that each deadline of the pass reads.
     pub now: FoldTime,
+    /// The received stamp of the tick: the stamp of each row that the pass writes.
+    pub(crate) received: LocalTs,
     pub books: &'a [Book],
     pub desired: &'a DesiredBook,
     /// Per instrument, the window the venue last rotated it into. `None` where the venue does not
@@ -351,4 +354,13 @@ pub struct SpinInput<'a> {
     pub(crate) gates: &'a [StrategyGate],
     pub(crate) ledger: &'a PositionLedger,
     pub(crate) bank: &'a mut Actions,
+}
+
+impl SpinInput<'_> {
+    pub(crate) fn stamps(&self) -> FoldStamps {
+        FoldStamps {
+            fold: self.now.as_local(),
+            received: self.received,
+        }
+    }
 }

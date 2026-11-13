@@ -13,7 +13,7 @@ use crate::runtime::config::MAX_QUOTE_LEVELS;
 
 use super::account::ReleaseOutcome;
 use super::audit::{bank_engine_driven, bank_event_rows};
-use super::engine::{ExecEngine, view_of};
+use super::engine::{ExecEngine, FoldStamps, view_of};
 use super::gates::HaltReason;
 use super::order::{
     FillDelta, MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS, OrderSlot, OrderState, ReconcilePass,
@@ -43,7 +43,7 @@ impl ExecEngine {
     pub(super) fn on_snapshot_end(
         &mut self,
         event: &ExecEvent,
-        now: LocalTs,
+        stamps: FoldStamps,
         bank: &mut Actions,
     ) -> ExecCallback {
         let Some(instrument) = event.instrument else {
@@ -52,12 +52,12 @@ impl ExecEngine {
         let pass = ReconcilePass {
             instrument,
             recon_seq: event.recon_seq,
-            recon_ts_us: now,
+            recon_ts_us: stamps.fold,
         };
         self.orders.sweep_unseen(pass, &mut |slot, previous| {
             swept_warning(slot, pass.recon_seq);
             let transition = OrderTransition::SweepClosed;
-            bank_engine_driven(bank, slot, transition, previous.into(), pass.recon_ts_us);
+            bank_engine_driven(bank, slot, transition, previous.into(), stamps.received);
         });
         self.readiness.observe_open_orders_snapshot();
         ExecCallback::None
@@ -78,10 +78,11 @@ impl ExecEngine {
         &mut self,
         index: usize,
         event: &ExecEvent,
-        now: LocalTs,
+        stamps: FoldStamps,
         ledger: &mut PositionLedger,
         bank: &mut Actions,
     ) -> ExecCallback {
+        let (now, received) = (stamps.fold, stamps.received);
         let previous_state = OrderLifecycle::from(self.orders.slot(index).state);
         let applied = apply_exec_event(self.orders.slot_mut(index), event, now);
         if applied.is_resurrection {
@@ -96,7 +97,7 @@ impl ExecEngine {
             self.release_reservation(index);
         }
         self.record_outcome(event, applied.state, now);
-        bank_event_rows(bank, &slot, event, previous_state, applied.fill, now);
+        bank_event_rows(bank, &slot, event, previous_state, applied.fill, received);
 
         if !applied.fill.is_empty() {
             return ExecCallback::Fill(Fill {
@@ -112,7 +113,7 @@ impl ExecEngine {
                 liquidity: event.liquidity,
                 trade_id: event.trade_id,
                 state: applied.state,
-                event_ts_us: now,
+                event_ts_us: received,
             });
         }
         if let Some(class) = event.reject {
@@ -125,10 +126,10 @@ impl ExecEngine {
                     class,
                     code: event.reject_code,
                 },
-                event_ts_us: now,
+                event_ts_us: received,
             });
         }
-        ExecCallback::Update(view_of(&slot).updated_at(now))
+        ExecCallback::Update(view_of(&slot).updated_at(received))
     }
 
     /// Prior-run order event: no reservation release, no reject count, no callback (position already in ledger).
@@ -136,10 +137,11 @@ impl ExecEngine {
     pub(super) fn apply_to_prior_run(
         &mut self,
         event: &ExecEvent,
-        now: LocalTs,
+        stamps: FoldStamps,
         ledger: &mut PositionLedger,
         bank: &mut Actions,
     ) {
+        let now = stamps.fold;
         // SMELL: when every prior-run slot is taken, this event is logged and dropped, so a fill of
         // an order from the earlier run never reaches the ledger and the position stays wrong. A
         // full table should halt the engine instead.
@@ -151,7 +153,14 @@ impl ExecEngine {
         let applied = apply_exec_event(self.prior_orders.slot_mut(index), event, now);
         let slot = *self.prior_orders.slot(index);
         self.book_fill(&slot, event, applied.fill, ledger);
-        bank_event_rows(bank, &slot, event, previous_state, applied.fill, now);
+        bank_event_rows(
+            bank,
+            &slot,
+            event,
+            previous_state,
+            applied.fill,
+            stamps.received,
+        );
     }
 
     /// Fee + fill. No-op on empty (duplicates already folded).

@@ -5,9 +5,8 @@ use crate::hot::ledger::{PositionLedger, narrow_quote, wide};
 use crate::hot::strategy::Actions;
 use crate::log::hot_warn;
 use crate::msg::ids::{InstrumentId, Notional, Qty, Side};
-use crate::msg::time::LocalTs;
 
-use super::engine::ExecEngine;
+use super::engine::{ExecEngine, FoldStamps};
 use super::spin::SpinInput;
 
 impl ExecEngine {
@@ -61,7 +60,7 @@ impl ExecEngine {
                 continue;
             }
             let instrument = InstrumentId(index as u16);
-            let pulled = self.cancel_resting_orders(instrument, at, input.bank);
+            let pulled = self.cancel_resting_orders(instrument, input.stamps(), input.bank);
             if pulled > 0 {
                 report_window_sweep(instrument, pulled);
             }
@@ -73,7 +72,7 @@ impl ExecEngine {
     fn cancel_resting_orders(
         &mut self,
         instrument: InstrumentId,
-        at: LocalTs,
+        stamps: FoldStamps,
         bank: &mut Actions,
     ) -> usize {
         let mut pulled = 0;
@@ -82,7 +81,7 @@ impl ExecEngine {
                 if !self.orders.slot(index).is_resting_quote() {
                     continue;
                 }
-                if !self.cancel_slot(index, at, bank) {
+                if !self.cancel_slot(index, stamps, bank) {
                     return pulled;
                 }
                 pulled += 1;

@@ -271,7 +271,7 @@ impl ExecEngine {
                     side,
                     QuoteLevel::ZERO,
                     intent,
-                    input.now.as_local(),
+                    input.stamps(),
                     input.bank,
                 );
             }

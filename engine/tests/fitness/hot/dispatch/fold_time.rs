@@ -4,14 +4,17 @@
 use std::sync::{Arc, Mutex};
 
 use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
+use engine::hot::exec::{DesiredQuote, QuoteLevel};
 use engine::hot::ingress::IngressQueues;
 use engine::hot::sink::ExecSink;
 use engine::hot::spawn::{HotDriver, Step};
-use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
-use engine::msg::exec::ExecLaneItem;
-use engine::msg::ids::{InstrumentId, Side};
+use engine::hot::strategy::{Fill, OrderReject, OrderUpdate, Registration, Strategy, StrategyCtx};
+use engine::msg::exec::{
+    ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, RejectClass, VenueOrderStatus,
+};
+use engine::msg::ids::{InstrumentId, Price, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick, TradeEvent};
-use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::msg::persist::{FeatureId, OrderTransition, PersistRecord};
 use engine::msg::time::{LocalTs, Stamper};
 use engine::runtime::config::{RecordedTables, TableKind};
 use proptest::prelude::{any, prop};
@@ -19,9 +22,10 @@ use proptest::test_runner::{Config, TestCaseError, TestRunner};
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::engine_support::{
-    ONE, detached_setup, instrument_row, persist_ring_for, spin, tracker_spec_all, trade, ts,
+    ONE, detached_setup, exec_event, instrument_row, persist_ring_for, snapshot_pair, spin,
+    tracker_spec_all, trade, ts,
 };
-use crate::exec_support::exec_settings;
+use crate::exec_support::{QUOTE_QTY, drain_commands, exec_settings, make_ready};
 
 const LANE: usize = 1_024;
 
@@ -208,6 +212,180 @@ fn check(folds: &mut Folds) -> Result<(), String> {
     Ok(())
 }
 
+/// The value that an execution callback handed the strategy: its kind, the stamp that the value
+/// carries, and the stamp of the message under fold.
+type ValueStamps = Arc<Mutex<Vec<(&'static str, LocalTs, LocalTs)>>>;
+
+/// Quotes a bid at the touch of market 0 on each spin, and keeps the stamps of each execution value.
+struct Quoter {
+    values: ValueStamps,
+}
+
+impl Quoter {
+    fn keep(&self, ctx: &StrategyCtx<'_>, kind: &'static str, value_ts: LocalTs) {
+        let mut values = self.values.lock().expect("one thread folds");
+        values.push((kind, value_ts, ctx.event_ts()));
+    }
+}
+
+impl Strategy for Quoter {
+    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
+        let market = InstrumentId(0);
+        let Some(bid) = ctx.book(market).best_bid() else {
+            return;
+        };
+        let quote = DesiredQuote {
+            price: bid.price,
+            qty: QUOTE_QTY,
+            style: OrderStyle::PostOnly,
+        };
+        ctx.quote(market, Side::Buy, QuoteLevel::ZERO, Some(quote));
+    }
+
+    fn on_fill(&mut self, ctx: &mut StrategyCtx<'_>, fill: &Fill) {
+        self.keep(ctx, "fill", fill.event_ts_us);
+    }
+
+    fn on_order_update(&mut self, ctx: &mut StrategyCtx<'_>, update: &OrderUpdate) {
+        self.keep(ctx, "update", update.event_ts_us);
+    }
+
+    fn on_reject(&mut self, ctx: &mut StrategyCtx<'_>, reject: &OrderReject) {
+        self.keep(ctx, "reject", reject.event_ts_us);
+    }
+}
+
+/// An order row or a fill row that reached the tape, by its received stamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Row {
+    /// The row of a placement that the execution pass of a spin made.
+    Placed(LocalTs),
+    Order(LocalTs),
+    Fill(LocalTs),
+}
+
+/// The order and fill rows that reached the tape while one message folded. The rows that the
+/// execution pass of a spin writes wait in the bank and reach the tape with the next message.
+fn rows_after(
+    engine: &mut HotEngine,
+    persist: &mut Consumer<PersistRecord>,
+    message: &InboundMessage,
+) -> Vec<Row> {
+    engine.dispatch(message);
+    std::iter::from_fn(|| persist.pop().ok())
+        .filter_map(|record| match record {
+            PersistRecord::Order(row) if row.transition == OrderTransition::Placed => {
+                Some(Row::Placed(row.received_ts_us))
+            }
+            PersistRecord::Order(row) => Some(Row::Order(row.received_ts_us)),
+            PersistRecord::Fill(row) => Some(Row::Fill(row.received_ts_us)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// After a trade at 2,000,000 the fold time stays there while a late tick and three late answers
+/// of the venue fold. The order row that the tick's quote writes keeps the tick's stamp, and each
+/// row and each callback value of an answer keeps the stamp of that answer.
+fn execution_rows_keep_the_stamp_of_their_message() {
+    let values = ValueStamps::default();
+    let rows = [instrument_row(0, tracker_spec_all(1), 64)];
+    let tables = RecordedTables::new(&[TableKind::Orders, TableKind::Fills]);
+    let (persistence, mut persist) = persist_ring_for(LANE, tables);
+    let (command_producer, mut commands) = RingBuffer::<ExecLaneItem>::new(LANE);
+    let strategy = Quoter {
+        values: Arc::clone(&values),
+    };
+    let mut engine = HotEngine::new(HotEngineSetup {
+        persistence: Some(persistence),
+        exec: Some(ExecWiring {
+            sink: ExecSink::new(command_producer, Stamper::Off),
+            settings: exec_settings(),
+            run_nonce: 0,
+        }),
+        ..detached_setup(&rows, Box::new(strategy))
+    });
+    make_ready(&mut engine, 1_000);
+    let (bids, asks) = snapshot_pair(0, &[(99 * ONE, ONE)], &[(101 * ONE, ONE)], 1_000);
+    engine.dispatch(&InboundMessage::new(ts(1_000), MessageBody::Book(bids)));
+    engine.dispatch(&InboundMessage::new(ts(1_000), MessageBody::Book(asks)));
+    let newer = trade(0, 100 * ONE, ONE, Side::Buy, 2_000_000);
+    engine.dispatch(&InboundMessage::new(
+        ts(2_000_000),
+        MessageBody::Trade(newer),
+    ));
+    while persist.pop().is_ok() {}
+
+    let mut rows = rows_after(&mut engine, &mut persist, &spin(1, 1_500_000));
+    let client_id = drain_commands(&mut commands)
+        .into_iter()
+        .find_map(|command| match command {
+            ExecCommand::Place { client_id, .. } => Some(client_id),
+            _ => None,
+        })
+        .expect("the late tick placed the quote");
+    let price = 99 * ONE;
+    let answer = |kind, when| ExecEvent {
+        kind,
+        ..exec_event(InstrumentId(0), client_id, Side::Buy, price, when)
+    };
+    let ack = ExecEvent {
+        status: Some(VenueOrderStatus::New),
+        ..answer(ExecKind::AckPlaced, 1_600_000)
+    };
+    let refused = ExecEvent {
+        reject: Some(RejectClass::StillLive),
+        ..answer(ExecKind::AckFailed, 1_700_000)
+    };
+    let fill = ExecEvent {
+        status: Some(VenueOrderStatus::Filled),
+        qty: QUOTE_QTY,
+        last_price: Price::from_mantissa(price),
+        last_qty: QUOTE_QTY,
+        cumulative_qty: QUOTE_QTY,
+        cumulative_quote: Price::from_mantissa(price).notional(QUOTE_QTY),
+        ..answer(ExecKind::ReportTrade, 1_800_000)
+    };
+    for (event, when) in [(ack, 1_600_000), (refused, 1_700_000), (fill, 1_800_000)] {
+        let message = InboundMessage::new(ts(when), MessageBody::Exec(event));
+        let answered = rows_after(&mut engine, &mut persist, &message);
+        for row in &answered {
+            let is_kept = match row {
+                Row::Placed(stamp) => *stamp == ts(1_500_000),
+                Row::Order(stamp) | Row::Fill(stamp) => *stamp == ts(when),
+            };
+            assert!(
+                is_kept,
+                "a placement keeps the stamp 1,500,000 of the late tick, and each row of the \
+                 answer received at {when} keeps that stamp: {answered:?}"
+            );
+        }
+        rows.extend(answered);
+    }
+    let placed = rows
+        .iter()
+        .filter(|row| matches!(row, Row::Placed(_)))
+        .count();
+    let fills = rows
+        .iter()
+        .filter(|row| matches!(row, Row::Fill(_)))
+        .count();
+    assert_eq!(
+        (placed, fills),
+        (1, 1),
+        "one placement and one fill reached the tape: {rows:?}"
+    );
+    assert_eq!(
+        *values.lock().expect("the fold is done"),
+        vec![
+            ("update", ts(1_600_000), ts(1_600_000)),
+            ("reject", ts(1_700_000), ts(1_700_000)),
+            ("fill", ts(1_800_000), ts(1_800_000)),
+        ],
+        "each execution value that the strategy receives keeps the stamp of its message"
+    );
+}
+
 /// FITNESS: the fold time never decreases. It is the latest received stamp of the messages popped
 /// so far, from any queue. The strategy reads it, the execution pass reads it for each deadline,
 /// and a row that a message writes keeps the stamp of that message.
@@ -245,6 +423,7 @@ fn fold_time_never_decreases() {
         vec![ts(1_000_000)],
         "the row of the tick keeps the stamp of the tick"
     );
+    execution_rows_keep_the_stamp_of_their_message();
 
     let mut runner = TestRunner::new(Config {
         cases: 64,
