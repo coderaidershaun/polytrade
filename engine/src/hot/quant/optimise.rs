@@ -117,8 +117,9 @@ impl<const N: usize> NelderMead<N> {
         (simplex, values)
     }
 
-    /// One move on a sorted simplex: the worst vertex reflects through the centroid of the others,
-    /// and the search then expands, contracts, or shrinks toward the best vertex.
+    /// One move on a sorted simplex. The worst vertex reflects through the centroid of the others,
+    /// and the search keeps the reflected point, expands past it, contracts toward it or toward the
+    /// worst vertex, or else shrinks toward the best vertex.
     fn step<const SIMPLEX: usize>(
         &self,
         simplex: &mut [[f64; N]; SIMPLEX],
@@ -154,17 +155,31 @@ impl<const N: usize> NelderMead<N> {
                 simplex[worst] = reflected;
                 values[worst] = reflected_value;
             }
-        } else {
-            let mut contracted = centroid;
+        } else if reflected_value < values[worst] {
+            let mut outside = centroid;
             for dimension in 0..N {
-                contracted[dimension] +=
+                outside[dimension] +=
+                    Self::CONTRACTION * (reflected[dimension] - centroid[dimension]);
+            }
+            self.clamp(&mut outside);
+            let outside_value = score(&outside);
+            if outside_value <= reflected_value {
+                simplex[worst] = outside;
+                values[worst] = outside_value;
+            } else {
+                self.shrink(simplex, values, score);
+            }
+        } else {
+            let mut inside = centroid;
+            for dimension in 0..N {
+                inside[dimension] +=
                     Self::CONTRACTION * (simplex[worst][dimension] - centroid[dimension]);
             }
-            self.clamp(&mut contracted);
-            let contracted_value = score(&contracted);
-            if contracted_value < values[worst] {
-                simplex[worst] = contracted;
-                values[worst] = contracted_value;
+            self.clamp(&mut inside);
+            let inside_value = score(&inside);
+            if inside_value < values[worst] {
+                simplex[worst] = inside;
+                values[worst] = inside_value;
             } else {
                 self.shrink(simplex, values, score);
             }

@@ -55,3 +55,31 @@ fn a_nan_objective_still_gives_a_finite_best() {
         );
     }
 }
+
+/// The adaptive Nelder-Mead of Gao and Han contracts toward the reflected point when the reflected
+/// value is at least the second worst and below the worst, and keeps that point when it is no worse
+/// than the reflected one. A contraction toward the worst vertex there turns away from the better
+/// side, so each fit takes other moves and can end at another point.
+#[test]
+fn a_reflection_between_the_two_worst_values_contracts_outside() {
+    // From (20, 20) each first step is 5% of 20 = 1, so the simplex is (20, 20), (21, 20), (20, 21),
+    // where f = 0.6875, 0.1875, 3.6875. The worst, (20, 21), reflects through (20.5, 20), the mean
+    // of the other two, to (21, 19), where f = 1.1875: at least 0.6875 and below 3.6875.
+    // With N = 2 the contraction is 0.75 - 1 / 4 = 0.5, so the outside point is
+    // (20.5, 20) + 0.5 ((21, 19) - (20.5, 20)) = (20.75, 19.5), where f = 0.125 <= 1.1875.
+    // It replaces the worst and is the new best. The inside point, (20.25, 20.5) with f = 1.375,
+    // would leave (21, 20) the best.
+    let objective =
+        |point: &[f64; 2]| (point[0] - 20.75).powi(2) + 2.0 * (point[1] - 19.75).powi(2);
+    let one_move = NelderMead {
+        max_iterations: 1,
+        ..NelderMead::new([20.0, 20.0], [(0.0, 100.0), (0.0, 100.0)])
+    };
+    let result = one_move.minimize::<3>(objective);
+    assert_eq!(result.iterations, 1);
+    assert!(
+        (result.x[0] - 20.75).abs() < 1e-12 && (result.x[1] - 19.5).abs() < 1e-12,
+        "not the outside point: {result:?}"
+    );
+    assert!((result.value - 0.125).abs() < 1e-12, "{result:?}");
+}
