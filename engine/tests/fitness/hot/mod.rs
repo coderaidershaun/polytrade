@@ -7,7 +7,6 @@ mod dispatch;
 mod driver;
 mod exec;
 mod ingress;
-mod ingress_order;
 mod lanes;
 mod money;
 mod position_ledger;
