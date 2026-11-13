@@ -935,6 +935,10 @@ test, or sits in a module that is a concept in its own right, and each clause na
     timing harness builds each message from a `MessageBody` (`tools/latency-probe/rig.rs`). A
     chunk keeps its entries and its length private, and its filled part is read through
     `active_levels` and `active_balances`, which were `pub` before.
+  - `UiHalt` with `is_halted` (`engine::msg::ui`), the kill switch as a workstation reads it, its
+    halt stamp a `VenueTs` that the writer converts with `to_peer()`: vocabulary of `msg`, the data
+    that crosses domains. The dom fixture, another compile root, builds it
+    (`tools/dom-fixture/shell_scene.rs`, `tools/dom-fixture/monitor_scenes.rs`).
   - `SpinSchedule::slot_to_fire`, with the type of the clause above. `StateDigest`, the value of
     `state_digest`.
   - `PinCall` and `pin_to_core`: the timing harness passes `pin_to_core`.
