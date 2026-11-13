@@ -33,7 +33,7 @@ use engine::runtime::registry::InstrumentRow;
 
 use crate::engine_support::{
     FillPen, LinkedEngine, LinkedSetup, ONE, book_reset, delta_chunk, engine_view,
-    engine_with_link, idle_at, instrument_row, kline, pop, recorder_spec, run_control, running_at,
+    engine_with_link, idle_at, instrument_row, kline, recorder_spec, run_control, running_at,
     snapshot_pair, spin, tracker_spec_all, trade,
 };
 use crate::micro_strategy::features::FEATURE_NAMES;
@@ -119,7 +119,7 @@ fn resuming_emits_what_a_cold_engine_emits() {
         run_control(idle_at(1), PARK_TS_US),
         run_control(running_at(2), RESUME_TS_US),
     ] {
-        resumed.engine.dispatch(pop(0, 0), &marker);
+        resumed.engine.dispatch(&marker);
     }
     let after = crate::alloc_count();
     assert_eq!(
@@ -263,7 +263,7 @@ fn message(index: i64, when: i64) -> InboundMessage {
 }
 
 fn dispatch(linked: &mut LinkedEngine, message: &InboundMessage, rows: &mut Vec<FeatureRow>) {
-    linked.engine.dispatch(pop(0, 0), message);
+    linked.engine.dispatch(message);
     while let Ok(record) = linked.persist.pop() {
         if let PersistRecord::Feature(row) = record {
             rows.push(row);

@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use rtrb::Producer;
 
+use crate::log::hot_warn;
 use crate::runtime::exposure::ExposureSnapshot;
-use crate::warn;
 
 /// Output ring: replace pending, retry cadence, destructor drains final.
 pub struct ExposureSink {
@@ -18,6 +18,7 @@ pub struct ExposureSink {
 /// to survive a brief writer hiccup without hanging shutdown.
 const FLUSH_ATTEMPT_INTERVAL: Duration = Duration::from_millis(2);
 const FLUSH_ATTEMPTS: u32 = 250;
+const FLUSH_DEADLINE_MS: u64 = FLUSH_ATTEMPT_INTERVAL.as_millis() as u64 * FLUSH_ATTEMPTS as u64;
 
 /// Destructor flushes final snapshot (covers drain + fatal + panic unwind). Blocking safe at thread end, bounded.
 impl Drop for ExposureSink {
@@ -30,9 +31,9 @@ impl Drop for ExposureSink {
             }
             std::thread::sleep(FLUSH_ATTEMPT_INTERVAL);
         }
-        warn!(
+        hot_warn!(
             "exposure: the run's final position never reached the writer after {} ms — the file on disk is one change stale",
-            FLUSH_ATTEMPT_INTERVAL.as_millis() * u128::from(FLUSH_ATTEMPTS)
+            FLUSH_DEADLINE_MS
         );
     }
 }

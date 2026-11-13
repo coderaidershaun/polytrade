@@ -4,12 +4,11 @@
 use tokio::runtime::Handle;
 
 use crate::hot::spawn::QueueProducer;
-use crate::msg::exec::ExecLaneItem;
 use crate::msg::time::DurationUs;
 use crate::runtime::registry::{AssetDictionary, InstrumentRow};
 use crate::runtime::secrets::Credentials;
 use crate::venues::binance::rest::{BinanceEnv, SignedRestClient};
-use crate::venues::edge::{EdgeInputs, EdgeSettings, VenueEdge, run_edge};
+use crate::venues::edge::{EdgeInputs, EdgeLane, EdgeSettings, VenueEdge, run_edge};
 use crate::venues::exec::{EdgeHandle, EngineIdentity};
 
 use super::super::{ExecutionPreflight, RecvWindow, SignError};
@@ -23,7 +22,6 @@ pub(super) struct BinanceExecAdapterSetup {
     // Shares one weight budget and clock offset with the REST client, since the venue
     // charges all calls against the same IP.
     pub(super) rest: SignedRestClient,
-    pub(super) commands: rtrb::Consumer<ExecLaneItem>,
     pub(super) producer: QueueProducer,
     pub(super) env: BinanceEnv,
     pub(super) identity: EngineIdentity,
@@ -47,6 +45,7 @@ pub(crate) fn bring_up(
         commands,
         producer,
         settings,
+        sender,
         ..
     } = inputs;
     let setup = BinanceExecAdapterSetup {
@@ -54,7 +53,6 @@ pub(crate) fn bring_up(
         assets: registry.assets().clone(),
         credentials: gate.credentials,
         rest: gate.rest,
-        commands,
         producer,
         env,
         identity,
@@ -62,16 +60,17 @@ pub(crate) fn bring_up(
         loud_clock_skew: DurationUs::from_millis(execution.max_clock_skew_ms as i64),
         edge: settings,
     };
+    let lane = EdgeLane { commands, sender };
     Ok(VenueEdge {
-        spawn: Box::new(move |runtime: &Handle| spawn(setup, runtime)),
+        spawn: Box::new(move |runtime: &Handle| spawn(setup, lane, runtime)),
         tap_gate: None,
     })
 }
 
-fn spawn(setup: BinanceExecAdapterSetup, rt: &Handle) -> EdgeHandle {
+fn spawn(setup: BinanceExecAdapterSetup, lane: EdgeLane, rt: &Handle) -> EdgeHandle {
     let sweep_deadline = setup.edge.sweep_deadline;
     EdgeHandle::spawn("binance execution adapter", sweep_deadline, |stop| {
         let actor = Actor::new(setup, stop, rt);
-        rt.spawn(crate::log::tag_task("binance-exec", run_edge(actor)))
+        rt.spawn(crate::log::tag_task("binance-exec", run_edge(actor, lane)))
     })
 }

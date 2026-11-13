@@ -91,7 +91,8 @@ fn paint_chart_body(ui: &mut egui::Ui, body: egui::Rect, model: &mut UiModel) {
         ui,
         latency_rect,
         &LatencyFrame {
-            summary: model.latency(),
+            report: model.latency_report().copied(),
+            staleness: model.latency_report_staleness(),
         },
     );
 

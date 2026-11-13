@@ -466,39 +466,85 @@ fn record_spin(
     };
     let bid_quote = bid_model.filter(|_| !budget.would_breach(exposure_quote, Side::Buy));
     let ask_quote = ask_model.filter(|_| !budget.would_breach(exposure_quote, Side::Sell));
-    engine::strategy_info!(
+    // A log record carries at most six words, so each spin's values go out as several short
+    // lines, in a fixed order, each led by the same words a reader searches for.
+    engine::note!(
         ctx,
-        "gueant i{} in: mid={mid:?} spread={spread:?} log_vol={log_vol:?} sigma_bps={:?} \
-         a_bid={:?} k_bid={:?} a_ask={:?} k_ask={:?}",
-        instrument.0,
-        scale.map(|scale| scale.sigma_bps),
+        "gueant i{} in: mid={:?} spread={:?}",
+        instrument,
+        mid,
+        spread
+    );
+    let sigma_bps = scale.map(|scale| scale.sigma_bps);
+    engine::note!(
+        ctx,
+        "gueant i{} in: log_vol={:?} sigma_bps={:?}",
+        instrument,
+        log_vol,
+        sigma_bps
+    );
+    let (a_bid, k_bid) = (
         bid_fit.map(|fit| fit.a_per_sec),
         bid_fit.map(|fit| fit.k_per_tick),
+    );
+    engine::note!(
+        ctx,
+        "gueant i{} in: a_bid={:?} k_bid={:?}",
+        instrument,
+        a_bid,
+        k_bid
+    );
+    let (a_ask, k_ask) = (
         ask_fit.map(|fit| fit.a_per_sec),
         ask_fit.map(|fit| fit.k_per_tick),
     );
-    engine::strategy_info!(
+    engine::note!(
         ctx,
-        "gueant i{} out: q={} order={} budget={} model_bid={:?} model_ask={:?} \
-         quoted_bid={:?} quoted_ask={:?}",
-        instrument.0,
+        "gueant i{} in: a_ask={:?} k_ask={:?}",
+        instrument,
+        a_ask,
+        k_ask
+    );
+    let order = cfg.order_notional as f64 / FIXED_SCALE as f64;
+    let budget_quote = max_exposure_quote as f64 / FIXED_SCALE as f64;
+    engine::note!(
+        ctx,
+        "gueant i{} out: q={} order={} budget={}",
+        instrument,
         inventory,
-        cfg.order_notional as f64 / FIXED_SCALE as f64,
-        max_exposure_quote as f64 / FIXED_SCALE as f64,
-        bid_model.map(Price::to_f64),
-        ask_model.map(Price::to_f64),
-        bid_quote.map(Price::to_f64),
-        ask_quote.map(Price::to_f64),
+        order,
+        budget_quote
+    );
+    let (model_bid, model_ask) = (bid_model.map(Price::to_f64), ask_model.map(Price::to_f64));
+    engine::note!(
+        ctx,
+        "gueant i{} out: model_bid={:?} model_ask={:?}",
+        instrument,
+        model_bid,
+        model_ask
+    );
+    let (quoted_bid, quoted_ask) = (bid_quote.map(Price::to_f64), ask_quote.map(Price::to_f64));
+    engine::note!(
+        ctx,
+        "gueant i{} out: quoted_bid={:?} quoted_ask={:?}",
+        instrument,
+        quoted_bid,
+        quoted_ask
     );
     let (markouts_bid, markouts_ask) = (model.markouts.bid(), model.markouts.ask());
-    engine::strategy_info!(
+    engine::note!(
         ctx,
-        "drops i{} markout gaps={}/{} stale={}/{} overflow={}/{} hawkes_out_of_order={}/{}",
-        instrument.0,
+        "drops i{} markout gaps={}/{} stale={}/{}",
+        instrument,
         markouts_bid.reverse_gap_count(),
         markouts_ask.reverse_gap_count(),
         markouts_bid.stale_maturation_count(),
         markouts_ask.stale_maturation_count(),
+    );
+    engine::note!(
+        ctx,
+        "drops i{} markout overflow={}/{} hawkes_out_of_order={}/{}",
+        instrument,
         markouts_bid.pending_overflow_count(),
         markouts_ask.pending_overflow_count(),
         model.hawkes_bid.out_of_order_count(),

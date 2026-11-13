@@ -23,7 +23,7 @@ The repo is one Cargo workspace. Run each command of this file at its root.
 | `lab/` | Package `lab`: scoring and research over recorded history. It holds only its root file for now. |
 | `strategies/strat-micro-recorder/` | Package `strat-micro-recorder`: one binary for each trading engine, and `link_schema.rs`, the link schema that both engines share. |
 | `strategies/` | Also the Python post-trade environment and its notebook. |
-| `tools/` | `dom-fixture` and `poly-probe`, described in `tools/README.md`. |
+| `tools/` | `dom-fixture`, `poly-probe` and `latency-probe`, described in `tools/README.md`. |
 | `browser/` | The Trunk page of the browser workstation. |
 | `wiki/`, `static/` | Notes on the models, and the images of this file. |
 
@@ -31,7 +31,8 @@ The repo is one Cargo workspace. Run each command of this file at its root.
 
 ```shell
 # Credentials — copy the template, then fill it in. .env is never tracked.
-mv .env.example .env
+# While a build job runs, the keys sit in the key file ../polytrade-live/.env, not in this checkout.
+cp .env.example .env
 
 # Trading engines — headless, one process per data source
 cargo run --release --bin strat-micro-recorder-te-binance-spot-btcusdt
@@ -57,8 +58,13 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo clippy --target wasm32-unknown-unknown -p engine --lib --bin polysim-ui --bin dom-fixture -- -D warnings
-cargo test --workspace
-cargo test --workspace --all-features
+# Step 4 names each test target; the integration tests only compile, each one is ignored.
+cargo test -p engine --test fitness
+cargo test -p engine --test integration
+cargo test -p engine --all-features --test fitness
+cargo test -p engine --all-features --test integration
+# Step 5 runs the zero-allocation proof of the hot driver in the release profile.
+cargo test -p engine --release --test fitness step_allocates_nothing
 (cd browser && trunk build --release) && (cd tools/dom-fixture && trunk build --release)
 
 # ARM64 Linux binary for deployment, built in Docker, lands in dist/
@@ -74,6 +80,33 @@ docker buildx build \
 That file has the name `.mcp.json.off` on purpose, so no session starts this server: its tools set an engine to `live` and start it with no guard. The file gets its name `.mcp.json` back when that guard exists. Until then, Claude Code reads no project entry for this server.
 
 Until that guard exists (stage 3 of the build), this file gives no command that starts the server or registers it with Claude Code. A session that reaches its tools can set an engine to `live` and start it, so the server stays off.
+
+Step 2 of the gate also reads the clock lint of `clippy.toml`: a call that reads a clock or a counter is an error, except at a permitted site that carries `#[expect(clippy::disallowed_methods, reason = "...")]`. The fitness test `permitted_clock_sites_equal_the_list` holds the list of permitted sites. The last task of each part also runs the proof of step 5 one time in the profile that ships, `cargo test -p engine --profile deploy --test fitness step_allocates_nothing`. That run is not a step of the gate, because a build with full link-time optimisation takes minutes.
+
+## Config keys
+
+Each trading engine reads its `config.yaml`. Each block refuses a key that it does not know. The keys in the table below have defaults. The blocks `latency:` and `senders:` can be left out. The code is in `engine/src/runtime/config/`.
+
+| Key | Default | What it sets |
+| --- | --- | --- |
+| `engine.idle` | `spin` | How the hot thread waits while each input queue is empty: `spin` keeps its core busy, `park` sleeps `engine.park_us` and looks again. On Linux, `spin` needs `engine.hot_core_id`, or the start is refused. |
+| `engine.park_us` | `50` | The sleep of `park`, from 1 to 10,000 µs. |
+| `engine.housekeeping_core_id` | none | The core of the log drain thread and the metrics thread. On Linux, a pin that fails refuses the start. Without the key, the operating system places them. |
+| `latency.interval_secs` | `60` | One interval of the metrics thread: the unit of a latency log line and of a budget check. From 1 to 3,600. |
+| `latency.window_intervals` | `10` | Intervals in the rolling window of the latency report. From 1 to 60. |
+| `latency.display_ms` | `1000` | How often the latency report goes to the workstation. From 100 to 60,000. |
+| `latency.sample_ring` | `32768` | Samples that the stage ring to the metrics thread holds, one for each message that the hot thread times. From 1,024 to 1,048,576. The counter ring and the wire ring have fixed sizes, so no key sets them. |
+| `latency.budget.<stage>.p99_us`, `latency.budget.<stage>.p999_us` | none | The budget of one stage, in µs, from 1 to 10,000,000. `<stage>` is `venue_to_engine`, `wire_to_message`, `message_to_decision` or `decision_to_wire`. A breach writes one warning, flags the rows and counts. It does not change trading. A stage without a budget is not checked. |
+| `senders.placement` | `shared` | Where the loops that send commands and link frames run: `shared` wakes on a tick on the runtime of the other edges, `pinned` runs them on one thread on a core of their own. On Linux, `pinned` needs `senders.core_id`. |
+| `senders.core_id` | none | The core of the pinned senders, from 0 to 1,023. On Linux, a pin that fails refuses the start. |
+| `senders.tick_us` | `1000` | The tick of a shared sender, from 1,000 to 1,000,000 µs. |
+| `senders.link_flush_ms` | `10` | How often the link sends its frames when the senders are shared. From 1 to 1,000. |
+| `logging.dir` | `./logs` | The folder of the log files in a release build. A debug build logs to stderr. |
+| `logging.ring_capacity` | `8192` | Records that each log lane of a thread and the strategy lane hold before they drop. |
+| `logging.drain_deadline_ms` | `2000` | How long the log drain writes at shutdown. It must be below `engine.drain_deadline_ms`, or the start is refused. |
+| `logging.reopen_limit` | `3` | Failed reopens of the log file in a row before log lines go to stderr. |
+
+The environment variable `POLYSIM_METRICS_SUMMARY_SECS` is gone: `latency.interval_secs` sets the interval.
 
 ## Browser workstation
 

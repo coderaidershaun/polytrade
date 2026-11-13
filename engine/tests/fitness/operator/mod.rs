@@ -6,3 +6,5 @@ mod fleet;
 #[cfg(feature = "web")]
 mod web_http;
 mod workstation;
+
+pub(crate) use workstation::rust_sources;

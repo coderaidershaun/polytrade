@@ -25,6 +25,10 @@ pub(super) struct LivenessMonitor {
 }
 
 impl LivenessMonitor {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) fn new() -> Self {
         let now = Instant::now();
         Self {
@@ -60,6 +64,10 @@ impl LivenessMonitor {
             .collect()
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) fn arm(&mut self) {
         let now = Instant::now();
         self.connected_at = now;
@@ -70,6 +78,10 @@ impl LivenessMonitor {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) fn note_message(&mut self) {
         self.last_message_at = Instant::now();
     }
@@ -83,11 +95,19 @@ impl LivenessMonitor {
     /// The gap actually observed, not the deadline it crossed: a REST fetch blocking the read loop
     /// can push the real silence far past the deadline, and an operator reading the reconnect line
     /// needs the measurement.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) fn socket_silence(&self) -> Option<Duration> {
         let silent_for = self.last_message_at.elapsed();
         (silent_for > MESSAGE_SILENCE_DEADLINE).then_some(silent_for)
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) fn warn_silent(&mut self, label: &str) {
         let elapsed = self.connected_at.elapsed();
         for stream in &mut self.streams {

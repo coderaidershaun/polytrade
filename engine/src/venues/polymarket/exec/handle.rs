@@ -5,10 +5,9 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
 use crate::hot::spawn::QueueProducer;
-use crate::msg::exec::ExecLaneItem;
 use crate::msg::time::DurationUs;
 use crate::runtime::registry::InstrumentRow;
-use crate::venues::edge::{EdgeInputs, EdgeSettings, VenueEdge, run_edge};
+use crate::venues::edge::{EdgeInputs, EdgeLane, EdgeSettings, VenueEdge, run_edge};
 use crate::venues::exec::EdgeHandle;
 use crate::venues::polymarket::rotation::WindowAssignment;
 
@@ -35,7 +34,6 @@ pub(super) struct PolymarketExecAdapterSetup {
     pub(super) credentials: ApiCredentials,
     pub(super) key: SigningKey,
     pub(super) wallet: WalletIdentity,
-    pub(super) commands: rtrb::Consumer<ExecLaneItem>,
     pub(super) producer: QueueProducer,
     /// Rotation bindings from the market-data actor, which is the single authority on how a
     /// token maps to a leg.
@@ -54,6 +52,7 @@ pub(crate) fn bring_up(
         commands,
         producer,
         settings,
+        sender,
         ..
     } = inputs;
     let setup = PolymarketExecAdapterSetup {
@@ -61,22 +60,25 @@ pub(crate) fn bring_up(
         credentials: gate.credentials,
         key: gate.key,
         wallet: gate.wallet,
-        commands,
         producer,
         assignments,
         venue_clock_offset: gate.venue_clock_offset,
         edge: settings,
     };
+    let lane = EdgeLane { commands, sender };
     VenueEdge {
-        spawn: Box::new(move |runtime: &Handle| spawn(setup, runtime)),
+        spawn: Box::new(move |runtime: &Handle| spawn(setup, lane, runtime)),
         tap_gate: None,
     }
 }
 
-fn spawn(setup: PolymarketExecAdapterSetup, runtime: &Handle) -> EdgeHandle {
+fn spawn(setup: PolymarketExecAdapterSetup, lane: EdgeLane, runtime: &Handle) -> EdgeHandle {
     let sweep_deadline = setup.edge.sweep_deadline;
     EdgeHandle::spawn("polymarket execution adapter", sweep_deadline, |stop| {
         let actor = Actor::new(setup, stop, runtime);
-        runtime.spawn(crate::log::tag_task("polymarket-exec", run_edge(actor)))
+        runtime.spawn(crate::log::tag_task(
+            "polymarket-exec",
+            run_edge(actor, lane),
+        ))
     })
 }

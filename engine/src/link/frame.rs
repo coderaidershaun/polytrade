@@ -3,7 +3,7 @@
 //! differ do not agree about what a given slot index holds.
 
 use crate::msg::time::TsUs;
-use crate::msg::ui::{UiBookSnapshot, UiEvent};
+use crate::msg::ui::{LatencyReport, UiBookSnapshot, UiEvent};
 
 use super::control::{
     CATALOG_FEATURE_BODY_LEN, CATALOG_INSTRUMENT_BODY_LEN, CatalogFeature, CatalogInstrument,
@@ -13,7 +13,7 @@ use super::envelope::{
     ByteReader, ByteWriter, ENVELOPE_LEN, Envelope, FrameGuard, LINK_MAX_DATAGRAM, LinkDecodeError,
     LinkHash, TopicId,
 };
-use super::feed::{BOOK_BODY_LEN, EVENT_BODY_LEN};
+use super::feed::{BOOK_BODY_LEN, EVENT_BODY_LEN, REPORT_BODY_LEN};
 use super::wire::{WireField, wire_array};
 
 /// 38 measured maximum (see InboundLink budget assert).
@@ -163,6 +163,7 @@ pub enum LinkBody {
     CatalogInstrument(CatalogInstrument),
     CatalogFeature(CatalogFeature),
     Lifecycle(Lifecycle),
+    Latency(LatencyReport),
     Payload(LinkPayload),
 }
 
@@ -191,6 +192,7 @@ impl LinkDatagram {
             LinkBody::CatalogInstrument(instrument) => instrument.write(&mut writer),
             LinkBody::CatalogFeature(feature) => feature.write(&mut writer),
             LinkBody::Lifecycle(lifecycle) => lifecycle.write(&mut writer),
+            LinkBody::Latency(report) => report.write(&mut writer),
             LinkBody::Payload(payload) => payload.write(&mut writer),
         }
         writer.written()
@@ -226,6 +228,7 @@ impl LinkDatagram {
                 LinkBody::CatalogFeature(CatalogFeature::read(&mut reader)?)
             }
             TopicId::LIFECYCLE => LinkBody::Lifecycle(Lifecycle::read(&mut reader)?),
+            TopicId::LATENCY => LinkBody::Latency(LatencyReport::read(&mut reader)?),
             _ => LinkBody::Payload(LinkPayload::read(&mut reader, guard)?),
         };
         Ok(Self { envelope, body })
@@ -240,6 +243,7 @@ fn expected_topic(body: &LinkBody) -> Option<TopicId> {
         LinkBody::CatalogInstrument(_) => Some(TopicId::CATALOG_INSTRUMENTS),
         LinkBody::CatalogFeature(_) => Some(TopicId::CATALOG_FEATURES),
         LinkBody::Lifecycle(_) => Some(TopicId::LIFECYCLE),
+        LinkBody::Latency(_) => Some(TopicId::LATENCY),
         LinkBody::Payload(_) => None,
     }
 }
@@ -252,6 +256,7 @@ fn topic_body_len(topic: TopicId) -> Option<usize> {
         TopicId::CATALOG_INSTRUMENTS => Some(CATALOG_INSTRUMENT_BODY_LEN),
         TopicId::CATALOG_FEATURES => Some(CATALOG_FEATURE_BODY_LEN),
         TopicId::LIFECYCLE => Some(LIFECYCLE_BODY_LEN),
+        TopicId::LATENCY => Some(REPORT_BODY_LEN),
         _ if topic.is_strategy_topic() => Some(PAYLOAD_BODY_LEN),
         _ => None,
     }

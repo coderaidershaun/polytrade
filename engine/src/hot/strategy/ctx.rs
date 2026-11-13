@@ -1,13 +1,11 @@
 //! Strategy-facing surface: post-event state read + emission banking. Split for readability.
 
-use core::fmt;
-
 use crate::hot::book::Book;
 use crate::hot::exec::{Balance, DesiredQuote, OrderView, QuoteLevel, TickGrid};
 use crate::hot::quant::volatility::EwmaVol;
 use crate::hot::tracker::MicroTracker;
 use crate::link::TopicId;
-use crate::log::{Level, LogRecord};
+use crate::log::{Callsite, HotRecord, LogArgs};
 use crate::msg::ids::{AssetId, InstrumentId, Qty, Side};
 use crate::msg::persist::{BookEventRow, FeatureId, FeatureRow, KlineRow, PersistRecord, TradeRow};
 use crate::msg::time::TsUs;
@@ -171,23 +169,11 @@ impl StrategyCtx<'_> {
         self.actions.push_link(topic, values, self.event_ts);
     }
 
-    /// Bank log line (event time, not wall clock → pure fn of sequence). Use strategy_info!/warn!/error! macros.
+    /// Banks one raw log record, stamped with the message time rather than a clock read, so the
+    /// strategy lane is a pure function of the message sequence. Call it through `note!` or `alert!`.
     #[doc(hidden)]
-    pub fn log_record(
-        &mut self,
-        level: Level,
-        module: &'static str,
-        file: &'static str,
-        line: u32,
-        args: fmt::Arguments<'_>,
-    ) {
-        self.actions.push_log(LogRecord::strategy_at(
-            self.event_ts,
-            level,
-            module,
-            file,
-            line,
-            args,
-        ));
+    pub fn bank_log<A: LogArgs>(&mut self, callsite: &'static Callsite, args: A) {
+        self.actions
+            .push_log(HotRecord::new(callsite, self.event_ts, args));
     }
 }

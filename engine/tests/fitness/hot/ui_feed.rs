@@ -20,16 +20,16 @@ use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::persist::FeatureId;
 use engine::msg::time::{DurationUs, TsUs};
-use engine::msg::ui::{UiBookSnapshot, UiBookState, UiEvent, UiLatencySummary};
+use engine::msg::ui::{UiBookSnapshot, UiBookState, UiEvent};
 use engine::operator::workstation::model::UiModel;
 use engine::runtime::config::{RecordedTables, TableKind};
 use rtrb::Consumer;
 
 use crate::engine_support::{
     FillPen, Idle, ONE, book_reset, delta_chunk, detached_setup, engine_with_ui,
-    engine_with_ui_and_exec, exec_event, idle_at, instrument_row, level, metrics_ring,
-    persist_ring, persist_ring_for, pop, rotation, run_control, snapshot_pair, spin, spin_pop,
-    strategy_log_ring, tracker_spec_all, trade, ts, ui_event_ring,
+    engine_with_ui_and_exec, exec_event, idle_at, instrument_row, level, persist_ring,
+    persist_ring_for, rotation, run_control, snapshot_pair, spin, strategy_log_ring,
+    tracker_spec_all, trade, ts, ui_event_ring,
 };
 
 /// Counts strategy callbacks independently of the UI projection. A fill may tee two UI facts, but
@@ -151,9 +151,7 @@ fn ui_engine(
     let instruments = [instrument_row(0, tracker_spec_all(1), 64)];
     let (sink, _persist) = persist_ring(256);
     let (log_sink, _logs) = strategy_log_ring(64);
-    let (metrics, _metrics) = metrics_ring(64);
-    let (engine, books, events) =
-        engine_with_ui(&instruments, strategy, sink, log_sink, metrics, warmup);
+    let (engine, books, events) = engine_with_ui(&instruments, strategy, sink, log_sink, warmup);
     // The persist/log/metrics consumers are dropped here on purpose: these tests inspect only the UI
     // feed, and those lanes fill-then-drop harmlessly.
     (engine, books, events)
@@ -185,13 +183,13 @@ fn book_snapshot_lifecycle_from_commit_through_reset_and_rotation() {
         &[(101 * ONE, ONE), (102 * ONE, 3 * ONE)],
         10,
     );
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(bids));
+    engine.dispatch(&InboundMessage::Book(bids));
     assert!(
         drain(&mut books).is_empty(),
         "a non-final chunk is mid-update — no snapshot until the commit"
     );
 
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(asks));
+    engine.dispatch(&InboundMessage::Book(asks));
     let snaps = drain(&mut books);
     assert_eq!(
         snaps.len(),
@@ -209,10 +207,12 @@ fn book_snapshot_lifecycle_from_commit_through_reset_and_rotation() {
     assert_eq!(snap.asks[0], level(101 * ONE, ONE));
     assert_eq!(snap.asks[1], level(102 * ONE, 3 * ONE));
 
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 5 * ONE)], 20)),
-    );
+    engine.dispatch(&InboundMessage::Book(delta_chunk(
+        0,
+        Side::Buy,
+        &[(100 * ONE, 5 * ONE)],
+        20,
+    )));
     let snaps = drain(&mut books);
     assert_eq!(snaps.len(), 1, "a committed delta emits the next snapshot");
     assert_eq!(snaps[0].seq, 1, "per-instrument seq is strictly monotonic");
@@ -222,17 +222,19 @@ fn book_snapshot_lifecycle_from_commit_through_reset_and_rotation() {
         "an idle strategy tees no quote events"
     );
 
-    engine.dispatch(pop(0, 0), &InboundMessage::BookReset(book_reset(0, 30)));
+    engine.dispatch(&InboundMessage::BookReset(book_reset(0, 30)));
     let snaps = drain(&mut books);
     assert_eq!(snaps.len(), 1, "a reset emits one snapshot");
     assert_eq!(snaps[0].state, UiBookState::AwaitingSnapshot);
     assert_eq!((snaps[0].bid_len, snaps[0].ask_len), (0, 0));
     assert_eq!(snaps[0].seq, 2, "the reset continues the sequence");
 
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::MarketRotation(rotation(0, 300 * ONE, 600 * ONE, 40)),
-    );
+    engine.dispatch(&InboundMessage::MarketRotation(rotation(
+        0,
+        300 * ONE,
+        600 * ONE,
+        40,
+    )));
     let snaps = drain(&mut books);
     assert_eq!(snaps.len(), 1, "a rotation refreshes the UI book");
     assert_eq!(snaps[0].seq, 3);
@@ -249,33 +251,29 @@ fn replay_produces_identical_feed() {
             ui_engine(Box::new(MixedProbe { feature: None }), DurationUs::ZERO);
         let mut pen = FillPen::new(0);
         let (bids, asks) = snapshot_pair(0, &[(100 * ONE, ONE)], &[(101 * ONE, ONE)], 10);
-        engine.dispatch(pop(0, 0), &InboundMessage::Book(bids));
-        engine.dispatch(pop(0, 0), &InboundMessage::Book(asks));
+        engine.dispatch(&InboundMessage::Book(bids));
+        engine.dispatch(&InboundMessage::Book(asks));
         for seq in 0..5u64 {
             let when = 100 + seq as i64 * 10;
             let side = if seq % 2 == 0 { Side::Buy } else { Side::Sell };
-            engine.dispatch(
-                pop(0, 0),
-                &InboundMessage::Trade(trade(0, 100 * ONE, ONE, side, when)),
-            );
+            engine.dispatch(&InboundMessage::Trade(trade(0, 100 * ONE, ONE, side, when)));
             for message in pen.fill(side, 100 * ONE, ONE, when + 1) {
-                engine.dispatch(pop(0, 0), &message);
+                engine.dispatch(&message);
             }
-            engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(seq, when + 2)));
-            engine.dispatch(
-                pop(0, 0),
-                &InboundMessage::Book(delta_chunk(
-                    0,
-                    Side::Buy,
-                    &[(100 * ONE, (seq as i64 + 2) * ONE)],
-                    when + 5,
-                )),
-            );
+            engine.dispatch(&InboundMessage::SpinTick(spin(seq, when + 2)));
+            engine.dispatch(&InboundMessage::Book(delta_chunk(
+                0,
+                Side::Buy,
+                &[(100 * ONE, (seq as i64 + 2) * ONE)],
+                when + 5,
+            )));
         }
-        engine.dispatch(
-            pop(0, 0),
-            &InboundMessage::MarketRotation(rotation(0, 300 * ONE, 600 * ONE, 200)),
-        );
+        engine.dispatch(&InboundMessage::MarketRotation(rotation(
+            0,
+            300 * ONE,
+            600 * ONE,
+            200,
+        )));
         (drain(&mut books), drain(&mut events))
     };
     let (first_books, first_events) = run();
@@ -290,21 +288,9 @@ fn replay_produces_identical_feed() {
         "the lane's kinds and sequence numbers are replay-deterministic"
     );
     assert_eq!(
-        message_derived(&first_events),
-        message_derived(&second_events),
+        first_events, second_events,
         "event sequence is replay-deterministic across every kind"
     );
-    // `Latency` is the one lane member that is MEASURED rather than derived: its queue-wait and
-    // processing sums come off the machine's clock, so two runs report different numbers by
-    // construction. The determinism this suite rests on is over hot state and the messages that
-    // produce it, which is why the shape comparison above still binds where the payload one cannot.
-    assert!(
-        first_events
-            .iter()
-            .any(|event| matches!(event, UiEvent::Latency { .. })),
-        "the spins teed self-timing, so the exclusion is over a kind that was genuinely present"
-    );
-
     // Balance and Reject need messages this mix does not carry. Execution and OrderSnapshot require
     // a command ring; the wired per-spin test below pins both. Every kind this unwired mix CAN reach
     // must appear here, or the determinism claim is over a stream that never exercised it.
@@ -320,7 +306,6 @@ fn replay_produces_identical_feed() {
             UiEvent::Position { .. } => 6,
             UiEvent::OrderSnapshot { .. } | UiEvent::Execution { .. } => continue,
             UiEvent::Balance { .. } | UiEvent::Reject { .. } => continue,
-            UiEvent::Latency { .. } => continue,
         };
         kinds[slot] = true;
     }
@@ -348,7 +333,7 @@ fn quote_tee_declares_then_expires() {
     let (mut engine, _books, mut events) =
         ui_engine(Box::new(QuoteProbe { bid, ask }), DurationUs::ZERO);
 
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(0, 12_345)));
+    engine.dispatch(&InboundMessage::SpinTick(spin(0, 12_345)));
     let quotes = quote_events(&mut events);
     assert_eq!(quotes.len(), 1, "one instrument tees one Quote per spin");
     let (instrument, event_ts_us, quote) = quotes[0];
@@ -368,11 +353,11 @@ fn quote_tee_declares_then_expires() {
         DurationUs::ZERO,
     );
 
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(0, 100)));
+    engine.dispatch(&InboundMessage::SpinTick(spin(0, 100)));
     let quotes = quote_events(&mut events);
     assert_eq!(quotes[0].2, DomQuote::top(bid, None));
 
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(1, 200)));
+    engine.dispatch(&InboundMessage::SpinTick(spin(1, 200)));
     let quotes = quote_events(&mut events);
     assert_eq!(
         quotes[0].2,
@@ -424,10 +409,13 @@ fn feed_events_tee_ahead_of_the_warmup_gate() {
     let warmup = DurationUs::from_secs(10);
 
     let (mut engine, _books, mut events) = ui_engine(Box::new(Idle), warmup);
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Trade(trade(0, 100 * ONE, 3 * ONE, Side::Sell, 1_000_000)),
-    );
+    engine.dispatch(&InboundMessage::Trade(trade(
+        0,
+        100 * ONE,
+        3 * ONE,
+        Side::Sell,
+        1_000_000,
+    )));
     let evs = drain(&mut events);
     assert_eq!(evs.len(), 1, "trade: a print tees exactly one Trade event");
     let UiEvent::Trade {
@@ -453,10 +441,12 @@ fn feed_events_tee_ahead_of_the_warmup_gate() {
     assert_eq!(qty, Qty(3 * ONE), "trade: qty");
 
     let (mut engine, _books, mut events) = ui_engine(Box::new(Idle), warmup);
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::MarketRotation(rotation(0, 300 * ONE, 600 * ONE, 30)),
-    );
+    engine.dispatch(&InboundMessage::MarketRotation(rotation(
+        0,
+        300 * ONE,
+        600 * ONE,
+        30,
+    )));
     let evs = drain(&mut events);
     assert_eq!(evs.len(), 1, "rotation: tees exactly one Rotation event");
     let UiEvent::Rotation {
@@ -493,7 +483,7 @@ fn features_tee_to_the_ui_even_when_they_are_not_recorded() {
         ui_event_sink,
         ..detached_setup(&instruments, Box::new(FeatureProbe { ids: Vec::new() }))
     });
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(0, 500)));
+    engine.dispatch(&InboundMessage::SpinTick(spin(0, 500)));
     assert_eq!(
         teed_features(&mut events),
         vec![
@@ -508,16 +498,14 @@ fn features_tee_to_the_ui_even_when_they_are_not_recorded() {
     let (persistence, mut records) =
         persist_ring_for(256, RecordedTables::new(&[TableKind::Trades]));
     let (log_sink, _logs) = strategy_log_ring(64);
-    let (metrics, _metrics) = metrics_ring(64);
     let (mut engine, _books, mut events) = engine_with_ui(
         &instruments,
         Box::new(FeatureProbe { ids: Vec::new() }),
         persistence,
         log_sink,
-        metrics,
         DurationUs::ZERO,
     );
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(0, 500)));
+    engine.dispatch(&InboundMessage::SpinTick(spin(0, 500)));
     assert_eq!(
         teed_features(&mut events).len(),
         3,
@@ -572,20 +560,10 @@ fn the_execution_gate_tee_reflects_whether_a_command_ring_is_wired() {
     let instruments = [instrument_row(0, tracker_spec_all(1), 64)];
     let (persist, _persist_out) = persist_ring(256);
     let (log_sink, _logs) = strategy_log_ring(64);
-    let (metrics, _metrics) = metrics_ring(64);
-    let (mut engine, _books, mut events, _commands) = engine_with_ui_and_exec(
-        &instruments,
-        Box::new(Idle),
-        persist,
-        log_sink,
-        metrics,
-        0x5150_0001,
-    );
+    let (mut engine, _books, mut events, _commands) =
+        engine_with_ui_and_exec(&instruments, Box::new(Idle), persist, log_sink, 0x5150_0001);
     for seq in 0..3u64 {
-        engine.dispatch(
-            pop(0, 0),
-            &InboundMessage::SpinTick(spin(seq, 700 + seq as i64)),
-        );
+        engine.dispatch(&InboundMessage::SpinTick(spin(seq, 700 + seq as i64)));
     }
 
     let emitted = drain(&mut events);
@@ -633,10 +611,7 @@ fn the_execution_gate_tee_reflects_whether_a_command_ring_is_wired() {
 
     let (mut engine, _books, mut events) = ui_engine(Box::new(Idle), DurationUs::ZERO);
     for seq in 0..3u64 {
-        engine.dispatch(
-            pop(0, 0),
-            &InboundMessage::SpinTick(spin(seq, 700 + seq as i64)),
-        );
+        engine.dispatch(&InboundMessage::SpinTick(spin(seq, 700 + seq as i64)));
     }
     assert_eq!(
         execution_frames(&mut events),
@@ -646,78 +621,25 @@ fn the_execution_gate_tee_reflects_whether_a_command_ring_is_wired() {
     );
 }
 
-/// FITNESS: the engine tees its own timing once per spin, on the ONE lane, and the workstation model
-/// keeps the latest.
-///
-/// It rides the event lane rather than a channel of its own so that a UI which has fallen behind
-/// sees the drop in the same sequence it already tracks. That only holds if the kind takes its turn
-/// like every other: a Latency frame that numbered itself separately would leave the consumer's gap
-/// count reporting losses that never happened, on every other panel at once.
+/// `orders_submitted` counts the commands the engine banked, not the intents a strategy declared.
+/// With execution off a declared quote is teed and never banked: a count above zero would be a
+/// command that nobody asked the engine to send.
 #[test]
-fn spins_tee_engine_latency_on_the_one_lane() {
-    let (mut engine, _books, mut events) = ui_engine(Box::new(Idle), DurationUs::ZERO);
-    for seq in 0..3u64 {
-        engine.dispatch(
-            spin_pop(0, 7),
-            &InboundMessage::SpinTick(spin(seq, 700 + seq as i64)),
-        );
-    }
-
-    let evs = drain(&mut events);
-    let summaries: Vec<UiLatencySummary> = evs
-        .iter()
-        .filter_map(|event| match event {
-            UiEvent::Latency { summary, .. } => Some(*summary),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(summaries.len(), 3, "one self-timing frame per spin");
-    for (index, event) in evs.iter().enumerate() {
-        assert_eq!(
-            event.seq(),
-            index as u64,
-            "self-timing takes its turn in the lane-wide sequence: {evs:?}"
-        );
-    }
-
-    let latest = summaries[2];
-    assert_eq!(
-        latest.backlog_ema,
-        Some(7.0),
-        "a constant backlog is the fold's fixed point, whatever the gaps between spins"
-    );
-    assert_eq!(
-        latest.hot_path.processing.count, 3,
-        "a spin's own processing is measured before it reports"
-    );
-
-    let mut model = UiModel::with_capacity(1, DurationUs::from_micros(100_000));
-    assert_eq!(
-        model.latency(),
-        None,
-        "a model that has seen no spin reports no timing rather than an empty one"
-    );
-    for event in &evs {
-        model.apply_event(*event);
-    }
-    assert_eq!(model.latency(), Some(latest), "the newest spin wins");
-    assert_eq!(model.event_gaps(), 0);
-
-    let skipped = UiEvent::Latency {
-        seq: evs.len() as u64 + 2,
-        event_ts_us: ts(999),
-        summary: UiLatencySummary::default(),
+fn declared_quotes_bank_no_command_while_execution_is_off() {
+    let level = Some((Price(100 * ONE), Qty(ONE)));
+    let probe = QuoteProbe {
+        bid: level,
+        ask: level,
     };
-    model.apply_event(skipped);
+    let (mut engine, _books, mut events) = ui_engine(Box::new(probe), DurationUs::ZERO);
+    for seq in 0..10_000u64 {
+        engine.dispatch(&InboundMessage::SpinTick(spin(seq, seq as i64)));
+        drain(&mut events);
+    }
     assert_eq!(
-        model.event_gaps(),
-        2,
-        "a Latency frame is gap-counted on the one lane like every other kind"
-    );
-    assert_eq!(
-        model.latency(),
-        Some(UiLatencySummary::default()),
-        "and the latest still wins across the gap"
+        engine.counters().orders_submitted,
+        0,
+        "execution is off in this run, so no command may have been banked"
     );
 }
 
@@ -731,13 +653,16 @@ fn spins_tee_engine_latency_on_the_one_lane() {
 #[test]
 fn a_partial_fill_updates_the_working_order_then_tees_one_fill() {
     let (mut engine, _books, mut events) = ui_engine(Box::new(Idle), DurationUs::ZERO);
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Trade(trade(0, 100 * ONE, ONE, Side::Sell, 4_242)),
-    );
+    engine.dispatch(&InboundMessage::Trade(trade(
+        0,
+        100 * ONE,
+        ONE,
+        Side::Sell,
+        4_242,
+    )));
     let mut pen = FillPen::new(0);
     for message in pen.fill(Side::Buy, 100 * ONE, ONE, 4_242) {
-        engine.dispatch(pop(0, 0), &message);
+        engine.dispatch(&message);
     }
 
     let evs = drain(&mut events);
@@ -846,7 +771,7 @@ fn a_full_fill_retires_the_working_order_in_the_ui_model() {
     };
     adoption.qty = Qty(2 * ONE);
     let client_id = adoption.client_id;
-    engine.dispatch(pop(0, 0), &InboundMessage::Exec(adoption));
+    engine.dispatch(&InboundMessage::Exec(adoption));
 
     let full_qty = Qty(2 * ONE);
     let full_fill = InboundMessage::Exec(engine::msg::exec::ExecEvent {
@@ -859,7 +784,7 @@ fn a_full_fill_retires_the_working_order_in_the_ui_model() {
         qty: full_qty,
         ..exec_event(InstrumentId(0), client_id, Side::Buy, 100 * ONE, 901)
     });
-    engine.dispatch(pop(0, 0), &full_fill);
+    engine.dispatch(&full_fill);
 
     let evs = drain(&mut events);
     assert_eq!(
@@ -926,11 +851,8 @@ fn a_silent_venue_leaves_liquidity_absent() {
     let adoption = pen
         .adopt(Side::Buy, 100 * ONE, 4_242)
         .expect("a fresh pen has seated nothing");
-    engine.dispatch(pop(0, 0), &adoption);
-    engine.dispatch(
-        pop(0, 0),
-        &pen.silent_report(Side::Buy, 100 * ONE, ONE, 4_242),
-    );
+    engine.dispatch(&adoption);
+    engine.dispatch(&pen.silent_report(Side::Buy, 100 * ONE, ONE, 4_242));
 
     let fills: Vec<Option<Liquidity>> = drain(&mut events)
         .into_iter()
@@ -960,17 +882,15 @@ fn spins_emit_absolute_position_state() {
     ];
     let (sink, _persist) = persist_ring(256);
     let (log_sink, _logs) = strategy_log_ring(64);
-    let (metrics, _metrics) = metrics_ring(64);
     let (mut engine, _books, mut events) = engine_with_ui(
         &instruments,
         Box::new(Idle),
         sink,
         log_sink,
-        metrics,
         DurationUs::ZERO,
     );
 
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(0, 10)));
+    engine.dispatch(&InboundMessage::SpinTick(spin(0, 10)));
     assert!(
         positions(&mut events).is_empty(),
         "with no book yet there is no mark, so the engine reports no position at all"
@@ -978,9 +898,9 @@ fn spins_emit_absolute_position_state() {
 
     // Mid of 100/102 marks instrument 0 at 101.
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, ONE)], &[(102 * ONE, ONE)], 20);
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(bids));
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(asks));
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(1, 30)));
+    engine.dispatch(&InboundMessage::Book(bids));
+    engine.dispatch(&InboundMessage::Book(asks));
+    engine.dispatch(&InboundMessage::SpinTick(spin(1, 30)));
     assert_eq!(
         positions(&mut events),
         vec![(InstrumentId(0), ts(30), 0.0, 0.0)],
@@ -990,13 +910,13 @@ fn spins_emit_absolute_position_state() {
 
     // Mid of 200/204 marks instrument 1 at 202, and it stays flat for the rest of the run.
     let (bids, asks) = snapshot_pair(1, &[(200 * ONE, ONE)], &[(204 * ONE, ONE)], 40);
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(bids));
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(asks));
+    engine.dispatch(&InboundMessage::Book(bids));
+    engine.dispatch(&InboundMessage::Book(asks));
     let mut pen = FillPen::new(0);
     for message in pen.fill(Side::Buy, 100 * ONE, 3 * ONE, 50) {
-        engine.dispatch(pop(0, 0), &message);
+        engine.dispatch(&message);
     }
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(2, 60)));
+    engine.dispatch(&InboundMessage::SpinTick(spin(2, 60)));
     // Bought 3 @ 100 and marked at 101: exposure 303, cash -300, so PnL is the 3 the mark moved.
     assert_eq!(
         positions(&mut events),
@@ -1008,11 +928,13 @@ fn spins_emit_absolute_position_state() {
          marked instrument reports"
     );
 
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::MarketRotation(rotation(0, 300 * ONE, 600 * ONE, 70)),
-    );
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(3, 80)));
+    engine.dispatch(&InboundMessage::MarketRotation(rotation(
+        0,
+        300 * ONE,
+        600 * ONE,
+        70,
+    )));
+    engine.dispatch(&InboundMessage::SpinTick(spin(3, 80)));
     assert_eq!(
         positions(&mut events),
         vec![(InstrumentId(1), ts(80), 0.0, 0.0)],
@@ -1032,9 +954,9 @@ fn position_tee_survives_gating() {
     // case.
     let (mut engine, _books, mut events) = ui_engine(Box::new(Idle), DurationUs::from_secs(10));
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, ONE)], &[(102 * ONE, ONE)], 1_000_000);
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(bids));
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(asks));
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(0, 1_000_100)));
+    engine.dispatch(&InboundMessage::Book(bids));
+    engine.dispatch(&InboundMessage::Book(asks));
+    engine.dispatch(&InboundMessage::SpinTick(spin(0, 1_000_100)));
     assert_eq!(
         positions(&mut events),
         vec![(InstrumentId(0), ts(1_000_100), 0.0, 0.0)],
@@ -1044,16 +966,16 @@ fn position_tee_survives_gating() {
     // Parked: no warmup, but the run is explicitly idled before the spin.
     let (mut engine, _books, mut events) = ui_engine(Box::new(Idle), DurationUs::ZERO);
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, ONE)], &[(102 * ONE, ONE)], 10);
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(bids));
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(asks));
+    engine.dispatch(&InboundMessage::Book(bids));
+    engine.dispatch(&InboundMessage::Book(asks));
     let mut pen = FillPen::new(0);
     for message in pen.fill(Side::Buy, 100 * ONE, 3 * ONE, 20) {
-        engine.dispatch(pop(0, 0), &message);
+        engine.dispatch(&message);
     }
     let _ = drain(&mut events);
 
-    engine.dispatch(pop(0, 0), &run_control(idle_at(1), 30));
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(0, 40)));
+    engine.dispatch(&run_control(idle_at(1), 30));
+    engine.dispatch(&InboundMessage::SpinTick(spin(0, 40)));
     assert_eq!(
         positions(&mut events),
         vec![(InstrumentId(0), ts(40), 303.0, 3.0)],
@@ -1073,19 +995,24 @@ fn position_tee_survives_gating() {
 fn mixed_kind_lane_sequence_is_globally_monotonic() {
     let (mut engine, _books, mut events) =
         ui_engine(Box::new(MixedProbe { feature: None }), DurationUs::ZERO);
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::MarketRotation(rotation(0, 300 * ONE, 600 * ONE, 10)),
-    );
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 20)),
-    );
+    engine.dispatch(&InboundMessage::MarketRotation(rotation(
+        0,
+        300 * ONE,
+        600 * ONE,
+        10,
+    )));
+    engine.dispatch(&InboundMessage::Trade(trade(
+        0,
+        100 * ONE,
+        ONE,
+        Side::Buy,
+        20,
+    )));
     let mut pen = FillPen::new(0);
     for message in pen.fill(Side::Buy, 100 * ONE, ONE, 25) {
-        engine.dispatch(pop(0, 0), &message);
+        engine.dispatch(&message);
     }
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(0, 30)));
+    engine.dispatch(&InboundMessage::SpinTick(spin(0, 30)));
 
     let evs = drain(&mut events);
     for (index, event) in evs.iter().enumerate() {
@@ -1121,14 +1048,6 @@ fn lane_shape(events: &[UiEvent]) -> Vec<(&'static str, u64)> {
         .collect()
 }
 
-fn message_derived(events: &[UiEvent]) -> Vec<UiEvent> {
-    events
-        .iter()
-        .copied()
-        .filter(|event| !matches!(event, UiEvent::Latency { .. }))
-        .collect()
-}
-
 /// The variant's name alone — enough to assert a kind reached the lane without pinning how many of
 /// it did, or what else rode beside it.
 fn event_kind(event: &UiEvent) -> &'static str {
@@ -1144,7 +1063,6 @@ fn event_kind(event: &UiEvent) -> &'static str {
         UiEvent::Execution { .. } => "Execution",
         UiEvent::Rotation { .. } => "Rotation",
         UiEvent::Position { .. } => "Position",
-        UiEvent::Latency { .. } => "Latency",
     }
 }
 
@@ -1162,10 +1080,13 @@ fn saturated_event_ring_drops_then_heals() {
     });
 
     for i in 0..20i64 {
-        engine.dispatch(
-            pop(0, 0),
-            &InboundMessage::Trade(trade(0, 100 * ONE, ONE, Side::Buy, i)),
-        );
+        engine.dispatch(&InboundMessage::Trade(trade(
+            0,
+            100 * ONE,
+            ONE,
+            Side::Buy,
+            i,
+        )));
     }
     assert!(
         engine.dropped_ui_events() > 0,
@@ -1174,10 +1095,13 @@ fn saturated_event_ring_drops_then_heals() {
 
     // Drain, then one more print: its Trade event lands, and its seq reflects every drop before it.
     let _ = drain(&mut events);
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 99)),
-    );
+    engine.dispatch(&InboundMessage::Trade(trade(
+        0,
+        100 * ONE,
+        ONE,
+        Side::Buy,
+        99,
+    )));
     let evs = drain(&mut events);
     assert_eq!(evs.len(), 1, "after a drain the next event lands");
     assert_eq!(

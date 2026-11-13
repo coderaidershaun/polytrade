@@ -19,7 +19,7 @@ use engine::msg::time::{DurationUs, TsUs};
 use engine::runtime::config::{RecordedTables, TableKind};
 
 use crate::engine_support::{
-    LinkedEngine, LinkedSetup, drain_persist, engine_with_link, idle_at, instrument_row, pop,
+    LinkedEngine, LinkedSetup, drain_persist, engine_with_link, idle_at, instrument_row,
     run_control, spin, tracker_spec_all, ts,
 };
 
@@ -209,13 +209,11 @@ fn a_peer_frame_reaches_the_strategy_and_the_tape_under_independent_gates() {
         let mut linked = linked(case.tables);
         let mut edge = Edge::new();
         if case.park {
-            linked
-                .engine
-                .dispatch(pop(0, 0), &run_control(idle_at(1), 50));
+            linked.engine.dispatch(&run_control(idle_at(1), 50));
             drain_persist(&mut linked);
         }
         let message = edge.admit(1, &case.values, 100).expect("gate admits");
-        linked.engine.dispatch(pop(0, 0), &message);
+        linked.engine.dispatch(&message);
 
         let records = drain_persist(&mut linked);
         let delivered = features(&records);
@@ -286,7 +284,7 @@ fn the_sequence_gate_keeps_duplicates_and_reorders_off_the_hot_thread() {
             continue;
         };
         admitted.push(seq);
-        linked.engine.dispatch(pop(0, 0), &message);
+        linked.engine.dispatch(&message);
     }
     assert_eq!(
         admitted,
@@ -313,7 +311,7 @@ fn link_send_banks_the_declared_schema_on_a_registered_topic() {
     let mut linked = linked(&[TableKind::Features]);
     linked
         .engine
-        .dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(4, 200)));
+        .dispatch(&InboundMessage::SpinTick(spin(4, 200)));
 
     let outbound = linked.outbound.pop().expect("the spin banked one payload");
     assert_eq!(
@@ -391,5 +389,5 @@ fn dispatch_one_spin(strategy: Box<dyn Strategy>) {
     });
     linked
         .engine
-        .dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(1, 1)));
+        .dispatch(&InboundMessage::SpinTick(spin(1, 1)));
 }

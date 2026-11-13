@@ -9,7 +9,7 @@ use super::wire::{WireField, wire_struct};
 pub const LINK_MAGIC: u32 = 0x504C_4E4B;
 
 /// Bump on ANY layout change (UI_BOOK_LEVELS, Level, etc). Only thing catching cross-commit skew.
-pub const LINK_VERSION: u16 = 10;
+pub const LINK_VERSION: u16 = 11;
 
 /// Over-length panics (never truncates); margin real but thin (max 30 chars today).
 pub const LINK_NAME_LEN: usize = 32;
@@ -69,6 +69,7 @@ impl TopicId {
     pub const CATALOG_INSTRUMENTS: TopicId = TopicId(3);
     pub const CATALOG_FEATURES: TopicId = TopicId(4);
     pub const LIFECYCLE: TopicId = TopicId(5);
+    pub const LATENCY: TopicId = TopicId(6);
     pub const FIRST_STRATEGY: TopicId = TopicId(16);
 
     /// Id of the strategy topic declared at `index`. The numbering lives here because the sites
@@ -105,6 +106,7 @@ impl TopicId {
             "catalog_instruments" => Some(TopicId::CATALOG_INSTRUMENTS),
             "catalog_features" => Some(TopicId::CATALOG_FEATURES),
             "lifecycle" => Some(TopicId::LIFECYCLE),
+            "latency" => Some(TopicId::LATENCY),
             _ => strategy_topics
                 .iter()
                 .position(|declared| *declared == name)

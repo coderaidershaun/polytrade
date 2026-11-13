@@ -35,6 +35,10 @@ pub(super) struct LiveChild {
 
 impl ChildSlot {
     /// Reads the wall clock, because a client shows this moment as the engine's start time.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the operator fleet times the starts and stops of its children and holds no engine state"
+    )]
     pub(super) fn running(child: Child, console_log: PathBuf, boot: ParsedConfig) -> ChildSlot {
         ChildSlot {
             console_log,

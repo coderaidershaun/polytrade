@@ -2,7 +2,6 @@
 //! type can pin.
 
 mod cargo_bins;
-mod exec_no_clock;
+mod clock_sites;
 mod log_lane_ownership;
-
-pub(crate) use exec_no_clock::rust_sources;
+mod suite_integrity;

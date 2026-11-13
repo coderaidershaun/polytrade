@@ -18,7 +18,7 @@ use engine::msg::inbound::InboundMessage;
 use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
 use engine::runtime::exposure::InstrumentExposure;
 
-use crate::engine_support::{FillPen, Idle, ONE, instrument_row, pop, rotation};
+use crate::engine_support::{FillPen, Idle, ONE, instrument_row, rotation};
 use crate::exec_support::{
     QuotingEngine, QuotingSetup, built_quoting_engine, exec_settings, has_halted, reseat_book,
     spin_at,
@@ -200,7 +200,7 @@ fn fixture_restoring(
 
 fn dispatch_all(fixture: &mut QuotingEngine, messages: &[InboundMessage]) {
     for message in messages {
-        fixture.engine.dispatch(pop(0, 0), message);
+        fixture.engine.dispatch(message);
     }
 }
 
@@ -402,10 +402,14 @@ fn restored_ledger_boundaries_match_named_cases() {
 /// A rotation, far enough from its close that nothing in the quote-stop path fires — the only thing
 /// under test here is what the ledger reset does to the budget.
 fn rotate(fixture: &mut QuotingEngine, when: i64) {
-    fixture.engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::MarketRotation(rotation(0, when, when + 300 * 1_000_000, when)),
-    );
+    fixture
+        .engine
+        .dispatch(&InboundMessage::MarketRotation(rotation(
+            0,
+            when,
+            when + 300 * 1_000_000,
+            when,
+        )));
 }
 
 /// FITNESS: the budget spans the RUN, not the market. A venue that rotates every few minutes hands

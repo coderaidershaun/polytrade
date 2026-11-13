@@ -8,7 +8,7 @@ mod grouping;
 mod rows;
 mod validate;
 
-use crate::msg::ids::{AssetId, InstrumentId, Price, Qty, QueueId};
+use crate::msg::ids::{AssetId, InstrumentId, MAX_INPUT_QUEUES, Price, Qty, QueueId};
 use crate::runtime::config::{
     BinanceEnv, Config, ConfigError, KlineInterval, Subscriptions, TrackerSpec, VenueMarket,
 };
@@ -18,8 +18,6 @@ pub use grouping::{ConnectionCategory, ProducerGroup};
 
 use grouping::group_producers;
 use rows::{binance_env, build_instrument_rows, check_strategy_instruments};
-
-const MAX_INPUT_QUEUES: usize = 20;
 
 #[derive(Debug, Clone)]
 pub struct InstrumentRow {

@@ -174,6 +174,10 @@ impl WriterState {
         Ok(())
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a writer stamps and paces its own files, which are never engine state"
+    )]
     fn document(&self) -> ExposureDocument {
         ExposureDocument {
             version: FORMAT_VERSION,

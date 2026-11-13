@@ -56,6 +56,10 @@ fn transport_for(request: ExecRequest, has_socket: bool) -> Transport {
 impl Actor {
     // Binance Spot has no batch-order endpoint, so requests go out one at a time and
     // share a single flush instead.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) async fn dispatch(
         &mut self,
         outgoing: Vec<Outgoing>,
@@ -105,6 +109,10 @@ impl Actor {
         ended
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn feed(
         &mut self,
         request_id: RequestId,
@@ -153,6 +161,10 @@ impl Actor {
         FeedOutcome::Fed
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     fn submit_over_rest(&mut self, request: ExecRequest, recon_seq: u64) {
         let job = match request {
             ExecRequest::Cancel {

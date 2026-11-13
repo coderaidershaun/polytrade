@@ -8,6 +8,10 @@
 
 // The counting allocator implements an unsafe trait, and the workspace denies unsafe code.
 #![allow(unsafe_code)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "tests read clocks for their own deadlines, which are never engine state"
+)]
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -16,6 +20,7 @@ mod engine_support;
 mod exec_support;
 mod hot;
 mod link;
+mod log;
 /// The shipped strategy, included from its folder so the fitness suite drives the real thing. One
 /// include point only — a second would mint a distinct `MicroRecorder` type.
 #[path = "../../../strategies/strat-micro-recorder/te-binance-spot-btcusdt/strategy.rs"]
@@ -35,7 +40,6 @@ mod poly_strategy;
 mod raw_recorder;
 mod runtime;
 mod scans;
-mod suite_integrity;
 mod tape;
 mod venues;
 

@@ -68,6 +68,17 @@ pub enum EngineError {
     #[error("hot_core_id {core_id} is not an available core (found {available})")]
     CoreId { core_id: usize, available: usize },
     #[error(
+        "the {thread} thread could not pin to engine.housekeeping_core_id {core_id} — on linux a housekeeping thread runs only on the core it was given; name a core this process may use"
+    )]
+    HousekeepingPin {
+        core_id: usize,
+        thread: &'static str,
+    },
+    #[error(
+        "the sender thread could not pin to senders.core_id {core_id} — set a core this process may use, or senders.placement: shared"
+    )]
+    SenderPin { core_id: usize },
+    #[error(
         "trading engine {trading_engine} could not bind link.bind {bind} — another process holds that port, or this host has no such address"
     )]
     LinkBind {

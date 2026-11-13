@@ -4,21 +4,21 @@
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
-use engine::log::LogRecord;
+use engine::log::{HotRecord, open_hot_lane};
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{
     BookChunk, InboundMessage, KlineEvent, MarketRotation, SpinTick, TradeEvent,
 };
 use engine::msg::persist::{FeatureId, PersistRecord};
-use engine::msg::time::DurationUs;
+use engine::msg::time::{DurationUs, TsUs};
 use engine::runtime::config::{Instruments, KlineInterval, NoParams, StrategySpec, TableKind};
 
 use rtrb::Consumer;
 
 use crate::engine_support::{
     NOMINAL_SPIN, ONE, book_reset, call_codes, delta_chunk, engine_view, engine_with_ui,
-    engine_without_warmup, instrument_row, kline, metrics_ring, persist_ring, pop, rotation,
-    snapshot_pair, spin, strategy_log_ring, tracker_spec_all, trade,
+    engine_without_warmup, instrument_row, kline, persist_ring, rotation, snapshot_pair, spin,
+    strategy_log_ring, tracker_spec_all, trade,
 };
 use crate::raw_recorder::RecorderStrategy;
 
@@ -33,7 +33,12 @@ struct Probe {
 impl Probe {
     fn log(&self, ctx: &mut StrategyCtx<'_>, instrument: InstrumentId, code: f64) {
         ctx.emit(self.call.expect("features registered"), instrument, code);
-        engine::strategy_info!(ctx, "probe callback {code} on instrument {}", instrument.0);
+        engine::note!(
+            ctx,
+            "probe callback {} on instrument {}",
+            code,
+            instrument.0
+        );
     }
 }
 
@@ -117,7 +122,7 @@ fn dispatch_capture(
     consumer: &mut Consumer<PersistRecord>,
     message: InboundMessage,
 ) -> (Option<f64>, Option<f64>) {
-    engine.dispatch(pop(0, 0), &message);
+    engine.dispatch(&message);
     let mut ewma = None;
     let mut microprice_present = None;
     while let Ok(record) = consumer.pop() {
@@ -166,24 +171,22 @@ fn probe_sequence() -> Vec<InboundMessage> {
 /// pure function of the input sequence.
 struct Replayed {
     persist: Vec<PersistRecord>,
-    logs: Vec<LogRecord>,
+    logs: Vec<HotRecord>,
 }
 
 fn run_sequence(sequence: &[InboundMessage], warmup: DurationUs) -> Replayed {
     let instruments = [instrument_row(0, tracker_spec_all(1), 64)];
     let (persist_sink, mut consumer) = persist_ring(256);
     let (strategy_log_sink, mut log_consumer) = strategy_log_ring(256);
-    let (metrics_sink, _metrics_consumer) = metrics_ring(64);
     let (mut engine, _ui_books, _ui_events) = engine_with_ui(
         &instruments,
         Box::new(Probe::default()),
         persist_sink,
         strategy_log_sink,
-        metrics_sink,
         warmup,
     );
     for message in sequence {
-        engine.dispatch(pop(0, 0), message);
+        engine.dispatch(message);
     }
     let mut persist = Vec::new();
     while let Ok(record) = consumer.pop() {
@@ -211,7 +214,7 @@ fn dispatch_replay_is_deterministic() {
     );
 
     // The strategy log lane is a pure function of the sequence too: records stamp event time with
-    // no wall-clock read, so two runs bank byte-identical `LogRecord`s.
+    // no wall-clock read, so two runs bank byte-identical `HotRecord`s.
     assert!(
         !first.logs.is_empty(),
         "the probe banked strategy log lines"
@@ -260,6 +263,77 @@ fn warmup_sequence() -> Vec<InboundMessage> {
         InboundMessage::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 11_000_000)),
         InboundMessage::SpinTick(spin(1, 12_000_000)),
     ]
+}
+
+/// The log records of one replay, run on a thread of its own with its own hot lane, as the hot thread
+/// runs: the engine's hot records and the strategy's banked records.
+#[derive(Debug, PartialEq, Eq)]
+struct LoggedReplay {
+    hot: Vec<HotRecord>,
+    strategy: Vec<HotRecord>,
+}
+
+fn replay_on_own_thread(sequence: &[InboundMessage], warmup: DurationUs) -> LoggedReplay {
+    let sequence = sequence.to_vec();
+    std::thread::spawn(move || {
+        let mut hot_lane = open_hot_lane(64);
+        let strategy = run_sequence(&sequence, warmup).logs;
+        let mut hot = Vec::new();
+        while let Some(record) = hot_lane.pop() {
+            hot.push(record);
+        }
+        LoggedReplay { hot, strategy }
+    })
+    .join()
+    .expect("the replay thread finished")
+}
+
+fn rendered(record: &HotRecord) -> String {
+    let mut text = String::new();
+    record
+        .render(&mut text)
+        .expect("a String takes every write");
+    text
+}
+
+/// Hot log records are a pure function of the messages: each carries the time of the message under
+/// fold and raw words, never a clock value, so two replays write the same records byte for byte.
+#[test]
+fn engine_hot_log_records_replay_identically() {
+    let probe = (probe_sequence(), DurationUs::ZERO);
+    let warmed = (warmup_sequence(), WARMUP_SPAN);
+    let mut replays = Vec::new();
+    for (sequence, warmup) in [probe, warmed] {
+        let first = replay_on_own_thread(&sequence, warmup);
+        let second = replay_on_own_thread(&sequence, warmup);
+        assert_eq!(first, second, "log records diverged across replays");
+        let stamps: Vec<TsUs> = sequence
+            .iter()
+            .map(InboundMessage::received_ts_us)
+            .collect();
+        for record in first.hot.iter().chain(&first.strategy) {
+            assert!(
+                stamps.contains(&record.at()),
+                "{record:?} carries a time that no message carries"
+            );
+        }
+        replays.push(first);
+    }
+
+    let [probe, warmed] = <[LoggedReplay; 2]>::try_from(replays).expect("two sequences");
+    assert!(
+        !probe.strategy.is_empty(),
+        "the probe banked strategy records"
+    );
+    let warmup_line = warmed
+        .hot
+        .iter()
+        .find(|record| {
+            rendered(record)
+                == "warmup complete after 10s of message time — strategy callbacks now live"
+        })
+        .expect("the boundary message wrote the warmup line to the hot lane");
+    assert_eq!(warmup_line.at(), TsUs::from_micros(10_000_000));
 }
 
 /// `engine.warmup_secs`: warmup is decided by message stamps alone. The suppressed prefix is
@@ -320,7 +394,6 @@ fn recorder_records_only_configured_instruments() {
     };
     let (sink, mut consumer) = persist_ring(256);
     let (log_sink, _log_consumer) = strategy_log_ring(64);
-    let (metrics_producer, _metrics_consumer) = metrics_ring(64);
     let mut engine = engine_without_warmup(
         &instruments,
         Box::new(RecorderStrategy::from_spec(
@@ -329,17 +402,22 @@ fn recorder_records_only_configured_instruments() {
         )),
         sink,
         log_sink,
-        metrics_producer,
     );
 
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 1)),
-    );
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Trade(trade(1, 100 * ONE, ONE, Side::Buy, 2)),
-    );
+    engine.dispatch(&InboundMessage::Trade(trade(
+        0,
+        100 * ONE,
+        ONE,
+        Side::Buy,
+        1,
+    )));
+    engine.dispatch(&InboundMessage::Trade(trade(
+        1,
+        100 * ONE,
+        ONE,
+        Side::Buy,
+        2,
+    )));
 
     let mut instruments_recorded = Vec::new();
     while let Ok(PersistRecord::Trade(row)) = consumer.pop() {
@@ -359,14 +437,8 @@ fn one_sided_book_does_not_perturb_ewma() {
     let instruments = [instrument_row(0, tracker_spec_all(4), 64)];
     let (sink, mut consumer) = persist_ring(256);
     let (log_sink, _log_consumer) = strategy_log_ring(64);
-    let (metrics_producer, _metrics_consumer) = metrics_ring(64);
-    let mut engine = engine_without_warmup(
-        &instruments,
-        Box::new(EwmaProbe::default()),
-        sink,
-        log_sink,
-        metrics_producer,
-    );
+    let mut engine =
+        engine_without_warmup(&instruments, Box::new(EwmaProbe::default()), sink, log_sink);
 
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, 2 * ONE)], &[(101 * ONE, ONE)], 1);
     dispatch_capture(&mut engine, &mut consumer, InboundMessage::Book(bids));
@@ -383,7 +455,7 @@ fn one_sided_book_does_not_perturb_ewma() {
     );
     let vol_before = built.expect("ewma has a value after two moving two-sided updates");
 
-    engine.dispatch(pop(0, 0), &InboundMessage::BookReset(book_reset(0, 4)));
+    engine.dispatch(&InboundMessage::BookReset(book_reset(0, 4)));
     while consumer.pop().is_ok() {}
 
     // Partial snapshot: bids only (book stays awaiting). No microprice, so ewma must not move.

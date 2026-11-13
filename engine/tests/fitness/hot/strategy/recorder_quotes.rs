@@ -15,7 +15,7 @@
 
 use engine::msg::ids::{FIXED_SCALE, Price, Side};
 
-use crate::engine_support::{ONE, pop};
+use crate::engine_support::ONE;
 use crate::hot::strategy::recorder_fixture::{
     STEP_US, STEPS, column_value, drain_places, make_ready, recorded_row, recorder_engine,
     seed_book, spin_columns, step_messages,
@@ -44,7 +44,7 @@ fn the_recorded_quote_is_the_order_that_gets_placed() {
     for index in 0..STEPS {
         let when = index * STEP_US;
         for message in step_messages(BASE, index, when) {
-            engine.dispatch(pop(0, 0), &message);
+            engine.dispatch(&message);
         }
         let spun = spin_columns(&mut persist);
         let issued = drain_places(&mut commands);

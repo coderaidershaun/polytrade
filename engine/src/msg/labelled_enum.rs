@@ -1,6 +1,7 @@
 //! One declaration per string-tagged enum: the variant list, its label table and its exhaustive
 //! `ALL` array are the same text, so a variant cannot be added without a label, and `ALL` cannot
-//! fall out of the declaration order that `variant as usize` indexes by.
+//! fall out of the declaration order that `variant as usize` indexes by. Each one is also a
+//! `LogValue`: a hot log line prints its label under `{}` and its variant name under `{:?}`.
 //! Macro bodies sit outside the fmt gate (rustfmt skips brace-delimited item macros) — hand-formatted.
 
 /// Trailing `const ALL` is opt-in: an unread `ALL` would be a public promise nobody asked for.
@@ -48,6 +49,8 @@ macro_rules! labelled_enum {
                 }
             }
         }
+
+        $crate::log::fieldless_log_value!($ty { $( $variant ),+ }, label = $accessor);
     };
 }
 

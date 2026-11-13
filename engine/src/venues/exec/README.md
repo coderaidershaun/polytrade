@@ -19,7 +19,8 @@ thread never sees any of it, only stamped messages in queue order.
 
 ## The two vocabularies
 
-**Commands in** (one `rtrb` ring of `ExecLaneItem`, drained by `ExecCore::drain_commands`):
+**Commands in** (one `rtrb` ring of `ExecLaneItem`, drained by the shared `Sender`, which hands
+each command to the venue's transport and from there to `ExecCore::on_command`):
 `Place`, `Cancel`, `AmendQty` (shrink only — growth is cancel+place), `ReconcileOrder`,
 `ReconcileOpenOrders`, `CancelOurs`, `CancelPriorRun`. These are intents, not venue methods.
 There is deliberately no cancel-all: the engine cannot distinguish foreign orders, so it
@@ -53,9 +54,12 @@ engine branches solely on the normalised enums.
    reconciled, never re-sent), `ResyncPass` (numbered passes, bounded retries, give-up drops
    the connection), `ExecStop`/`EdgeHandle` (the stop latch and the one shutdown body), the
    synthesised-event constructors (every refused or timed-out command still answers the hot
-   slot), and `VenueCapabilities`/`LeaseNamespace` (declared beside each other in every venue
-   module). `ExecSession`, `EventSink` and `InFlightTable` are public on their own merit, as
-   the shared machinery a venue embeds, with the same standing as `ExecCore` and `ResyncPass`.
+   slot), `VenueCapabilities`/`LeaseNamespace` (declared beside each other in every venue
+   module), and `Sender` (`venues/edge/sender.rs`: the one drain loop of the command lane. It
+   pops each command once and in lane order, stamps its pop and the moment its transport took the
+   bytes, and waits between wakes as `senders.placement` says). `ExecSession`, `EventSink`,
+   `InFlightTable`, `Sender` and its `CommandTransport` are public on their own merit, as the
+   shared machinery a venue embeds, with the same standing as `ExecCore` and `ResyncPass`.
    Driving commands through `ExecCore::on_command` and answers through `ExecSession::fold` is
    what makes the money rules inherited instead of re-derived.
 
@@ -63,16 +67,19 @@ engine branches solely on the normalised enums.
    venue shares: connect/backoff with full jitter, the blind-too-long cancel sweep, offline
    settling, exit precedence (Shutdown > Fatal > Park), sweep pacing, and the stop
    protocol. A venue implements the ten-method `EdgeDriver` trait with only its own
-   physics: its URL, its `select!` loop, its offline folding, its sweep step, its closing
-   report. The same file holds what a venue's bring-up is handed and hands back:
+   physics: its URL, its `select!` loop (which drains the lane through the sender first on each
+   wake, and waits on the sender beside its own timers), its offline folding, its sweep step,
+   its closing report. The same file holds what a venue's bring-up is handed and hands back:
    `EdgeInputs`, which carries `EdgeSettings` (the settings every edge shares, built once by
    the runtime), and `VenueEdge`. It also holds what a live venue builds its edge from:
-   `EdgeControl::new`, the shared tick constants (`COMMAND_POLL`, `HOUSEKEEPING`,
-   `RECONCILE_INTERVAL`, `RECENT_TRADES`), and the `EventSink` that feeds the venue's input
-   queue. `EdgeHandle::spawn` gives a live venue its handle; the simulator builds its own,
+   `EdgeControl::new`, the shared tick constants (`HOUSEKEEPING`, `RECONCILE_INTERVAL`,
+   `RECENT_TRADES`), the sender settings (`SenderSettings`, `EdgeLane`) that `run_edge` builds a
+   venue's sender from, and the `EventSink` that feeds the venue's input queue.
+   `EdgeHandle::spawn` gives a live venue its handle; the simulator builds its own,
    because a sweep it misses invalidates the run rather than leaving orders on a venue. The
    chassis file legitimately owns a clock; everything under `venues/exec/` is clock-free by
-   scanned law — deadlines there take `now` as a parameter.
+   the clock lint of `clippy.toml`, which permits no site there — deadlines there take `now`
+   as a parameter.
 
 4. **Written obligations** — the rules no signature can carry:
    - Every command is eventually answered. A refusal, a timeout, a disconnect — each

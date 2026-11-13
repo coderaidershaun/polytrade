@@ -24,7 +24,8 @@ pub(crate) use event::{
     ChunkStamps, account_chunks, amend_not_sent, blank, place_not_sent, request_timed_out,
     stream_ready, stream_reset,
 };
-pub(crate) use exit::{EdgeHandle, ExecStop, ExitPlan, SessionOutcome};
+pub use exit::SessionOutcome;
+pub(crate) use exit::{EdgeHandle, ExecStop, ExitPlan};
 pub use identity::{EngineIdentity, LeaseNamespace, OrderOwnership, TeTag};
 pub use inflight::{InFlightRequest, InFlightTable};
 pub use mirror::MirroredOrder;

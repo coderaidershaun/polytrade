@@ -5,6 +5,9 @@ members = ["engine", "lab", "strategies/strat-micro-recorder"]
 [workspace.lints.rust]
 unsafe_code = "deny"
 
+[workspace.lints.clippy]
+disallowed_methods = "deny"
+
 [profile.deploy]
 inherits = "release"
 lto = "fat"

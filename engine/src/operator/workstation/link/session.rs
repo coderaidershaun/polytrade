@@ -10,7 +10,7 @@ use crate::link::{
 };
 use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, TsUs};
-use crate::msg::ui::{UiBookSnapshot, UiCatalog, UiEvent};
+use crate::msg::ui::{LatencyReport, UiBookSnapshot, UiCatalog, UiEvent};
 use crate::runtime::config::StrategyId;
 use crate::{info, warn, warn_repeating};
 
@@ -30,12 +30,13 @@ const REPORT_INTERVAL: DurationUs = DurationUs::from_secs(60);
 /// Enumerated rather than [`TopicSet::ALL`]: "all" means every topic the sender offers, which would
 /// have an engine unicast strategy payload frames at a process that declares no link fields and can
 /// only count them as rejects.
-const WANTED_TOPICS: [TopicId; 5] = [
+const WANTED_TOPICS: [TopicId; 6] = [
     TopicId::BOOKS,
     TopicId::EVENTS,
     TopicId::CATALOG_INSTRUMENTS,
     TopicId::CATALOG_FEATURES,
     TopicId::LIFECYCLE,
+    TopicId::LATENCY,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -64,6 +65,7 @@ pub enum Delivery {
     Book(UiBookSnapshot),
     Event(UiEvent),
     Catalog(UiCatalog),
+    Latency(LatencyReport),
 }
 
 #[derive(Debug, Default)]
@@ -79,6 +81,7 @@ struct DeliveredCounts {
     events: u64,
     catalog: u64,
     lifecycle: u64,
+    latency: u64,
 }
 
 /// One trading engine at a time. Everything about that engine (the sequence gate, the catalog, the
@@ -213,6 +216,10 @@ impl LinkSession {
                 self.delivered.lifecycle += 1;
                 self.reported = Some(lifecycle);
                 self.publish_catalog()
+            }
+            LinkBody::Latency(report) => {
+                self.delivered.latency += 1;
+                Some(Delivery::Latency(report))
             }
             LinkBody::Subscribe(_) | LinkBody::Payload(_) => {
                 self.rejected.foreign += 1;
@@ -369,12 +376,13 @@ impl LinkSession {
         let rejected = &self.rejected;
         let delivered = &self.delivered;
         info!(
-            "link session {} delivered[books={} events={} catalog={} lifecycle={}] rejected[decode={} gated={} foreign={}] gate{:?}",
+            "link session {} delivered[books={} events={} catalog={} lifecycle={} latency={}] rejected[decode={} gated={} foreign={}] gate{:?}",
             self.peer(),
             delivered.books,
             delivered.events,
             delivered.catalog,
             delivered.lifecycle,
+            delivered.latency,
             rejected.decode,
             rejected.gated,
             rejected.foreign,

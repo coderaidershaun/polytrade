@@ -10,8 +10,7 @@ use rtrb::RingBuffer;
 use tokio::sync::mpsc;
 
 use engine::hot::ingress::IngressQueues;
-use engine::hot::metrics::{Category, MetricsSnapshot};
-use engine::hot::spawn::{HotThreadConfig, QueueProducer, spawn_hot_thread};
+use engine::hot::spawn::{HotThreadConfig, IdleWait, QueueProducer, spawn_hot_thread};
 use engine::hot::strategy::StrategyConfig;
 use engine::msg::ids::{FIXED_SCALE, QueueId, SourceId};
 use engine::msg::inbound::InboundMessage;
@@ -23,8 +22,8 @@ use engine::runtime::shutdown::{DrainSignal, FatalSignal};
 use engine::tape::{PersistConfig, PersistWriter, RunMeta};
 
 use crate::engine_support::{
-    ALL_TABLES, NOMINAL_SPIN, engine_view, engine_without_warmup, instrument_row, metrics_ring,
-    persist_ring, recorder_spec, strategy_log_ring, tracker_spec_all,
+    ALL_TABLES, NOMINAL_SPIN, engine_view, engine_without_warmup, instrument_row, persist_ring,
+    recorder_spec, strategy_log_ring, tracker_spec_all,
 };
 use crate::parquet_readback::{
     Cell, FileData, TempDir, drain_blocking, parquet_files, read_parquet_file, run_dir,
@@ -193,32 +192,6 @@ fn e2e_reads_back_every_table_and_drains_clean() {
             "condition id"
         );
     }
-
-    assert!(
-        !outcome.snapshots.is_empty(),
-        "at least one metrics snapshot reached the actor ring"
-    );
-    assert!(
-        outcome
-            .snapshots
-            .iter()
-            .any(|snapshot| snapshot.is_active(Category::Spin)),
-        "the spin category is active in a snapshot — the timer path flowed"
-    );
-    for snapshot in &outcome.snapshots {
-        assert_eq!(
-            snapshot.counters.persist_dropped, 0,
-            "no persistence records dropped"
-        );
-        assert_eq!(
-            snapshot.counters.snapshots_dropped, 0,
-            "no metrics snapshots dropped"
-        );
-        assert!(
-            snapshot.queue_count >= 1,
-            "occupancy recorded for the input queue"
-        );
-    }
 }
 
 #[test]
@@ -242,7 +215,6 @@ fn e2e_replay_is_identical_across_runs() {
 }
 
 struct RunOutcome {
-    snapshots: Vec<MetricsSnapshot>,
     fatal_tripped: bool,
 }
 
@@ -258,7 +230,6 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
 
     let (sink, persist_consumer) = persist_ring(4096);
     let (log_sink, _log_consumer) = strategy_log_ring(64);
-    let (metrics_producer, mut metrics_consumer) = metrics_ring(64);
 
     let instruments = [instrument_row(0, tracker_spec_all(2), 64)];
     let strategy = RecorderStrategy::from_spec(
@@ -270,13 +241,7 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
         ]),
         engine_view(NOMINAL_SPIN),
     );
-    let mut engine = engine_without_warmup(
-        &instruments,
-        Box::new(strategy),
-        sink,
-        log_sink,
-        metrics_producer,
-    );
+    let engine = engine_without_warmup(&instruments, Box::new(strategy), sink, log_sink);
 
     let feature_names: Vec<Box<str>> = engine
         .feature_names()
@@ -312,11 +277,13 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
         HotThreadConfig {
             core_id: None,
             tag: "e2e-hot",
+            samples: None,
+            idle: IdleWait::Spin,
         },
         ingress,
+        engine,
         fatal.clone(),
         drain.clone(),
-        move |pop, message| engine.dispatch(pop, &message),
     );
 
     for message in message_sequence() {
@@ -336,13 +303,7 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
 
     drain_blocking(persistence).expect("persistence drains and closes every file");
 
-    let mut snapshots = Vec::new();
-    while let Ok(snapshot) = metrics_consumer.pop() {
-        snapshots.push(snapshot);
-    }
-
     RunOutcome {
-        snapshots,
         fatal_tripped: fatal.is_tripped(),
     }
 }

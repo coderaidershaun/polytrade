@@ -10,7 +10,7 @@ use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{CancelReason, ExecCommand, ExecLaneItem, OrderStyle};
 use engine::msg::ids::{AssetId, InstrumentId, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
-use engine::msg::time::DurationUs;
+use engine::msg::time::{DurationUs, Stamper};
 use engine::msg::ui::UiEvent;
 use engine::runtime::config::{RecordedTables, TrackerSpec};
 use engine::runtime::exposure::InstrumentExposure;
@@ -20,7 +20,7 @@ use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
     ALL_TABLES, ONE, account_chunk, book_reset, detached_setup, exposure_ring, instrument_row,
-    persist_ring_for, pop, snapshot_pair, spin, stream_ready, ts, ui_event_ring,
+    persist_ring_for, snapshot_pair, spin, stream_ready, ts, ui_event_ring,
 };
 
 /// Drop the book and restate it whole, so the mark moves with no transient crossing to reason about.
@@ -144,7 +144,7 @@ pub(crate) fn built_quoting_engine(setup: QuotingSetup<'_>) -> QuotingEngine {
         persistence: Some(persistence),
         ui_event_sink,
         exec: Some(ExecWiring {
-            sink: ExecSink::new(commands_producer),
+            sink: ExecSink::new(commands_producer, Stamper::Off),
             settings: setup.settings,
             run_nonce: setup.run_nonce,
         }),
@@ -198,27 +198,24 @@ pub(crate) fn make_ready(engine: &mut HotEngine, when: i64) {
 /// it is load bearing: an engine that quotes without it would make the marker's absence
 /// undetectable.
 pub(crate) fn stream_and_balances(engine: &mut HotEngine, when: i64) {
-    engine.dispatch(pop(0, 0), &stream_ready(INSTRUMENT, when));
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Account(account_chunk(
-            &[(BASE_ASSET, 10 * ONE), (QUOTE_ASSET, 1_000_000 * ONE)],
-            when,
-        )),
-    );
+    engine.dispatch(&stream_ready(INSTRUMENT, when));
+    engine.dispatch(&InboundMessage::Account(account_chunk(
+        &[(BASE_ASSET, 10 * ONE), (QUOTE_ASSET, 1_000_000 * ONE)],
+        when,
+    )));
 }
 
 /// The third leg, built by the SAME constructor the Binance actor sends it with. A hand-built marker
 /// would let every readiness-dependent test stay green while production sent none.
 pub(crate) fn open_orders_snapshot(engine: &mut HotEngine, when: i64) {
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Exec(open_orders_snapshot_end(INSTRUMENT, ts(when))),
-    );
+    engine.dispatch(&InboundMessage::Exec(open_orders_snapshot_end(
+        INSTRUMENT,
+        ts(when),
+    )));
 }
 
 pub(crate) fn spin_at(engine: &mut HotEngine, seq: u64, when: i64) {
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(seq, when)));
+    engine.dispatch(&InboundMessage::SpinTick(spin(seq, when)));
 }
 
 pub(crate) fn drain_commands(commands: &mut Consumer<ExecLaneItem>) -> Vec<ExecCommand> {

@@ -4,19 +4,9 @@
 
 use rtrb::Consumer;
 
-use crate::msg::ids::QueueId;
+use crate::msg::ids::{MAX_INPUT_QUEUES, QueueId};
 use crate::msg::inbound::InboundMessage;
 use crate::msg::time::TsUs;
-
-/// What one pop leaves behind, read after the message came off: `depth` counts only the popped
-/// queue, `spin_backlog` every queue at once. The total is present on spin ticks alone — the one
-/// cadence that arrives whether or not the market does, so the reading is comparable over time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct QueueSample {
-    pub queue_id: QueueId,
-    pub depth: usize,
-    pub spin_backlog: Option<usize>,
-}
 
 /// The consumer ends of every input queue; only the hot thread holds this.
 pub struct IngressQueues {
@@ -24,7 +14,14 @@ pub struct IngressQueues {
 }
 
 impl IngressQueues {
+    /// # Panics
+    /// More than [`MAX_INPUT_QUEUES`] queues, which the registry never builds.
     pub fn new(consumers: Vec<Consumer<InboundMessage>>) -> Self {
+        assert!(
+            consumers.len() <= MAX_INPUT_QUEUES,
+            "{} input queues, max {MAX_INPUT_QUEUES}",
+            consumers.len()
+        );
         Self { consumers }
     }
 
@@ -46,13 +43,14 @@ impl IngressQueues {
         Some((QueueId(index as u8), message))
     }
 
+    /// Messages that wait in each queue, by queue id. Each count is one read of an index that
+    /// another core writes, so the hot loop takes it once a spin, never once a message.
     #[inline]
-    pub fn occupancy(&self, queue: QueueId) -> usize {
-        self.consumers[usize::from(queue.0)].slots()
-    }
-
-    #[inline]
-    pub fn backlog(&self) -> usize {
-        self.consumers.iter().map(Consumer::slots).sum()
+    pub(crate) fn backlog_by_queue(&self) -> [u32; MAX_INPUT_QUEUES] {
+        let mut waiting = [0; MAX_INPUT_QUEUES];
+        for (count, consumer) in waiting.iter_mut().zip(&self.consumers) {
+            *count = u32::try_from(consumer.slots()).unwrap_or(u32::MAX);
+        }
+        waiting
     }
 }

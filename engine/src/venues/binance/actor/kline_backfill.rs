@@ -41,6 +41,10 @@ impl Actor {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn fill_kline_gap(
         &mut self,
         missing_from_open_ts_us: TsUs,
@@ -74,6 +78,10 @@ impl Actor {
         self.flush(out);
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) async fn backfill_klines(&mut self) {
         for target in self.kline_targets.clone() {
             if self.rest_quiet.is_active(Instant::now()) {

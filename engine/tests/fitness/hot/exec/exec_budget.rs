@@ -22,7 +22,7 @@ use engine::msg::time::DurationUs;
 use engine::runtime::config::RecordedTables;
 use engine::runtime::exposure::InstrumentExposure;
 
-use crate::engine_support::{ALL_TABLES, ONE, exec_event, local_refusals, pop};
+use crate::engine_support::{ALL_TABLES, ONE, exec_event, local_refusals};
 use crate::exec_support::{
     ASK, BID, CEILING, INSTRUMENT, QUOTE_QTY, QuotingEngine, QuotingSetup, TwoSidedQuoter,
     built_quoting_engine, drain_commands, exec_settings, make_ready, reseat_book, row_with_ceiling,
@@ -73,7 +73,7 @@ fn ready_engine(
     });
     make_ready(&mut built.engine, 0);
     for message in reseat_book(BID, ASK, 0) {
-        built.engine.dispatch(pop(0, 0), &message);
+        built.engine.dispatch(&message);
     }
     drain_commands(&mut built.commands);
     built
@@ -89,14 +89,11 @@ fn report_canceled(engine: &mut HotEngine, command: ExecCommand, when: i64) {
     else {
         return;
     };
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Exec(ExecEvent {
-            kind: ExecKind::ReportCanceled,
-            status: Some(VenueOrderStatus::Canceled),
-            ..exec_event(INSTRUMENT, client_id, side, 0, when)
-        }),
-    );
+    engine.dispatch(&InboundMessage::Exec(ExecEvent {
+        kind: ExecKind::ReportCanceled,
+        status: Some(VenueOrderStatus::Canceled),
+        ..exec_event(INSTRUMENT, client_id, side, 0, when)
+    }));
 }
 
 /// What one spin did: how many placements went out, and every refusal the engine reported. Kept
@@ -134,7 +131,7 @@ fn run_spins(built: &mut QuotingEngine, spins: u64) -> Vec<SpinOutcome> {
 /// budget would be reading the book-age gate instead.
 fn quotable_spin(built: &mut QuotingEngine, spin: u64, when: i64) {
     for message in reseat_book(BID, ASK, when) {
-        built.engine.dispatch(pop(0, 0), &message);
+        built.engine.dispatch(&message);
     }
     spin_at(&mut built.engine, spin, when);
 }

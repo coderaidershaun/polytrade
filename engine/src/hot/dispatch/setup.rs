@@ -5,9 +5,7 @@
 use crate::hot::book::Book;
 use crate::hot::exec::{ExecEngineSetup, ExecSettings};
 use crate::hot::quant::volatility::EwmaVol;
-use crate::hot::sink::{
-    ExecSink, MetricsSink, PersistSink, StrategyLogSink, UiBookSink, UiEventSink,
-};
+use crate::hot::sink::{ExecSink, PersistSink, StrategyLogSink, UiBookSink, UiEventSink};
 use crate::hot::strategy::{Registration, Strategy};
 use crate::hot::tracker::MicroTracker;
 use crate::link::{LinkHash, TopicId, schema_hash_of_fields};
@@ -24,7 +22,6 @@ pub struct HotEngineSetup<'a> {
     /// None = no persistence (emit* discards).
     pub persistence: Option<PersistWiring>,
     pub strategy_log_sink: StrategyLogSink,
-    pub metrics_sink: MetricsSink,
     pub ui_book_sink: UiBookSink,
     pub ui_event_sink: UiEventSink,
     pub link: Option<LinkWiring>,

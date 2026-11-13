@@ -4,9 +4,9 @@
 mod alloc;
 mod book_reconstruction;
 mod dispatch;
+mod driver;
 mod exec;
 mod ingress_order;
-mod latency_metrics;
 mod position_ledger;
 /// The quant calculator pins. They live here rather than beside the calculators because `src/`
 /// carries production code only. One module per calculator, named for the concept rather than the

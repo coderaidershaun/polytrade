@@ -1,5 +1,7 @@
 //! Fixtures shared by the workstation projection fitness files: the book-snapshot builder, the DOM
-//! overlay, the named-case table alias and the chart-model fixtures.
+//! overlay, the named-case table alias, the chart-model fixtures, and the walk of a source folder.
+
+use std::path::Path;
 
 use engine::msg::ids::{InstrumentId, Price, Qty};
 use engine::msg::inbound::Level;
@@ -123,4 +125,21 @@ pub fn rotation_event(instrument: u16, bucket: u64) -> UiEvent {
         seq: 0,
         event_ts_us: at(bucket),
     }
+}
+
+pub fn rust_sources(directory: &Path) -> Vec<std::path::PathBuf> {
+    let entries = std::fs::read_dir(directory)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", directory.display()));
+    let mut sources = Vec::new();
+    for path in entries.filter_map(|entry| entry.ok().map(|entry| entry.path())) {
+        match path.is_dir() {
+            true => sources.extend(rust_sources(&path)),
+            false if path.extension().is_some_and(|extension| extension == "rs") => {
+                sources.push(path);
+            }
+            false => {}
+        }
+    }
+    sources.sort();
+    sources
 }

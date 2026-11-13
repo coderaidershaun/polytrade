@@ -40,6 +40,10 @@ impl BackoffCaps {
     /// Public because the caps are: a configuration type a caller can build but whose behaviour it
     /// cannot reach keeps half its contract to itself.
     #[must_use]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the reconnect jitter takes its seed from the wall clock and only paces reconnects"
+    )]
     pub fn delay(&self, attempt: u32) -> Duration {
         let ceiling = self
             .initial

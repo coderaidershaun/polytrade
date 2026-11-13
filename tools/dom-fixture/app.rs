@@ -15,7 +15,7 @@ use engine::operator::workstation::dom_view::{DEFAULT_ROWS_PER_SIDE, DomOverlay}
 use engine::operator::workstation::monitor::view::{Channel, MonitorFrame};
 use engine::operator::workstation::shell::{Arrangement, View};
 
-use crate::chart_scenes::{ChartScene, chart_scenes, latency_summary};
+use crate::chart_scenes::{ChartScene, chart_scenes, latency_report};
 use crate::fit_readout;
 use crate::hud::{self, HudBand};
 use crate::link_scenes::{LinkScene, link_scenes};
@@ -111,7 +111,8 @@ impl DomFixture {
                 None => LeftPanel::Chart,
             },
             latency: LatencyFrame {
-                summary: Some(latency_summary()),
+                report: Some(latency_report()),
+                staleness: None,
             },
             links: Panel::new(link_scenes(), number("LINK")),
             shell: ShellScene::new(),

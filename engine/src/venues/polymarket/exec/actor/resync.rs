@@ -309,6 +309,10 @@ impl Actor {
         self.finish_readiness_if_clean();
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     fn adopted_event(&self, unmapped: &UnmappedOrder, client_id: ClientOrderId) -> ExecEvent {
         let now = self.control.clock.now();
         ExecEvent {
@@ -392,6 +396,10 @@ impl Actor {
 
     /// Quoting opens once the pass has finished, no prior-run order is resting and every prior-run
     /// cancel has answered. The cancels are checked first because arming moves the core's phase.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) fn finish_readiness_if_clean(&mut self) {
         if self.prior_run_cancels > 0 {
             return;

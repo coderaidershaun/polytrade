@@ -249,6 +249,10 @@ impl Actor {
     }
 
     // Klines are not simulator inputs.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     fn flush(&mut self, out: Vec<InboundMessage>) {
         for mut message in out {
             message.set_queued_ts_us(self.clock.now());
@@ -305,6 +309,10 @@ impl Actor {
     // A 429/418 quiets every client on this venue's IP budget, the signed order path included: the
     // venue counts both halves of the deployment against one allowance, so letting the other half
     // learn nothing would have it retry straight into a harder ban.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     fn on_rest_error(&mut self, error: &RestError, operation: &str) {
         if let RestError::RateLimited {
             retry_after_secs, ..
@@ -327,6 +335,10 @@ impl Actor {
 }
 
 impl Lane for Actor {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn session(&mut self, mut socket: Socket) -> SessionEnd {
         let Some(epoch) = self.stream_epoch.next() else {
             self.on_epoch_exhausted();

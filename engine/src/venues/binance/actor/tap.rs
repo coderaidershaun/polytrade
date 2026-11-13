@@ -12,6 +12,10 @@ use super::{Actor, liveness};
 
 impl Actor {
     // Both consumers must observe the same prefix.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) fn flush_tapped(&mut self, out: Vec<TappedMessage>) {
         for tapped in out {
             let mut message = tapped.message;
@@ -28,6 +32,10 @@ impl Actor {
     /// Every REST read this actor makes goes through here, because a fetch that outlives the
     /// heartbeat would emit no watermark while it runs and so stall the simulator's ordering gate.
     /// A lane with no tap fetches plainly. `None` means the failure has already been logged.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) async fn read_rest(
         &mut self,
         instrument: InstrumentId,

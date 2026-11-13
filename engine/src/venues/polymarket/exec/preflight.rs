@@ -244,6 +244,10 @@ fn blank_as_dash(value: &str) -> &str {
     if value.is_empty() { "-" } else { value }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a start preflight reads the wall clock once, before any message exists"
+)]
 fn local_unix_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

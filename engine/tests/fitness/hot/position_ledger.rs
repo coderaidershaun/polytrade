@@ -24,8 +24,8 @@ use proptest::strategy::Strategy as _;
 
 use crate::engine_support::{
     FillPen, ONE, book_reset, delta_chunk, engine_without_warmup, idle_at, instrument_row,
-    last_snapshot_chunk, metrics_ring, persist_ring, pop, rotation, run_control, running_at,
-    snapshot_pair, spin, strategy_log_ring, trade,
+    last_snapshot_chunk, persist_ring, rotation, run_control, running_at, snapshot_pair, spin,
+    strategy_log_ring, trade,
 };
 
 /// One hundredth of a price unit — the grid a venue quotes on. Note it is EVEN in mantissas, so a
@@ -151,13 +151,11 @@ fn probe_engine(instruments: &[InstrumentRow]) -> (HotEngine, Readings) {
     let readings: Readings = Arc::new(Mutex::new(Vec::new()));
     let (persistence, _persist) = persist_ring(256);
     let (log_sink, _logs) = strategy_log_ring(64);
-    let (metrics, _metrics) = metrics_ring(64);
     let engine = engine_without_warmup(
         instruments,
         Box::new(LedgerProbe::new(&readings)),
         persistence,
         log_sink,
-        metrics,
     );
     // The persist/log/metrics consumers are dropped on purpose: this suite reads the ledger through
     // ctx alone, and those lanes fill-then-drop harmlessly.
@@ -202,7 +200,7 @@ fn reseat_book(instrument: u16, bid: i64, ask: i64, when: i64) -> [InboundMessag
 
 fn dispatch_all(engine: &mut HotEngine, messages: &[InboundMessage]) {
     for message in messages {
-        engine.dispatch(pop(0, 0), message);
+        engine.dispatch(message);
     }
 }
 
@@ -283,7 +281,7 @@ proptest! {
                 }
             }
             let seq = index as u64;
-            engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(seq, when + 1)));
+            engine.dispatch(&InboundMessage::SpinTick(spin(seq, when + 1)));
 
             let reading = spin_reading(&readings, 0, seq);
             prop_assert_eq!(reading.position_base, Qty(shadow.position_base));
@@ -315,7 +313,7 @@ fn a_fill_folds_before_its_callback_and_a_redelivery_moves_the_money_once() {
         let mut pen = FillPen::new(0);
 
         dispatch_all(&mut engine, &pen.fill(Side::Buy, 101 * ONE, ONE, 10));
-        engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(0, 20)));
+        engine.dispatch(&InboundMessage::SpinTick(spin(0, 20)));
 
         let recorded = take_readings(&readings);
         let in_fill = recorded
@@ -345,7 +343,7 @@ fn a_fill_folds_before_its_callback_and_a_redelivery_moves_the_money_once() {
         assert_eq!(on_spin.pnl_quote, 0);
 
         dispatch_all(&mut engine, &pen.fill(Side::Buy, 100 * ONE, ONE, 30));
-        engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(1, 40)));
+        engine.dispatch(&InboundMessage::SpinTick(spin(1, 40)));
 
         let after = spin_reading(&readings, 0, 1);
         assert_eq!(after.position_base, Qty(2 * ONE));
@@ -367,7 +365,7 @@ fn a_fill_folds_before_its_callback_and_a_redelivery_moves_the_money_once() {
         for batch in [&first, &second, &second, &first, &first] {
             dispatch_all(&mut engine, batch);
         }
-        engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(0, 30)));
+        engine.dispatch(&InboundMessage::SpinTick(spin(0, 30)));
 
         let after = spin_reading(&readings, 0, 0);
         let fills = take_readings(&readings)
@@ -416,16 +414,18 @@ fn a_rotation_flattens_its_own_slot_and_a_resume_preserves_every_one() {
         let mut pen = FillPen::new(instrument);
         dispatch_all(&mut engine, &pen.fill(Side::Buy, 100 * ONE, ONE, 10));
     }
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(0, 20)));
+    engine.dispatch(&InboundMessage::SpinTick(spin(0, 20)));
     for instrument in [0u16, 1] {
         assert_eq!(spin_reading(&readings, instrument, 0).pnl_quote, ONE);
     }
 
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::MarketRotation(rotation(0, 30, 300_000_030, 30)),
-    );
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(1, 40)));
+    engine.dispatch(&InboundMessage::MarketRotation(rotation(
+        0,
+        30,
+        300_000_030,
+        30,
+    )));
+    engine.dispatch(&InboundMessage::SpinTick(spin(1, 40)));
     let rotated = spin_reading(&readings, 0, 1);
     assert_eq!(
         rotated.position_base,
@@ -441,9 +441,9 @@ fn a_rotation_flattens_its_own_slot_and_a_resume_preserves_every_one() {
     assert_eq!(untouched.position_base, Qty(ONE));
     assert_eq!(untouched.pnl_quote, ONE);
 
-    engine.dispatch(pop(0, 0), &run_control(idle_at(1), 50));
-    engine.dispatch(pop(0, 0), &run_control(running_at(2), 600_000_050));
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(2, 600_000_060)));
+    engine.dispatch(&run_control(idle_at(1), 50));
+    engine.dispatch(&run_control(running_at(2), 600_000_050));
+    engine.dispatch(&InboundMessage::SpinTick(spin(2, 600_000_060)));
     let resumed = spin_reading(&readings, 1, 2);
     assert_eq!(
         resumed.position_base,
@@ -475,27 +475,31 @@ fn a_mark_needs_both_sides_and_survives_a_book_reset() {
     let instruments = [bare_row(0)];
     let (mut engine, readings) = probe_engine(&instruments);
 
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(0, 1)));
+    engine.dispatch(&InboundMessage::SpinTick(spin(0, 1)));
     assert!(
         !spin_reading(&readings, 0, 0).has_mark,
         "no book has committed at all"
     );
 
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Book(last_snapshot_chunk(0, Side::Buy, &[(100 * ONE, ONE)], 10)),
-    );
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(1, 11)));
+    engine.dispatch(&InboundMessage::Book(last_snapshot_chunk(
+        0,
+        Side::Buy,
+        &[(100 * ONE, ONE)],
+        10,
+    )));
+    engine.dispatch(&InboundMessage::SpinTick(spin(1, 11)));
     assert!(
         !spin_reading(&readings, 0, 1).has_mark,
         "a book with bids and no asks is not a valuation"
     );
 
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Book(delta_chunk(0, Side::Sell, &[(102 * ONE, ONE)], 20)),
-    );
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(2, 21)));
+    engine.dispatch(&InboundMessage::Book(delta_chunk(
+        0,
+        Side::Sell,
+        &[(102 * ONE, ONE)],
+        20,
+    )));
+    engine.dispatch(&InboundMessage::SpinTick(spin(2, 21)));
     assert!(
         spin_reading(&readings, 0, 2).has_mark,
         "both sides are present at a commit boundary"
@@ -503,8 +507,8 @@ fn a_mark_needs_both_sides_and_survives_a_book_reset() {
 
     let mut pen = FillPen::new(0);
     dispatch_all(&mut engine, &pen.fill(Side::Buy, 100 * ONE, ONE, 30));
-    engine.dispatch(pop(0, 0), &InboundMessage::BookReset(book_reset(0, 40)));
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(3, 41)));
+    engine.dispatch(&InboundMessage::BookReset(book_reset(0, 40)));
+    engine.dispatch(&InboundMessage::SpinTick(spin(3, 41)));
     let held = spin_reading(&readings, 0, 3);
     assert!(
         held.has_mark,
@@ -618,7 +622,6 @@ fn a_fill_moves_cash_the_way_its_side_and_its_commission_say() {
     let latest = Arc::new(Mutex::new(None));
     let (persistence, _persist) = persist_ring(256);
     let (log_sink, _logs) = strategy_log_ring(64);
-    let (metrics, _metrics) = metrics_ring(64);
     let mut engine = engine_without_warmup(
         &instruments,
         Box::new(MoneyProbe {
@@ -626,16 +629,15 @@ fn a_fill_moves_cash_the_way_its_side_and_its_commission_say() {
         }),
         persistence,
         log_sink,
-        metrics,
     );
     let mut pen = FillPen::new(0);
 
     // Buy one whole base unit at 100. No mark yet, so PnL is the bare cost basis — which is exactly
     // the number that has to be NEGATIVE: we spent quote to get base.
     for message in pen.fill(Side::Buy, 100 * ONE, ONE, 10) {
-        engine.dispatch(pop(0, 0), &message);
+        engine.dispatch(&message);
     }
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(0, 20)));
+    engine.dispatch(&InboundMessage::SpinTick(spin(0, 20)));
     let (position, cash) = latest.lock().expect("poisoned").expect("the spin ran");
     assert_eq!(
         position, ONE,
@@ -650,9 +652,9 @@ fn a_fill_moves_cash_the_way_its_side_and_its_commission_say() {
     // Sell it back at 110. Base returns to flat and the round trip banks a profit; an inverted sell
     // would drive the position to -2 and the cash the wrong way.
     for message in pen.fill(Side::Sell, 110 * ONE, ONE, 30) {
-        engine.dispatch(pop(0, 0), &message);
+        engine.dispatch(&message);
     }
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(1, 40)));
+    engine.dispatch(&InboundMessage::SpinTick(spin(1, 40)));
     let (position, cash) = latest.lock().expect("poisoned").expect("the spin ran");
     assert_eq!(
         position, 0,
@@ -707,11 +709,8 @@ fn a_fill_moves_cash_the_way_its_side_and_its_commission_say() {
             commission_asset,
             ..report
         });
-        engine.dispatch(pop(0, 0), &charged);
-        engine.dispatch(
-            pop(0, 0),
-            &InboundMessage::SpinTick(spin(2 + step as u64, when + 10)),
-        );
+        engine.dispatch(&charged);
+        engine.dispatch(&InboundMessage::SpinTick(spin(2 + step as u64, when + 10)));
         let (_, cash_after) = latest.lock().expect("poisoned").expect("the spin ran");
         assert_eq!(cash_after - cash_before, cash_gain - 100 * ONE, "{why}");
         cash_before = cash_after;
