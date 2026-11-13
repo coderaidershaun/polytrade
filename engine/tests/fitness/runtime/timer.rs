@@ -38,36 +38,33 @@ proptest! {
 }
 
 /// CONTRACT: the timer fires the slot that the schedule names for its wake, stamps the tick with
-/// the time of that slot, and sleeps until the slot after it. A late timer that fired each slot it
-/// missed would hand the hot thread a burst of stale spins, and one that stamped its wake would
-/// move each later spin.
+/// the time of that slot, counts the slots it skipped, and sleeps until the slot after it. A late
+/// timer that fired each slot it missed would hand the hot thread a burst of stale spins, and one
+/// that stamped its wake would move each later spin.
 #[test]
 fn late_wake_fires_only_the_latest_slot() {
     let start = TsUs::from_micros(1_000_000);
     let schedule = SpinSchedule::new(start, DurationUs::from_micros(1_000));
-    let next_slot = 1;
+    let last_sent = 0;
     let woke = start + DurationUs::from_micros(3_400);
 
-    let slot = schedule.slot_at(woke);
+    assert_eq!(schedule.slot_at(woke), 3);
+    let (slot, skipped) = schedule.slot_to_fire(last_sent, woke);
     assert_eq!(slot, 3, "the wake fires the latest slot that is due");
     assert_eq!(
         schedule.stamp_of(slot),
         TsUs::from_micros(1_003_000),
         "the tick carries the time of its slot, not the time of the wake"
     );
-
-    let skipped: Vec<u64> = (next_slot..slot).collect();
     assert_eq!(
-        skipped,
-        [1, 2],
-        "the timer counts these slots and fires no tick for them"
+        skipped, 2,
+        "slots 1 and 2 get no tick, and the timer counts them"
     );
-    for missed in skipped {
-        assert!(
-            schedule.stamp_of(missed) < woke,
-            "slot {missed} was due before the wake"
-        );
-    }
+    assert_eq!(
+        schedule.slot_to_fire(slot, woke),
+        (4, 0),
+        "a wake before the next slot is due fires that slot, so no slot fires twice"
+    );
 
     let next_wake = schedule.stamp_of(slot + 1);
     assert_eq!(

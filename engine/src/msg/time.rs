@@ -144,6 +144,15 @@ impl SpinSchedule {
     pub fn stamp_of(&self, slot: u64) -> TsUs {
         self.start + DurationUs((slot as i64).saturating_mul(self.interval.0))
     }
+
+    /// The slot to fire for a wake at `at` once slot `last_sent` is sent, and how many slots
+    /// between the two get no tick. A late wake fires only the newest slot that is due, and a
+    /// wake before the next slot is due still fires that slot, so no slot fires twice.
+    pub fn slot_to_fire(&self, last_sent: u64, at: TsUs) -> (u64, u64) {
+        let first_unsent = last_sent + 1;
+        let slot = self.slot_at(at).max(first_unsent);
+        (slot, slot - first_unsent)
+    }
 }
 
 /// One wall-clock reading taken at start, plus the monotonic time elapsed since. A step in the
