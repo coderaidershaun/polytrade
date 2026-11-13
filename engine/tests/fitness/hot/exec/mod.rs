@@ -15,3 +15,4 @@ mod prior_run;
 mod probes;
 mod quoting;
 mod risk_gate;
+mod silence;
