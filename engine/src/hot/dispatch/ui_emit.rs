@@ -13,7 +13,7 @@ use crate::msg::inbound::{Level, MarketRotation, TradeEvent};
 use crate::msg::time::LocalTs;
 use crate::msg::ui::{
     DomQuote, UI_BOOK_LEVELS, UI_ORDER_SNAPSHOT_CAPACITY, UI_ORDER_SNAPSHOT_MAX_TOTAL,
-    UiBookSnapshot, UiBookState, UiEvent, UiWorkingOrder,
+    UiBookSnapshot, UiBookState, UiEvent, UiHalt, UiWorkingOrder,
 };
 
 pub(crate) struct UiEmitter {
@@ -212,6 +212,16 @@ impl UiEmitter {
     }
 
     pub(crate) fn emit_execution(&mut self, halt: ExecHalt, event_ts: LocalTs) {
+        let halt = match halt {
+            ExecHalt::Armed => UiHalt::Armed,
+            ExecHalt::Halted {
+                reason,
+                halted_ts_us,
+            } => UiHalt::Halted {
+                reason,
+                halted_ts_us: halted_ts_us.to_peer(),
+            },
+        };
         self.event_sink
             .push_stamped(&mut self.event_seq, |seq| UiEvent::Execution {
                 seq,

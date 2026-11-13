@@ -3,8 +3,8 @@
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
-    ClientIdLayout, ExecHalt, ExecSettings, HaltReason, OrderClaim, OrderState, OrderTable,
-    QuoteLevel, ReconcilePass, apply_exec_event, side_base,
+    ClientIdLayout, ExecSettings, HaltReason, OrderClaim, OrderState, OrderTable, QuoteLevel,
+    ReconcilePass, apply_exec_event, side_base,
 };
 use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, OrderStyle, RejectClass, VenueOrderStatus,
@@ -12,7 +12,7 @@ use engine::msg::exec::{
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::time::LocalTs;
-use engine::msg::ui::UiEvent;
+use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::{RecordedTables, TableKind};
 use rtrb::Consumer;
 
@@ -191,7 +191,7 @@ fn adopt_live(engine: &mut HotEngine, generation_offset: usize, side: Side, when
     ));
 }
 
-fn halt_of(events: &mut Consumer<UiEvent>) -> Option<ExecHalt> {
+fn halt_of(events: &mut Consumer<UiEvent>) -> Option<UiHalt> {
     std::iter::from_fn(|| events.pop().ok())
         .filter_map(|event| match event {
             UiEvent::Execution { halt, .. } => Some(halt),
@@ -217,7 +217,7 @@ fn conservative_occupancy_above_the_cap_halts_and_sweeps() {
     spin_at(&mut engine, 1, 30);
     assert!(!matches!(
         halt_of(&mut ui_events),
-        Some(ExecHalt::Halted { .. })
+        Some(UiHalt::Halted { .. })
     ));
     drain_commands(&mut commands);
 
@@ -225,7 +225,7 @@ fn conservative_occupancy_above_the_cap_halts_and_sweeps() {
     spin_at(&mut engine, 2, 50);
     assert!(matches!(
         halt_of(&mut ui_events),
-        Some(ExecHalt::Halted {
+        Some(UiHalt::Halted {
             reason: HaltReason::DuplicateResting,
             ..
         })

@@ -4,7 +4,7 @@
 pub(crate) mod channel;
 mod latency;
 
-use crate::hot::exec::{ExecHalt, OrderState, QuoteLevel, RejectOrigin};
+use crate::hot::exec::{HaltReason, OrderState, QuoteLevel, RejectOrigin};
 use crate::msg::exec::Liquidity;
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use crate::msg::inbound::Level;
@@ -16,6 +16,23 @@ use crate::runtime::registry::Registry;
 pub use latency::{
     LATENCY_REPORT_CELLS, LatencyCell, LatencyFlow, LatencyReading, LatencyReport, Percentile,
 };
+
+/// The kill switch as a workstation reads it: the halt stamp is a peer stamp there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UiHalt {
+    Armed,
+    Halted {
+        reason: HaltReason,
+        halted_ts_us: VenueTs,
+    },
+}
+
+impl UiHalt {
+    #[inline]
+    pub fn is_halted(self) -> bool {
+        matches!(self, UiHalt::Halted { .. })
+    }
+}
 
 /// Book levels per side. The ladder shows 12 rows a side, but a grouped row sums several ticks, so
 /// a 16-level feed would leave a grouped ladder half empty.
@@ -278,7 +295,7 @@ pub enum UiEvent {
     Execution {
         seq: u64,
         event_ts_us: VenueTs,
-        halt: ExecHalt,
+        halt: UiHalt,
     },
     /// An instrument's window rotated; the monitor's System channel records the handover.
     Rotation {

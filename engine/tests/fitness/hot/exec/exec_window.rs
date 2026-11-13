@@ -16,8 +16,8 @@
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
-    DesiredQuote, ExecHalt, ExecSettings, HaltReason, MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS,
-    OrderSlot, OrderState, QuoteLevel, RejectReason,
+    DesiredQuote, ExecSettings, HaltReason, MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS, OrderSlot,
+    OrderState, QuoteLevel, RejectReason,
 };
 use engine::hot::strategy::{Strategy, StrategyCtx, WindowInfo};
 use engine::msg::exec::{
@@ -26,7 +26,7 @@ use engine::msg::exec::{
 use engine::msg::ids::{Price, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
-use engine::msg::ui::UiEvent;
+use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::RecordedTables;
 use rtrb::Consumer;
 
@@ -293,7 +293,7 @@ fn full_command_bank_halts_and_leaves_the_order_live() {
     for step in 0..JAM_SPINS {
         spin_at(&mut engine, 2 + step as u64, jammed_from + step * 10_000);
         screen = read_screen(&mut ui_events);
-        if screen.0.is_some_and(ExecHalt::is_halted) {
+        if screen.0.is_some_and(UiHalt::is_halted) {
             break;
         }
     }
@@ -301,7 +301,7 @@ fn full_command_bank_halts_and_leaves_the_order_live() {
     assert!(
         matches!(
             halt,
-            Some(ExecHalt::Halted {
+            Some(UiHalt::Halted {
                 reason: HaltReason::CommandBankOverflow,
                 ..
             })
@@ -340,7 +340,7 @@ fn full_command_bank_halts_and_leaves_the_order_live() {
 
 /// What the workstation was told since the last read: the newest kill-switch frame, and the state of
 /// every working order the order snapshots listed.
-fn read_screen(ui_events: &mut Consumer<UiEvent>) -> (Option<ExecHalt>, Vec<OrderState>) {
+fn read_screen(ui_events: &mut Consumer<UiEvent>) -> (Option<UiHalt>, Vec<OrderState>) {
     let mut halt = None;
     let mut working = Vec::new();
     while let Ok(event) = ui_events.pop() {

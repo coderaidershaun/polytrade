@@ -16,10 +16,10 @@ use super::link_bar::{self, LinkAction};
 use super::socket::{Frame, LinkSocket};
 use super::theme::{DARK, METRICS, clear_color};
 use super::touch;
-use crate::hot::exec::ExecHalt;
 use crate::link::LinkHash;
 use crate::msg::relay::RelayHello;
 use crate::msg::time::{DurationUs, EngineClock, LocalTs};
+use crate::msg::ui::UiHalt;
 use crate::operator::workstation::link::attachment::{Attachment, Screen};
 use crate::operator::workstation::link::session::{LinkSession, LinkSessionError, LinkTarget};
 use crate::operator::workstation::shell::{self, Arrangement, Navigation, Selection};
@@ -289,7 +289,7 @@ impl Station {
     }
 
     /// The latch the engine reports. It is `None` before any engine has said anything.
-    fn halt(&self) -> Option<ExecHalt> {
+    fn halt(&self) -> Option<UiHalt> {
         let (_, attachment) = self.attached.as_ref()?;
         attachment.model().exec().halt()
     }

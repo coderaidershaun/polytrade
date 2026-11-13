@@ -2,11 +2,11 @@
 //! they are tested natively.
 
 use super::model::FeatureCell;
-use crate::hot::exec::ExecHalt;
 use crate::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::persist::FeatureId;
 use crate::msg::time::{DurationUs, VenueTs};
+use crate::msg::ui::UiHalt;
 use crate::operator::workstation::dom_view::{DomUnit, delta_from_mid, snapshot_mid, tick_index};
 use crate::operator::workstation::exec_model::{BalanceCell, OrderStatus, RejectCell};
 use crate::operator::workstation::model::UiModel;
@@ -121,7 +121,7 @@ pub struct AccountView<'a> {
     pub ask: SideCountView,
     pub last_reject: Option<RejectCell>,
     /// `None` until the engine's first execution frame.
-    pub halt: Option<ExecHalt>,
+    pub halt: Option<UiHalt>,
     /// Balances in assets the catalog does not name. They share one id, so only their count shows.
     pub unknown_asset_balances: u64,
     /// Exposure frames an engine sent that could not be used. It shows beside the count above, so

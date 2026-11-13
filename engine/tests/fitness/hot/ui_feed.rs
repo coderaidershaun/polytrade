@@ -9,14 +9,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use engine::hot::dispatch::{HotEngine, HotEngineSetup};
-use engine::hot::exec::{CloseReason, DesiredQuote, ExecHalt, OrderState, QuoteLevel};
+use engine::hot::exec::{CloseReason, DesiredQuote, OrderState, QuoteLevel};
 use engine::hot::strategy::{DomQuote, Registration, Strategy, StrategyCtx};
 use engine::msg::exec::{ExecKind, Liquidity, OrderStyle, VenueOrderStatus};
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::persist::FeatureId;
 use engine::msg::time::{DurationUs, VenueTs};
-use engine::msg::ui::{UiBookSnapshot, UiBookState, UiEvent};
+use engine::msg::ui::{UiBookSnapshot, UiBookState, UiEvent, UiHalt};
 use engine::operator::workstation::model::UiModel;
 use engine::runtime::config::{RecordedTables, TableKind};
 use rtrb::Consumer;
@@ -157,7 +157,7 @@ fn ui_engine(
     (engine, books, events)
 }
 
-fn execution_frames(consumer: &mut Consumer<UiEvent>) -> Vec<ExecHalt> {
+fn execution_frames(consumer: &mut Consumer<UiEvent>) -> Vec<UiHalt> {
     drain(consumer)
         .into_iter()
         .filter_map(|event| match event {
@@ -387,7 +387,7 @@ fn teed_features(events: &mut Consumer<UiEvent>) -> Vec<(u64, FeatureId, f64)> {
 /// to a full ring would otherwise leave the band reading `OPEN` forever.
 ///
 /// FITNESS: an engine with no command ring says NOTHING about the gate, on the same case-by-case
-/// dispatch as the wired one. [`ExecHalt`] is the kill-switch LATCH, not the wired state, so `Armed`
+/// dispatch as the wired one. [`UiHalt`] is the kill-switch LATCH, not the wired state, so `Armed`
 /// on a run that has no ring means only "nothing has tripped". The band renders it under the heading
 /// `gate` as `ARMED` in the positive colour, which an operator reads as "armed to trade". The run
 /// where that costs money is not the recorder: it is a `mode: live` config whose preflight or queue
@@ -411,7 +411,7 @@ fn the_execution_gate_tee_reflects_whether_a_command_ring_is_wired() {
     }
 
     let emitted = drain(&mut events);
-    let gates: Vec<ExecHalt> = emitted
+    let gates: Vec<UiHalt> = emitted
         .iter()
         .filter_map(|event| match event {
             UiEvent::Execution { halt, .. } => Some(*halt),
@@ -420,7 +420,7 @@ fn the_execution_gate_tee_reflects_whether_a_command_ring_is_wired() {
         .collect();
     assert_eq!(
         gates,
-        vec![ExecHalt::Armed; 3],
+        vec![UiHalt::Armed; 3],
         "wired: one Execution frame per spin, carrying the latch verbatim"
     );
 

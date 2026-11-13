@@ -3,10 +3,10 @@
 
 use eframe::egui;
 
-use engine::hot::exec::{ExecHalt, HaltReason};
+use engine::hot::exec::HaltReason;
 use engine::msg::ids::{AssetId, InstrumentId};
-use engine::msg::time::LocalTs;
-use engine::msg::ui::{UiCatalog, UiInstrument};
+use engine::msg::time::VenueTs;
+use engine::msg::ui::{UiCatalog, UiHalt, UiInstrument};
 use engine::operator::workstation::browser::chrome::{ChromeAction, TopBarFrame};
 use engine::operator::workstation::shell::{self, Arrangement, Navigation, Selection, SizeClass};
 use engine::runtime::config::ExecutionMode;
@@ -22,7 +22,7 @@ const EXECUTION_MODES: [ExecutionMode; 3] =
 pub struct ShellScene {
     catalog: UiCatalog,
     selected: InstrumentId,
-    halt: Option<ExecHalt>,
+    halt: Option<UiHalt>,
     navigation: Navigation,
     is_hud_shown: bool,
 }
@@ -137,10 +137,10 @@ pub fn fit_zoom(ctx: &egui::Context) {
     }
 }
 
-fn halted() -> ExecHalt {
-    ExecHalt::Halted {
+fn halted() -> UiHalt {
+    UiHalt::Halted {
         reason: HaltReason::RejectStreak,
-        halted_ts_us: LocalTs::from_micros(0),
+        halted_ts_us: VenueTs::from_micros(0),
     }
 }
 

@@ -8,13 +8,12 @@
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
-    ClientIdLayout, ExecHalt, ExposureCheck, HaltReason, QuotePermission, assess_exposure,
-    side_base,
+    ClientIdLayout, ExposureCheck, HaltReason, QuotePermission, assess_exposure, side_base,
 };
 use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, RejectClass, VenueOrderStatus};
 use engine::msg::ids::{Notional, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody};
-use engine::msg::ui::UiEvent;
+use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::RecordedTables;
 use engine::runtime::exposure::InstrumentExposure;
 use proptest::prelude::*;
@@ -509,7 +508,7 @@ fn a_post_only_refusal_neither_extends_nor_ends_a_hard_reject_streak() {
     );
     assert_eq!(
         latest_halt(&mut extended.ui_events),
-        Some(ExecHalt::Armed),
+        Some(UiHalt::Armed),
         "one hard reject short of the limit, the kill switch must still read armed"
     );
 
@@ -532,7 +531,7 @@ fn a_post_only_refusal_neither_extends_nor_ends_a_hard_reject_streak() {
     assert!(
         matches!(
             halt,
-            Some(ExecHalt::Halted {
+            Some(UiHalt::Halted {
                 reason: HaltReason::RejectStreak,
                 ..
             })
@@ -612,7 +611,7 @@ fn dispatch_exec(engine: &mut HotEngine, event: ExecEvent, received_ts_us: Local
 
 /// The kill switch as the workstation was last told it. The engine restates it every spin, so the
 /// newest frame is its current answer.
-fn latest_halt(ui_events: &mut Consumer<UiEvent>) -> Option<ExecHalt> {
+fn latest_halt(ui_events: &mut Consumer<UiEvent>) -> Option<UiHalt> {
     std::iter::from_fn(|| ui_events.pop().ok())
         .filter_map(|event| match event {
             UiEvent::Execution { halt, .. } => Some(halt),

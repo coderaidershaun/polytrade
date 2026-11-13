@@ -1,12 +1,10 @@
 //! The monitor scenes: fixed event streams, the same on every run.
 
-use engine::hot::exec::{
-    CloseReason, ExecHalt, HaltReason, OrderState, RejectOrigin, RejectReason,
-};
+use engine::hot::exec::{CloseReason, HaltReason, OrderState, RejectOrigin, RejectReason};
 use engine::msg::exec::RejectClass;
 use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use engine::msg::time::LocalTs;
-use engine::msg::ui::{UiBookState, UiCatalog, UiInstrument};
+use engine::msg::time::VenueTs;
+use engine::msg::ui::{UiBookState, UiCatalog, UiHalt, UiInstrument};
 use engine::operator::workstation::monitor::model::SystemNote;
 use engine::operator::workstation::monitor::view::{Channel, MonitorDetail, MonitorUiState};
 use engine::runtime::config::ExecutionMode;
@@ -152,9 +150,9 @@ fn halted() -> MonitorScene {
     let mut feed = btc_feed().feed;
     feed.execution(
         1_310_000,
-        ExecHalt::Halted {
+        UiHalt::Halted {
             reason: HaltReason::RealisedLoss,
-            halted_ts_us: LocalTs::from_micros(BASE_TS + 1_310_000),
+            halted_ts_us: VenueTs::from_micros(BASE_TS + 1_310_000),
         },
     );
     feed.finish("halted", FULL_FEATURES, MonitorUiState::new())
@@ -200,7 +198,7 @@ fn btc_feed() -> BtcFeed {
     feed.balance(1_000_000, USDT, 25_000_000_000_000, 118_234_500_000);
     // A balance in an asset the catalog does not name is counted, not shown.
     feed.balance(1_000_000, AssetId::UNKNOWN, 5_000_000, 0);
-    feed.execution(1_000_000, ExecHalt::Armed);
+    feed.execution(1_000_000, UiHalt::Armed);
 
     feed.trade(1_100_000, Side::Buy, ASK_TICK, 123_456_789);
     btc_touch(&mut feed, UiBookState::AwaitingSnapshot, 1_100_000);

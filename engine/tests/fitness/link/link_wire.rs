@@ -4,8 +4,7 @@
 use std::net::SocketAddr;
 
 use engine::hot::exec::{
-    CloseReason, ExecHalt, HaltReason, OrderState, QuoteLevel, ReadinessGap, RejectOrigin,
-    RejectReason,
+    CloseReason, HaltReason, OrderState, QuoteLevel, ReadinessGap, RejectOrigin, RejectReason,
 };
 use engine::link::{
     CatalogFeature, CatalogInstrument, Envelope, FrameGuard, GateVerdict, LINK_MAGIC,
@@ -23,7 +22,7 @@ use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::msg::ui::{
     DomQuote, LATENCY_REPORT_CELLS, LatencyCell, LatencyReport, UI_BOOK_LEVELS,
     UI_ORDER_SNAPSHOT_CAPACITY, UI_ORDER_SNAPSHOT_MAX_TOTAL, UiBookSnapshot, UiBookState, UiEvent,
-    UiWorkingOrder,
+    UiHalt, UiWorkingOrder,
 };
 use engine::runtime::config::ExecutionMode;
 use proptest::prelude::*;
@@ -366,9 +365,9 @@ fn arb_reject_origin() -> impl Strategy<Value = RejectOrigin> {
     ]
 }
 
-fn arb_halt() -> impl Strategy<Value = ExecHalt> {
+fn arb_halt() -> impl Strategy<Value = UiHalt> {
     prop_oneof![
-        Just(ExecHalt::Armed),
+        Just(UiHalt::Armed),
         (
             prop_oneof![
                 Just(HaltReason::RejectStreak),
@@ -382,9 +381,9 @@ fn arb_halt() -> impl Strategy<Value = ExecHalt> {
             ],
             any::<i64>()
         )
-            .prop_map(|(reason, at)| ExecHalt::Halted {
+            .prop_map(|(reason, at)| UiHalt::Halted {
                 reason,
-                halted_ts_us: LocalTs::from_micros(at)
+                halted_ts_us: VenueTs::from_micros(at)
             }),
     ]
 }
@@ -1466,7 +1465,7 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                 UiEvent::Execution {
                     seq: 0x110b,
                     event_ts_us: VenueTs::from_micros(1_700_000_000_001_011),
-                    halt: ExecHalt::Armed,
+                    halt: UiHalt::Armed,
                 },
             ),
         ),
@@ -1477,9 +1476,9 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                 UiEvent::Execution {
                     seq: 0x110c,
                     event_ts_us: VenueTs::from_micros(1_700_000_000_001_012),
-                    halt: ExecHalt::Halted {
+                    halt: UiHalt::Halted {
                         reason: HaltReason::DuplicateResting,
-                        halted_ts_us: LocalTs::from_micros(1_700_000_000_000_999),
+                        halted_ts_us: VenueTs::from_micros(1_700_000_000_000_999),
                     },
                 },
             ),
