@@ -3,7 +3,7 @@
 
 use engine::hot::exec::{DesiredQuote, ExecSettings, QuoteLevel};
 use engine::hot::strategy::{Strategy, StrategyCtx};
-use engine::msg::exec::{CancelReason, ExecCommand, ExecKind, OrderStyle, RejectClass};
+use engine::msg::exec::{CancelReason, ExecCommand, ExecKind, RejectClass};
 use engine::msg::ids::{ClientOrderId, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::{DurationUs, LocalTs};
@@ -50,7 +50,6 @@ impl Strategy for OneBid {
             Some(DesiredQuote {
                 price: bid.price,
                 qty: QUOTE_QTY,
-                style: OrderStyle::PostOnly,
             }),
         );
     }

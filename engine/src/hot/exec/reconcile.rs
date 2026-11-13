@@ -135,7 +135,6 @@ pub enum RejectReason {
     WouldCross,
     OutsideBand,
     Underfunded,
-    StyleNotPermitted,
     NotReady(ReadinessGap),
     Halted,
     SessionReducingOnly,
@@ -165,7 +164,6 @@ impl RejectReason {
             Self::WouldCross => "would cross the book",
             Self::OutsideBand => "outside the price band",
             Self::Underfunded => "underfunded",
-            Self::StyleNotPermitted => "order style not permitted",
             Self::NotReady(ReadinessGap::Stream) => "waiting for the account stream",
             Self::NotReady(ReadinessGap::Balances) => "waiting for balances",
             Self::NotReady(ReadinessGap::OpenOrders) => "waiting for open orders",
@@ -186,14 +184,13 @@ impl RejectReason {
 
 /// Every kind of refusal, in the order whose place a hot log record carries. `NotReady` stands for
 /// each gap here, and the gap itself travels in the second word.
-const REJECT_KINDS: [RejectReason; 19] = [
+const REJECT_KINDS: [RejectReason; 18] = [
     RejectReason::QtyBelowMin,
     RejectReason::NotionalBelowMin,
     RejectReason::NotionalAboveMax,
     RejectReason::WouldCross,
     RejectReason::OutsideBand,
     RejectReason::Underfunded,
-    RejectReason::StyleNotPermitted,
     RejectReason::NotReady(ReadinessGap::Stream),
     RejectReason::Halted,
     RejectReason::SessionReducingOnly,
@@ -268,9 +265,6 @@ pub fn reconcile_side(input: ReconcileInput) -> ReconcileOutcome {
     let Some(desired) = desired else {
         return withdraw(resting);
     };
-    if desired.style != OrderStyle::PostOnly {
-        return ReconcileOutcome::Reject(RejectReason::StyleNotPermitted);
-    }
 
     let price = side.snap_passive(desired.price, grid.tick);
     let qty = desired.qty.floor_to_step(grid.step);
@@ -295,7 +289,7 @@ pub fn reconcile_side(input: ReconcileInput) -> ReconcileOutcome {
     let intent = PlaceIntent {
         price,
         qty,
-        style: desired.style,
+        style: OrderStyle::PostOnly,
     };
     let Some(resting) = resting else {
         if !funds.can_spend(side.spend(price, qty)) {

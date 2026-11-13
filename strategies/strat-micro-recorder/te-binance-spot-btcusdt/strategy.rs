@@ -8,8 +8,8 @@ use engine::hot::quant::pricing::{GueantParams, Objective};
 use engine::hot::quant::toxicity::{MarkoutSide, vpin};
 use engine::hot::quant::volatility::Returns;
 use engine::hot::strategy::{
-    BookState, DesiredQuote, EngineView, FeatureId, LinkFrame, OrderStyle, QuoteLevel,
-    Registration, Strategy, StrategyConfig, StrategyCtx, VolumeBar, resolve_filter,
+    BookState, DesiredQuote, EngineView, FeatureId, LinkFrame, QuoteLevel, Registration, Strategy,
+    StrategyConfig, StrategyCtx, VolumeBar, resolve_filter,
 };
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Side};
 use engine::msg::inbound::{BookChunk, KlineEvent, SpinTick, TradeEvent};
@@ -303,7 +303,6 @@ impl Strategy for MicroRecorder {
     }
 }
 
-/// `PostOnly`: model prices passive quotes only.
 fn declare(
     ctx: &mut StrategyCtx<'_>,
     instrument: InstrumentId,
@@ -318,7 +317,6 @@ fn declare(
         price.map(|price| DesiredQuote {
             price,
             qty: qty_at(order_notional, price),
-            style: OrderStyle::PostOnly,
         }),
     );
 }

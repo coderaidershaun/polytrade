@@ -18,9 +18,7 @@ use engine::link::{
     LinkFrame, LinkHash, LinkOrigin, LinkPayload, OutboundLink, TopicId, schema_hash_of_fields,
 };
 use engine::log::{HotRecord, LaneReader, TextRecord, open_hot_lane, open_text_lane};
-use engine::msg::exec::{
-    ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, VenueOrderStatus,
-};
+use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus};
 use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
 };
@@ -1011,7 +1009,6 @@ impl Strategy for Probe {
                 let desired = DesiredQuote {
                     price,
                     qty: PROBE_QTY,
-                    style: OrderStyle::PostOnly,
                 };
                 ctx.quote(instrument, side, QuoteLevel::ZERO, Some(desired));
             }

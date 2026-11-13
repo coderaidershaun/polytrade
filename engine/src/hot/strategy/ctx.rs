@@ -13,9 +13,10 @@ use crate::msg::time::{FoldTime, LocalTs};
 use super::{StrategyCtx, StrategyGate, WindowInfo};
 
 impl StrategyCtx<'_> {
-    /// Declare resting quote this side SHOULD have; `None` withdraws. Declare every spin: absent = expire.
-    /// Engine tees declaration to DOM → ladder shows engine state, not strategy paint.
-    /// Strategy cannot transmit; engine gates all decisions (price, size, existence).
+    /// Declares the quote that this level of the ladder should rest this spin, or `None` to
+    /// withdraw it. Declare it again each spin: a quote that is not declared again is withdrawn.
+    /// The engine decides whether, where, and how much it places, and a quote never takes
+    /// liquidity. In a spin that calls [`Self::flatten`] for the market, the quote is dropped.
     pub fn quote(
         &mut self,
         instrument: InstrumentId,
@@ -27,13 +28,10 @@ impl StrategyCtx<'_> {
             .declare(instrument, side, level, desired, self.spin_seq);
     }
 
-    /// Declare that this instrument's position should be closed at market. Level-triggered like
-    /// [`Self::quote`]: declare it every spin while flat is wanted, and stop declaring to stop
-    /// wanting it. The engine sends at most one marketable order per spin, sized by what is
-    /// actually held, so a partial fill simply re-fires on the next spin until nothing is left.
-    ///
-    /// Declaring it does not withdraw the ladder. A resting quote occupies the same side and the
-    /// same order budget, so a strategy that wants OUT withdraws its quotes as well.
+    /// Declares that this market should get flat this spin: each of its quotes is withdrawn, and
+    /// the engine sends at most one marketable order a spin, sized by what is still held. Declare
+    /// it again each spin until the position is closed, so a partial fill sends the rest on the
+    /// next spin. A quote of the market declared in the same spin is dropped.
     pub fn flatten(&mut self, instrument: InstrumentId) {
         self.desired.declare_flatten(instrument, self.spin_seq);
     }

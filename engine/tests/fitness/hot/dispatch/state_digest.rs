@@ -8,8 +8,7 @@ use engine::hot::exec::{ClientIdLayout, side_base};
 use engine::hot::ingress::IngressQueues;
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{
-    DesiredQuote, Fill, OrderReject, OrderStyle, OrderUpdate, QuoteLevel, Registration, Strategy,
-    StrategyCtx,
+    DesiredQuote, Fill, OrderReject, OrderUpdate, QuoteLevel, Registration, Strategy, StrategyCtx,
 };
 use engine::link::{LinkFrame, LinkHash, LinkOrigin, LinkPayload, TopicId};
 use engine::log::{HotRecord, TextRecord, open_hot_lane, open_text_lane};
@@ -78,7 +77,6 @@ impl Probe {
             let quote = DesiredQuote {
                 price,
                 qty: QUOTE_QTY,
-                style: OrderStyle::PostOnly,
             };
             ctx.quote(instrument, side, QuoteLevel::ZERO, Some(quote));
         }
@@ -164,7 +162,6 @@ impl Strategy for FeedProbe {
         let bid = DesiredQuote {
             price: Price::from_mantissa(100 * ONE),
             qty: Qty::from_mantissa(ONE),
-            style: OrderStyle::PostOnly,
         };
         ctx.quote(InstrumentId(0), Side::Buy, QuoteLevel::ZERO, Some(bid));
     }

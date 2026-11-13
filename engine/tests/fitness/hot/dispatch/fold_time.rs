@@ -10,7 +10,7 @@ use engine::hot::sink::ExecSink;
 use engine::hot::spawn::{HotDriver, Step};
 use engine::hot::strategy::{Fill, OrderReject, OrderUpdate, Registration, Strategy, StrategyCtx};
 use engine::msg::exec::{
-    ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, RejectClass, VenueOrderStatus,
+    ExecCommand, ExecEvent, ExecKind, ExecLaneItem, RejectClass, VenueOrderStatus,
 };
 use engine::msg::ids::{InstrumentId, Price, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick, TradeEvent};
@@ -237,7 +237,6 @@ impl Strategy for Quoter {
         let quote = DesiredQuote {
             price: bid.price,
             qty: QUOTE_QTY,
-            style: OrderStyle::PostOnly,
         };
         ctx.quote(market, Side::Buy, QuoteLevel::ZERO, Some(quote));
     }

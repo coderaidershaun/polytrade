@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use engine::hot::dispatch::{HotEngine, HotEngineSetup};
 use engine::hot::exec::{CloseReason, DesiredQuote, OrderState, QuoteLevel};
 use engine::hot::strategy::{DomQuote, Registration, Strategy, StrategyCtx};
-use engine::msg::exec::{ExecKind, Liquidity, OrderStyle, VenueOrderStatus};
+use engine::msg::exec::{ExecKind, Liquidity, VenueOrderStatus};
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::persist::FeatureId;
@@ -63,11 +63,7 @@ impl QuoteProbe {
             InstrumentId(0),
             side,
             QuoteLevel::ZERO,
-            level.map(|(price, qty)| DesiredQuote {
-                price,
-                qty,
-                style: OrderStyle::PostOnly,
-            }),
+            level.map(|(price, qty)| DesiredQuote { price, qty }),
         );
     }
 }
