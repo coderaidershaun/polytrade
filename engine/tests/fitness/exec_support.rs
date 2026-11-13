@@ -146,11 +146,11 @@ pub(crate) fn built_quoting_engine(setup: QuotingSetup<'_>) -> QuotingEngine {
     let engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),
         ui_event_sink,
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(commands_producer, Stamper::Off),
             settings: setup.settings,
             run_nonce: setup.run_nonce,
-        }),
+        }],
         exposure: ExposureWiring {
             restored: setup.restored,
             sink: exposure_sink,

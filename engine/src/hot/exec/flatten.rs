@@ -216,12 +216,12 @@ impl ExecEngine {
     /// deliberately not budget-gated either, for the reason `admit_quote_placement` gives. Still
     /// gated on every money protection (halt, readiness, single-flight, per-side order count,
     /// funds, notional), so it bypasses only what would keep a position open.
-    pub(super) fn flatten_pass(&mut self, input: &mut SpinInput<'_>) {
-        if self.halt.is_halted() || self.readiness_gap().is_some() {
+    pub(super) fn flatten_pass(&mut self, venue: usize, input: &mut SpinInput<'_>) {
+        if self.halt.is_halted() || self.venues[venue].readiness_gap().is_some() {
             return;
         }
-        for index in 0..self.instruments.len() {
-            let instrument = InstrumentId(index as u16);
+        for instrument in self.venues[venue].instrument_ids() {
+            let index = usize::from(instrument.0);
             if !input.desired.is_flattening(instrument, input.tick.seq) {
                 self.instruments[index].flatten_refusal = None;
                 continue;
@@ -233,7 +233,7 @@ impl ExecEngine {
             };
             if self.orders.is_awaiting_answer(instrument, side)
                 || self.orders.possibly_live_count(instrument, side)
-                    >= self.settings.max_orders_per_side
+                    >= self.venues[venue].settings.max_orders_per_side
             {
                 continue;
             }
@@ -241,11 +241,11 @@ impl ExecEngine {
                 position_base: position,
                 grid: self.instruments[index].grid,
                 top: self.book_top(instrument, input),
-                limits: self.settings.limits,
+                limits: self.venues[venue].settings.limits,
                 funds: self.funds_view(instrument, side),
-                slack_ticks: self.settings.flatten_slack_ticks,
-                fee_model: self.settings.fee_model,
-                taker_fee_rate: self.settings.taker_fee_rate,
+                slack_ticks: self.venues[venue].settings.flatten_slack_ticks,
+                fee_model: self.venues[venue].settings.fee_model,
+                taker_fee_rate: self.venues[venue].settings.taker_fee_rate,
             });
             self.act_on_flatten(instrument, side, outcome, input);
         }

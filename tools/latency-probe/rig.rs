@@ -91,7 +91,7 @@ pub fn engine(instruments: &[InstrumentRow]) -> HotEngine {
         ui_event_sink: UiEventSink::new(RingBuffer::new(OUTPUT_RING).0),
         link: None,
         warmup: DurationUs::ZERO,
-        exec: None,
+        exec: Vec::new(),
         exposure: ExposureWiring {
             restored: &[],
             sink: ExposureSink::lane(OUTPUT_RING, instruments.len()).0,

@@ -50,7 +50,7 @@ impl ExecEngine {
                     client_id,
                     qty,
                 };
-                if self.bank_or_halt(command, at) {
+                if self.bank_or_halt(self.venue_of(instrument), command, at) {
                     let previous = self.orders.mark_amend_sent(index);
                     let transition = OrderTransition::AmendSent;
                     self.bank_moved(index, previous, transition, stamps.received, input.bank);
@@ -85,7 +85,7 @@ impl ExecEngine {
             instrument: slot.instrument(),
             client_id: slot.client_id(),
         };
-        let is_sent = self.bank_or_halt(command, at);
+        let is_sent = self.bank_or_halt(self.venue_of(slot.instrument()), command, at);
         if is_sent {
             let previous = self.orders.mark_cancel_sent(index);
             let transition = OrderTransition::CancelSent;
@@ -135,7 +135,7 @@ impl ExecEngine {
                 return None;
             }
         };
-        let is_banked = self.pending.bank(
+        let is_banked = self.venue_mut(instrument).pending.bank(
             ExecCommand::Place {
                 instrument,
                 client_id,
@@ -151,8 +151,10 @@ impl ExecEngine {
             return None;
         }
         match kind {
-            PlacementKind::Quote { permit, .. } => self.budget.spend_quote(permit),
-            PlacementKind::Flatten => self.budget.spend_flatten(),
+            PlacementKind::Quote { permit, .. } => {
+                self.venue_mut(instrument).budget.spend_quote(permit)
+            }
+            PlacementKind::Flatten => self.venue_mut(instrument).budget.spend_flatten(),
         }
         bank_engine_driven(
             bank,
@@ -180,11 +182,12 @@ impl ExecEngine {
             qty: intent.qty,
             style: intent.style,
             claimed_ts_us: at,
-            recon_seq: self.recon_seq,
+            recon_seq: self.venue(instrument).recon_seq,
+            run_nonce: self.venue(instrument).run_nonce,
         })?;
         let asset = self.instruments[usize::from(instrument.0)].spend_asset(side);
         let amount = side.spend(intent.price, intent.qty);
-        let reserved_at = self.account.reserve(asset, amount);
+        let reserved_at = self.venue_mut(instrument).account.reserve(asset, amount);
         self.orders.hold_reservation(index, amount, reserved_at);
         Ok((index, client_id))
     }
@@ -205,8 +208,8 @@ impl ExecEngine {
     /// unwind its claim before the halt, and the sweep the halt itself issues, which has nothing left
     /// to escalate to and says so out loud.
     #[inline]
-    pub(super) fn bank_or_halt(&mut self, command: ExecCommand, at: LocalTs) -> bool {
-        let is_banked = self.pending.bank(command, at);
+    pub(super) fn bank_or_halt(&mut self, venue: usize, command: ExecCommand, at: LocalTs) -> bool {
+        let is_banked = self.venues[venue].pending.bank(command, at);
         if !is_banked {
             self.halt(HaltReason::CommandBankOverflow, at);
         }

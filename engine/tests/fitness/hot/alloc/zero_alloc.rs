@@ -1100,11 +1100,11 @@ fn armed_at_capacity(case: Case, rows: &[InstrumentRow], stamper: Stamper) -> (H
             sink: LinkSink::new(link_producer),
             acknowledged: control.acknowledged().clone(),
         }),
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(command_producer, stamper),
             settings: exec_settings(case.venue()),
             run_nonce: 0,
-        }),
+        }],
         exposure: ExposureWiring {
             restored: &[],
             sink: exposure_sink,

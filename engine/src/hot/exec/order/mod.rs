@@ -113,6 +113,8 @@ pub struct OrderClaim {
     pub style: OrderStyle,
     pub claimed_ts_us: LocalTs,
     pub recon_seq: u64,
+    /// The run nonce of the venue of the instrument: each venue has its own lease and nonce.
+    pub run_nonce: u32,
 }
 
 /// Why a level of the ladder has no slot for a new order.
@@ -136,12 +138,11 @@ pub struct OrderTable {
     /// One for each slot, beside the slots rather than in them, so a copy of a slot stays small.
     fees: Box<[FeeMemory]>,
     in_use: SlotsInUse,
-    layout: ClientIdLayout,
 }
 
 digest_by_hash!(ClientIdLayout, OrderSlot, FeeMemory);
 digest_fields! {
-    OrderTable { slots, fees, layout }
+    OrderTable { slots, fees }
     not_state {
         // Which slots are not free: a function of the slots, which the digest holds.
         in_use,
@@ -149,13 +150,12 @@ digest_fields! {
 }
 
 impl OrderTable {
-    pub fn new(capacity: &ExecCapacity, run_nonce: u32) -> Self {
+    pub fn new(capacity: &ExecCapacity) -> Self {
         let slots = capacity.order_slots();
         Self {
             slots: vec![OrderSlot::EMPTY; slots].into_boxed_slice(),
             fees: vec![FeeMemory::EMPTY; slots].into_boxed_slice(),
             in_use: SlotsInUse::with_slots(slots),
-            layout: ClientIdLayout { run_nonce },
         }
     }
 
@@ -260,7 +260,10 @@ impl OrderTable {
         let index = base + offset;
         let slot = &mut self.slots[index];
         let generation = slot.generation + 1;
-        let client_id = self.layout.encode(index, generation);
+        let layout = ClientIdLayout {
+            run_nonce: claim.run_nonce,
+        };
+        let client_id = layout.encode(index, generation);
         *slot = OrderSlot {
             client_id,
             state: OrderState::PendingNew,
@@ -334,8 +337,17 @@ impl OrderTable {
 
     #[cold]
     pub fn invalidate_all(&mut self, invalidated: &mut impl FnMut(&OrderSlot, OrderState)) {
-        let mut next = self.in_use.next_from(0);
-        while let Some(index) = next {
+        self.invalidate_within(0..self.slots.len(), invalidated);
+    }
+
+    /// A stream reset of one venue leaves the orders of each other venue as they were.
+    pub(crate) fn invalidate_within(
+        &mut self,
+        slots: Range<usize>,
+        invalidated: &mut impl FnMut(&OrderSlot, OrderState),
+    ) {
+        let mut next = self.in_use.next_from(slots.start);
+        while let Some(index) = next.filter(|index| *index < slots.end) {
             next = self.in_use.next_from(index + 1);
             let slot = &mut self.slots[index];
             if !slot.state.is_working() {
@@ -409,8 +421,13 @@ impl OrderTable {
     }
 
     pub fn reap(&mut self, now: LocalTs, window: DurationUs) {
-        let mut next = self.in_use.next_from(0);
-        while let Some(index) = next {
+        self.reap_within(0..self.slots.len(), now, window);
+    }
+
+    /// Each venue reaps its own slots with its own window.
+    pub(crate) fn reap_within(&mut self, slots: Range<usize>, now: LocalTs, window: DurationUs) {
+        let mut next = self.in_use.next_from(slots.start);
+        while let Some(index) = next.filter(|index| *index < slots.end) {
             next = self.in_use.next_from(index + 1);
             let slot = &mut self.slots[index];
             let is_reapable = matches!(slot.state, OrderState::Closed(_))

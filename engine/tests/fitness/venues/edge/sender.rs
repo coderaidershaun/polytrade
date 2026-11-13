@@ -75,11 +75,11 @@ fn lane_after_one_banked_placement(counter: &Counter) -> Consumer<ExecLaneItem> 
     let instruments = [row_with_ceiling(CEILING)];
     let (commands, lane) = RingBuffer::<ExecLaneItem>::new(LANE_CAPACITY);
     let mut engine = HotEngine::new(HotEngineSetup {
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(commands, counter.stamper.clone()),
             settings: exec_settings(),
             run_nonce: 0,
-        }),
+        }],
         ..detached_setup(&instruments, Box::new(OneBid))
     });
     make_ready(&mut engine, 0);

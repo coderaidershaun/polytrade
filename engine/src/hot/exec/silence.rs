@@ -4,7 +4,6 @@
 use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::log::hot_warn;
 use crate::msg::exec::{ExecCommand, ExecKind};
-use crate::msg::ids::InstrumentId;
 use crate::msg::time::{DurationUs, LocalTs};
 
 use super::engine::ExecEngine;
@@ -122,44 +121,50 @@ pub(super) fn is_stream_report(kind: ExecKind) -> bool {
 impl ExecEngine {
     /// The silence deadline is a difference of message stamps, never a count of spins, so a timer
     /// that fires late or fast reads at the same moment of message time.
-    pub(super) fn detect_silence(&mut self, now: LocalTs) {
+    pub(super) fn detect_silence(&mut self, venue: usize, now: LocalTs) {
+        let slots = self.venues[venue].slots.clone();
         let has_working = self
             .orders
             .slots_in_use()
+            .skip_while(|index| *index < slots.start)
+            .take_while(|index| *index < slots.end)
             .any(|index| self.orders.slot(index).state().is_working());
-        self.silence.observe_spin(now, has_working);
-        if has_working && self.silence.is_due(now, self.settings.stream_silence) {
-            self.request_open_orders(now);
+        let state = &mut self.venues[venue];
+        state.silence.observe_spin(now, has_working);
+        if has_working && state.silence.is_due(now, state.settings.stream_silence) {
+            self.request_open_orders(venue, now);
         }
     }
 
+    /// One read of the open orders of each instrument of the venue, numbered in a row.
     #[cold]
-    fn request_open_orders(&mut self, now: LocalTs) {
-        let first_seq = self.recon_seq + 1;
-        for index in 0..self.instruments.len() {
-            self.recon_seq += 1;
+    fn request_open_orders(&mut self, venue: usize, now: LocalTs) {
+        let first_seq = self.venues[venue].recon_seq + 1;
+        for instrument in self.venues[venue].instrument_ids() {
+            self.venues[venue].recon_seq += 1;
             let command = ExecCommand::ReconcileOpenOrders {
-                instrument: InstrumentId(index as u16),
-                recon_seq: self.recon_seq,
+                instrument,
+                recon_seq: self.venues[venue].recon_seq,
             };
-            self.bank_or_halt(command, now);
+            self.bank_or_halt(venue, command, now);
         }
-        let instruments = self.recon_seq + 1 - first_seq;
-        self.silence.open_read(now, first_seq, instruments);
+        let state = &mut self.venues[venue];
+        let instruments = state.recon_seq + 1 - first_seq;
+        state.silence.open_read(now, first_seq, instruments);
     }
 
     /// Judges a silence read once its last instrument has ended. A read that changed a slot showed
     /// what the stream missed, so the edge subscribes again, and past the cap quoting halts.
-    pub(super) fn end_silence_read(&mut self, recon_seq: u64, now: LocalTs) {
-        let Some(missed_events) = self.silence.end_read_instrument(recon_seq) else {
+    pub(super) fn end_silence_read(&mut self, venue: usize, recon_seq: u64, now: LocalTs) {
+        let Some(missed_events) = self.venues[venue].silence.end_read_instrument(recon_seq) else {
             return;
         };
-        self.on_missed_event(missed_events, now);
+        self.on_missed_event(venue, missed_events, now);
     }
 
     #[cold]
-    fn on_missed_event(&mut self, missed_events: u32, now: LocalTs) {
-        let cap = self.settings.max_stream_resets;
+    fn on_missed_event(&mut self, venue: usize, missed_events: u32, now: LocalTs) {
+        let cap = self.venues[venue].settings.max_stream_resets;
         hot_warn!(
             "a read of open orders showed a change that the order stream never reported: missed event {} of a cap of {}",
             missed_events,
@@ -168,6 +173,6 @@ impl ExecEngine {
         if missed_events > cap {
             return self.halt(HaltReason::StreamSilent, now);
         }
-        self.bank_or_halt(ExecCommand::ResubscribeStream, now);
+        self.bank_or_halt(venue, ExecCommand::ResubscribeStream, now);
     }
 }

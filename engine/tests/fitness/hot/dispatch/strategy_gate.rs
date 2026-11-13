@@ -313,11 +313,11 @@ fn late_engine() -> LateEngine {
         persistence: Some(persistence),
         ui_event_sink,
         warmup: LATE_SPAN,
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(producer, Stamper::Off),
             settings: exec_settings(),
             run_nonce: 0,
-        }),
+        }],
         ..detached_setup(&rows, Box::new(probe))
     });
     engine.dispatch(&stream_ready(MARKET_0, 0));

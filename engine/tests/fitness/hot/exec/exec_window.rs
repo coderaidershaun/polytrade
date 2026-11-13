@@ -228,7 +228,7 @@ fn the_quote_stop_pulls_the_whole_ladder_and_an_unwindowed_instrument_never_stop
 
 fn a_sweep_pulls_resting_quotes_and_never_a_marketable_order() {
     let is_resting = |style: OrderStyle, state: OrderState| {
-        let mut orders = OrderTable::new(&exec_capacity(1), 0);
+        let mut orders = OrderTable::new(&exec_capacity(1));
         let (index, client_id) = orders
             .claim(OrderClaim {
                 instrument: INSTRUMENT,
@@ -239,6 +239,7 @@ fn a_sweep_pulls_resting_quotes_and_never_a_marketable_order() {
                 style,
                 claimed_ts_us: ts(0),
                 recon_seq: 0,
+                run_nonce: 0,
             })
             .expect("a fresh table has a free slot");
         let placed = ExecEvent {
@@ -551,14 +552,14 @@ fn three_markets(budget: i64) -> (HotEngine, Consumer<ExecLaneItem>, Consumer<Pe
     let (producer, commands) = RingBuffer::new(1_024);
     let engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(producer, Stamper::Off),
             settings: ExecSettings {
                 max_session_loss_quote: Notional::from_mantissa(budget),
                 ..exec_settings()
             },
             run_nonce: 0,
-        }),
+        }],
         ..detached_setup(&rows, Box::new(Idle))
     });
     (engine, commands, records)

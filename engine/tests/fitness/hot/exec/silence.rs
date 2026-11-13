@@ -58,6 +58,9 @@ struct Quiet {
     sent: Vec<(i64, &'static str)>,
     reads: usize,
     spins: u64,
+    /// The answer of a status probe of the edge's own resync: the second of the read that it comes
+    /// just before, the fill it shows, and its recon number.
+    probe: Option<(i64, i64, u64)>,
 }
 
 impl Quiet {
@@ -67,11 +70,11 @@ impl Quiet {
         let (ui_event_sink, ui_events) = ui_event_ring(4_096);
         let mut engine = HotEngine::new(HotEngineSetup {
             ui_event_sink,
-            exec: Some(ExecWiring {
+            exec: vec![ExecWiring {
                 sink: ExecSink::new(producer, Stamper::Off),
                 settings,
                 run_nonce: 0,
-            }),
+            }],
             ..detached_setup(&instruments, Box::new(OneBidOfTen))
         });
         make_ready(&mut engine, 0);
@@ -91,6 +94,7 @@ impl Quiet {
             sent: vec![(0, "place")],
             reads: 0,
             spins: 0,
+            probe: None,
         };
         quiet.report(0, ExecKind::ReportNew, 0, 0);
         quiet
@@ -141,6 +145,17 @@ impl Quiet {
             let kind = match command {
                 ExecCommand::Place { .. } => "place",
                 ExecCommand::ReconcileOpenOrders { recon_seq, .. } => {
+                    if let Some((_, filled, probe_seq)) =
+                        self.probe.take_if(|(second, ..)| *second * SECOND == at)
+                    {
+                        let answer = ExecEvent {
+                            kind: ExecKind::SnapshotOrder,
+                            status: Some(VenueOrderStatus::PartiallyFilled),
+                            recon_seq: probe_seq,
+                            ..self.order_event(at + ANSWER_DELAY / 2, filled)
+                        };
+                        self.dispatch(at + ANSWER_DELAY / 2, answer);
+                    }
                     self.reads += 1;
                     self.answer_read(at + ANSWER_DELAY, recon_seq, filled(self.reads));
                     "read"
@@ -259,6 +274,19 @@ fn silent_stream_reads_then_resubscribes_then_halts() {
         silent.engine.counters().fee_gaps,
         3,
         "each fill that only a read shows names no last quantity, so its step is a fee gap"
+    );
+
+    // The status probe of an edge's own resync answers with recon number 0. Its fill books, and it
+    // counts toward no read of the silence: the read that follows shows what the table holds.
+    let mut probed = Quiet::new(silence_settings(SPAN));
+    probed.probe = Some((30, 4 * ONE, 0));
+    for second in 1..=31 {
+        probed.spin_at(second, |_| 4 * ONE);
+    }
+    assert_eq!(
+        seconds(&probed.sent),
+        [(0, "place"), (30, "read")],
+        "a probe answer of recon number 0 is no part of the read, which then agrees"
     );
 
     // A report of the stream after the second missed event sets the count back to 0.

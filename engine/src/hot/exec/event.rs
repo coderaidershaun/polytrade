@@ -18,15 +18,26 @@ use super::view::{ExecCallback, Fill, OrderReject, RejectOrigin};
 
 impl ExecEngine {
     #[cold]
-    pub(super) fn on_stream_reset(&mut self, at: LocalTs, bank: &mut Actions) -> ExecCallback {
+    /// A stream reset of one venue leaves the orders, the readiness and the refusals of each other
+    /// venue as they were.
+    pub(super) fn on_stream_reset(
+        &mut self,
+        venue: usize,
+        at: LocalTs,
+        bank: &mut Actions,
+    ) -> ExecCallback {
         hot_warn!(
             "execution stream reset — every open order is unknown until a reconciliation lands"
         );
-        self.readiness.observe_stream_reset();
+        self.venues[venue].readiness.observe_stream_reset();
         // Every reason the pass last reported was derived from order state that is now a memory, so
         // the next refusal is news again rather than a repeat the latch would swallow.
-        self.refusals.forget();
-        self.orders.invalidate_all(&mut |slot, previous| {
+        let (instruments, slots) = {
+            let state = &self.venues[venue];
+            (state.instruments.clone(), state.slots.clone())
+        };
+        self.refusals.forget_instruments(instruments);
+        self.orders.invalidate_within(slots, &mut |slot, previous| {
             let transition = OrderTransition::StreamReset;
             bank_engine_driven(bank, slot, transition, previous.into(), at);
         });
@@ -55,19 +66,23 @@ impl ExecEngine {
             let transition = OrderTransition::SweepClosed;
             bank_engine_driven(bank, slot, transition, previous.into(), stamps.received);
         });
+        let venue = self.venue_of(instrument);
         if has_swept {
-            self.silence.observe_read_change(pass.recon_seq);
+            self.venues[venue]
+                .silence
+                .observe_read_change(pass.recon_seq);
         }
-        self.readiness.observe_open_orders_snapshot();
-        self.end_silence_read(pass.recon_seq, stamps.fold);
+        self.venues[venue].readiness.observe_open_orders_snapshot();
+        self.end_silence_read(venue, pass.recon_seq, stamps.fold);
         ExecCallback::None
     }
 
     /// Retries each release that beat its account update. A free slot holds no reservation, so the
     /// pass walks the slots in use.
-    pub(super) fn retry_reservation_releases(&mut self) {
-        let mut next = self.orders.next_in_use(0);
-        while let Some(index) = next {
+    pub(super) fn retry_reservation_releases(&mut self, venue: usize) {
+        let slots = self.venues[venue].slots.clone();
+        let mut next = self.orders.next_in_use(slots.start);
+        while let Some(index) = next.filter(|index| slots.contains(index)) {
             next = self.orders.next_in_use(index + 1);
             let slot = self.orders.slot(index);
             if slot.reserved_amount().is_none() || slot.state() == OrderState::PendingNew {
@@ -236,7 +251,10 @@ impl ExecEngine {
             return;
         }
         let asset = self.instruments[usize::from(slot.instrument().0)].spend_asset(slot.side());
-        if self.settings.holds_reservations_until_settled {
+        if self
+            .settings_of(slot.instrument())
+            .holds_reservations_until_settled
+        {
             if slot.state() != OrderState::PendingNew {
                 self.gated_release(index, asset);
             }
@@ -259,7 +277,11 @@ impl ExecEngine {
         let Some(amount) = slot.reserved_amount() else {
             return;
         };
-        let outcome = self.account.release(asset, amount, slot.reserved_at());
+        let reserved_at = slot.reserved_at();
+        let outcome = self
+            .venue_mut(slot.instrument())
+            .account
+            .release(asset, amount, reserved_at);
         if outcome == ReleaseOutcome::Released {
             self.orders.clear_reservation(index);
         }
@@ -270,8 +292,11 @@ impl ExecEngine {
         let Some(amount) = slot.reserved_amount() else {
             return;
         };
-        let asset = self.instruments[usize::from(slot.instrument().0)].spend_asset(slot.side());
-        self.account.release_unsent(asset, amount);
+        let instrument = slot.instrument();
+        let asset = self.instruments[usize::from(instrument.0)].spend_asset(slot.side());
+        self.venue_mut(instrument)
+            .account
+            .release_unsent(asset, amount);
         self.orders.clear_reservation(index);
     }
 
@@ -294,7 +319,7 @@ impl ExecEngine {
             let is_venue_answer =
                 !matches!(event.kind, ExecKind::PlaceNotSent | ExecKind::AmendNotSent);
             if is_venue_answer && matches!(state, OrderState::Live) {
-                self.reject_streak = 0;
+                self.venues[usize::from(event.venue.0)].reject_streak = 0;
             }
             return;
         };
@@ -311,8 +336,9 @@ impl ExecEngine {
             // request, so it must not count toward the kill switch.
             RejectClass::Gone => {}
             RejectClass::StillLive | RejectClass::Ambiguous => {
-                self.reject_streak += 1;
-                if self.reject_streak >= self.settings.max_consecutive_rejects {
+                let venue = &mut self.venues[usize::from(event.venue.0)];
+                venue.reject_streak += 1;
+                if venue.reject_streak >= venue.settings.max_consecutive_rejects {
                     self.halt(HaltReason::RejectStreak, now);
                 }
             }

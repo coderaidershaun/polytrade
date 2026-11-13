@@ -265,7 +265,7 @@ fn engine(start: Start, stamper: Stamper) -> (HotEngine, Readers) {
         ui_book_sink,
         ui_event_sink,
         warmup: start.warmup(),
-        exec,
+        exec: exec.into_iter().collect(),
         exposure: ExposureWiring {
             restored: &[],
             sink: exposure_sink,

@@ -79,7 +79,10 @@ impl ExecEngine {
     #[inline]
     pub(super) fn admits_window(&self, instrument: InstrumentId, input: &SpinInput<'_>) -> bool {
         input.windows[usize::from(instrument.0)].is_none_or(|window| {
-            window.admits_quote_at(input.now.as_local(), self.settings.quote_stop_margin)
+            window.admits_quote_at(
+                input.now.as_local(),
+                self.settings_of(instrument).quote_stop_margin,
+            )
         })
     }
 
@@ -87,10 +90,10 @@ impl ExecEngine {
     /// stays tracked; venue losses are caught by in-flight timeout. CancelOurs is an exit that tells the
     /// edge to sweep and shut down, wrong for a routine rotation every few minutes that must leave the
     /// next window quotable. Runs every spin past the stop; refused cancels re-read as Live.
-    pub(super) fn sweep_closing_windows(&mut self, input: &mut SpinInput<'_>) {
+    pub(super) fn sweep_closing_windows(&mut self, venue: usize, input: &mut SpinInput<'_>) {
         let at = input.now.as_local();
-        let margin = self.settings.quote_stop_margin;
-        for index in 0..self.instruments.len() {
+        let margin = self.venues[venue].settings.quote_stop_margin;
+        for index in self.venues[venue].instruments.clone() {
             let is_closing =
                 input.windows[index].is_some_and(|window| window.is_past_quote_stop(at, margin));
             if !is_closing {

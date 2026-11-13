@@ -826,7 +826,7 @@ fn engine_with_exposure(
     let engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),
         ui_event_sink,
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(commands_producer, Stamper::Off),
             // A wide band and a long book age: a quote refused by the price band or a stale book
             // would read the same as one that the loss gate pulled.
@@ -835,7 +835,7 @@ fn engine_with_exposure(
                 ..exec_settings()
             },
             run_nonce: 0,
-        }),
+        }],
         exposure,
         ..detached_setup(instruments, Box::new(TwoSidedQuoter))
     });

@@ -323,8 +323,10 @@ impl RefusalLatch {
         self.len = 0;
     }
 
-    pub fn forget(&mut self) {
-        self.current.fill([None; SIDES]);
+    pub(super) fn forget_instruments(&mut self, instruments: std::ops::Range<usize>) {
+        for row in &mut self.current[instruments] {
+            *row = [None; SIDES];
+        }
     }
 
     fn slot_mut(
@@ -351,26 +353,15 @@ impl ExecEngine {
     /// table does. Ordered furthest-upstream first, so a diagnostic names the cause rather than a
     /// consequence of it.
     #[inline]
-    pub(super) fn readiness_gap(&self) -> Option<ReadinessGap> {
-        if !self.readiness.is_stream_ready() {
-            return Some(ReadinessGap::Stream);
-        }
-        if !self.account.has_snapshot() {
-            return Some(ReadinessGap::Balances);
-        }
-        (!self.readiness.has_open_orders_snapshot()).then_some(ReadinessGap::OpenOrders)
-    }
-
     /// Conservatively count possibly-live (pending/amending/unknown live until venue proves terminal).
-    pub(super) fn enforce_resting_limit(&mut self, at: LocalTs) {
+    pub(super) fn enforce_resting_limit(&mut self, venue: usize, at: LocalTs) {
         if self.halt.is_halted() {
             return;
         }
-        for index in 0..self.instruments.len() {
-            let instrument = InstrumentId(index as u16);
+        for instrument in self.venues[venue].instrument_ids() {
             for side in [Side::Buy, Side::Sell] {
                 let possibly_live = self.orders.possibly_live_count(instrument, side);
-                if possibly_live > self.settings.max_orders_per_side {
+                if possibly_live > self.venues[venue].settings.max_orders_per_side {
                     self.warn_duplicate_resting(instrument, side, possibly_live);
                     self.halt(HaltReason::DuplicateResting, at);
                     return;
@@ -387,7 +378,7 @@ impl ExecEngine {
             instrument.0,
             resting,
             side,
-            self.settings.max_orders_per_side
+            self.settings_of(instrument).max_orders_per_side
         );
     }
 
@@ -403,10 +394,11 @@ impl ExecEngine {
     /// delta would silently include the whole restored position's cost. Waiting for the first
     /// two-sided book makes the baseline a mark-to-market valuation, so the delta is this session's
     /// PnL and nothing else. Message-driven, so it is replay-exact and depends on no boot ordering.
-    pub(super) fn observe_pnl_baseline(&mut self, ledger: &PositionLedger) {
+    pub(super) fn observe_pnl_baseline(&mut self, venue: usize, ledger: &PositionLedger) {
+        let instruments = self.venues[venue].instruments.clone();
         for (instrument, row) in ledger.rows() {
             let index = usize::from(instrument.0);
-            if index >= self.instruments.len() || self.pnl_at_baseline[index].is_some() {
+            if !instruments.contains(&index) || self.pnl_at_baseline[index].is_some() {
                 continue;
             }
             if row.has_mark() {
@@ -451,7 +443,7 @@ impl ExecEngine {
                 realised_quote: self.loss_sums.realised(self.instruments[index].quote_asset),
                 position_base: row.position_base(),
             },
-            self.settings.max_session_loss_quote,
+            self.settings_of(instrument).max_session_loss_quote,
         )
     }
 
@@ -477,7 +469,7 @@ impl ExecEngine {
     ) {
         let reason = reason.or_else(|| {
             let top = self.book_top(instrument, input);
-            (!top.is_quotable(self.settings.limits.max_book_age))
+            (!top.is_quotable(self.settings_of(instrument).limits.max_book_age))
                 .then_some(RejectReason::BookNotQuotable)
         });
         self.refusals

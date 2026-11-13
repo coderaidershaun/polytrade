@@ -39,7 +39,7 @@ const TICK: i64 = 1_000_000;
 const RECEIVED: LocalTs = LocalTs::from_micros(2);
 
 fn table(instruments: u16) -> OrderTable {
-    OrderTable::new(&exec_capacity(instruments), RUN_NONCE)
+    OrderTable::new(&exec_capacity(instruments))
 }
 
 fn buy_claim(level: QuoteLevel, price: i64, qty: i64) -> OrderClaim {
@@ -52,6 +52,7 @@ fn buy_claim(level: QuoteLevel, price: i64, qty: i64) -> OrderClaim {
         style: OrderStyle::PostOnly,
         claimed_ts_us: LocalTs::from_micros(1),
         recon_seq: 0,
+        run_nonce: RUN_NONCE,
     }
 }
 
@@ -874,6 +875,7 @@ fn claim_at(orders: &mut OrderTable, instrument: InstrumentId, at: QuoteLevel, s
             style: OrderStyle::PostOnly,
             claimed_ts_us: LocalTs::from_micros(0),
             recon_seq: seq,
+            run_nonce: RUN_NONCE,
         })
         .expect("the keyed level has a generation slot");
     index

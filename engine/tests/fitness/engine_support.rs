@@ -437,7 +437,7 @@ fn ui_engine(
     let (ui_book_sink, ui_books) = ui_book_ring(UI_BOOK_RING_CAPACITY);
     let (ui_event_sink, ui_events) = ui_event_ring(UI_EVENT_RING_CAPACITY);
     let engine = HotEngine::new(HotEngineSetup {
-        exec,
+        exec: exec.into_iter().collect(),
         persistence,
         strategy_log_sink,
         ui_book_sink,
@@ -609,7 +609,7 @@ pub fn detached_setup(
         ui_event_sink: ui_event_ring(256).0,
         link: None,
         warmup: DurationUs::ZERO,
-        exec: None,
+        exec: Vec::new(),
         exposure: ExposureWiring {
             restored: &[],
             sink: exposure_ring(16, instruments.len()).0,

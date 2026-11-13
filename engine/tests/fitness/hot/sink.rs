@@ -267,11 +267,11 @@ fn engine(capacity: usize) -> (HotEngine, Lanes) {
             sink: LinkSink::new(link_producer),
             acknowledged: RunControlGate::new().acknowledged().clone(),
         }),
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(commands_producer, Stamper::Off),
             settings: exec_settings(),
             run_nonce: 0,
-        }),
+        }],
         exposure: ExposureWiring {
             restored: &[],
             sink: exposure_sink,

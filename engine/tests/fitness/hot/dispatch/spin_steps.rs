@@ -130,11 +130,11 @@ impl Run {
         let engine = HotEngine::new(HotEngineSetup {
             persistence: Some(persistence),
             ui_event_sink,
-            exec: Some(ExecWiring {
+            exec: vec![ExecWiring {
                 sink: ExecSink::new(command_producer, Stamper::Off),
                 settings: exec_settings(),
                 run_nonce: 0,
-            }),
+            }],
             ..detached_setup(&rows_of_market, Box::new(strategy))
         });
         let (input, queue) = RingBuffer::new(LANE);

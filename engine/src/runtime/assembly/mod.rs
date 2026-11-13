@@ -329,7 +329,7 @@ impl Engine {
             rings: RingPlan::of(&registry, &config),
             engine: move || {
                 HotEngine::new(HotEngineSetup {
-                    exec: exec_wiring,
+                    exec: exec_wiring.into_iter().collect(),
                     instruments: &instruments,
                     strategy,
                     persistence: persist_wiring,

@@ -827,14 +827,14 @@ fn markets(
 ) -> Markets {
     let (producer, commands) = RingBuffer::new(1_024);
     let engine = HotEngine::new(HotEngineSetup {
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(producer, Stamper::Off),
             settings: ExecSettings {
                 max_session_loss_quote: Notional::from_mantissa(budget),
                 ..exec_settings()
             },
             run_nonce: 0,
-        }),
+        }],
         exposure: ExposureWiring {
             restored,
             sink: exposure_ring(64, rows.len()).0,

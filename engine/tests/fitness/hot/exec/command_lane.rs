@@ -69,11 +69,11 @@ fn held_command_keeps_bank_stamp() {
     second.venue_symbol = "ETHUSDT".into();
     let instruments = [row_with_ceiling(CEILING), second];
     let mut engine = HotEngine::new(HotEngineSetup {
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(producer, Stamper::Counter(clock)),
             settings: exec_settings(),
             run_nonce: 0,
-        }),
+        }],
         ..detached_setup(&instruments, Box::new(ThreePlacements))
     });
     make_ready(&mut engine, 500_000);

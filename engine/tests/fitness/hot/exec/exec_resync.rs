@@ -136,7 +136,7 @@ fn the_resync_marker_can_retire_no_slot() {
     assert_eq!(marker.kind, ExecKind::SnapshotEnd);
     assert_eq!(marker.instrument, Some(INSTRUMENT));
 
-    let mut orders = OrderTable::new(&exec_capacity(1), 0);
+    let mut orders = OrderTable::new(&exec_capacity(1));
     let (index, _) = orders
         .claim(OrderClaim {
             instrument: INSTRUMENT,
@@ -147,6 +147,7 @@ fn the_resync_marker_can_retire_no_slot() {
             style: OrderStyle::PostOnly,
             claimed_ts_us: LocalTs::from_micros(0),
             recon_seq: 0,
+            run_nonce: 0,
         })
         .expect("a fresh table has a free slot");
 

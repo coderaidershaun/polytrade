@@ -48,11 +48,11 @@ fn engine_with_settings(
     let instruments = [row];
     let (producer, commands) = RingBuffer::new(256);
     let engine = HotEngine::new(HotEngineSetup {
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(producer, Stamper::Off),
             settings,
             run_nonce: 0,
-        }),
+        }],
         ..detached_setup(&instruments, strategy)
     });
     (engine, commands)

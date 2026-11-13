@@ -3,27 +3,27 @@
 
 use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::hot::ledger::PositionLedger;
-use crate::hot::sink::{ExecSink, PendingCommands};
 use crate::hot::strategy::Actions;
 use crate::log::{hot_error, hot_warn};
 use crate::msg::exec::{
     AccountChunk, AccountChunkKind, CancelReason, ExecCommand, ExecEvent, ExecKind, Provenance,
 };
-use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Qty, Side};
+use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Qty, Side, VenueId};
 use crate::msg::time::{DurationUs, FoldTime, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 use crate::runtime::registry::InstrumentRow;
 
-use super::account::{AccountTable, Balance};
+use super::account::Balance;
 use super::audit::IncidentCounts;
-use super::budget::{BudgetMeter, OrderBudget};
+use super::budget::OrderBudget;
 use super::capacity::ExecCapacity;
 use super::desired::QuoteLevel;
 use super::flatten::FeeModel;
-use super::gates::{ExecHalt, HaltReason, LossSums, Readiness, RefusalLatch};
+use super::gates::{ExecHalt, HaltReason, LossSums, RefusalLatch};
 use super::order::{OrderSlot, OrderTable, PriorRunOrders};
 use super::reconcile::{ExecLimits, RejectReason, RestingOrder, TickGrid};
-use super::silence::{StreamSilence, is_stream_report};
+use super::silence::is_stream_report;
+use super::venue::{ExecVenueSetup, VenueExec, venues_for};
 use super::view::{ExecCallback, OrderReject, OrderView, WorkingOrderView};
 
 /// The two times of the message under fold. The fold time stamps what the engine decides: a slot, a
@@ -104,6 +104,7 @@ impl ExecSettings {
 }
 
 pub(super) struct InstrumentExec {
+    pub(super) venue: VenueId,
     pub(super) grid: TickGrid,
     pub(super) base_asset: AssetId,
     pub(super) quote_asset: AssetId,
@@ -131,26 +132,20 @@ impl InstrumentExec {
 
 pub struct ExecEngineSetup<'a> {
     pub instruments: &'a [InstrumentRow],
-    pub run_nonce: u32,
-    pub settings: ExecSettings,
-    pub sink: Option<ExecSink>,
+    /// One setup for each venue, in venue order. A venue that a row names past the last setup has
+    /// execution off.
+    pub venues: Vec<ExecVenueSetup>,
 }
 
 pub struct ExecEngine {
     pub(super) orders: OrderTable,
     pub(super) prior_orders: PriorRunOrders,
-    pub(super) account: AccountTable,
-    pub(super) pending: PendingCommands,
-    pub(super) sink: Option<ExecSink>,
+    /// The state of each venue, by its [`VenueId`]. A halt, the order tables and the loss sums
+    /// stay engine-wide.
+    pub(super) venues: Vec<VenueExec>,
     pub(super) halt: ExecHalt,
-    pub(super) readiness: Readiness,
     pub(super) refusals: RefusalLatch,
-    pub(super) reject_streak: u32,
-    pub(super) budget: BudgetMeter,
     pub(super) instruments: Vec<InstrumentExec>,
-    pub(super) settings: ExecSettings,
-    pub(super) silence: StreamSilence,
-    pub(super) recon_seq: u64,
     pub(super) incidents: IncidentCounts,
     /// The PnL baseline at the first honest valuation; the session loss gate compares
     /// against this. `None` until that first mark.
@@ -161,30 +156,33 @@ pub struct ExecEngine {
 digest_by_hash!(ExecSettings);
 digest_fields! {
     InstrumentExec {
-        grid, base_asset, quote_asset, max_exposure_quote, last_commit_ts_us,
+        venue, grid, base_asset, quote_asset, max_exposure_quote, last_commit_ts_us,
         is_prior_run_cancel_sent, flatten_refusal, realised_carried_quote,
     }
 }
 digest_fields! {
     ExecEngine {
-        orders, prior_orders, account, pending, sink, halt, readiness, refusals, reject_streak,
-        budget, instruments, settings, silence, recon_seq, incidents,
+        orders, prior_orders, venues, halt, refusals, instruments, incidents,
         pnl_at_baseline, loss_sums,
     }
 }
 
 impl ExecEngine {
     pub fn new(setup: ExecEngineSetup<'_>) -> Self {
-        assert!(
-            setup.sink.is_none()
-                || (1..=MAX_QUOTE_LEVELS).contains(&setup.settings.max_orders_per_side),
-            "max_orders_per_side must be within 1..={MAX_QUOTE_LEVELS} when execution is wired"
-        );
         let capacity = ExecCapacity::sized_for(setup.instruments);
+        let venues = venues_for(setup.instruments, setup.venues, &capacity);
+        for venue in &venues {
+            assert!(
+                venue.sink.is_none()
+                    || (1..=MAX_QUOTE_LEVELS).contains(&venue.settings.max_orders_per_side),
+                "max_orders_per_side must be within 1..={MAX_QUOTE_LEVELS} when execution is wired"
+            );
+        }
         let instruments = setup
             .instruments
             .iter()
             .map(|row| InstrumentExec {
+                venue: row.venue,
                 grid: TickGrid {
                     tick: row.tick_size.map_or(1, |tick| tick.mantissa().max(1)),
                     step: row.lot_size.map_or(1, |lot| lot.mantissa().max(1)),
@@ -207,29 +205,16 @@ impl ExecEngine {
             })
             .collect();
         Self {
-            orders: OrderTable::new(&capacity, setup.run_nonce),
+            orders: OrderTable::new(&capacity),
             prior_orders: PriorRunOrders::new(&capacity),
-            account: AccountTable::new(&capacity),
-            pending: PendingCommands::for_sink(setup.sink.as_ref(), capacity.command_bank()),
-            sink: setup.sink,
+            venues,
             halt: ExecHalt::Armed,
-            readiness: Readiness::default(),
             refusals: RefusalLatch::new(&capacity),
-            reject_streak: 0,
-            budget: BudgetMeter::new(setup.settings.order_budget),
             instruments,
-            settings: setup.settings,
-            silence: StreamSilence::default(),
-            recon_seq: 0,
             incidents: IncidentCounts::default(),
             pnl_at_baseline: vec![None; setup.instruments.len()],
             loss_sums: LossSums::new(&capacity),
         }
-    }
-
-    #[inline]
-    pub(crate) fn commands_banked(&self) -> u64 {
-        self.pending.banked_total()
     }
 
     #[inline]
@@ -245,17 +230,25 @@ impl ExecEngine {
     /// could not send an order if it wanted to.
     #[inline]
     pub fn halt_state(&self) -> Option<ExecHalt> {
-        self.sink.is_some().then_some(self.halt)
+        self.has_sink().then_some(self.halt)
     }
 
+    /// The balance of an asset at the venue that names it. Each venue names its own assets.
     pub fn balance(&self, asset: AssetId) -> Balance {
-        self.account.balance(asset)
+        self.instruments
+            .iter()
+            .find(|row| row.base_asset == asset || row.quote_asset == asset)
+            .map_or(Balance::default(), |row| {
+                self.venues[usize::from(row.venue.0)].account.balance(asset)
+            })
     }
 
     /// Every asset the venue has named. Absolute state, so a caller may re-state it as often as it
     /// likes — see [`AccountTable::balances`].
     pub fn balances(&self) -> impl Iterator<Item = (AssetId, Balance)> + '_ {
-        self.account.balances()
+        self.venues
+            .iter()
+            .flat_map(|venue| venue.account.balances())
     }
 
     pub fn tick_grid(&self, instrument: InstrumentId) -> TickGrid {
@@ -314,13 +307,14 @@ impl ExecEngine {
         bank: &mut Actions,
     ) -> ExecCallback {
         let now = stamps.fold;
+        let venue = self.venue_of_event(event);
         if is_stream_report(event.kind) {
-            self.silence.observe_stream_event(now);
+            self.venues[venue].silence.observe_stream_event(now);
         }
         match event.kind {
-            ExecKind::StreamReset => return self.on_stream_reset(stamps.received, bank),
+            ExecKind::StreamReset => return self.on_stream_reset(venue, stamps.received, bank),
             ExecKind::StreamReady => {
-                self.readiness.observe_stream_ready();
+                self.venues[venue].readiness.observe_stream_ready();
                 return ExecCallback::None;
             }
             ExecKind::SnapshotEnd => return self.on_snapshot_end(event, stamps, bank),
@@ -343,7 +337,9 @@ impl ExecEngine {
         let has_closed = was_working && !self.orders.slot(index).state().is_working();
         let has_moved = has_closed || matches!(callback, ExecCallback::Fill(_));
         if event.kind == ExecKind::SnapshotOrder && has_moved {
-            self.silence.observe_read_change(event.recon_seq);
+            self.venues[venue]
+                .silence
+                .observe_read_change(event.recon_seq);
         }
         callback
     }
@@ -351,11 +347,14 @@ impl ExecEngine {
     /// Absolute balances only — see [`AccountChunk`] for why a delta may never reach here. A
     /// balance update comes from the order stream, and a snapshot answers an own read.
     pub fn on_account(&mut self, chunk: &AccountChunk, at: FoldTime) {
+        let venue = usize::from(chunk.venue.0);
         if chunk.kind == AccountChunkKind::Update {
-            self.silence.observe_stream_event(at.as_local());
+            self.venues[venue]
+                .silence
+                .observe_stream_event(at.as_local());
         }
-        self.account.apply(chunk);
-        self.retry_reservation_releases();
+        self.venues[venue].account.apply(chunk);
+        self.retry_reservation_releases(venue);
     }
 
     /// Pulls every order this run owns, on every instrument. [`ExecEngine::halt`] is the only caller
@@ -367,7 +366,7 @@ impl ExecEngine {
         for index in 0..self.instruments.len() {
             let instrument = InstrumentId(index as u16);
             let command = ExecCommand::CancelOurs { instrument, reason };
-            if !self.pending.bank(command, at) {
+            if !self.venue_mut(instrument).pending.bank(command, at) {
                 unswept_error(instrument);
             }
         }
@@ -425,7 +424,7 @@ impl ExecEngine {
             return;
         }
         let command = ExecCommand::CancelPriorRun { instrument };
-        if !self.bank_or_halt(command, now) {
+        if !self.bank_or_halt(self.venue_of(instrument), command, now) {
             return;
         }
         self.instruments[index].is_prior_run_cancel_sent = true;

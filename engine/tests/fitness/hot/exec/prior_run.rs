@@ -100,11 +100,11 @@ fn fixture_with_lane(lane_capacity: usize) -> Fixture {
     let engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),
         ui_event_sink,
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(commands_producer, Stamper::Off),
             settings: ExecSettings::disabled(),
             run_nonce: 0,
-        }),
+        }],
         ..detached_setup(&instruments, strategy)
     });
     Fixture {
@@ -402,11 +402,11 @@ fn fold_earlier_orders(
     let latest = Arc::clone(&probe.latest);
     let mut engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(commands_producer, Stamper::Off),
             settings: ExecSettings::disabled(),
             run_nonce: RUN_NONCE,
-        }),
+        }],
         ..detached_setup(&instruments, Box::new(probe))
     });
     engine.dispatch(&stream_ready(InstrumentId(0), 1));

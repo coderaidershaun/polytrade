@@ -71,7 +71,7 @@ impl Unanswered {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let mut engine = HotEngine::new(HotEngineSetup {
             ui_event_sink,
-            exec: Some(ExecWiring {
+            exec: vec![ExecWiring {
                 sink: ExecSink::new(producer, Stamper::Off),
                 settings: ExecSettings {
                     inflight_timeout: DurationUs::from_millis(5_000),
@@ -79,7 +79,7 @@ impl Unanswered {
                     ..exec_settings()
                 },
                 run_nonce: 0,
-            }),
+            }],
             ..detached_setup(
                 &instruments,
                 Box::new(OneBid {

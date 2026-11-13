@@ -23,37 +23,52 @@ use super::reconcile::{
 
 impl ExecEngine {
     pub(crate) fn on_spin(&mut self, mut input: SpinInput<'_>) {
-        if self.sink.is_none() {
+        if !self.has_sink() {
             return;
         }
         let now = input.now.as_local();
-        self.budget.observe_spin(now);
-        self.orders.reap(now, self.settings.order_reap_window);
-        self.sweep_timeouts(input.stamps(), input.bank);
-        self.detect_silence(now);
-        self.observe_pnl_baseline(input.ledger);
-        self.enforce_resting_limit(now);
-        // The window sweep runs first: pulling orders off a closing market becomes
-        // irreversible if it's late, and doing so frees the side for the flatten pass.
-        self.sweep_closing_windows(&mut input);
-        // Flatten runs before quote: claiming a slot marks the side as in-flight, so the
-        // quote ladder skips it. Reversing the order would send two unanswered commands on
-        // one side in a single spin.
-        self.flatten_pass(&mut input);
-        self.quote_pass(&mut input);
-        if let Some(sink) = self.sink.as_mut() {
-            self.pending.drain_into(sink, now);
+        for venue in 0..self.venues.len() {
+            self.spin_venue(venue, &mut input);
+        }
+        for venue in &mut self.venues {
+            if let Some(sink) = venue.sink.as_mut() {
+                venue.pending.drain_into(sink, now);
+            }
         }
     }
 
-    fn sweep_timeouts(&mut self, stamps: FoldStamps, bank: &mut Actions) {
-        let mut next = self.orders.next_in_use(0);
-        while let Some(index) = next {
+    /// The pass of one venue, over its own instruments and slots and with its own settings. A venue
+    /// with no sink places nothing, so it has no pass.
+    fn spin_venue(&mut self, venue: usize, input: &mut SpinInput<'_>) {
+        if self.venues[venue].sink.is_none() {
+            return;
+        }
+        let now = input.now.as_local();
+        let state = &mut self.venues[venue];
+        state.budget.observe_spin(now);
+        let (slots, reap_window) = (state.slots.clone(), state.settings.order_reap_window);
+        self.orders.reap_within(slots, now, reap_window);
+        self.sweep_timeouts(venue, input.stamps(), input.bank);
+        self.detect_silence(venue, now);
+        self.observe_pnl_baseline(venue, input.ledger);
+        self.enforce_resting_limit(venue, now);
+        // The window sweep runs first: pulling orders off a closing market becomes
+        // irreversible if it's late, and doing so frees the side for the flatten pass.
+        self.sweep_closing_windows(venue, input);
+        // Flatten runs before quote: claiming a slot marks the side as in-flight, so the
+        // quote ladder skips it. Reversing the order would send two unanswered commands on
+        // one side in a single spin.
+        self.flatten_pass(venue, input);
+        self.quote_pass(venue, input);
+    }
+
+    fn sweep_timeouts(&mut self, venue: usize, stamps: FoldStamps, bank: &mut Actions) {
+        let slots = self.venues[venue].slots.clone();
+        let timeout = self.venues[venue].settings.inflight_timeout;
+        let mut next = self.orders.next_in_use(slots.start);
+        while let Some(index) = next.filter(|index| slots.contains(index)) {
             next = self.orders.next_in_use(index + 1);
-            if self
-                .orders
-                .is_timed_out(index, stamps.fold, self.settings.inflight_timeout)
-            {
+            if self.orders.is_timed_out(index, stamps.fold, timeout) {
                 self.chase_timed_out(index, stamps, bank);
             }
         }
@@ -67,7 +82,8 @@ impl ExecEngine {
     fn chase_timed_out(&mut self, index: usize, stamps: FoldStamps, bank: &mut Actions) {
         let now = stamps.fold;
         let probes = self.orders.slot(index).status_probes();
-        let max_probes = u16::from(self.settings.max_status_probes);
+        let venue = self.venue_of(self.orders.slot(index).instrument());
+        let max_probes = u16::from(self.venues[venue].settings.max_status_probes);
         if probes > max_probes {
             return self.halt(HaltReason::StatusProbesSpent, now);
         }
@@ -81,8 +97,8 @@ impl ExecEngine {
         );
         let slot = self.orders.slot(index);
         let (instrument, client_id) = (slot.instrument(), slot.client_id());
-        self.recon_seq += 1;
-        let recon_seq = self.recon_seq;
+        self.venues[venue].recon_seq += 1;
+        let recon_seq = self.venues[venue].recon_seq;
         let command = if probes < max_probes {
             ExecCommand::ReconcileOrder {
                 instrument,
@@ -95,12 +111,12 @@ impl ExecEngine {
                 recon_seq,
             }
         };
-        self.bank_or_halt(command, now);
+        self.bank_or_halt(venue, command, now);
     }
 
     /// A realised loss of a quote asset at the budget halts quoting before any side is decided, and
     /// then each instrument quotes the sides that its own loss permission leaves open.
-    fn quote_pass(&mut self, input: &mut SpinInput<'_>) {
+    fn quote_pass(&mut self, venue: usize, input: &mut SpinInput<'_>) {
         self.sum_realised_losses(input.ledger);
         let is_spent = (0..self.instruments.len()).any(|index| {
             let verdict = self.loss_verdict(InstrumentId(index as u16), input.ledger);
@@ -109,8 +125,7 @@ impl ExecEngine {
         if is_spent && !self.halt.is_halted() {
             self.halt(HaltReason::RealisedLoss, input.now.as_local());
         }
-        for index in 0..self.instruments.len() {
-            let instrument = InstrumentId(index as u16);
+        for instrument in self.venues[venue].instrument_ids() {
             let permission = self.loss_permission(instrument, input.ledger);
             for side in [Side::Buy, Side::Sell] {
                 let reason = self.reconcile_ladder(instrument, side, permission, input);
@@ -130,7 +145,7 @@ impl ExecEngine {
         if self.halt.is_halted() {
             return Err(RejectReason::Halted);
         }
-        if let Some(gap) = self.readiness_gap() {
+        if let Some(gap) = self.venue(instrument).readiness_gap() {
             return Err(RejectReason::NotReady(gap));
         }
         if !session.admits(side) {
@@ -196,10 +211,11 @@ impl ExecEngine {
         instrument: InstrumentId,
         side: Side,
     ) -> Result<QuotePermit, RejectReason> {
-        if self.orders.possibly_live_count(instrument, side) >= self.settings.max_orders_per_side {
+        let venue = self.venue(instrument);
+        if self.orders.possibly_live_count(instrument, side) >= venue.settings.max_orders_per_side {
             return Err(RejectReason::OrderLimit);
         }
-        self.budget.admit_quote()
+        venue.budget.admit_quote()
     }
 
     /// What the strategy wants on this side once every gate has had its say, level by level.
@@ -211,7 +227,10 @@ impl ExecEngine {
         input: &SpinInput<'_>,
     ) -> DesiredLadder {
         let tick = self.instruments[usize::from(instrument.0)].grid.tick;
-        let depth = self.settings.max_orders_per_side.min(MAX_QUOTE_LEVELS);
+        let depth = self
+            .settings_of(instrument)
+            .max_orders_per_side
+            .min(MAX_QUOTE_LEVELS);
         let mut ladder = DesiredLadder::default();
         let mut snapped_prices = [None; MAX_QUOTE_LEVELS];
         for level in QuoteLevel::ALL {
@@ -274,7 +293,7 @@ impl ExecEngine {
                     .map(resting_of),
                 grid,
                 top,
-                limits: self.settings.limits,
+                limits: self.settings_of(instrument).limits,
                 funds,
             });
             match outcome {
@@ -292,12 +311,13 @@ impl ExecEngine {
 
     pub(super) fn funds_view(&self, instrument: InstrumentId, side: Side) -> FundsView {
         let asset = self.instruments[usize::from(instrument.0)].spend_asset(side);
+        let venue = self.venue(instrument);
         let floor = match side {
-            Side::Buy => self.settings.min_quote_balance.mantissa(),
-            Side::Sell => self.settings.min_base_balance.mantissa(),
+            Side::Buy => venue.settings.min_quote_balance.mantissa(),
+            Side::Sell => venue.settings.min_base_balance.mantissa(),
         };
         FundsView {
-            spendable: self.account.balance(asset).spendable(),
+            spendable: venue.account.balance(asset).spendable(),
             floor,
         }
     }

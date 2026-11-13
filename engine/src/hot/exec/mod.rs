@@ -20,6 +20,7 @@ mod order;
 mod reconcile;
 mod silence;
 mod spin;
+mod venue;
 mod view;
 mod window;
 
@@ -45,6 +46,7 @@ pub use reconcile::{
     RestingOrder, TickGrid, reconcile_side,
 };
 pub use spin::SpinInput;
+pub use venue::ExecVenueSetup;
 pub use view::{
     ExecCallback, Fill, OrderReject, OrderUpdate, OrderView, RejectOrigin, WorkingOrderView,
 };

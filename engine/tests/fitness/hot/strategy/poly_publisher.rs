@@ -955,12 +955,12 @@ impl Maker {
         let (ui_event_sink, events) = ui_event_ring(4_096);
         let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(1_024);
         let engine = HotEngine::new(HotEngineSetup {
-            exec: Some(ExecWiring {
+            exec: vec![ExecWiring {
                 sink: ExecSink::new(commands_producer, Stamper::Off),
                 settings: maker_settings(),
                 // Zero because [`FillPen`] addresses this engine's slots with that constant.
                 run_nonce: 0,
-            }),
+            }],
             persistence: Some(persistence),
             ui_event_sink,
             ..detached_setup(&rows, Box::new(strategy))

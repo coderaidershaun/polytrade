@@ -111,10 +111,12 @@ impl Actor {
                 .collect();
             for client_id in missing {
                 self.session.core.mark_ambiguous(client_id);
+                // The answer goes to the hot side, which numbers its own reads: a pass counter
+                // there would retire live orders or count toward a silence read, so it says 0.
                 if !self.submit(RestJob::OrderStatus {
                     instrument,
                     client_id,
-                    recon_seq: resync_seq,
+                    recon_seq: 0,
                 }) {
                     self.fail_resync(resync_seq);
                 }

@@ -109,11 +109,11 @@ impl Folds {
         };
         let engine = HotEngine::new(HotEngineSetup {
             persistence: Some(persistence),
-            exec: Some(ExecWiring {
+            exec: vec![ExecWiring {
                 sink: ExecSink::new(command_producer, Stamper::Off),
                 settings: exec_settings(),
                 run_nonce: 0,
-            }),
+            }],
             ..detached_setup(&rows, Box::new(strategy))
         });
         let (market, market_queue) = RingBuffer::new(LANE);
@@ -297,11 +297,11 @@ fn execution_rows_keep_the_stamp_of_their_message() {
     };
     let mut engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(command_producer, Stamper::Off),
             settings: exec_settings(),
             run_nonce: 0,
-        }),
+        }],
         ..detached_setup(&rows, Box::new(strategy))
     });
     make_ready(&mut engine, 1_000);

@@ -31,7 +31,8 @@ never asks for something it could not account for.
 `MessageBody::Account(AccountChunk)`, through `EventFunnel`): sixteen `ExecKind`s covering acks,
 reports, refusals, snapshots and stream lifecycle, plus balance chunks. Everything is a fixed-size
 POD of integer newtypes — prices and quantities are i64 mantissas, identity is packed integers,
-and no string crosses inward.
+and no string crosses inward. `EventFunnel` stamps the venue of its edge on each event and each
+balance chunk, so an adapter never sets it, and the fold reads the venue from the message.
 
 Both live in `msg/exec.rs`. The venue's raw codes ride along as tape-only fields; the hot
 engine branches solely on the normalised enums.
@@ -109,7 +110,9 @@ engine branches solely on the normalised enums.
      `venue_update_ts_ms` that advances only when money moved. A delta stream is converted
      to snapshots at the edge; a lagging balance read is never presented as fresh.
    - Timeouts and ambiguity reconcile — a status probe resolves them; nothing is re-sent.
-     Re-sending risks two live orders, which no reconciliation can undo. The deadline is
+     Re-sending risks two live orders, which no reconciliation can undo. A probe that the edge
+     sends on its own answers with `recon_seq` 0: the hot side numbers its own reads, and only
+     an answer that echoes one of them counts toward that read. The deadline is
      `execution.inflight_timeout_ms`, the one value that the hot slot and the in-flight table
      both read (`SessionSetup.inflight_timeout`). A venue's order client gives its HTTP verdict
      before that deadline: it declares its request deadline (`ORDER_REQUEST_TIMEOUT`), and the
@@ -130,7 +133,8 @@ Connect → subscribe the user stream → resync pass (the venue's own read set:
 open orders, paginated or per-instrument as the venue demands) → fold every open order into
 the mirror, classifying provenance → cancel prior-run orders and wait for them to drain →
 arm readiness → Quoting. On disconnect: mark every in-flight request ambiguous, emit
-`StreamReset` (which invalidates every hot slot to Unknown and disarms readiness),
+`StreamReset` (which invalidates each hot slot of this venue's instruments to Unknown and
+disarms this venue's readiness; each other venue of the engine keeps its slots and readiness),
 reconnect with backoff, resync again. On exit: plan a cancel sweep, retry it paced until
 the mirror confirms every order gone or the deadline forces an abort, then report, settle
 the latch, and stop. A sweep past its deadline with orders still mirrored never reports

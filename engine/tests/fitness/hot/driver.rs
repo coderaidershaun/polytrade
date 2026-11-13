@@ -651,11 +651,11 @@ fn armed_engine(shipped: Shipped, log_lane: usize, stamper: Stamper) -> (HotEngi
         strategy_log_sink,
         ui_book_sink,
         ui_event_sink,
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(commands_producer, stamper),
             settings: exec_settings(shipped),
             run_nonce: 0,
-        }),
+        }],
         exposure: ExposureWiring {
             restored: &[],
             sink: exposure_sink,
@@ -1140,11 +1140,11 @@ fn held_command_keeps_its_issue_tick() {
     });
     let (commands_producer, mut lane) = RingBuffer::<ExecLaneItem>::new(2);
     let engine = HotEngine::new(HotEngineSetup {
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(commands_producer, harness.counter.stamper.clone()),
             settings: settings(FeeModel::None, true),
             run_nonce: 0,
-        }),
+        }],
         ..detached_setup(&instruments, Box::new(ThreeBids))
     });
     let (mut input, queue) = RingBuffer::new(32);

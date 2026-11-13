@@ -690,11 +690,11 @@ fn orphan_fill_halts_and_keeps_state() {
         let mut engine = HotEngine::new(HotEngineSetup {
             persistence: Some(persistence),
             ui_event_sink,
-            exec: Some(ExecWiring {
+            exec: vec![ExecWiring {
                 sink: ExecSink::new(commands_producer, Stamper::Off),
                 settings: exec_settings(),
                 run_nonce: RUN_NONCE,
-            }),
+            }],
             ..detached_setup(&instruments, Box::new(probe))
         });
         make_ready(&mut engine, 0);
