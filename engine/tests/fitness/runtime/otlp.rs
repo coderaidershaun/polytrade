@@ -250,9 +250,15 @@ fn down_address() -> SocketAddr {
 
 fn plan_for(collector: SocketAddr) -> OtlpPlan {
     let execution = execution_block_with("sim", SIM_BLOCK);
+    // The exit sweep takes half of the engine's drain deadline first, so the default deadlines
+    // leave the exporter no room to stop.
     let document = format!(
         "{}otlp:\n  collector: {collector}\n",
-        config_with_execution_on(BINANCE_SPOT_SOURCE, &execution)
+        config_with_execution_on(BINANCE_SPOT_SOURCE, &execution).replacen(
+            "engine:\n",
+            "engine:\n  drain_deadline_ms: 10000\n",
+            1
+        )
     );
     let config = Config::<NoParams>::from_yaml(&document).expect("the document is valid");
     let identity = RunIdentity::new(STRATEGY, ENGINE).expect("a valid identity");
@@ -663,6 +669,24 @@ fn a_failed_send_is_dropped_counted_and_never_sent_again() {
         (report.refused, report.rows_failed, report.rows_sent),
         (1, 1, 0),
         "a redirect is a refusal: {report}"
+    );
+    let (mut rows, lanes) = plan_for(down_address()).open();
+    let flood: Vec<RollupRow> = (0..1_025)
+        .map(|total| drop_row(SinkKind::StageSamples, total))
+        .collect();
+    write_rows(&mut rows, &flood);
+    let report = lanes
+        .start()
+        .expect("the OS starts the exporter thread")
+        .stop();
+    assert_eq!(
+        report.rows_dropped, 1,
+        "a rows lane of 1,024 rows drops the row past it and counts it: {report}"
+    );
+    assert_eq!(
+        (report.rows_failed, report.unreached),
+        (1_024, 1),
+        "the rows that the lane held went out in one request: {report}"
     );
 }
 

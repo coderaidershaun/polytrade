@@ -226,7 +226,7 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         );
         let message = remote.to_string();
         assert!(
-            message.contains("otlp.collector") && message.contains("127.0.0.1"),
+            message.contains("otlp.collector") && message.contains("127.0.0.0/8"),
             "{message}"
         );
     }
@@ -246,9 +246,39 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
                     log_deadline_ms: 4000,
                     export_stop_ms: 1000,
                     engine_deadline_ms: 5000,
+                    sweep_ms: 2500,
                 })
             ),
             "{deadline}"
+        );
+    }
+
+    // The default deadlines leave the exporter no room to stop after the exit sweep.
+    #[cfg(feature = "otlp")]
+    {
+        let defaults = format!(
+            "{}otlp:\n  collector: 127.0.0.1:4318\n",
+            sim_document(&state, "")
+        );
+        let deadline = refusal(&defaults, stamped, &state);
+        assert!(
+            matches!(
+                deadline,
+                StartError::Otlp(OtlpError::DrainDeadline {
+                    log_deadline_ms: 2000,
+                    export_stop_ms: 1000,
+                    engine_deadline_ms: 5000,
+                    sweep_ms: 2500,
+                })
+            ),
+            "{deadline}"
+        );
+        let message = deadline.to_string();
+        assert!(
+            message.contains("2500")
+                && message.contains("below 1500")
+                && message.contains("engine.drain_deadline_ms"),
+            "{message}"
         );
     }
 

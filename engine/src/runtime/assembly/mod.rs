@@ -64,6 +64,8 @@ use timer::spawn_timer;
 
 pub use drain::{DrainWatchdog, ForcedExit};
 pub use error::StartError;
+#[cfg(feature = "otlp")]
+pub(crate) use exec::SWEEP_SHARE_OF_DRAIN;
 pub use exec_identity::ExecutionLease;
 pub use exit::{DrainDeadline, DrainFailure, DrainOutcome, Exit, Trigger};
 pub use preflight::{Preflight, StartPlan};
