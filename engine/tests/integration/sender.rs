@@ -98,7 +98,7 @@ fn pinned_sender_sends_without_waiting_for_a_tick() {
             commands,
             stamper: loop_stamper,
             wires,
-            queue: QueueId(0),
+            queue: QueueId::new(0).unwrap(),
             wait: SendWait::new(
                 SenderPlacement::Pinned,
                 tokio::time::interval_at(tokio::time::Instant::now() + TICK, TICK),

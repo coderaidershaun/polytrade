@@ -9,11 +9,40 @@ pub struct InstrumentId(pub u16);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceId(pub u16);
 
+/// One input queue of the hot thread. Its index is below [`MAX_INPUT_QUEUES`] by construction, so a
+/// table of queues never meets an id past its end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct QueueId(pub u8);
+pub struct QueueId(u8);
 
 /// The most input queues the hot thread reads.
 pub(crate) const MAX_INPUT_QUEUES: usize = 20;
+
+impl QueueId {
+    /// # Errors
+    /// [`QueueIdError`] when `index` is not below the cap of input queues.
+    pub const fn new(index: usize) -> Result<QueueId, QueueIdError> {
+        if index < MAX_INPUT_QUEUES {
+            Ok(QueueId(index as u8))
+        } else {
+            Err(QueueIdError {
+                index,
+                max: MAX_INPUT_QUEUES,
+            })
+        }
+    }
+
+    #[inline]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[error("input queue {index} is past the {max} input queues that one hot thread reads")]
+pub struct QueueIdError {
+    pub index: usize,
+    pub max: usize,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AssetId(pub u16);

@@ -38,7 +38,10 @@ type Session = ExecSession<SentEvents>;
 const NOW: LocalTs = LocalTs::from_micros(1_785_000_000_000_000);
 const INTERVAL_US: i64 = 60_000_000;
 const LANE_CAPACITY: usize = 8;
-const EXEC_QUEUE: QueueId = QueueId(3);
+const EXEC_QUEUE: QueueId = match QueueId::new(3) {
+    Ok(queue_id) => queue_id,
+    Err(_) => panic!("queue 3 is below the cap"),
+};
 
 const ISSUE: u64 = 100;
 const POP: u64 = 150;

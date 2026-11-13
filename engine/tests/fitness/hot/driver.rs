@@ -832,7 +832,7 @@ fn backlog_counts_each_queue_and_not_the_popped_message() {
     assert_eq!(driver.step(), Step::Folded);
     harness.metrics.pass(ts(INTERVAL_US), &mut harness.rows);
 
-    let waiting = [QueueId(0), QueueId(1)].map(|queue| harness.rows.backlog_max(queue));
+    let waiting = [0, 1].map(|index| harness.rows.backlog_max(QueueId::new(index).unwrap()));
     assert_eq!(
         waiting,
         [Some(2), Some(3)],
@@ -1197,7 +1197,7 @@ fn held_command_keeps_its_issue_tick() {
         issued_ts_us: held.issued_ts_us,
         client_id,
         kind: CommandKind::Place,
-        queue: QueueId(0),
+        queue: QueueId::new(0).unwrap(),
     });
     harness.pass(INTERVAL_US);
     let stage = |stage: Stage| {

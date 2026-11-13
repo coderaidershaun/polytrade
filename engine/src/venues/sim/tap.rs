@@ -118,7 +118,7 @@ pub(super) fn attach_market_taps(
         let (tap_producer, tap_consumer) = RingBuffer::<MarketTapItem>::new(capacity);
         info!(
             "market tap for input queue {} ({}) allocated {} slots of {} bytes",
-            group.queue_id.0,
+            group.queue_id.index(),
             group.category.as_str(),
             capacity,
             size_of::<MarketTapItem>()

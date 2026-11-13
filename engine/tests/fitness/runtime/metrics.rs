@@ -240,7 +240,7 @@ impl Harness {
             exchange_ts_us: venue_ts(VENUE_MATCH_US),
             request_sent_ts_us: NO_STAMP,
             category,
-            queue: QueueId(0),
+            queue: QueueId::new(0).unwrap(),
             pop_seq: 0,
         }
     }
@@ -253,7 +253,7 @@ impl Harness {
             issued_ts_us: ts(RECEIVED_US),
             client_id: ClientOrderId(7),
             kind: CommandKind::Place,
-            queue: QueueId(1),
+            queue: QueueId::new(1).unwrap(),
         }
     }
 }
@@ -917,7 +917,7 @@ fn arb_stage() -> impl Strategy<Value = RawStage> {
         arb_tick(),
         prop::array::uniform5(arb_stamp()),
         arb_category(),
-        any::<u8>(),
+        0..20_u8,
         any::<u32>(),
     )
         .prop_map(|(pop, done, stamps, category, queue, pop_seq)| RawStage {
@@ -953,7 +953,7 @@ proptest! {
                 exchange_ts_us: VenueTs::from_micros(raw.stamps[3].micros()),
                 request_sent_ts_us: raw.stamps[4],
                 category: raw.category,
-                queue: QueueId(raw.queue),
+                queue: QueueId::new(usize::from(raw.queue)).unwrap(),
                 pop_seq: raw.pop_seq,
             };
             harness.samples.stages.push(sample);

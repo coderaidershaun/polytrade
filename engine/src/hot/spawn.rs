@@ -139,7 +139,7 @@ impl QueueProducer {
         assert!(
             self.producer.push(message).is_ok(),
             "input queue {} filled between its capacity check and its push — single producer violated",
-            self.queue_id.0
+            self.queue_id.index()
         );
     }
 
@@ -166,7 +166,7 @@ impl QueueProducer {
                 let capacity = self.producer.buffer().capacity();
                 hot_error!(
                     "input queue {} (source {}) full at capacity {} — engine cannot keep up",
-                    queue.0,
+                    queue.index(),
                     source.0,
                     capacity
                 );
@@ -179,7 +179,7 @@ impl QueueProducer {
                     .map_or(0, |tap| tap.producer.buffer().capacity());
                 hot_error!(
                     "market tap ring for input queue {} (source {}) full at capacity {} — simulator cannot keep up",
-                    queue.0,
+                    queue.index(),
                     source.0,
                     capacity
                 );
@@ -232,7 +232,7 @@ impl LinkQueueProducer {
         if self.dropped.is_power_of_two() {
             hot_warn!(
                 "link input queue {} full at capacity {} — dropped {} frames from remote peers",
-                self.queue_id.0,
+                self.queue_id.index(),
                 self.producer.buffer().capacity(),
                 self.dropped
             );

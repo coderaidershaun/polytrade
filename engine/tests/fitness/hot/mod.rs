@@ -6,6 +6,7 @@ mod book_reconstruction;
 mod dispatch;
 mod driver;
 mod exec;
+mod ingress;
 mod ingress_order;
 mod money;
 mod position_ledger;

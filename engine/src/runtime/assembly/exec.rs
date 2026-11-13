@@ -110,11 +110,8 @@ pub(super) fn exec_bring_up(mut setup: ExecBringUpSetup<'_>) -> Result<ExecBring
     }
 
     let te_tag = TeTag::of(setup.identity);
-    let edge_stall = DurationUs::from_micros(BackoffCaps::default().max.as_micros() as i64);
-    let lane_capacity = exec_lane_capacity(ExecLaneBudget {
-        spin_interval: setup.spin_interval,
-        edge_stall,
-    });
+    let edge_stall = edge_stall();
+    let lane_capacity = command_lane_capacity(setup.spin_interval);
     let (commands_producer, commands_consumer) = RingBuffer::<ExecLaneItem>::new(lane_capacity);
     info!(
         "execution command lane: {lane_capacity} slots ({} KiB), sized to hold a {}s edge stall at the configured {}ms spin",
@@ -265,4 +262,20 @@ fn settings(execution: &ExecutionConfig, capabilities: &VenueCapabilities) -> Ex
         taker_fee_rate: validated_mantissa(execution.taker_fee_rate),
         holds_reservations_until_settled: capabilities.holds_reservations_until_settled,
     }
+}
+
+/// An edge that cannot reach its venue waits at most the cap of its backoff before it tries again,
+/// so that cap is the longest stall that the command lane must hold.
+fn edge_stall() -> DurationUs {
+    DurationUs::from_micros(BackoffCaps::default().max.as_micros() as i64)
+}
+
+/// The command lane holds the commands of a busy spin and a watermark for each spin of the longest
+/// edge stall. The execution input queue takes the same default, so the edge can answer each
+/// command that the lane holds.
+pub(super) fn command_lane_capacity(spin_interval: DurationUs) -> usize {
+    exec_lane_capacity(ExecLaneBudget {
+        spin_interval,
+        edge_stall: edge_stall(),
+    })
 }

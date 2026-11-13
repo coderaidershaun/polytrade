@@ -3,9 +3,9 @@
 
 use crate::msg::ids::{InstrumentId, QueueId, SourceId};
 use crate::msg::labelled_enum::labelled_enum;
-use crate::runtime::config::{BinanceMarket, PolySeries, Subscriptions, VenueMarket};
+use crate::runtime::config::{BinanceMarket, ConfigError, PolySeries, Subscriptions, VenueMarket};
 
-use super::InstrumentRow;
+use super::{InstrumentRow, queue_id_at};
 
 labelled_enum! {
     /// Binance: 3 categories (one depth carries updates + snapshots). Polymarket: single `Market` channel.
@@ -55,23 +55,25 @@ pub struct ProducerGroup {
 
 // Group order fixes the queue and source ids, and those ids are recorded on every message, so a
 // new order would re-attribute every recorded tape.
-pub(super) fn group_producers(instruments: &[InstrumentRow]) -> Vec<ProducerGroup> {
+pub(super) fn group_producers(
+    instruments: &[InstrumentRow],
+) -> Result<Vec<ProducerGroup>, ConfigError> {
     let binance = [BinanceMarket::Spot, BinanceMarket::Perpetual].map(VenueMarket::Binance);
     let polymarket = poly_series_present(instruments)
         .into_iter()
         .map(VenueMarket::Polymarket);
     let mut groups = Vec::new();
     for market in binance.into_iter().chain(polymarket) {
-        push_market_groups(&mut groups, instruments, market);
+        push_market_groups(&mut groups, instruments, market)?;
     }
-    groups
+    Ok(groups)
 }
 
 fn push_market_groups(
     groups: &mut Vec<ProducerGroup>,
     instruments: &[InstrumentRow],
     market: VenueMarket,
-) {
+) -> Result<(), ConfigError> {
     for &category in ConnectionCategory::serving(market) {
         let subscribed: Vec<InstrumentId> = instruments
             .iter()
@@ -84,12 +86,13 @@ fn push_market_groups(
         let ordinal = groups.len();
         groups.push(ProducerGroup {
             source_id: SourceId(ordinal as u16),
-            queue_id: QueueId(ordinal as u8),
+            queue_id: queue_id_at(ordinal)?,
             market,
             category,
             instruments: subscribed,
         });
     }
+    Ok(())
 }
 
 fn poly_series_present(instruments: &[InstrumentRow]) -> Vec<PolySeries> {

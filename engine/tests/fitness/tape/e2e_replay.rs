@@ -233,7 +233,12 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
 
     let (input_producer, input_consumer) = RingBuffer::<InboundMessage>::new(1024);
     let ingress = IngressQueues::new(vec![input_consumer]);
-    let mut producer = QueueProducer::new(input_producer, fatal.clone(), QueueId(0), SourceId(0));
+    let mut producer = QueueProducer::new(
+        input_producer,
+        fatal.clone(),
+        QueueId::new(0).unwrap(),
+        SourceId(0),
+    );
 
     let (sink, persist_consumer) = persist_ring(4096);
     let (log_sink, _log_consumer) = strategy_log_ring(64);

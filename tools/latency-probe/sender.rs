@@ -103,7 +103,7 @@ impl SenderRun {
                 commands,
                 stamper: sender_stamper,
                 wires,
-                queue: QueueId(0),
+                queue: QueueId::new(0).expect("queue 0 is below the cap of input queues"),
                 wait: SendWait::new(placement, tokio::time::interval(tick)),
             };
             drive_sender(setup, wire, &sending).await;
