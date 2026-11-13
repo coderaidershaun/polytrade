@@ -390,7 +390,8 @@ impl Venue {
             ExecCommand::AmendQty { .. }
             | ExecCommand::ReconcileOrder { .. }
             | ExecCommand::ReconcileOpenOrders { .. }
-            | ExecCommand::CancelPriorRun { .. } => Vec::new(),
+            | ExecCommand::CancelPriorRun { .. }
+            | ExecCommand::ResubscribeStream => Vec::new(),
         }
     }
 

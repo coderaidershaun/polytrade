@@ -282,6 +282,12 @@ struct LaneTransport<'a> {
 
 impl CommandTransport for LaneTransport<'_> {
     async fn hand_over(&mut self, command: ExecCommand) -> Result<Handover, SessionOutcome> {
+        // Polymarket does not document a second subscribe frame on a socket that holds one, so a
+        // new subscription drops the connection, and the reconnect subscribes again.
+        if command == ExecCommand::ResubscribeStream {
+            warn!("polymarket execution was asked for a new order stream — reconnecting");
+            return Err(SessionOutcome::Reconnect);
+        }
         let mut outgoing = Vec::new();
         self.actor.session.core.on_command(
             command,

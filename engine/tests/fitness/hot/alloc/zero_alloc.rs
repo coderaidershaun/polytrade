@@ -876,7 +876,9 @@ impl Venue {
                 recon_seq,
                 ..open_orders_snapshot_end(instrument, ts(when))
             },
-            ExecCommand::CancelOurs { .. } | ExecCommand::CancelPriorRun { .. } => return,
+            ExecCommand::CancelOurs { .. }
+            | ExecCommand::CancelPriorRun { .. }
+            | ExecCommand::ResubscribeStream => return,
         };
         inputs.push(
             Queue::Venue,

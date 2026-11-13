@@ -22,7 +22,8 @@ thread never sees any of it, only stamped messages in queue order.
 **Commands in** (one `rtrb` ring of `ExecLaneItem`, drained by the shared `Sender`, which hands
 each command to the venue's transport and from there to `ExecCore::on_command`):
 `Place`, `Cancel`, `AmendQty` (shrink only — growth is cancel+place), `ReconcileOrder`,
-`ReconcileOpenOrders`, `CancelOurs`, `CancelPriorRun`. These are intents, not venue methods.
+`ReconcileOpenOrders`, `CancelOurs`, `CancelPriorRun`, `ResubscribeStream`. These are intents, not
+venue methods.
 There is deliberately no cancel-all: the engine cannot distinguish foreign orders, so it
 never asks for something it could not account for.
 
@@ -138,6 +139,15 @@ that stays, and one ERROR line names them too. A final exit whose sweep was neve
 because the socket stayed down or nothing answered in time, ends the same way with no ids.
 The edge settles its latch with that failure, and the drain counts it as a failed step, so
 the exit is not graceful.
+
+A new subscription: when a read of open orders shows a change that the order stream never
+reported, the hot side sends `ResubscribeStream`. The core turns it into the same
+`SubscribeUserStream` request that a connect sends, and no order request is sent again for it.
+Binance sends the subscribe again on its session: its WebSocket API accepts a second
+`userDataStream.subscribe.signature` and replaces the filter of the active one, and the answer
+gives `StreamReady` and starts a resync pass. Polymarket documents no second subscribe frame on a
+socket that holds one, so its edge drops the connection, and the reconnect subscribes again. The
+simulator records the subscription and sends nothing.
 
 ## Identity and ownership
 

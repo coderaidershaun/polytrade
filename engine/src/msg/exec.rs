@@ -296,6 +296,9 @@ pub enum ExecCommand {
     },
     /// Cancel prior-run orders.
     CancelPriorRun { instrument: InstrumentId },
+    /// Subscribes to the order stream again, because a read of open orders showed a change that the
+    /// stream never reported. Each venue has its own command lane, so the command names no venue.
+    ResubscribeStream,
 }
 
 impl ExecCommand {

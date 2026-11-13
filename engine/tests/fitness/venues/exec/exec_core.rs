@@ -327,6 +327,13 @@ fn on_command_admission_is_permissive_for_cancels_and_fail_closed_for_places() {
             client_id: ClientOrderId(1234)
         }]
     );
+    let resubscribe_effects =
+        effects_of(|emit| unknown.on_command(ExecCommand::ResubscribeStream, emit));
+    assert_eq!(
+        sent_requests(&resubscribe_effects),
+        [ExecRequest::SubscribeUserStream],
+        "a new subscription of the order stream is asked for as the subscribe that each edge serves"
+    );
 
     let mut storage = ExecCore::with_limits(2, 1);
     effects_of(|emit| storage.on_connected(emit));
