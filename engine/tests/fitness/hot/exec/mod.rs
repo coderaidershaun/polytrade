@@ -11,6 +11,7 @@ mod exec_resync;
 mod exec_window;
 mod fills;
 mod loss_gate;
+mod meter;
 mod order_table;
 mod quoting;
 mod risk_gate;
