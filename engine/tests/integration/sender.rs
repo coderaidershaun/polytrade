@@ -45,6 +45,10 @@ impl CommandTransport for Loopback {
     async fn flush(&mut self) -> Result<(), SessionOutcome> {
         Ok(())
     }
+
+    fn has_reached_wire(&self, _fed: usize) -> bool {
+        false
+    }
 }
 
 /// The write end of a wire-sample ring, from a metrics core whose scale two real anchors set.
