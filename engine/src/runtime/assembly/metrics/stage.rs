@@ -2,7 +2,15 @@
 //! category does not list has no histogram, and a stamp that a sample lacks gives no value.
 
 use crate::msg::latency::{Category, Stage, StageSample, WireSample};
-use crate::msg::time::{TickScale, TsUs};
+use crate::msg::time::{Tick, TickScale, TsUs};
+
+use super::ANCHOR_SPREAD_LIMIT_NS;
+
+/// How far a tick can read before a message stamp of the same moment. The stamp drops what is
+/// below one microsecond, and an anchor places a tick in engine time no closer than its own
+/// microsecond reading and the spread of its two counter reads. A span from a stamp to a tick that
+/// reads negative by no more than this is a wait too short to resolve.
+pub(super) const UNRESOLVED_SPAN_NS: u64 = 1_000 + 1_000 + ANCHOR_SPREAD_LIMIT_NS;
 
 /// Each stage that a sample of each category can time. A pair that is not listed has no
 /// histogram, so the memory of the thread stays a fixed few megabytes.
@@ -90,16 +98,34 @@ pub(super) fn stage_nanos(
             Some(venue_span(matched, sent))
         }
         Stage::WireToMessage => Some(own_span(sample.received_ts_us, sample.queued_ts_us)),
-        Stage::QueueWait => ticked(scale.nanos_since(sample.queued_ts_us, sample.pop_tick)),
+        Stage::QueueWait => Some(stamp_to_tick(scale, sample.queued_ts_us, sample.pop_tick)),
         Stage::Processing => ticked(scale.nanos(sample.pop_tick, sample.done_tick)),
         Stage::MessageToDecision => {
-            ticked(scale.nanos_since(sample.queued_ts_us, sample.done_tick))
+            Some(stamp_to_tick(scale, sample.queued_ts_us, sample.done_tick))
         }
         Stage::OrderRoundTrip => {
             let sent = present(sample.request_sent_ts_us)?;
             Some(own_span(sent, sample.received_ts_us))
         }
         Stage::DecisionToWire | Stage::BankAndLaneWait | Stage::Send => None,
+    }
+}
+
+/// From a message stamp to a tick. A tick that reads before the stamp by no more than
+/// [`UNRESOLVED_SPAN_NS`] is a wait of zero; one further before it ran backward.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the metrics thread anchors ticks to engine time and turns them into time, off the fold"
+)]
+fn stamp_to_tick(scale: &TickScale, stamp: TsUs, tick: Tick) -> Result<u64, Fault> {
+    if let Some(nanos) = scale.nanos_since(stamp, tick) {
+        return Ok(nanos);
+    }
+    let tolerance_us = (UNRESOLVED_SPAN_NS / 1_000) as i64;
+    let earliest = TsUs::from_micros(stamp.micros().saturating_sub(tolerance_us));
+    match scale.nanos_since(earliest, tick) {
+        Some(_) => Ok(0),
+        None => Err(Fault::Backward),
     }
 }
 

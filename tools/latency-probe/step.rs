@@ -12,7 +12,6 @@ use rtrb::RingBuffer;
 use engine::hot::ingress::IngressQueues;
 use engine::hot::metrics::DriverSamples;
 use engine::hot::spawn::{HotDriver, Step};
-use engine::msg::latency::{Category, Stage};
 use engine::msg::time::DurationUs;
 use engine::runtime::metrics::SampleProducers;
 
@@ -45,7 +44,7 @@ impl StepRun {
         let instruments = [rows];
         let engine = rig::engine(&instruments);
         let (metrics, samples) = if self.are_stamps_on {
-            let (metrics, producers, stamper) = MetricsRun::start(&clock);
+            let (metrics, producers, stamper) = MetricsRun::start(&clock, "latency-probe-step")?;
             let SampleProducers {
                 stages, counters, ..
             } = producers;
@@ -120,17 +119,7 @@ impl StepRun {
         let label = if self.are_stamps_on { "step --stamps on" } else { "step --stamps off" };
         tally.print(label, dropped);
         if let Some(metrics) = metrics {
-            let rows = metrics.finish();
-            crate::tally::print_rows(
-                label,
-                &rows,
-                Category::Trade,
-                &[
-                    Stage::QueueWait,
-                    Stage::Processing,
-                    Stage::MessageToDecision,
-                ],
-            );
+            metrics.finish(label)?;
         }
         Ok(())
     }

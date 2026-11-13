@@ -1,16 +1,17 @@
 //! What each timed mode drives: one hot engine on one Binance spot instrument with a strategy that
-//! does nothing, the recorded trades it folds, and a metrics core that a thread of its own drains.
+//! does nothing, the recorded trades it folds, and the engine's own metrics thread and log.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::JoinHandle;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use anyhow::Context;
 
 use rtrb::RingBuffer;
 
 use engine::hot::dispatch::{ExposureWiring, HotEngine, HotEngineSetup};
 use engine::hot::sink::{ExposureSink, StrategyLogSink, UiBookSink, UiEventSink};
 use engine::hot::strategy::{EngineView, Strategy, StrategyConfig};
+use engine::log::{LogConfig, LogHandle};
 use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty};
 use engine::msg::inbound::{InboundMessage, SpinTick, TradeEvent};
 use engine::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, Stamper};
@@ -19,7 +20,7 @@ use engine::runtime::config::{
     TrackerSpec, VenueMarket,
 };
 use engine::runtime::metrics::{
-    LatencyRow, Metrics, MetricsParts, MetricsSetup, RollupRow, RollupSink, SampleProducers,
+    Metrics, MetricsParts, MetricsSetup, MetricsThread, MetricsThreadSetup, SampleProducers,
 };
 use engine::runtime::registry::InstrumentRow;
 use engine::venues::binance::parse::{ParseContext, parse_agg_trade, parse_combined_frame};
@@ -35,12 +36,8 @@ const TRADES_PER_SPIN: usize = 1_000;
 /// they do when a reader falls behind.
 const OUTPUT_RING: usize = 1_024;
 
-/// The wake of the harness's metrics thread, as in the engine.
-const METRICS_POLL: Duration = Duration::from_millis(5);
-
-/// A fresh anchor this often keeps the rate of the counter exact, as in the engine. Without it a
-/// rate taken over two milliseconds drifts by milliseconds over a run.
-const ANCHOR_INTERVAL: DurationUs = DurationUs::from_millis(100);
+/// The engine's log writes its file below the run folder, as a full start does.
+const LOG_DIR: &str = "logs";
 
 /// A strategy that reads nothing and decides nothing, so a run times the engine alone.
 pub struct Silent;
@@ -131,6 +128,10 @@ pub fn message(trades: &[TradeEvent], index: usize, clock: &EngineClock) -> Inbo
         });
     }
     let mut trade = trades[index % trades.len()];
+    // No venue sits behind the harness, so the venue's stamps are the send itself and the venue
+    // stages read zero rather than the age of the recording.
+    trade.exchange_ts_us = at;
+    trade.exchange_sent_ts_us = Some(at);
     trade.received_ts_us = at;
     trade.queued_ts_us = at;
     InboundMessage::Trade(trade)
@@ -158,34 +159,42 @@ pub fn pin(core: Option<usize>) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A metrics core with time passed in, run on a thread of its own as the engine runs it.
+/// The engine's own metrics thread and log, as a full start runs them. The rows of each interval
+/// reach the log as its lines, and the harness prints those lines when the run ends.
 pub struct MetricsRun {
-    stop: Arc<AtomicBool>,
-    join: JoinHandle<Vec<LatencyRow>>,
-}
-
-#[derive(Default)]
-struct Rows(Vec<LatencyRow>);
-
-impl RollupSink for Rows {
-    fn write(&mut self, row: RollupRow) {
-        if let RollupRow::Latency(row) = row {
-            self.0.push(row);
-        }
-    }
+    thread: MetricsThread,
+    log: LogHandle,
+    stem: &'static str,
+    /// How long each log file of the stem was before this run, so only the lines of this run print.
+    logged_before: HashMap<PathBuf, u64>,
 }
 
 impl MetricsRun {
-    /// The write ends of its rings, and the stamper that the samples must read.
-    pub fn start(clock: &EngineClock) -> (MetricsRun, SampleProducers, Stamper) {
+    /// Starts the log, then the metrics thread. Hands back the write ends of the thread's rings and
+    /// the stamper that the samples must read.
+    ///
+    /// # Errors
+    /// When the log or the metrics thread cannot start.
+    pub fn start(
+        clock: &EngineClock,
+        stem: &'static str,
+    ) -> anyhow::Result<(MetricsRun, SampleProducers, Stamper)> {
+        let logged_before = log_lengths(stem);
+        let log = engine::log::init(
+            &LogConfig {
+                dir: PathBuf::from(LOG_DIR),
+                file_stem: stem.into(),
+                ..LogConfig::default()
+            },
+            clock,
+        )
+        .context("the harness cannot start the engine's log")?;
         let stamper = Stamper::Counter(quanta::Clock::new());
         let scale = clock::first_scale(&stamper, clock);
         let clock_source = ClockSource::check(InvariantCounter::detect())
             .unwrap_or_else(|refusal| refusal.fallback());
         let MetricsParts {
-            mut metrics,
-            samples,
-            ..
+            metrics, samples, ..
         } = Metrics::with_rings(MetricsSetup {
             latency: LatencyConfig {
                 interval_secs: 3_600,
@@ -196,36 +205,75 @@ impl MetricsRun {
             scale,
             start_ts_us: clock::now(clock),
         });
-        let stop = Arc::new(AtomicBool::new(false));
-        let thread_stop = Arc::clone(&stop);
-        let thread_clock = clock.clone();
-        let thread_stamper = stamper.clone();
-        let join = std::thread::spawn(move || {
-            let mut rows = Rows::default();
-            let mut next_anchor_ts_us = clock::now(&thread_clock) + ANCHOR_INTERVAL;
-            while !thread_stop.load(Ordering::Acquire) {
-                let now = clock::now(&thread_clock);
-                if now >= next_anchor_ts_us {
-                    let (before, at, after) = clock::anchor_reads(&thread_stamper, &thread_clock);
-                    if let Err(refusal) = metrics.take_anchor(before, at, after) {
-                        eprintln!("{refusal}");
-                    }
-                    next_anchor_ts_us = at + ANCHOR_INTERVAL;
-                }
-                metrics.pass(now, &mut rows);
-                std::thread::sleep(METRICS_POLL);
-            }
-            metrics.finish(clock::now(&thread_clock), &mut rows);
-            rows.0
-        });
-        (MetricsRun { stop, join }, samples, stamper)
+        let thread = MetricsThread::spawn(MetricsThreadSetup {
+            metrics,
+            clock: clock.clone(),
+            stamper: stamper.clone(),
+            core_id: None,
+        })
+        .context("the harness cannot start the metrics thread")?;
+        let run = MetricsRun {
+            thread,
+            log,
+            stem,
+            logged_before,
+        };
+        Ok((run, samples, stamper))
     }
 
-    /// The rows of the one interval that the run filled.
-    pub fn finish(self) -> Vec<LatencyRow> {
-        self.stop.store(true, Ordering::Release);
-        self.join
-            .join()
-            .expect("the metrics thread of the harness does not panic")
+    /// Stops the metrics thread, which closes its interval into the log, drains the log, and prints
+    /// the latency lines of the run.
+    ///
+    /// # Errors
+    /// When the log folder cannot be read.
+    pub fn finish(self, label: &str) -> anyhow::Result<()> {
+        self.thread.stop();
+        self.log.drain();
+        print_latency_lines(label, self.stem, &self.logged_before)
     }
+}
+
+fn log_files(stem: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(LOG_DIR) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(stem))
+        })
+        .collect()
+}
+
+fn log_lengths(stem: &str) -> HashMap<PathBuf, u64> {
+    log_files(stem)
+        .into_iter()
+        .filter_map(|path| Some((path.clone(), std::fs::metadata(&path).ok()?.len())))
+        .collect()
+}
+
+/// A debug build logs to stderr, so only a release build leaves a file to print from.
+fn print_latency_lines(
+    label: &str,
+    stem: &str,
+    logged_before: &HashMap<PathBuf, u64>,
+) -> anyhow::Result<()> {
+    let files = log_files(stem);
+    if files.is_empty() {
+        println!("development {label}: no log file; a debug build writes its log to stderr");
+    }
+    for path in files {
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("cannot read {}", path.display()))?;
+        let start = logged_before.get(&path).copied().unwrap_or(0) as usize;
+        let lines = text.get(start..).unwrap_or("").lines().filter(|line| {
+            line.contains("] engine::runtime::assembly::metrics") || line.contains(" WARN ")
+        });
+        for line in lines {
+            println!("development {label}: {line}");
+        }
+    }
+    Ok(())
 }
