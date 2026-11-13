@@ -20,9 +20,8 @@ use engine::msg::time::DurationUs;
 use engine::runtime::config::{RecordedTables, TableKind};
 
 use crate::engine_support::{
-    LinkedEngine, LinkedSetup, ONE, call_codes, delta_chunk, drain_persist, engine_with_link,
-    idle_at, instrument_row, run_control, running_at, snapshot_pair, spin, tracker_spec_all, trade,
-    ts,
+    LinkedEngine, LinkedSetup, ONE, call_codes, drain_persist, engine_with_link, idle_at,
+    instrument_row, run_control, running_at, snapshot_pair, spin, tracker_spec_all, trade, ts,
 };
 
 /// One `call` feature per callback, so the drained stream encodes exactly which callbacks fired —
@@ -229,73 +228,4 @@ fn a_lower_epoch_assertion_loses_the_race() {
     assert_eq!(linked.control.desired().load(), idle_at(5));
     assert!(linked.control.desired().accept_if_newer(running_at(6)));
     assert_eq!(linked.control.desired().load(), running_at(6));
-}
-
-/// FITNESS: resuming wipes per-instrument derived state and re-arms warmup.
-///
-/// An EwmaVol resident, a tracker series or a Hawkes fit carried across a multi-minute park is
-/// poison: the first post-resume rows would be polluted research data that reads as ordinary. The
-/// `vol` column is the observable — it must be gone after the resume and only return once fresh
-/// samples have rebuilt it.
-#[test]
-fn resuming_resets_derived_state_and_rearms_warmup() {
-    // A real span, because a zero-warmup engine has nothing to re-arm; the stamps below straddle it.
-    const WARMUP_US: i64 = 10;
-    let mut linked = linked_with_warmup(DurationUs::from_micros(WARMUP_US));
-    let (bids, asks) = snapshot_pair(0, &[(100 * ONE, 2 * ONE)], &[(101 * ONE, ONE)], 0);
-    for message in [
-        InboundMessage::new(ts(0), MessageBody::Book(bids)),
-        InboundMessage::new(ts(0), MessageBody::Book(asks)),
-        InboundMessage::new(
-            ts(2),
-            MessageBody::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 5 * ONE)], 2)),
-        ),
-        InboundMessage::new(
-            ts(3),
-            MessageBody::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 9 * ONE)], 3)),
-        ),
-        spin(1, 20),
-    ] {
-        linked.engine.dispatch(&message);
-    }
-    assert!(
-        has_vol(&drain_persist(&mut linked)),
-        "the pre-park spin carries an EwmaVol the suppressed prefix warmed"
-    );
-
-    for message in [
-        run_control(idle_at(1), 30),
-        run_control(running_at(2), 40),
-        spin(2, 45),
-    ] {
-        linked.engine.dispatch(&message);
-    }
-    assert!(
-        call_codes(&drain_persist(&mut linked)).is_empty(),
-        "warmup re-armed on the resume, so the spin 5us later reaches no callback"
-    );
-
-    // A market warms again from its own first message after the resume, never from a spin, so a
-    // market that stays silent after a park does not go live on cold estimators.
-    linked.engine.dispatch(&InboundMessage::new(
-        ts(50),
-        MessageBody::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 7 * ONE)], 50)),
-    ));
-    linked.engine.dispatch(&spin(3, 60));
-    let past_warmup = drain_persist(&mut linked);
-    assert_eq!(
-        call_codes(&past_warmup),
-        vec![6.0],
-        "a spin past the re-armed span calls back again"
-    );
-    assert!(
-        !has_vol(&past_warmup),
-        "the resident EwmaVol was wiped, so no pre-park volatility survives the gap"
-    );
-}
-
-fn has_vol(records: &[PersistRecord]) -> bool {
-    records
-        .iter()
-        .any(|record| matches!(record, PersistRecord::Feature(row) if row.feature == FeatureId(1)))
 }

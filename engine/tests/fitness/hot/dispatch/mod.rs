@@ -7,4 +7,3 @@ mod resume;
 mod spin_steps;
 mod state_digest;
 mod strategy_gate;
-mod strategy_resume;

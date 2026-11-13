@@ -40,9 +40,9 @@ const SUFFIX_STEPS: i64 = 6 * 310;
 /// The park lengths: one spin, ten minutes, and an hour. Nothing arrives during a park.
 const HOLES_US: [i64; 3] = [3_000_000, 600_000_000, 3_600_000_000];
 
-/// Both runs warm for the same span from their first market message, so the gates of the resumed
-/// run must warm again after the resume for the two to agree.
-const WARMUP: DurationUs = DurationUs::from_secs(10);
+/// The warmups: none, so each run calls back from its first message, and a span from the first
+/// market message of each run, so the gates of the resumed run must warm again for the two to agree.
+const WARMUPS: [DurationUs; 2] = [DurationUs::ZERO, DurationUs::from_secs(10)];
 
 const PARK_TS_US: i64 = PREFIX_STEPS * STEP_US;
 
@@ -196,6 +196,14 @@ impl Subject {
         }
     }
 
+    /// Fewer rows than this from a cold suffix would compare nothing that matters.
+    fn least_cold_rows(self) -> usize {
+        match self {
+            Subject::BinanceRecorder | Subject::Probe => 500,
+            Subject::PolymarketRecorder => 300,
+        }
+    }
+
     fn column(self, name: &str) -> FeatureId {
         let index = self
             .columns()
@@ -231,12 +239,12 @@ struct Written {
     frames: Vec<String>,
 }
 
-fn engine(subject: Subject, rows: &[InstrumentRow]) -> LinkedEngine {
+fn engine(subject: Subject, rows: &[InstrumentRow], warmup: DurationUs) -> LinkedEngine {
     engine_with_link(LinkedSetup {
         instruments: rows,
         strategy: subject.strategy(),
         tables: RecordedTables::new(&[TableKind::Features]),
-        warmup: WARMUP,
+        warmup,
     })
 }
 
@@ -391,10 +399,10 @@ fn differing_columns(
 /// Run A folds the prefix, parks, lies idle for `hole_us`, resumes and folds the suffix. Run B
 /// folds only the suffix, cold. Each row of A after the resume equals the row of B, but the
 /// position, and the two write each column the same number of times.
-fn resumed_equals_cold(subject: Subject, hole_us: i64) {
-    let case = format!("{subject:?} after a hole of {hole_us} us");
+fn resumed_equals_cold(subject: Subject, hole_us: i64, warmup: DurationUs) {
+    let case = format!("{subject:?} after a hole of {hole_us} us with a warmup of {warmup:?}");
     let rows = [subject.row()];
-    let mut resumed = engine(subject, &rows);
+    let mut resumed = engine(subject, &rows, warmup);
     let prefix = fold_prefix(subject, &mut resumed);
     let prefix_counts = counts(subject, &prefix.features);
     for name in subject.warmed_columns() {
@@ -425,11 +433,12 @@ fn resumed_equals_cold(subject: Subject, hole_us: i64) {
     while resumed.outbound.pop().is_ok() {}
 
     let mut written = fold_suffix(subject, &mut resumed, resume_ts_us);
-    let mut cold = engine(subject, &rows);
+    let mut cold = engine(subject, &rows, warmup);
     let mut cold_written = fold_suffix(subject, &mut cold, resume_ts_us);
+    let cold_rows = cold_written.features.len() + cold_written.frames.len();
     assert!(
-        !cold_written.features.is_empty() || !cold_written.frames.is_empty(),
-        "{case}: the cold suffix wrote nothing, so the comparison would hold nothing"
+        cold_rows > subject.least_cold_rows(),
+        "{case}: the cold suffix wrote only {cold_rows} rows, so the comparison holds little"
     );
     let first_frame_apart = written
         .frames
@@ -494,7 +503,9 @@ fn resumed_run_equals_cold_run_for_each_strategy() {
         Subject::Probe,
     ] {
         for hole_us in HOLES_US {
-            resumed_equals_cold(subject, hole_us);
+            for warmup in WARMUPS {
+                resumed_equals_cold(subject, hole_us, warmup);
+            }
         }
     }
 }
