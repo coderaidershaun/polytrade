@@ -85,39 +85,42 @@ pub enum FailureVerdict {
     Fatal,
 }
 
+/// Each variant names its request by `target`: the method and the path, as `GET /api/v3/account`.
+/// The query string of a signed request holds its signature, and an error ends in a log line, so no
+/// variant holds the query.
 #[derive(thiserror::Error, Debug)]
 pub enum RestError {
     #[error(transparent)]
     Transport(#[from] TransportError),
     #[error(
-        "binance rate limited {url}: http {status}, retry after {retry_after_secs:?}s (code {code:?}: {message:?})"
+        "binance rate limited {target}: http {status}, retry after {retry_after_secs:?}s (code {code:?}: {message:?})"
     )]
     RateLimited {
-        url: String,
+        target: String,
         status: u16,
         retry_after_secs: Option<u64>,
         code: Option<i64>,
         message: Option<String>,
     },
-    #[error("{url} returned http {status} (binance code {code:?}: {message:?})")]
+    #[error("{target} returned http {status} (binance code {code:?}: {message:?})")]
     Status {
-        url: String,
+        target: String,
         status: u16,
         code: Option<i64>,
         message: Option<String>,
     },
     #[error(
-        "binance refused {url} as unauthorised: http {status} (code {code:?}: {message:?}) — check the key's ip allowlist and that spot trading is enabled on it"
+        "binance refused {target} as unauthorised: http {status} (code {code:?}: {message:?}) — check the key's ip allowlist and that spot trading is enabled on it"
     )]
     Unauthorized {
-        url: String,
+        target: String,
         status: u16,
         code: Option<i64>,
         message: Option<String>,
     },
-    #[error("decoding the response from {url} failed")]
+    #[error("decoding the response from {target} failed")]
     Decode {
-        url: String,
+        target: String,
         #[source]
         source: serde_json::Error,
     },
@@ -278,6 +281,7 @@ impl RestClient {
             Some(signed_query) => format!("{base}?{signed_query}"),
             None => base,
         };
+        let target = format!("{} {}", method_of(plan.method), plan.path);
 
         let mut builder = self.http.request(method_of(plan.method), &url);
         if prepared.signed_query.is_none() {
@@ -287,7 +291,7 @@ impl RestClient {
             builder = builder.header("X-MBX-APIKEY", api_key_header(api_key)?);
         }
 
-        let response = self.http.send(builder, &url).await?;
+        let response = self.http.send(builder, &target).await?;
 
         let status = response.status().as_u16();
         self.observe_limit_headers(response.headers());
@@ -296,20 +300,20 @@ impl RestClient {
             let (code, message) = binance_error(response).await;
             return Err(match status {
                 429 | 418 => RestError::RateLimited {
-                    url,
+                    target,
                     status,
                     retry_after_secs,
                     code,
                     message,
                 },
                 401 | 403 => RestError::Unauthorized {
-                    url,
+                    target,
                     status,
                     code,
                     message,
                 },
                 _ => RestError::Status {
-                    url,
+                    target,
                     status,
                     code,
                     message,
@@ -317,8 +321,8 @@ impl RestClient {
             });
         }
 
-        let body = self.http.body(response, &url).await?;
-        Ok(Fetched { url, body })
+        let body = self.http.body(response, &target).await?;
+        Ok(Fetched { target, body })
     }
 
     fn observe_limit_headers(&mut self, headers: &reqwest::header::HeaderMap) {
@@ -346,7 +350,7 @@ struct Prepared<'a> {
 }
 
 struct Fetched {
-    url: String,
+    target: String,
     body: String,
 }
 
@@ -378,7 +382,7 @@ fn method_of(method: HttpMethod) -> reqwest::Method {
 
 fn decode<T: DeserializeOwned>(fetched: &Fetched) -> Result<T, RestError> {
     serde_json::from_str(&fetched.body).map_err(|source| RestError::Decode {
-        url: fetched.url.clone(),
+        target: fetched.target.clone(),
         source,
     })
 }
