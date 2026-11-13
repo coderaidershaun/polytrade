@@ -175,8 +175,8 @@ fn execution_frames(consumer: &mut Consumer<UiEvent>) -> Vec<ExecHalt> {
 /// following committed delta bumps the per-instrument sequence, a reset then emits an
 /// `AwaitingSnapshot` snapshot with empty sides continuing that same sequence, and a rotation emits
 /// too. Book snapshots also ride ahead of the warmup gate (every dispatch here uses zero warmup, and
-/// [`feed_events_tee_ahead_of_the_warmup_gate`] below pins the non-zero case for the event lane) so
-/// operators watch the book build before the strategy goes live.
+/// `warmup_holds_callbacks_by_message_time` pins the non-zero case for the event lane) so operators
+/// watch the book build before the strategy goes live.
 #[test]
 fn book_snapshot_lifecycle_from_commit_through_reset_and_rotation() {
     let (mut engine, mut books, mut events) = ui_engine(Box::new(Idle), DurationUs::ZERO);
@@ -315,68 +315,6 @@ fn quote_events(consumer: &mut Consumer<UiEvent>) -> Vec<(InstrumentId, VenueTs,
             _ => None,
         })
         .collect()
-}
-
-/// Trade prints and rotations both tee to the event lane ahead of the warmup gate, carrying their
-/// facts faithfully, so an operator watches the tape and the window build before the strategy goes
-/// live. Each case below uses its own fresh engine with a 10s warmup and a single dispatch landing
-/// at t<=1s, so the strategy callback stays suppressed for the whole case — only the tee is under
-/// test.
-#[test]
-fn feed_events_tee_ahead_of_the_warmup_gate() {
-    let warmup = DurationUs::from_secs(10);
-
-    let (mut engine, _books, mut events) = ui_engine(Box::new(Idle), warmup);
-    engine.dispatch(&InboundMessage::new(
-        ts(1_000_000),
-        MessageBody::Trade(trade(0, 100 * ONE, 3 * ONE, Side::Sell, 1_000_000)),
-    ));
-    let evs = drain(&mut events);
-    assert_eq!(evs.len(), 1, "trade: a print tees exactly one Trade event");
-    let UiEvent::Trade {
-        instrument,
-        seq,
-        event_ts_us,
-        aggressor,
-        price,
-        qty,
-    } = evs[0]
-    else {
-        panic!("trade: a print tees a Trade event, got {:?}", evs[0]);
-    };
-    assert_eq!(instrument, InstrumentId(0), "trade: instrument");
-    assert_eq!(seq, 0, "trade: the first event is sequence 0");
-    assert_eq!(
-        event_ts_us,
-        venue_ts(1_000_000),
-        "trade: stamped with the ingress time"
-    );
-    assert_eq!(aggressor, Side::Sell, "trade: aggressor");
-    assert_eq!(price, Price::from_mantissa(100 * ONE), "trade: price");
-    assert_eq!(qty, Qty::from_mantissa(3 * ONE), "trade: qty");
-
-    let (mut engine, _books, mut events) = ui_engine(Box::new(Idle), warmup);
-    engine.dispatch(&rotation(0, 300 * ONE, 600 * ONE, 30));
-    let evs = drain(&mut events);
-    assert_eq!(evs.len(), 1, "rotation: tees exactly one Rotation event");
-    let UiEvent::Rotation {
-        instrument,
-        seq,
-        event_ts_us,
-    } = evs[0]
-    else {
-        panic!(
-            "rotation: a rotation tees a Rotation event, got {:?}",
-            evs[0]
-        );
-    };
-    assert_eq!(instrument, InstrumentId(0), "rotation: instrument");
-    assert_eq!(seq, 0, "rotation: seq");
-    assert_eq!(
-        event_ts_us,
-        venue_ts(30),
-        "rotation: stamped with the rotation's ingress time"
-    );
 }
 
 /// Recording and displaying are ORTHOGONAL operator intents, so a feature tees to the monitor even

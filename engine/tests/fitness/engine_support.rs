@@ -333,7 +333,7 @@ pub const NOMINAL_SPIN: DurationUs = DurationUs::from_micros(100_000);
 
 /// These tests assert on what the strategy sees from the very first message, so they opt out of
 /// warmup rather than inherit the config default and silently assert on a suppressed prefix.
-/// `warmup_suppresses_callbacks_by_message_time` covers the suppressing engine.
+/// `warmup_holds_callbacks_by_message_time` covers the suppressing engine.
 pub fn engine_without_warmup(
     instruments: &[InstrumentRow],
     strategy: Box<dyn Strategy>,
