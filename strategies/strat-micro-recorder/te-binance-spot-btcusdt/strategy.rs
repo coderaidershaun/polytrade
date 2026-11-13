@@ -46,10 +46,10 @@ const KYLES_LAMBDA: KylesLambdaSpec = KylesLambdaSpec {
     min_sign_fraction: 0.2,
 };
 
-const HAWKES: HawkesChoice = HawkesChoice {
-    max_events: HAWKES_MAX_EVENTS,
-    min_events: 100,
-    refit_arrivals: HAWKES_REFIT_ARRIVALS,
+const HAWKES: HawkesChoice = match HawkesChoice::new(HAWKES_MAX_EVENTS, 100, HAWKES_REFIT_ARRIVALS)
+{
+    Ok(choice) => choice,
+    Err(_) => panic!("the recorder's hawkes choice breaks a rule of HawkesChoice::new"),
 };
 
 const HAWKES_MAX_EVENTS: usize = 1024;
