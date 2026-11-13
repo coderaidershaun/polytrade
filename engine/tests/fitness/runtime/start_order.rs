@@ -81,9 +81,11 @@ fn identity() -> RunIdentity {
 }
 
 /// A simulated Binance spot engine whose hot thread, housekeeping threads and senders each have a
-/// core, with each folder below `root`.
+/// core, with each folder below `root`. With the OTLP export, it exports to a port where no
+/// collector listens, so a refusal after the log started has open lanes to close.
 fn document(root: &Path) -> String {
     let execution = execution_block_with("sim", SIM_BLOCK);
+    let otlp = if cfg!(feature = "otlp") { "otlp:\n  collector: 127.0.0.1:9\n" } else { "" };
     format!(
         "engine:
   hot_core_id: {HOT_CORE}
@@ -107,7 +109,7 @@ logging:
   drain_deadline_ms: 500
 exposure:
   dir: \"{root}/state\"
-",
+{otlp}",
         root = root.display()
     )
 }

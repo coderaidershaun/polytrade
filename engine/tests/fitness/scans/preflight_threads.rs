@@ -5,7 +5,11 @@ use std::path::Path;
 
 use super::log_lane_ownership::without_comments_and_literals;
 
-const CHECKED: [&str; 2] = ["src/runtime/assembly/preflight.rs", "src/venues/port.rs"];
+const CHECKED: [&str; 3] = [
+    "src/runtime/assembly/preflight.rs",
+    "src/runtime/otlp/plan.rs",
+    "src/venues/port.rs",
+];
 
 const SPAWNS: [&str; 7] = [
     "thread::Builder",
