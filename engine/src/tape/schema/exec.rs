@@ -1,8 +1,8 @@
-//! The schemas of real-money outcomes: order transitions and fills, the audit trail. A venue id is
-//! nullable, because an order that was never acknowledged has none.
+//! The schemas of the audit trail of real money: order transitions, fills, and the incidents that
+//! the engine could not book. A venue id is nullable, because an unacknowledged order has none.
 
 use crate::msg::exec::{Liquidity, OrderStyle, RejectClass};
-use crate::msg::persist::{FillRow, OrderRow};
+use crate::msg::persist::{FillRow, IncidentRow, OrderRow};
 use crate::msg::time::LocalTs;
 
 use super::TableRow;
@@ -73,6 +73,25 @@ impl TableRow for FillRow {
         Column::Mantissa("booked_quote", |row| row.booked_quote),
         Column::Mantissa("commission", |row| row.commission),
         Column::U16("commission_asset_id", |row| row.commission_asset.0),
+    ];
+
+    fn partition_ts(&self) -> LocalTs {
+        self.received_ts_us
+    }
+}
+
+impl TableRow for IncidentRow {
+    const NAME: &'static str = "incidents";
+    const COLUMNS: &'static [Column<Self>] = &[
+        Column::VenueTs("exchange_ts_us", |row| row.exchange_ts_us),
+        Column::Ts("received_ts_us", |row| row.received_ts_us),
+        Column::Text("kind", |row| row.kind.as_str()),
+        Column::U16("instrument_id", |row| row.instrument.0),
+        Column::NullableU64("client_order_id", |row| row.client_id.map(|id| id.0)),
+        Column::VenueId("trade_id", |row| row.trade_id.map(|id| id.0)),
+        Column::Mantissa("qty", |row| row.qty.mantissa()),
+        Column::Mantissa("amount", |row| row.amount),
+        Column::NullableVenueTs("window_close_ts_us", |row| row.window_close_ts_us),
     ];
 
     fn partition_ts(&self) -> LocalTs {

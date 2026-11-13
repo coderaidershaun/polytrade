@@ -80,13 +80,15 @@ impl Actions {
         self.features.push(row);
     }
 
-    /// Gate non-tee rows: config authority. Filtered row ≠ capacity drop, uncounted.
+    /// A row of a table that `strategy.tables` does not name is filtered, which is not a drop and is
+    /// not counted. An incident passes whatever the config names.
     #[inline]
     pub(crate) fn push_persist(&mut self, record: PersistRecord) {
-        if !record
-            .table()
-            .is_some_and(|table| self.tables.contains(table))
-        {
+        let is_recorded = match record.table() {
+            Some(table) => self.tables.contains(table),
+            None => matches!(record, PersistRecord::Incident(_)),
+        };
+        if !is_recorded {
             return;
         }
         if self.persist.len() == PERSIST_LANE_CAPACITY {

@@ -1,5 +1,5 @@
-//! Persistence records: POD Copy union (i64 mantissas, _ts_us stamps, no strings). Plus RotationRow
-//! (owned, strings, off hot path).
+//! The records that the hot thread hands the tape writer: fixed-size copies with exact mantissas and
+//! stamps, so a push never allocates. A rotation row carries text, so it travels apart.
 
 use crate::hot::exec::QuoteLevel;
 use crate::msg::exec::{Liquidity, OrderStyle, Provenance, RejectClass};
@@ -24,11 +24,16 @@ pub enum PersistRecord {
     LinkFrame(LinkFrameRow),
     Order(OrderRow),
     Fill(FillRow),
+    /// Written whenever the tape exists: no config can switch off the record of money that the
+    /// engine could not place in its state.
+    Incident(IncidentRow),
     /// Seal all files (ring-ordered).
     SealAll,
 }
 
 impl PersistRecord {
+    /// The table that `strategy.tables` names for this record, and `None` for a record that no
+    /// config can switch off.
     #[inline]
     pub fn table(&self) -> Option<TableKind> {
         match self {
@@ -39,7 +44,7 @@ impl PersistRecord {
             PersistRecord::LinkFrame(_) => Some(TableKind::LinkFrames),
             PersistRecord::Order(_) => Some(TableKind::Orders),
             PersistRecord::Fill(_) => Some(TableKind::Fills),
-            PersistRecord::SealAll => None,
+            PersistRecord::Incident(_) | PersistRecord::SealAll => None,
         }
     }
 }
@@ -225,6 +230,43 @@ pub struct FillRow {
     // Not quote asset; wrong forever if incorrect.
     pub commission: i64,
     pub commission_asset: AssetId,
+    pub exchange_ts_us: VenueTs,
+    pub received_ts_us: LocalTs,
+}
+
+labelled_enum! {
+    /// Why money that the engine could not place in its state left a record.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum IncidentKind {
+        /// The filled quantity of an order rose by more than its report's own quantity, so the fees
+        /// of the trades in between are unknown.
+        FeeGap = "fee_gap",
+        StrandedPosition = "stranded_position",
+        /// A fill of an order of this run that holds no slot. The ledger does not book it.
+        OrphanFill = "orphan_fill",
+        /// A fee that the ledger did not book: its asset has no row, or the engine cannot tell
+        /// whether the fee of its trade was booked before.
+        UnbookedFee = "unbooked_fee",
+    }
+    pub fn as_str;
+}
+
+/// One money event that the engine could not place in its state, with the amounts that a person
+/// needs to book it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IncidentRow {
+    pub kind: IncidentKind,
+    pub instrument: InstrumentId,
+    /// `None` for a stranded position, which no one order holds.
+    pub client_id: Option<ClientOrderId>,
+    pub trade_id: Option<TradeId>,
+    /// The unexplained step of a fee gap, the filled quantity of an orphan fill, the position of a
+    /// stranded position, and the report's own quantity of an unbooked fee.
+    pub qty: Qty,
+    /// The basis of a stranded position, as a quote mantissa, and an unbooked fee, as a mantissa of
+    /// the asset that the fill row of its trade names. Zero for the other kinds.
+    pub amount: i64,
+    pub window_close_ts_us: Option<VenueTs>,
     pub exchange_ts_us: VenueTs,
     pub received_ts_us: LocalTs,
 }

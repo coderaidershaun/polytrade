@@ -21,6 +21,8 @@ pub(in crate::tape) enum Column<R> {
     /// Nullable: absent means the venue never assigned one, and a zero would read as a real id.
     VenueId(&'static str, fn(&R) -> Option<i64>),
     QuoteLevel(&'static str, fn(&R) -> Option<u8>),
+    NullableU64(&'static str, fn(&R) -> Option<u64>),
+    NullableVenueTs(&'static str, fn(&R) -> Option<VenueTs>),
     I32(&'static str, fn(&R) -> i32),
     U16(&'static str, fn(&R) -> u16),
     U32(&'static str, fn(&R) -> u32),
@@ -56,6 +58,8 @@ impl<R> Column<R> {
             }
             Column::VenueId(name, _) => Field::new(*name, DataType::Int64, true),
             Column::QuoteLevel(name, _) => Field::new(*name, DataType::UInt8, true),
+            Column::NullableU64(name, _) => Field::new(*name, DataType::UInt64, true),
+            Column::NullableVenueTs(name, _) => Field::new(*name, DataType::Int64, true),
             Column::I32(name, _) => Field::new(*name, DataType::Int32, false),
             Column::U16(name, _) => Field::new(*name, DataType::UInt16, false),
             Column::U32(name, _) => Field::new(*name, DataType::UInt32, false),
@@ -79,6 +83,10 @@ impl<R> Column<R> {
             }
             Column::VenueId(_, get) => Arc::new(Int64Array::from_iter(rows.iter().map(get))),
             Column::QuoteLevel(_, get) => Arc::new(UInt8Array::from_iter(rows.iter().map(get))),
+            Column::NullableU64(_, get) => Arc::new(UInt64Array::from_iter(rows.iter().map(get))),
+            Column::NullableVenueTs(_, get) => Arc::new(Int64Array::from_iter(
+                rows.iter().map(|row| get(row).map(VenueTs::micros)),
+            )),
             Column::I32(_, get) => Arc::new(Int32Array::from_iter_values(rows.iter().map(get))),
             Column::U16(_, get) => Arc::new(UInt16Array::from_iter_values(rows.iter().map(get))),
             Column::U32(_, get) => Arc::new(UInt32Array::from_iter_values(rows.iter().map(get))),

@@ -232,6 +232,19 @@ fn emit_counters(drops: &[(SinkKind, u64)], counts: &RunCounts, budget_breaches:
         ],
     );
     line.push_count("klines_unconfigured", counters.klines_unconfigured);
+    line.push_group(
+        "incidents",
+        &[
+            ("fee_gaps", counters.fee_gaps),
+            ("stranded_positions", counters.stranded_positions),
+            ("orphan_fills", counters.orphan_fills),
+            ("unbooked_fees", counters.unbooked_fees),
+            (
+                "orphan_events_without_fill",
+                counters.orphan_events_without_fill,
+            ),
+        ],
+    );
     line.push_count("idle_parks", counts.idle_parks);
     line.push_count("budget_breaches", budget_breaches);
     let interval_drops: Vec<(&str, u64)> = drops

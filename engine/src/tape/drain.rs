@@ -9,8 +9,8 @@ use rtrb::Consumer;
 use tokio::sync::mpsc;
 
 use crate::msg::persist::{
-    BookEventRow, FeatureRow, FillRow, KlineRow, LinkFrameRow, OrderRow, PersistRecord,
-    RotationRow, TradeRow,
+    BookEventRow, FeatureRow, FillRow, IncidentRow, KlineRow, LinkFrameRow, OrderRow,
+    PersistRecord, RotationRow, TradeRow,
 };
 use crate::msg::time::wall_clock_now;
 use crate::runtime::config::{ExecutionMode, RecordedTables, TableKind};
@@ -57,6 +57,7 @@ impl PersistWriter {
             link_frames: writers.named(TableKind::LinkFrames),
             orders: writers.named(TableKind::Orders),
             fills: writers.named(TableKind::Fills),
+            incidents: writers.always_written(),
             rotations: writers.always_written(),
             rotations_rx: rotations,
             unnamed_table_rows: 0,
@@ -90,10 +91,10 @@ impl TableWriterBuilder<'_> {
         self.tables.contains(table).then(|| self.writer())
     }
 
-    /// Venue lineage: it says which market each `instrument_id` stood for over which window, so
-    /// every other table's rows are unattributable without it. `TableKind` names it nowhere, and so
-    /// `strategy.tables` has no way to switch it off.
-    fn always_written(&self) -> TableWriter<RotationRow> {
+    /// For the tables that `TableKind` names nowhere, so `strategy.tables` has no way to switch them
+    /// off: the venue lineage, without which no row says which market its `instrument_id` stood
+    /// for, and the incidents, the record of money that the engine could not book.
+    fn always_written<R: TableRow>(&self) -> TableWriter<R> {
         self.writer()
     }
 
@@ -129,6 +130,7 @@ struct WriterState {
     link_frames: Option<TableWriter<LinkFrameRow>>,
     orders: Option<TableWriter<OrderRow>>,
     fills: Option<TableWriter<FillRow>>,
+    incidents: TableWriter<IncidentRow>,
     rotations: TableWriter<RotationRow>,
     rotations_rx: mpsc::Receiver<RotationRow>,
     /// Rows for unnamed tables (hot path gates, so counts direct calls only; loud not fatal).
@@ -213,6 +215,7 @@ impl WriterState {
             PersistRecord::LinkFrame(row) => push_row(&mut self.link_frames, row)?,
             PersistRecord::Order(row) => push_row(&mut self.orders, row)?,
             PersistRecord::Fill(row) => push_row(&mut self.fills, row)?,
+            PersistRecord::Incident(row) => self.incidents.push(row).map(|()| true)?,
             // Ring-ordered (not latch) -> banked records reach writer before pop.
             PersistRecord::SealAll => return self.seal_all(),
         };
@@ -244,6 +247,7 @@ impl WriterState {
         seal.observe_table(&mut self.link_frames);
         seal.observe_table(&mut self.orders);
         seal.observe_table(&mut self.fills);
+        seal.observe(self.incidents.seal());
         seal.observe(self.rotations.seal());
         seal.into_result()
     }

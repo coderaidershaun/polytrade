@@ -13,6 +13,7 @@ use crate::runtime::config::MAX_QUOTE_LEVELS;
 use crate::runtime::registry::InstrumentRow;
 
 use super::account::{AccountTable, Balance};
+use super::audit::IncidentCounts;
 use super::budget::{BudgetMeter, OrderBudget};
 use super::capacity::ExecCapacity;
 use super::desired::QuoteLevel;
@@ -138,6 +139,7 @@ pub struct ExecEngine {
     pub(super) settings: ExecSettings,
     pub(super) spins_since_exec_event: u32,
     pub(super) recon_seq: u64,
+    pub(super) incidents: IncidentCounts,
     /// The PnL baseline at the first honest valuation; the session loss gate compares
     /// against this. `None` until that first mark.
     pub(super) pnl_at_baseline: Vec<Option<Notional>>,
@@ -153,7 +155,8 @@ digest_fields! {
 digest_fields! {
     ExecEngine {
         orders, prior_orders, account, pending, sink, halt, readiness, refusals, reject_streak,
-        budget, instruments, settings, spins_since_exec_event, recon_seq, pnl_at_baseline,
+        budget, instruments, settings, spins_since_exec_event, recon_seq, incidents,
+        pnl_at_baseline,
     }
 }
 
@@ -205,6 +208,7 @@ impl ExecEngine {
             settings: setup.settings,
             spins_since_exec_event: 0,
             recon_seq: 0,
+            incidents: IncidentCounts::default(),
             pnl_at_baseline: vec![None; setup.instruments.len()],
         }
     }
@@ -212,6 +216,11 @@ impl ExecEngine {
     #[inline]
     pub(crate) fn commands_banked(&self) -> u64 {
         self.pending.banked_total()
+    }
+
+    #[inline]
+    pub(crate) fn incident_counts(&self) -> IncidentCounts {
+        self.incidents
     }
 
     pub fn drain_refusals(&mut self, sink: &mut impl FnMut(&OrderReject)) {

@@ -43,6 +43,7 @@ impl HotEngine {
 
     /// The drop and event counts since the start of the run, which the hot loop reads once a spin.
     pub fn counters(&self) -> EngineCounters {
+        let incidents = self.state.exec.incident_counts();
         EngineCounters {
             persist_dropped: self.state.persist_dropped(),
             book_trimmed: self.state.books.iter().map(Book::trimmed_count).sum(),
@@ -68,6 +69,11 @@ impl HotEngine {
             ui_events_dropped: self.ui.dropped_events(),
             link_dropped: self.dropped_link_frames(),
             exposure_superseded: self.state.exposure.superseded(),
+            fee_gaps: incidents.fee_gaps,
+            stranded_positions: incidents.stranded_positions,
+            orphan_fills: incidents.orphan_fills,
+            unbooked_fees: incidents.unbooked_fees,
+            orphan_events_without_fill: incidents.orphan_events_without_fill,
         }
     }
 }

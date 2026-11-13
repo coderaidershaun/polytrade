@@ -1,6 +1,7 @@
-//! Slot transitions -> orders/fills rows. Banks all transitions incl. engine-driven
-//! (send/timeout/recon). Gate + drop counter via strategy bank.
+//! The audit trail of the execution engine: a row for each transition of a slot, the engine's own
+//! included, a row for each fill, and a counted row for each incident.
 
+use crate::hot::digest::digest_by_hash;
 use crate::hot::strategy::Actions;
 use crate::msg::exec::{ExecEvent, ExecKind, Provenance, RejectClass};
 use crate::msg::persist::{FillRow, OrderLifecycle, OrderRow, OrderTransition, PersistRecord};
@@ -19,6 +20,19 @@ struct OrderAudit<'a> {
     exchange_ts_us: VenueTs,
     received_ts_us: LocalTs,
 }
+
+/// The incidents of each kind that the fold recorded, and the events of its own orders that held no
+/// slot and no fill, which are refused with a count and no record.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub(crate) struct IncidentCounts {
+    pub(crate) fee_gaps: u64,
+    pub(crate) stranded_positions: u64,
+    pub(crate) orphan_fills: u64,
+    pub(crate) unbooked_fees: u64,
+    pub(crate) orphan_events_without_fill: u64,
+}
+
+digest_by_hash!(IncidentCounts);
 
 /// A transition the engine made on its own, so there is no venue answer, no reject and no exchange
 /// stamp.

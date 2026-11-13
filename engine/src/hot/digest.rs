@@ -12,8 +12,9 @@ use crate::msg::ids::{
 use crate::msg::inbound::{Level, TradeEvent};
 use crate::msg::latency::LaneDrops;
 use crate::msg::persist::{
-    BookEventKind, BookEventRow, FeatureId, FeatureRow, FillRow, KlineRow, LinkFrameRow,
-    LinkRowKind, OrderLifecycle, OrderRow, OrderTransition, PersistRecord, TradeRow,
+    BookEventKind, BookEventRow, FeatureId, FeatureRow, FillRow, IncidentKind, IncidentRow,
+    KlineRow, LinkFrameRow, LinkRowKind, OrderLifecycle, OrderRow, OrderTransition, PersistRecord,
+    TradeRow,
 };
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{DurationUs, FoldTime, LocalTs, VenueTs};
@@ -250,6 +251,7 @@ digest_by_hash!(
     LinkRowKind,
     OrderTransition,
     OrderLifecycle,
+    IncidentKind,
     InstrumentExposure,
 );
 
@@ -284,6 +286,12 @@ digest_fields! {
         exchange_ts_us, received_ts_us,
     }
 }
+digest_fields! {
+    IncidentRow {
+        kind, instrument, client_id, trade_id, qty, amount, window_close_ts_us, exchange_ts_us,
+        received_ts_us,
+    }
+}
 digest_fields! { OutboundLink { topic, payload } }
 digest_fields! { ExposureSnapshot { instruments, len, seq, exposure_quote, emitted_ts_us } }
 
@@ -298,6 +306,7 @@ impl Digest for PersistRecord {
             PersistRecord::Order(row) => digester.variant(5, row),
             PersistRecord::Fill(row) => digester.variant(6, row),
             PersistRecord::SealAll => digester.variant(7, &()),
+            PersistRecord::Incident(row) => digester.variant(8, row),
         }
     }
 }
