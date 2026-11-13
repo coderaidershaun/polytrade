@@ -548,6 +548,11 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 115] = [
         &["std::time::SystemTime::now"],
     ),
     (
+        "engine/src/venues/edge/funnel.rs",
+        "send",
+        &["engine::msg::time::EngineClock::now"],
+    ),
+    (
         "engine/src/venues/edge/mod.rs",
         "open_exit",
         &["engine::msg::time::EngineClock::now"],
@@ -560,11 +565,6 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 115] = [
     (
         "engine/src/venues/edge/mod.rs",
         "next_attempt_at",
-        &["engine::msg::time::EngineClock::now"],
-    ),
-    (
-        "engine/src/venues/edge/mod.rs",
-        "send",
         &["engine::msg::time::EngineClock::now"],
     ),
     (

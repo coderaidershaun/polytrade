@@ -12,6 +12,7 @@
 pub mod backoff;
 pub(crate) mod chunk;
 pub mod decode;
+mod funnel;
 pub mod http;
 pub(crate) mod lane;
 pub mod rest_quiet;
@@ -27,9 +28,8 @@ use futures_util::StreamExt;
 
 use crate::hot::sink::SampleSink;
 use crate::hot::spawn::{QueueProducer, SimTapGate};
-use crate::msg::exec::{AccountChunk, CancelReason, ExecEvent, ExecLaneItem};
+use crate::msg::exec::{CancelReason, ExecLaneItem};
 use crate::msg::ids::QueueId;
-use crate::msg::inbound::{InboundMessage, MessageBody};
 use crate::msg::latency::WireSample;
 use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, EngineClock, LocalTs, Stamper};
@@ -41,10 +41,12 @@ use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::sender::{SendWait, Sender, SenderSetup};
 use crate::venues::edge::socket::{Reader, Writer, connect};
 use crate::venues::exec::{
-    EdgeHandle, EngineIdentity, EventSink, ExecSessionError, ExecStop, ExitPlan, MirroredOrder,
+    EdgeHandle, EngineIdentity, ExecSessionError, ExecStop, ExitPlan, MirroredOrder,
     SessionOutcome, SweepFailure, halt_on_session_error,
 };
 use crate::{info, warn};
+
+pub(crate) use funnel::EventFunnel;
 
 // Checks the exit latches and deadlines often enough that a stop is acted on within milliseconds.
 pub(crate) const HOUSEKEEPING: Duration = Duration::from_millis(20);
@@ -272,46 +274,6 @@ impl EdgeControl {
     pub(crate) fn next_attempt_at(&self, attempt: u32) -> LocalTs {
         let delay = self.backoff.delay(attempt);
         self.clock.now() + DurationUs::from_micros(delay.as_micros() as i64)
-    }
-}
-
-/// The one path from a venue edge to the hot thread. Every message is stamped as it is queued,
-/// because the hot side measures its own lateness against that stamp and cannot take it later.
-pub(crate) struct EventFunnel {
-    producer: QueueProducer,
-    clock: EngineClock,
-}
-
-impl EventFunnel {
-    pub(crate) fn new(producer: QueueProducer, clock: EngineClock) -> Self {
-        Self { producer, clock }
-    }
-
-    pub(crate) fn send_account(&mut self, received_ts_us: LocalTs, chunks: Vec<AccountChunk>) {
-        for chunk in chunks {
-            self.send(InboundMessage::new(
-                received_ts_us,
-                MessageBody::Account(chunk),
-            ));
-        }
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the session chassis stamps queued time and paces reconnects by wall time"
-    )]
-    pub(crate) fn send(&mut self, mut message: InboundMessage) {
-        message.header.queued_ts_us = self.clock.now();
-        self.producer.push(message);
-    }
-}
-
-impl EventSink for EventFunnel {
-    fn send_exec(&mut self, received_ts_us: LocalTs, event: ExecEvent) {
-        self.send(InboundMessage::new(
-            received_ts_us,
-            MessageBody::Exec(event),
-        ));
     }
 }
 
