@@ -8,9 +8,9 @@ use crate::msg::time::LocalTs;
 /// Exponential kernel parameters, every rate per second.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HawkesParams {
-    pub mu: f64,
-    pub alpha: f64,
-    pub beta: f64,
+    mu: f64,
+    alpha: f64,
+    beta: f64,
 }
 
 impl HawkesParams {
@@ -28,6 +28,21 @@ impl HawkesParams {
         );
         assert!(beta > 0.0, "hawkes decay must be positive, got {beta}");
         Self { mu, alpha, beta }
+    }
+
+    #[inline]
+    pub fn mu_per_sec(&self) -> f64 {
+        self.mu
+    }
+
+    #[inline]
+    pub fn alpha_per_sec(&self) -> f64 {
+        self.alpha
+    }
+
+    #[inline]
+    pub fn beta_per_sec(&self) -> f64 {
+        self.beta
     }
 
     #[inline]

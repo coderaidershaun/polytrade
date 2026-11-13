@@ -60,7 +60,11 @@ pub(crate) struct ExpSimulation {
 
 impl ExpSimulation {
     pub(crate) fn run(&self) -> Vec<LocalTs> {
-        let HawkesParams { mu, alpha, beta } = self.params;
+        let (mu, alpha, beta) = (
+            self.params.mu_per_sec(),
+            self.params.alpha_per_sec(),
+            self.params.beta_per_sec(),
+        );
         let horizon = self.horizon.to_secs();
         let mut generator = Lcg(self.seed);
         let mut times = Vec::new();

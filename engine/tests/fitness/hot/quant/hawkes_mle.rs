@@ -14,9 +14,9 @@ fn fit_recovers_exponential_params_and_warm_starts() {
     let cold = fitter.fit(&events, now).expect("cold fit");
     assert!(cold.converged, "cold fit hit max_iter");
     for (fitted, expected, name) in [
-        (cold.mu, truth.mu, "mu"),
-        (cold.alpha, truth.alpha, "alpha"),
-        (cold.beta, truth.beta, "beta"),
+        (cold.mu, truth.mu_per_sec(), "mu"),
+        (cold.alpha, truth.alpha_per_sec(), "alpha"),
+        (cold.beta, truth.beta_per_sec(), "beta"),
     ] {
         assert!(
             (fitted / expected - 1.0).abs() < 0.25,
@@ -62,7 +62,11 @@ fn fit_recovers_exponential_params_and_warm_starts() {
 /// Σ ln λ(t_i) − ∫λ from the first event to `end`, with λ(t) = μ + α Σ_{j<i} e^{−β(t − t_j)}. Each
 /// kernel term integrates to (α/β)(1 − e^{−β(end − t_j)}).
 fn direct_log_likelihood(times: &[f64], end: f64, params: HawkesParams) -> f64 {
-    let HawkesParams { mu, alpha, beta } = params;
+    let (mu, alpha, beta) = (
+        params.mu_per_sec(),
+        params.alpha_per_sec(),
+        params.beta_per_sec(),
+    );
     let log_sum: f64 = times
         .iter()
         .enumerate()

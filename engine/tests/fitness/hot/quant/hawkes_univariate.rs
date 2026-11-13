@@ -17,11 +17,11 @@ fn recursion_matches_the_direct_kernel_sum_and_relaxes_to_baseline() {
     }
 
     let now = 5.0;
-    let direct = params.mu
-        + params.alpha
+    let direct = params.mu_per_sec()
+        + params.alpha_per_sec()
             * times
                 .iter()
-                .map(|time| (-params.beta * (now - time)).exp())
+                .map(|time| (-params.beta_per_sec() * (now - time)).exp())
                 .sum::<f64>();
     let recursive = hawkes.intensity(ts(now));
     assert!(
@@ -29,7 +29,7 @@ fn recursion_matches_the_direct_kernel_sum_and_relaxes_to_baseline() {
         "recursion {recursive} vs direct {direct}"
     );
 
-    assert!((hawkes.intensity(ts(65.0)) - params.mu).abs() < 1e-9);
+    assert!((hawkes.intensity(ts(65.0)) - params.mu_per_sec()).abs() < 1e-9);
 
     let mut reseeded = UnivariateHawkes::new(params);
     reseeded.reseed_from(&events);
@@ -65,11 +65,11 @@ fn a_late_stamp_reads_the_intensity_of_a_reseed() {
     );
 
     // The window holds the late event at 10.5 s, so its kernel decays once, from there.
-    let direct = params.mu
-        + params.alpha
+    let direct = params.mu_per_sec()
+        + params.alpha_per_sec()
             * [10.0, 10.5, 10.5]
                 .iter()
-                .map(|time| (-params.beta * (11.0 - time)).exp())
+                .map(|time| (-params.beta_per_sec() * (11.0 - time)).exp())
                 .sum::<f64>();
     assert!(
         ((late - direct) / direct).abs() < 1e-12,
