@@ -133,7 +133,8 @@ struct WriterState {
     incidents: TableWriter<IncidentRow>,
     rotations: TableWriter<RotationRow>,
     rotations_rx: mpsc::Receiver<RotationRow>,
-    /// Rows for unnamed tables (hot path gates, so counts direct calls only; loud not fatal).
+    /// Rows of tables that the config does not name. The bank filters them first, so only a row
+    /// sent past it counts. A warning, never fatal.
     unnamed_table_rows: u64,
     retention: Retention,
 }
@@ -216,7 +217,7 @@ impl WriterState {
             PersistRecord::Order(row) => push_row(&mut self.orders, row)?,
             PersistRecord::Fill(row) => push_row(&mut self.fills, row)?,
             PersistRecord::Incident(row) => self.incidents.push(row).map(|()| true)?,
-            // Ring-ordered (not latch) -> banked records reach writer before pop.
+            // It comes through the ring, so each record banked before it is already here.
             PersistRecord::SealAll => return self.seal_all(),
         };
         if let (false, Some(table)) = (landed, record.table()) {
@@ -225,7 +226,7 @@ impl WriterState {
         Ok(())
     }
 
-    /// Power-of-two WARNs (find misconfiguration, don't flood).
+    /// Warns at each power of two, so a wrong config shows without a flood of lines.
     #[cold]
     fn count_unnamed_table_row(&mut self, table: TableKind) {
         self.unnamed_table_rows += 1;
@@ -253,7 +254,7 @@ impl WriterState {
     }
 }
 
-/// false if table not in strategy.tables (no writer exists).
+/// `false` when `strategy.tables` does not name the table, so it has no writer.
 fn push_row<R: TableRow>(
     writer: &mut Option<TableWriter<R>>,
     row: R,
@@ -264,7 +265,7 @@ fn push_row<R: TableRow>(
     }
 }
 
-/// Seal all tables; one fault doesn't short-circuit siblings' footers.
+/// Seals each table, so a fault of one still leaves a footer on each other.
 #[derive(Default)]
 struct SealOutcome {
     first_error: Option<PersistError>,
@@ -273,7 +274,7 @@ struct SealOutcome {
 }
 
 impl SealOutcome {
-    /// Unnamed table = no writer/file (not counted in failure rate).
+    /// A table that the config does not name has no file, so it counts as no table.
     fn observe_table<R: TableRow>(&mut self, writer: &mut Option<TableWriter<R>>) {
         let Some(writer) = writer else { return };
         self.observe(writer.seal());

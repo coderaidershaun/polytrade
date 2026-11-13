@@ -1,15 +1,5 @@
-//! The transition table: the one pure function every venue event folds through, and the money
-//! decisions encoded in it.
-//!
-//! Split from the store beside it because these are two different questions. `order.rs` answers
-//! WHERE an order lives — which slot, under which id, retired when. This file answers what an event
-//! MEANS, and it is the half where a wrong answer costs money rather than tidiness.
-//!
-//! Two "in-flight" notions run through it and must never merge. EXISTENCE in-flight
-//! ([`OrderState::PendingNew`]) is resolved by ANY event naming the client id — the order either
-//! reached the venue or it did not. COMMAND in-flight (cancel/amend) is resolved only by that
-//! command's own ack or by a terminal report: a fill arriving mid-cancel does not mean the cancel
-//! landed, and treating it that way emits a second cancel.
+//! The transition table: what a venue event means for an order, apart from where the order lives,
+//! because here a wrong answer costs money rather than tidiness.
 
 use crate::msg::exec::{ExecEvent, ExecKind, RejectClass, VenueOrderStatus};
 use crate::msg::time::LocalTs;
@@ -25,6 +15,11 @@ pub struct Applied {
     pub(crate) fee: FeeVerdict,
 }
 
+/// Two "in-flight" notions run through it and must never merge. EXISTENCE in-flight
+/// ([`OrderState::PendingNew`]) is resolved by ANY event naming the client id — the order either
+/// reached the venue or it did not. COMMAND in-flight (cancel/amend) is resolved only by that
+/// command's own ack or by a terminal report: a fill arriving mid-cancel does not mean the cancel
+/// landed, and treating it that way emits a second cancel.
 pub(super) fn apply_exec_event(
     slot: &mut OrderSlot,
     fees: &mut FeeMemory,

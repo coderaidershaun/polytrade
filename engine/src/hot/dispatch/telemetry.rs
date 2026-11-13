@@ -10,12 +10,12 @@ use crate::msg::latency::EngineCounters;
 use super::HotEngine;
 
 impl HotEngine {
-    /// Output queue full = drop (never fatal).
+    /// A full output ring drops the record, never fatal.
     pub fn dropped_persist_records(&self) -> u64 {
         self.state.persist_dropped()
     }
 
-    /// Event ring full = drop (never fatal).
+    /// A full event ring drops the event, never fatal.
     pub fn dropped_ui_events(&self) -> u64 {
         self.ui.dropped_events()
     }
@@ -26,7 +26,7 @@ impl HotEngine {
         self.unretained_volume_bars
     }
 
-    /// Link ring full = drop (never fatal).
+    /// A full link ring drops the frame, never fatal.
     pub fn dropped_link_frames(&self) -> u64 {
         self.link_sink.as_ref().map_or(0, LinkSink::dropped)
     }

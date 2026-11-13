@@ -47,18 +47,18 @@ struct HotState {
     derived: Derived,
     windows: Vec<Option<WindowInfo>>,
     ledger: PositionLedger,
-    /// Ledger's durable half (next boot restore).
+    /// The half of the ledger that outlives the process: the next start restores it.
     exposure: ExposureSink,
-    /// Writer's state (seq is one fact with what changed).
+    /// What the exposure writer holds. Its sequence number and what changed are one fact.
     published_exposure: ExposureSnapshot,
-    /// Spin of current declarations (on state for single-arg ctx building).
+    /// The spin of the declarations in force, kept here so the context is built from one value.
     spin_seq: u64,
     /// The latest received stamp folded so far: the time that deadlines and the strategy read.
     fold_time: FoldTime,
     gates: MarketGates,
-    /// Beside ledger not inside (fill moves both, one owner per state).
+    /// Beside the ledger, not inside it: a fill moves both, and each state has one owner.
     exec: ExecEngine,
-    /// Outside exec (callback &mut desired + & exec, can't coexist in same struct).
+    /// Outside the execution engine, because a callback writes it while it reads the engine.
     desired: DesiredBook,
     actions: Actions,
     /// None if no persistence configured.
@@ -224,7 +224,8 @@ impl HotEngine {
         self.emit_positions(received_ts_us);
     }
 
-    /// Post-drain per-spin (fills folded). Ahead of live gate (corrects late-attach UI).
+    /// Each spin, after the drain, so each fill is in. It runs before the live gate, so a
+    /// workstation that attaches late is put right.
     fn emit_positions(&mut self, event_ts: LocalTs) {
         for (instrument, row) in self.state.ledger.rows() {
             if row.has_mark() {
@@ -233,7 +234,8 @@ impl HotEngine {
         }
     }
 
-    /// Drain bank to sinks (fixed priority). No-emit fast path avoids cost.
+    /// Empties the bank into the sinks in a fixed order. A message that banked nothing costs one
+    /// check.
     #[inline]
     fn drain_actions(&mut self) {
         if self.state.actions.is_empty() {
@@ -263,11 +265,12 @@ impl HotEngine {
             received: received_ts_us,
         };
         let callback = exec.on_exec_event(event, stamps, ledger, actions);
-        // Tee ahead of live gate (operator sees fill/transition/refusal).
+        // Sent before the live gate, so the operator sees each fill, transition and refusal.
         match callback {
             ExecCallback::None => {}
             ExecCallback::Fill(fill) => {
-                // Fill = two UI facts: tape delta + absolute state. State first (terminal>tape).
+                // A fill is two facts for the workstation: the state of the order and the fill
+                // itself. The state goes first, so a closed order never reads as still working.
                 if let Some(order) = exec.order(fill.client_id) {
                     self.ui
                         .emit_order_update(&order.updated_at(fill.event_ts_us));
@@ -289,7 +292,8 @@ impl HotEngine {
         }
     }
 
-    /// No callback (balance=read not event). UI re-states every spin.
+    /// A balance is a reading, not an event, so it earns no callback. The workstation hears it at
+    /// each spin.
     fn on_account(&mut self, chunk: &AccountChunk) {
         self.state.exec.on_account(chunk);
     }
@@ -363,7 +367,8 @@ impl HotEngine {
             .drain_refusals(&mut |reject| ui.emit_reject(reject));
     }
 
-    /// Halt/balances/desired every spin (corrects late-attach). Desired expires this spin.
+    /// The halt, the balances and the desired quotes, at each spin, so a workstation that attaches
+    /// late is put right. A desired quote lasts for this spin only.
     fn emit_execution_state(&mut self, tick: &SpinTick, at: LocalTs) {
         let is_execution_wired = if let Some(halt) = self.state.exec.halt_state() {
             self.ui.emit_execution(halt, at);

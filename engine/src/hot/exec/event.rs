@@ -129,7 +129,8 @@ impl ExecEngine {
         ExecCallback::Update(view_of(&slot).updated_at(received))
     }
 
-    /// Prior-run order event: no reservation release, no reject count, no callback (position already in ledger).
+    /// An order of an earlier run holds no reservation, adds to no reject streak and earns no
+    /// callback. Its fills still move the ledger.
     #[cold]
     pub(super) fn apply_to_prior_run(
         &mut self,
@@ -387,7 +388,7 @@ impl ExecEngine {
         }
     }
 
-    /// Class determines branch. Same fatal class for different causes -> error message carries the code.
+    /// One class covers several causes, so the line carries the venue's code.
     #[cold]
     fn fatal_reject_error(&self, event: &ExecEvent) {
         hot_error!(

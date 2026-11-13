@@ -14,7 +14,7 @@ use crate::runtime::config::{KlineInterval, TableKind};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FeatureId(pub u16);
 
-/// Copy enum (output ring = fixed-layout SPSC like input).
+/// A copy of fixed size, because the ring to the tape writer holds its records by value.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PersistRecord {
     Feature(FeatureRow),
@@ -27,7 +27,7 @@ pub enum PersistRecord {
     /// Written whenever the tape exists: no config can switch off the record of money that the
     /// engine could not place in its state.
     Incident(IncidentRow),
-    /// Seal all files (ring-ordered).
+    /// Seal each file. It travels in the ring, so each record banked before it is in the files.
     SealAll,
 }
 
@@ -49,7 +49,7 @@ impl PersistRecord {
     }
 }
 
-// Event timestamp, not wall clock.
+/// Stamped with the time of its message, never a clock read, so a replay writes the same row.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FeatureRow {
     pub instrument: InstrumentId,
@@ -68,7 +68,7 @@ pub struct TradeRow {
     pub received_ts_us: LocalTs,
 }
 
-// Applied chunk kinds + reset (not wire).
+/// What the book applied, and its reset, rather than the venue's wire kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BookEventKind {
     Delta,
@@ -86,7 +86,7 @@ impl From<BookChunkKind> for BookEventKind {
     }
 }
 
-/// One price level or (Reset kind) control event (zero price/qty/update_id).
+/// One price level, or a reset, whose price, quantity and update id are zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BookEventRow {
     pub instrument: InstrumentId,
@@ -116,7 +116,8 @@ pub struct KlineRow {
 }
 
 labelled_enum! {
-    /// LinkFrameRow kinds (run-state in kind, not value, for readable parquet column).
+    /// The run state sits in the kind rather than in the value, so its Parquet column reads as
+    /// words.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum LinkRowKind {
         Payload = "payload",
@@ -126,7 +127,8 @@ labelled_enum! {
     pub fn as_str;
 }
 
-/// Link frame/run-state. Teed by dispatch (no actor -> no divergence). Long format (no wide f64).
+/// A link frame or a run state, written by the fold itself so the tape cannot differ from what the
+/// fold saw. One row for each value, so no row carries a wide array of floats.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LinkFrameRow {
     pub kind: LinkRowKind,
@@ -141,7 +143,8 @@ pub struct LinkFrameRow {
 }
 
 labelled_enum! {
-    /// Transition cause (superset of venue ExecKind; tape missing pre-ack orders loses them).
+    /// What moved an order. It holds more than the venue's event kinds, because a tape with no row
+    /// for an order that the venue never acknowledged would lose that order.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum OrderTransition {
         Placed = "placed",
@@ -167,7 +170,7 @@ labelled_enum! {
 }
 
 labelled_enum! {
-    /// Engine's belief (flat, not nested).
+    /// What the engine believes of an order, as one flat label for the tape.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum OrderLifecycle {
         Free = "free",
@@ -175,7 +178,8 @@ labelled_enum! {
         Live = "live",
         CancelInFlight = "cancel_in_flight",
         AmendInFlight = "amend_in_flight",
-        /// Venue truth lost (blocks side until reconciliation).
+        /// The engine no longer knows what the venue holds. The side does not quote until a read
+        /// of open orders answers.
         Unknown = "unknown",
         ClosedFilled = "closed_filled",
         ClosedCanceled = "closed_canceled",
@@ -186,13 +190,15 @@ labelled_enum! {
     pub fn as_str;
 }
 
-/// Lifecycle transition (one row/transition). previous_state detects drops via mismatch.
+/// One row for each transition of an order. A previous state that differs from the state of the row
+/// before it shows a lost row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OrderRow {
     pub instrument: InstrumentId,
     pub client_id: ClientOrderId,
     pub quote_level: Option<QuoteLevel>,
-    // Join key; valuable when absent (sent, never acked).
+    // The key that joins the venue's records. Its absence says the order was sent and never
+    // acknowledged.
     pub venue_order_id: Option<VenueOrderId>,
     pub transition: OrderTransition,
     pub state: OrderLifecycle,
@@ -202,7 +208,7 @@ pub struct OrderRow {
     pub style: Option<OrderStyle>,
     pub price: Price,
     pub qty: Qty,
-    // Detects lost reports when paired with last_qty.
+    // Beside the report's own quantity, a total that jumps shows a lost report.
     pub filled_qty: Qty,
     pub filled_quote: i64,
     pub reject: Option<RejectClass>,
@@ -211,7 +217,8 @@ pub struct OrderRow {
     pub received_ts_us: LocalTs,
 }
 
-/// One fill (line item a statement reconciles against, durable record of quantity/price/fee).
+/// One fill: the line that a venue statement is reconciled against, with its quantity, price and
+/// fee.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FillRow {
     pub instrument: InstrumentId,
@@ -224,10 +231,11 @@ pub struct FillRow {
     pub liquidity: Option<Liquidity>,
     pub last_price: Price,
     pub last_qty: Qty,
-    // Paired with last_* detects lost reports.
+    // Beside the report's own quantity and price, what was booked shows a lost report.
     pub booked_qty: Qty,
     pub booked_quote: i64,
-    // Not quote asset; wrong forever if incorrect.
+    // In the asset that `commission_asset` names, which need not be the quote asset. A wrong
+    // asset here makes the fee wrong for good.
     pub commission: i64,
     pub commission_asset: AssetId,
     pub exchange_ts_us: VenueTs,
@@ -271,7 +279,8 @@ pub struct IncidentRow {
     pub received_ts_us: LocalTs,
 }
 
-// Venue lineage (side-channel).
+/// Which market an instrument stood for over which window. It travels to the tape writer by a
+/// channel of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RotationRow {
     pub instrument: InstrumentId,

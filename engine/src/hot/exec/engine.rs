@@ -69,8 +69,7 @@ impl ExecSettings {
     pub fn disabled() -> Self {
         Self {
             limits: ExecLimits::disabled(),
-            // Kept non-zero to avoid halting on inherited state; the zero_alloc fitness
-            // test measures this.
+            // Kept non-zero, so an engine with no venue never halts on the state it inherits.
             max_orders_per_side: MAX_QUOTE_LEVELS,
             min_base_balance: Qty::from_mantissa(0),
             min_quote_balance: Notional::ZERO,

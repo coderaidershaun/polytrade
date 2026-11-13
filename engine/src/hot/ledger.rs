@@ -153,7 +153,7 @@ impl PositionLedger {
         &self.rows[usize::from(instrument.0)]
     }
 
-    // Rows paired with their instruments (index invariant; callers don't rebuild pairing).
+    // Each row is paired with its instrument here, so no caller pairs them by index itself.
     #[inline]
     pub(crate) fn rows(&self) -> impl Iterator<Item = (InstrumentId, &LedgerRow)> {
         self.rows
@@ -251,7 +251,7 @@ impl PositionLedger {
 }
 
 /// Money past `i64@1e-8` (≳ 9.2e10 quote units) is a bug in the fill stream, not a market event, so
-/// it panics rather than wrapping research data into nonsense .
+/// it panics rather than wrapping research data into nonsense.
 #[inline]
 pub(crate) fn narrow(value: i128, field: &'static str) -> i64 {
     i64::try_from(value)

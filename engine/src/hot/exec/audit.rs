@@ -18,7 +18,7 @@ struct OrderAudit<'a> {
     provenance: Provenance,
     reject: Option<RejectClass>,
     reject_code: i32,
-    /// 0 on engine-driven (venue never heard of it).
+    /// Zero for a transition that the engine made on its own: the venue never heard of it.
     exchange_ts_us: VenueTs,
     received_ts_us: LocalTs,
 }
@@ -72,7 +72,8 @@ pub(super) fn bank_engine_driven(
     );
 }
 
-/// Chain by client_id, start at Free (dropped HEAD visible; slot recoverable from id bits).
+/// The rows of one order chain by client id from `Free`, so a lost first row shows, and the id
+/// names the slot.
 fn bank_order(bank: &mut Actions, audit: OrderAudit<'_>) {
     let slot = audit.slot;
     bank.push_persist(PersistRecord::Order(OrderRow {
@@ -97,7 +98,8 @@ fn bank_order(bank: &mut Actions, audit: OrderAudit<'_>) {
     }));
 }
 
-/// Delta = booked cumulative (diverges from event on lost report).
+/// The booked quantity is the step of the venue's running total, which differs from the report's
+/// own quantity when a report was lost.
 pub(super) fn bank_fill(
     bank: &mut Actions,
     slot: &OrderSlot,
@@ -125,7 +127,8 @@ pub(super) fn bank_fill(
     }));
 }
 
-/// Order row on state/fill move, fill paired (partial fill live = no state change).
+/// An order row when the state or the fill moved, with a fill row beside it. A partial fill of a
+/// live order moves only the fill.
 pub(super) fn bank_event_rows(
     bank: &mut Actions,
     slot: &OrderSlot,
@@ -158,7 +161,7 @@ pub(super) fn bank_event_rows(
     }
 }
 
-/// None for stream events (not per-order); they bank rows elsewhere.
+/// `None` for the events of the stream itself, which name no order and bank their rows elsewhere.
 fn transition_of(kind: ExecKind) -> Option<OrderTransition> {
     match kind {
         ExecKind::AckPlaced => Some(OrderTransition::AckPlaced),
@@ -179,7 +182,7 @@ fn transition_of(kind: ExecKind) -> Option<OrderTransition> {
     }
 }
 
-/// State or fill moved (duplicates already absorbed).
+/// A repeat of a report moves neither, so it leaves no row.
 #[inline]
 fn is_worth_recording(previous_state: OrderLifecycle, slot: &OrderSlot, fill: FillDelta) -> bool {
     OrderLifecycle::from(slot.state()) != previous_state || !fill.is_empty()
