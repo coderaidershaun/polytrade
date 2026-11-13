@@ -47,3 +47,4 @@ pub use spin::SpinInput;
 pub use view::{
     ExecCallback, Fill, OrderReject, OrderUpdate, OrderView, RejectOrigin, WorkingOrderView,
 };
+pub(crate) use window::RotationFacts;

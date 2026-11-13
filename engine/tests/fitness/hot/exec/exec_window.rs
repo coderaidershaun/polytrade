@@ -14,28 +14,34 @@
 //! The gate is driven entirely by message stamps: the window comes from a `MarketRotation` and the
 //! instant from the spin tick, so a replay refuses and sweeps at exactly the same points.
 
-use engine::hot::dispatch::HotEngine;
+use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{
     DesiredQuote, ExecCapacity, ExecSettings, HaltReason, OrderClaim, OrderState, OrderTable,
     QuoteLevel, RejectReason,
 };
+use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{Strategy, StrategyCtx, WindowInfo};
 use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, VenueOrderStatus,
 };
-use engine::msg::ids::{Price, Side};
+use engine::msg::ids::{AssetId, InstrumentId, Notional, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
-use engine::msg::time::{DurationUs, LocalTs, VenueTs};
+use engine::msg::persist::{IncidentKind, IncidentRow, PersistRecord};
+use engine::msg::time::{DurationUs, LocalTs, Stamper, VenueTs};
 use engine::msg::ui::{UiEvent, UiHalt};
-use engine::runtime::config::RecordedTables;
-use rtrb::Consumer;
+use engine::runtime::config::{RecordedTables, TrackerSpec};
+use engine::runtime::registry::InstrumentRow;
+use proptest::prelude::{prop_assert, prop_assert_eq};
+use proptest::test_runner::{Config, TestRunner};
+use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
-    ALL_TABLES, ONE, exec_capacity, exec_event, local_refusals, rotation, ts,
+    ALL_TABLES, FillPen, Idle, ONE, detached_setup, exec_capacity, exec_event, instrument_row,
+    local_refusals, persist_ring_for, rotation, ts,
 };
 use crate::exec_support::{
     ASK, BID, CEILING, INSTRUMENT, QUOTE_QTY, QuotingSetup, TwoSidedQuoter, built_quoting_engine,
-    drain_commands, exec_settings, make_ready, reseat_book, row_with_ceiling, spin_at,
+    drain_commands, exec_settings, has_halted, make_ready, reseat_book, row_with_ceiling, spin_at,
 };
 
 /// A window is 300 seconds and quoting stops 3 seconds before it closes, which is the shipped
@@ -78,7 +84,6 @@ fn cancels(commands: &[ExecCommand]) -> usize {
         .count()
 }
 
-#[test]
 fn the_quote_window_opens_at_the_open_and_shuts_a_margin_before_the_close() {
     let window = WindowInfo {
         open_ts_us: VenueTs::from_micros(OPEN),
@@ -157,11 +162,10 @@ fn seat_ladder(
     first_seq + LADDER_DEPTH as u64
 }
 
-/// FITNESS: the quote stop pulls the whole ladder and cancels nothing twice, and the mirror control —
+/// the quote stop pulls the whole ladder and cancels nothing twice, and the mirror control —
 /// an instrument that carries no window at all quotes whatever the margin says, because there is no
 /// stop to reach. Without the second half, an engine that had simply stopped quoting for some other
 /// reason would read exactly like the window gate working.
-#[test]
 fn the_quote_stop_pulls_the_whole_ladder_and_an_unwindowed_instrument_never_stops() {
     let (mut engine, mut commands, mut ui_events) =
         quoting_engine(Box::new(LadderQuoter), LADDER_DEPTH);
@@ -222,7 +226,6 @@ fn the_quote_stop_pulls_the_whole_ladder_and_an_unwindowed_instrument_never_stop
     );
 }
 
-#[test]
 fn a_sweep_pulls_resting_quotes_and_never_a_marketable_order() {
     let is_resting = |style: OrderStyle, state: OrderState| {
         let mut orders = OrderTable::new(&exec_capacity(1), 0);
@@ -421,4 +424,228 @@ fn ack_cancelled(engine: &mut HotEngine, commands: &[ExecCommand], when: i64) {
             }),
         ));
     }
+}
+
+/// FITNESS: no quote rests when a window closes. A fill in the last moment of an expiring market is
+/// a position on contracts that settle at nothing or at everything, with no book left to trade out.
+///
+/// Over generated windows (open, length, stop margin, and spin interval) for a ladder of two levels
+/// a side, with each placement and cancel answered within its spin: before the open nothing is
+/// placed; from the stop on nothing is placed, and the first spin there cancels each resting quote,
+/// so none rests after it. The named cases hold the window edges, a stop that pulls a whole ladder
+/// while an instrument with no window quotes on, and a sweep that never cancels a marketable order.
+#[test]
+fn no_order_rests_when_a_window_closes() {
+    the_quote_window_opens_at_the_open_and_shuts_a_margin_before_the_close();
+    the_quote_stop_pulls_the_whole_ladder_and_an_unwindowed_instrument_never_stops();
+    a_sweep_pulls_resting_quotes_and_never_a_marketable_order();
+
+    let windows = (0i64..=60, 20i64..=300, 1i64..=10, 1i64..=7, 1i64..=3);
+    let mut runner = TestRunner::new(Config {
+        cases: 32,
+        failure_persistence: None,
+        ..Config::default()
+    });
+    let outcome = runner.run(&windows, |(offset, length, margin, interval, lead)| {
+        let open = OPEN + offset * 1_000_000;
+        let close = open + length * 1_000_000;
+        let stop = close - margin * 1_000_000;
+        let built = built_quoting_engine(QuotingSetup {
+            row: row_with_ceiling(1_000_000 * ONE),
+            strategy: Box::new(TwoLevelsEachSide),
+            restored: &[],
+            settings: ExecSettings {
+                quote_stop_margin: DurationUs::from_secs(margin),
+                max_orders_per_side: 2,
+                ..exec_settings()
+            },
+            tables: RecordedTables::new(&ALL_TABLES),
+            run_nonce: 0,
+        });
+        let (mut engine, mut commands) = (built.engine, built.commands);
+        let first = open - lead * interval * 1_000_000;
+        make_ready(&mut engine, first - 2);
+        for message in reseat_book(BID, ASK, first - 2) {
+            engine.dispatch(&message);
+        }
+        engine.dispatch(&rotation(0, open, close, first - 1));
+        let mut live = Vec::new();
+        let mut placed_in_window = 0;
+        for (seq, at) in (1u64..)
+            .zip((first..=close + interval * 1_000_000).step_by(interval as usize * 1_000_000))
+        {
+            spin_at(&mut engine, seq, at);
+            let sent = drain_commands(&mut commands);
+            for command in &sent {
+                match command {
+                    ExecCommand::Place { client_id, .. } => live.push(*client_id),
+                    ExecCommand::Cancel { client_id, .. } => live.retain(|id| id != client_id),
+                    _ => {}
+                }
+            }
+            ack_placed(&mut engine, &sent, at + 1);
+            ack_cancelled(&mut engine, &sent, at + 1);
+            if at < open || at >= stop {
+                prop_assert_eq!(places(&sent), 0, "a placement outside the window at {}", at);
+            } else {
+                placed_in_window += places(&sent);
+            }
+            if at >= stop {
+                prop_assert!(
+                    live.is_empty(),
+                    "{:?} still rest at {} past the stop {}",
+                    live,
+                    at,
+                    stop
+                );
+            }
+        }
+        let has_window_spin = (first..stop)
+            .step_by(interval as usize * 1_000_000)
+            .any(|at| at >= open);
+        prop_assert!(
+            !has_window_spin || placed_in_window > 0,
+            "the window placed nothing"
+        );
+        Ok(())
+    });
+    if let Err(failure) = outcome {
+        panic!("a quote rested at a window's close: {failure}");
+    }
+}
+
+/// Quotes a bid and an offer at each of two levels, each spin.
+struct TwoLevelsEachSide;
+
+impl Strategy for TwoLevelsEachSide {
+    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
+        for level in 0..2u8 {
+            let step = i64::from(level) * ONE;
+            for (side, price) in [(Side::Buy, BID - step), (Side::Sell, ASK + step)] {
+                let quote = DesiredQuote {
+                    price: Price::from_mantissa(price),
+                    qty: QUOTE_QTY,
+                };
+                let level = QuoteLevel::new(level).expect("two levels");
+                ctx.quote(INSTRUMENT, side, level, Some(quote));
+            }
+        }
+    }
+}
+
+/// The quote asset of instrument 2.
+const USDC: AssetId = AssetId(2);
+
+/// Three instruments, the last one quoted in USDC, under a loss budget of `budget`, with the
+/// command lane and the tape lane.
+fn three_markets(budget: i64) -> (HotEngine, Consumer<ExecLaneItem>, Consumer<PersistRecord>) {
+    let rows = [
+        instrument_row(0, TrackerSpec::default(), 64),
+        instrument_row(1, TrackerSpec::default(), 64),
+        InstrumentRow {
+            quote_asset: USDC,
+            ..instrument_row(2, TrackerSpec::default(), 64)
+        },
+    ];
+    let (persistence, records) = persist_ring_for(1_024, RecordedTables::new(&ALL_TABLES));
+    let (producer, commands) = RingBuffer::new(1_024);
+    let engine = HotEngine::new(HotEngineSetup {
+        persistence: Some(persistence),
+        exec: Some(ExecWiring {
+            sink: ExecSink::new(producer, Stamper::Off),
+            settings: ExecSettings {
+                max_session_loss_quote: Notional::from_mantissa(budget),
+                ..exec_settings()
+            },
+            run_nonce: 0,
+        }),
+        ..detached_setup(&rows, Box::new(Idle))
+    });
+    (engine, commands, records)
+}
+
+fn stranded(records: &mut Consumer<PersistRecord>) -> Vec<IncidentRow> {
+    let mut incidents = Vec::new();
+    while let Ok(record) = records.pop() {
+        if let PersistRecord::Incident(row) = record {
+            incidents.push(row);
+        }
+    }
+    incidents
+}
+
+/// Instrument 2 loses 0.3 on a round trip in the window that closes at 300 s, then buys 10 at 0.42,
+/// and the window rotates.
+fn strand_ten_at_a_basis_of_four_point_two(engine: &mut HotEngine, pen: &mut FillPen) {
+    engine.dispatch(&rotation(2, 0, 300_000_000, 10));
+    for message in [
+        pen.fill(Side::Buy, 72_000_000, ONE, 20),
+        pen.fill(Side::Sell, 42_000_000, ONE, 30),
+        pen.fill(Side::Buy, 42_000_000, 10 * ONE, 40),
+    ]
+    .concat()
+    {
+        engine.dispatch(&message);
+    }
+    engine.dispatch(&rotation(2, 300_000_000, 600_000_000, 50));
+}
+
+/// CONTRACT: a rotation with a position leaves one incident record, and the basis of the position
+/// counts against the loss budget of its quote asset. Its contracts can settle at nothing, and no
+/// order can trade them any more, so a warning alone would let the next window spend the same
+/// budget again.
+#[test]
+fn rotation_with_position_records_it_and_keeps_its_basis() {
+    let (mut engine, mut commands, mut records) = three_markets(5 * ONE);
+    let mut pen = FillPen::new(2);
+    strand_ten_at_a_basis_of_four_point_two(&mut engine, &mut pen);
+    let incidents = stranded(&mut records);
+    assert_eq!(
+        incidents.len(),
+        1,
+        "one record for the stranded position: {incidents:?}"
+    );
+    let row = incidents[0];
+    assert_eq!(
+        (row.kind, row.instrument, row.client_id, row.qty, row.amount),
+        (
+            IncidentKind::StrandedPosition,
+            InstrumentId(2),
+            None,
+            Qty::from_mantissa(10 * ONE),
+            42 * ONE / 10
+        )
+    );
+    assert_eq!(
+        row.window_close_ts_us,
+        Some(VenueTs::from_micros(300_000_000))
+    );
+    spin_at(&mut engine, 1, 60);
+    assert!(
+        !has_halted(&mut commands),
+        "0.3 realised and 4.2 stranded use 4.5 of 5.0"
+    );
+
+    for message in pen.fill(Side::Buy, 10_000_000, 10 * ONE, 70) {
+        engine.dispatch(&message);
+    }
+    engine.dispatch(&rotation(2, 600_000_000, 900_000_000, 80));
+    assert_eq!(
+        stranded(&mut records).len(),
+        1,
+        "the second stranded position"
+    );
+    spin_at(&mut engine, 2, 90);
+    assert!(
+        has_halted(&mut commands),
+        "a second stranded basis of 1.0 makes 5.5 of 5.0, and quoting goes on"
+    );
+
+    let (mut engine, mut commands, _records) = three_markets(44 * ONE / 10);
+    strand_ten_at_a_basis_of_four_point_two(&mut engine, &mut FillPen::new(2));
+    spin_at(&mut engine, 1, 60);
+    assert!(
+        has_halted(&mut commands),
+        "the realised 0.3 is carried with the stranded 4.2: 4.5 of 4.4"
+    );
 }

@@ -5,17 +5,38 @@ use crate::hot::ledger::{PositionLedger, narrow_quote, wide};
 use crate::hot::strategy::Actions;
 use crate::log::hot_warn;
 use crate::msg::ids::{InstrumentId, Notional, Qty, Side};
+use crate::msg::persist::{IncidentKind, IncidentRow};
+use crate::msg::time::{LocalTs, VenueTs};
 
+use super::audit::bank_incident;
 use super::engine::{ExecEngine, FoldStamps};
 use super::spin::SpinInput;
 
+/// What the fold knows of a rotation when it hands it to the execution engine.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RotationFacts {
+    pub(crate) instrument: InstrumentId,
+    /// The close of the window that the rotation ends, `None` at the first rotation of a run.
+    pub(crate) closing_window_close_ts_us: Option<VenueTs>,
+    /// The venue's stamp of the rotation: the open of the window that it starts.
+    pub(crate) exchange_ts_us: VenueTs,
+    pub(crate) received_ts_us: LocalTs,
+}
+
 impl ExecEngine {
-    /// Call before PositionLedger::reset_instrument(). Carries forward the realised result from this
-    /// window before the ledger row is erased. The kill switch measures run-level PnL across all windows,
-    /// not single windows, so this carry-forward is essential. The mark-to-market baseline clears (no
-    /// longer valid for this market) and re-arms at the new window's first two-sided book.
+    /// Call before `PositionLedger::reset_instrument()`, which erases the row. The realised result
+    /// of the closing window is carried into the run, because the loss budget lasts the run and a
+    /// ledger row lasts one window. A position still open is stranded: one incident record, and
+    /// its basis counts as a loss of its quote asset, until a settlement message closes it. The
+    /// mark-to-market baseline clears and re-arms at the new window's first two-sided book.
     #[cold]
-    pub(crate) fn on_market_rotation(&mut self, ledger: &PositionLedger, instrument: InstrumentId) {
+    pub(crate) fn on_market_rotation(
+        &mut self,
+        ledger: &PositionLedger,
+        rotation: RotationFacts,
+        bank: &mut Actions,
+    ) {
+        let instrument = rotation.instrument;
         let index = usize::from(instrument.0);
         if index >= self.instruments.len() {
             return;
@@ -26,8 +47,24 @@ impl ExecEngine {
                 + wide(row.session_realised_quote()),
             "realised_carried_quote",
         );
-        if row.position_base().mantissa() != 0 {
-            stranded_position_warning(instrument, row.position_base());
+        let position = row.position_base();
+        if position.mantissa() != 0 {
+            stranded_position_warning(instrument, position);
+            let basis = Notional::from_mantissa(row.basis_quote().mantissa().abs());
+            self.loss_sums
+                .strand(self.instruments[index].quote_asset, basis);
+            let incident = IncidentRow {
+                kind: IncidentKind::StrandedPosition,
+                instrument,
+                client_id: None,
+                trade_id: None,
+                qty: position,
+                amount: basis.mantissa(),
+                window_close_ts_us: rotation.closing_window_close_ts_us,
+                exchange_ts_us: rotation.exchange_ts_us,
+                received_ts_us: rotation.received_ts_us,
+            };
+            bank_incident(bank, &mut self.incidents, incident);
         }
         self.pnl_at_baseline[index] = None;
     }

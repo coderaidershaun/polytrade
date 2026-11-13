@@ -125,24 +125,43 @@ pub(super) fn reducing_side(position_base: Qty) -> Option<Side> {
     }
 }
 
-/// The realised loss of each quote asset over the run, indexed by asset. The quote pass sums it at
-/// each spin before it reads it, and this is the one place where a sum is read.
+/// The realised loss of each quote asset over the run, indexed by asset, and this is the one place
+/// where a sum is read. The quote pass sums the ledger again at each spin. The basis of each
+/// position that a rotation stranded stays in the sum as a loss, because its contracts can settle
+/// at nothing and no order can trade them any more.
 pub(super) struct LossSums {
     realised_quote: Box<[i128]>,
+    stranded_quote: Box<[Notional]>,
+}
+
+digest_fields! {
+    LossSums { stranded_quote }
+    not_state {
+        // Summed again from the ledger and the instruments before each read.
+        realised_quote,
+    }
 }
 
 impl LossSums {
     pub(super) fn new(capacity: &ExecCapacity) -> Self {
         Self {
             realised_quote: vec![0; capacity.assets()].into_boxed_slice(),
+            stranded_quote: vec![Notional::ZERO; capacity.assets()].into_boxed_slice(),
         }
     }
 
     pub(super) fn realised(&self, asset: AssetId) -> Notional {
+        let index = usize::from(asset.0);
+        let stranded = wide(self.stranded_quote[index]);
         narrow_quote(
-            self.realised_quote[usize::from(asset.0)],
+            self.realised_quote[index] - stranded,
             "realised loss of a quote asset",
         )
+    }
+
+    pub(super) fn strand(&mut self, asset: AssetId, basis: Notional) {
+        let stranded = &mut self.stranded_quote[usize::from(asset.0)];
+        *stranded = narrow_quote(wide(*stranded) + wide(basis), "stranded basis");
     }
 }
 
