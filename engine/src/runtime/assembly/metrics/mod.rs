@@ -184,6 +184,9 @@ pub(super) struct MetricsBringUpSetup<'a> {
     /// The housekeeping core the thread pins itself to. Absent, the OS places it.
     pub core_id: Option<usize>,
     pub pin: PinCall,
+    /// The rows lane of the OTLP export. Absent, the rows stay in the log lines of each interval.
+    #[cfg(feature = "otlp")]
+    pub rows: Option<crate::runtime::otlp::OtlpRows>,
 }
 
 /// # Errors
@@ -208,13 +211,20 @@ pub(super) fn metrics_bring_up(
         scale,
         start_ts_us: second.at,
     });
-    let thread = MetricsThread::spawn(MetricsThreadSetup {
+    let thread_setup = MetricsThreadSetup {
         metrics,
         clock: setup.clock.clone(),
         stamper,
         core_id: setup.core_id,
         pin: setup.pin,
-    })?;
+    };
+    #[cfg(feature = "otlp")]
+    let thread = match setup.rows {
+        Some(rows) => MetricsThread::spawn_writing(thread_setup, rows)?,
+        None => MetricsThread::spawn(thread_setup)?,
+    };
+    #[cfg(not(feature = "otlp"))]
+    let thread = MetricsThread::spawn(thread_setup)?;
     Ok(MetricsBringUp {
         thread,
         samples,
@@ -255,6 +265,17 @@ impl MetricsThread {
     /// # Errors
     /// [`StartError::HousekeepingPin`] when the thread cannot pin itself to `core_id` on Linux.
     pub fn spawn(setup: MetricsThreadSetup) -> Result<MetricsThread, StartError> {
+        MetricsThread::spawn_writing(setup, NoTable)
+    }
+
+    /// The same thread, writing the rows of each closed interval into `sink`.
+    ///
+    /// # Errors
+    /// [`StartError::HousekeepingPin`] when the thread cannot pin itself to `core_id` on Linux.
+    pub(super) fn spawn_writing(
+        setup: MetricsThreadSetup,
+        sink: impl RollupSink + Send + 'static,
+    ) -> Result<MetricsThread, StartError> {
         let MetricsThreadSetup {
             metrics,
             clock,
@@ -265,7 +286,7 @@ impl MetricsThread {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_flag = Arc::clone(&stop);
         let join = spawn_pinned("polysim-metrics", core_id, pin, move || {
-            run(metrics, &clock, &stamper, &stop_flag);
+            run(metrics, &clock, &stamper, &stop_flag, sink);
         })
         .map_err(|refused| StartError::HousekeepingPin {
             core_id: refused.core_id,
@@ -287,9 +308,14 @@ impl MetricsThread {
     clippy::disallowed_methods,
     reason = "the metrics thread anchors ticks to engine time and turns them into time, off the fold"
 )]
-fn run(mut metrics: Metrics, clock: &EngineClock, stamper: &Stamper, stop: &AtomicBool) {
+fn run(
+    mut metrics: Metrics,
+    clock: &EngineClock,
+    stamper: &Stamper,
+    stop: &AtomicBool,
+    mut sink: impl RollupSink,
+) {
     crate::log::register_thread("metrics");
-    let mut sink = NoTable;
     let mut refused_anchors = 0u64;
     let mut next_anchor_ts_us = clock.now() + ANCHOR_INTERVAL;
     while !stop.load(Ordering::Acquire) {

@@ -37,6 +37,9 @@ pub struct StartPlan {
     pub(super) link: Option<BoundLink>,
     /// `None` unless execution is armed.
     pub(super) execution: Option<ExecPlan>,
+    /// `None` with no `otlp:` block.
+    #[cfg(feature = "otlp")]
+    pub(super) otlp: Option<crate::runtime::otlp::OtlpPlan>,
 }
 
 impl<P> Preflight<'_, P> {
@@ -65,6 +68,8 @@ impl<P> Preflight<'_, P> {
         if let Some(core_id) = config.engine.hot_core_id {
             validate_core_id(core_id)?;
         }
+        #[cfg(feature = "otlp")]
+        let otlp = crate::runtime::otlp::OtlpPlan::check(config, identity, mode)?;
         // Every venue's grid is checked against the deployment the registry names rather than a
         // constant, so a production run is checked against the production grid.
         port.read_scales(&registry)?.stamp(&mut registry);
@@ -96,6 +101,8 @@ impl<P> Preflight<'_, P> {
             rest_quiet,
             link,
             execution,
+            #[cfg(feature = "otlp")]
+            otlp,
         })
     }
 }

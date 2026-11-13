@@ -43,6 +43,8 @@ use crate::msg::ui::UiCatalog;
 use crate::msg::ui::channel::{UiLifecycle, UiWiring, ui_channel};
 use crate::runtime::config::{Config, ExecutionMode, SenderPlacement};
 use crate::runtime::exposure::{ExposureHandle, ExposureWriter, ExposureWriterConfig};
+#[cfg(feature = "otlp")]
+use crate::runtime::otlp::{OtlpExporter, OtlpLanes, OtlpPlan};
 use crate::runtime::pin::PinCall;
 use crate::runtime::shutdown::{DrainSignal, FatalSignal, RunControlGate, TaskHandle};
 use crate::tape::PersistHandle;
@@ -102,6 +104,8 @@ pub struct Engine {
     /// `None` unless `senders.placement` is pinned. Stopped after the edges and the link it runs.
     senders: Option<PinnedSenders>,
     metrics: MetricsThread,
+    #[cfg(feature = "otlp")]
+    otlp: Option<OtlpExporter>,
     fatal: FatalSignal,
     drain: DrainSignal,
     lifecycle: SyncSender<UiLifecycle>,
@@ -175,6 +179,8 @@ impl Engine {
                 });
             }
         };
+        #[cfg(feature = "otlp")]
+        let (otlp_rows, otlp) = plan.otlp.as_ref().map(OtlpPlan::open).unzip();
         log::register_thread("main");
         info!("polysim starting — trading engine {identity}");
         match latency_clock {
@@ -201,6 +207,8 @@ impl Engine {
             queue_count: plan.registry.input_queue_count(),
             core_id: config.engine.housekeeping_core_id,
             pin,
+            #[cfg(feature = "otlp")]
+            rows: otlp_rows,
         }) {
             Ok(brought_up) => brought_up,
             Err(error) => return Err(refuse(error, log_handle, || hot_thread.abandon())),
@@ -470,6 +478,8 @@ impl Engine {
             exec_tap_gate,
             senders,
             metrics,
+            #[cfg(feature = "otlp")]
+            otlp: otlp.and_then(OtlpLanes::start),
             fatal,
             drain,
             lifecycle,

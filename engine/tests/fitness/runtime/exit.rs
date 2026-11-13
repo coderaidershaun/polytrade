@@ -10,6 +10,8 @@ use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, QueueId, Side, S
 use engine::msg::time::LocalTs;
 use engine::runtime::config::ConfigError;
 use engine::runtime::exposure::ExposureError;
+#[cfg(feature = "otlp")]
+use engine::runtime::otlp::OtlpError;
 use engine::runtime::shutdown::{AnswerPart, FatalReason, FatalSignal};
 use engine::runtime::{
     DrainDeadline, DrainFailure, DrainOutcome, DrainWatchdog, Exit, StartError, Trigger,
@@ -96,7 +98,7 @@ fn variant_index(reason: FatalReason) -> usize {
 fn each_start_refusal() -> Vec<StartError> {
     let path = || std::path::PathBuf::from("state/te.nonce");
     let io = || std::io::Error::other("refused");
-    vec![
+    let refusals = vec![
         StartError::Config(ConfigError::SpinWithoutHotCore),
         StartError::Exposure(ExposureError::Malformed {
             path: path(),
@@ -154,7 +156,15 @@ fn each_start_refusal() -> Vec<StartError> {
             found: 80,
             max: 64,
         },
-    ]
+    ];
+    #[cfg(feature = "otlp")]
+    let refusals = refusals
+        .into_iter()
+        .chain([StartError::Otlp(OtlpError::CollectorNotLoopback {
+            collector: ([192, 0, 2, 10], 4318).into(),
+        })])
+        .collect();
+    refusals
 }
 
 /// The match has no catch-all arm, so a new variant does not compile here until the list above
@@ -180,6 +190,8 @@ fn start_variant_index(error: &StartError) -> usize {
         StartError::SenderPin { .. } => 16,
         StartError::LinkBind { .. } => 17,
         StartError::LinkNameTooLong { .. } => 18,
+        #[cfg(feature = "otlp")]
+        StartError::Otlp(_) => 19,
     }
 }
 
@@ -370,7 +382,7 @@ fn fatal_is_never_a_graceful_exit() {
     let start_indexes: Vec<usize> = refusals.iter().map(start_variant_index).collect();
     assert_eq!(
         start_indexes,
-        (0..19).collect::<Vec<_>>(),
+        (0..19 + usize::from(cfg!(feature = "otlp"))).collect::<Vec<_>>(),
         "one refusal of each variant, once"
     );
     for refusal in &refusals {

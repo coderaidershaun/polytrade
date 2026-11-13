@@ -100,6 +100,9 @@ pub enum StartError {
         found: usize,
         max: usize,
     },
+    #[cfg(feature = "otlp")]
+    #[error(transparent)]
+    Otlp(#[from] crate::runtime::otlp::OtlpError),
 }
 
 impl StartError {
@@ -124,6 +127,8 @@ impl StartError {
             | StartError::SenderPin { .. }
             | StartError::LinkBind { .. }
             | StartError::LinkNameTooLong { .. } => FailureClass::Halt(Halt::Start),
+            #[cfg(feature = "otlp")]
+            StartError::Otlp(error) => error.failure_class(),
         }
     }
 
