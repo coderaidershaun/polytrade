@@ -10,6 +10,7 @@
 use super::Lcg;
 use engine::hot::book::{Book, SnapshotOutcome};
 use engine::hot::quant::intensity::{IntensityFit, PacedIntensity};
+use engine::hot::quant::optimise::NelderMead;
 use engine::hot::tracker::MicroTracker;
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BookChunk, BookChunkKind, Level, TradeEvent};
@@ -135,10 +136,24 @@ fn fit_recovers_a_and_k_and_warm_starts() {
         cold.a_per_sec
     );
 
-    // A warm refit seeds from the cache, so it takes no more iterations than the cold fit.
+    // A warm refit starts from the cached optimum. It must converge before the iteration cap and
+    // meet the bounds of the cold fit.
     let warm = fit.fit(counts, now).ask.expect("warm");
-    assert!(warm.iterations <= cold.iterations, "warm not warmer");
+    assert!(
+        warm.converged && warm.iterations < NelderMead::<2>::MAX_ITERATIONS,
+        "warm refit ran to its cap: {warm:?}"
+    );
     assert!(!warm.is_stale);
+    assert!(
+        (warm.k_per_tick - k_true).abs() < 0.08,
+        "warm k {}",
+        warm.k_per_tick
+    );
+    assert!(
+        (warm.a_per_sec / a_true - 1.0).abs() < 0.2,
+        "warm a {}",
+        warm.a_per_sec
+    );
 }
 
 /// A source that configures no reach histogram gets no cadence either, and the two halves must
