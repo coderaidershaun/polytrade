@@ -5,7 +5,7 @@
 //! callers reverse best-first bids before validating.
 
 use engine::msg::ids::{Price, Qty, Side};
-use engine::msg::time::TsUs;
+use engine::msg::time::VenueTs;
 use engine::venues::polymarket::shadow::{BookFrameOutcome, ShadowValidator};
 use engine::venues::polymarket::teardown::{CollapseDetector, CollapseSignal, LevelUpdate};
 
@@ -16,7 +16,7 @@ fn update(side: Side, price: i64, qty: i64, venue_ts: i64) -> LevelUpdate {
         side,
         price: Price(price),
         qty: Qty(qty),
-        exchange_ts_us: TsUs::from_micros(venue_ts),
+        exchange_ts_us: VenueTs::from_micros(venue_ts),
     }
 }
 

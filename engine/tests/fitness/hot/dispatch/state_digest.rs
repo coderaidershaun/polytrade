@@ -37,7 +37,7 @@ use crate::engine_support::{
     ALL_TABLES, FillPen, ONE, account_chunk, book_reset, call_codes, delta_chunk, detached_setup,
     exec_event, exposure_ring, instrument_row, kline, last_snapshot_chunk, partial_snapshot_chunk,
     persist_ring_for, rotation, run_control, snapshot_pair, spin, strategy_log_ring, stream_ready,
-    tracker_spec_all, trade, ts, ui_book_ring, ui_event_ring,
+    tracker_spec_all, trade, ts, ui_book_ring, ui_event_ring, venue_ts,
 };
 use crate::exec_support::exec_settings;
 
@@ -839,11 +839,15 @@ fn peer_frame(seq: u64, value: f64, when: i64) -> InboundLink {
         frame: LinkFrame {
             origin: LinkOrigin {
                 sender_te_hash: LinkHash::of_name("peer-te"),
-                boot_ts_us: ts(1),
+                boot_ts_us: venue_ts(1),
                 topic: TopicId::FIRST_STRATEGY,
                 seq,
             },
-            payload: LinkPayload::new(LinkHash::of_name("peer-schema"), ts(when - 1), &[value]),
+            payload: LinkPayload::new(
+                LinkHash::of_name("peer-schema"),
+                venue_ts(when - 1),
+                &[value],
+            ),
         },
         received_ts_us: ts(when),
         queued_ts_us: ts(when),

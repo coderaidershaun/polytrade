@@ -12,7 +12,7 @@ use crate::msg::exec::ExecCommand;
 use crate::msg::ids::{InstrumentId, Price, Side};
 use crate::msg::inbound::SpinTick;
 use crate::msg::persist::OrderTransition;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 
 use super::desired::{DesiredBook, DesiredQuote, QuoteLevel};
@@ -48,7 +48,7 @@ impl ExecEngine {
         }
     }
 
-    fn sweep_timeouts(&mut self, now: TsUs, bank: &mut Actions) {
+    fn sweep_timeouts(&mut self, now: LocalTs, bank: &mut Actions) {
         for index in 0..MAX_ORDER_SLOTS {
             if self
                 .orders
@@ -62,7 +62,7 @@ impl ExecEngine {
     /// The venue never answered this order's request, so its state is unknown until the venue is
     /// asked about the order directly.
     #[cold]
-    fn chase_timed_out(&mut self, index: usize, now: TsUs, bank: &mut Actions) {
+    fn chase_timed_out(&mut self, index: usize, now: LocalTs, bank: &mut Actions) {
         let slot = self.orders.slot_mut(index);
         slot.last_event_ts_us = now;
         let (instrument, client_id) = (slot.instrument, slot.client_id);
@@ -77,7 +77,7 @@ impl ExecEngine {
         self.bank_or_halt(command, now);
     }
 
-    fn detect_silence(&mut self, now: TsUs) {
+    fn detect_silence(&mut self, now: LocalTs) {
         self.spins_since_exec_event += 1;
         let is_silent = self.spins_since_exec_event >= self.settings.exec_silence_spins;
         let has_working =
@@ -88,7 +88,7 @@ impl ExecEngine {
     }
 
     #[cold]
-    fn request_open_orders(&mut self, now: TsUs) {
+    fn request_open_orders(&mut self, now: LocalTs) {
         self.spins_since_exec_event = 0;
         for index in 0..self.instruments.len() {
             self.recon_seq += 1;

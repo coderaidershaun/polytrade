@@ -6,7 +6,7 @@
 use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, Price, Qty, Side, TradeId, VenueOrderId,
 };
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::runtime::config::RunIdentity;
 use engine::venues::exec::{EngineIdentity, TeTag};
 use engine::venues::sim::core::orders::SimOrder;
@@ -15,7 +15,7 @@ use engine::venues::sim::core::wallet::{
 };
 use engine::venues::sim::wire::{SimFill, VenueWire};
 
-const REPORTED_AT: TsUs = TsUs::from_micros(1_785_000_123_456_789);
+const REPORTED_AT: LocalTs = LocalTs::from_micros(1_785_000_123_456_789);
 const TRADE_ID: TradeId = TradeId(778_291);
 
 #[test]

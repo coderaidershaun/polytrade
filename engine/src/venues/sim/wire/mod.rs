@@ -8,7 +8,7 @@ use super::core::schedule::Rejection;
 use super::core::wallet::FillSettlement;
 use crate::msg::exec::VenueOrderStatus;
 use crate::msg::ids::{FIXED_SCALE, Qty, TradeId};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::venues::binance::exec::format_client_order_id;
 use crate::venues::exec::EngineIdentity;
 
@@ -65,7 +65,7 @@ impl VenueWire {
         }
     }
 
-    pub fn place_ack(&self, order: &SimOrder, event_ts_us: TsUs) -> String {
+    pub fn place_ack(&self, order: &SimOrder, event_ts_us: LocalTs) -> String {
         self.order_ack(
             templates::PLACE_ACK,
             order,
@@ -75,7 +75,7 @@ impl VenueWire {
         )
     }
 
-    pub fn cancel_ack(&self, order: &SimOrder, event_ts_us: TsUs) -> String {
+    pub fn cancel_ack(&self, order: &SimOrder, event_ts_us: LocalTs) -> String {
         let subject = self.client_order_id(order);
         self.order_ack(
             templates::CANCEL_ACK,
@@ -89,7 +89,7 @@ impl VenueWire {
         )
     }
 
-    pub fn amend_ack(&self, order: &SimOrder, event_ts_us: TsUs) -> String {
+    pub fn amend_ack(&self, order: &SimOrder, event_ts_us: LocalTs) -> String {
         let mut document = parse(templates::AMEND_ACK);
         stamp_response(&mut document, event_ts_us);
         let amended = &mut document["result"]["amendedOrder"];
@@ -108,12 +108,12 @@ impl VenueWire {
         &self,
         order: &SimOrder,
         status: VenueOrderStatus,
-        event_ts_us: TsUs,
+        event_ts_us: LocalTs,
     ) -> String {
         self.order_ack(templates::ORDER_STATUS, order, status, event_ts_us, |_| {})
     }
 
-    pub fn open_orders(&self, resting: &[SimOrder], event_ts_us: TsUs) -> String {
+    pub fn open_orders(&self, resting: &[SimOrder], event_ts_us: LocalTs) -> String {
         if resting.is_empty() {
             return templates::OPEN_ORDERS_EMPTY.to_owned();
         }
@@ -143,13 +143,18 @@ impl VenueWire {
         document.to_string()
     }
 
-    pub fn new_report(&self, order: &SimOrder, event_ts_us: TsUs) -> String {
+    pub fn new_report(&self, order: &SimOrder, event_ts_us: LocalTs) -> String {
         self.report(templates::REPORT_NEW, order, event_ts_us, |_| {})
     }
 
     /// # Panics
     /// If the settlement's cumulative totals disagree with the order it names.
-    pub fn trade_report(&self, order: &SimOrder, fill: SimFill<'_>, event_ts_us: TsUs) -> String {
+    pub fn trade_report(
+        &self,
+        order: &SimOrder,
+        fill: SimFill<'_>,
+        event_ts_us: LocalTs,
+    ) -> String {
         let settlement = fill.settlement;
         assert_eq!(
             (settlement.cumulative_qty, settlement.cumulative_quote),
@@ -179,7 +184,7 @@ impl VenueWire {
         })
     }
 
-    pub fn cancel_report(&self, order: &SimOrder, event_ts_us: TsUs) -> String {
+    pub fn cancel_report(&self, order: &SimOrder, event_ts_us: LocalTs) -> String {
         let subject = self.client_order_id(order);
         self.report(templates::REPORT_CANCELED, order, event_ts_us, |event| {
             event["c"] = VENUE_MINTED_CANCEL_ID.into();
@@ -187,7 +192,7 @@ impl VenueWire {
         })
     }
 
-    pub fn rejected_report(&self, order: &SimOrder, event_ts_us: TsUs) -> String {
+    pub fn rejected_report(&self, order: &SimOrder, event_ts_us: LocalTs) -> String {
         self.report(
             templates::REPORT_REJECTED_CROSS,
             order,
@@ -203,7 +208,7 @@ impl VenueWire {
     pub fn account_position(
         &self,
         balances: &[SimBalance<'_>],
-        event_ts_us: TsUs,
+        event_ts_us: LocalTs,
         update_ts_ms: u64,
     ) -> String {
         assert!(
@@ -237,7 +242,7 @@ impl VenueWire {
         &self,
         template: &str,
         order: &SimOrder,
-        event_ts_us: TsUs,
+        event_ts_us: LocalTs,
         extra: impl FnOnce(&mut serde_json::Value),
     ) -> String {
         let mut document = parse(template);
@@ -259,7 +264,7 @@ impl VenueWire {
         template: &str,
         order: &SimOrder,
         status: VenueOrderStatus,
-        event_ts_us: TsUs,
+        event_ts_us: LocalTs,
         extra: impl FnOnce(&mut serde_json::Value),
     ) -> String {
         let mut document = parse(template);
@@ -310,20 +315,20 @@ fn venue_status_text(status: VenueOrderStatus) -> &'static str {
     }
 }
 
-fn stamp_stream_event(event: &mut serde_json::Value, event_ts_us: TsUs) {
+fn stamp_stream_event(event: &mut serde_json::Value, event_ts_us: LocalTs) {
     let event_ts_ms = event_ts_us.micros().div_euclid(1_000);
     event["E"] = event_ts_ms.into();
     event["T"] = event_ts_ms.into();
 }
 
-fn stamp_response(document: &mut serde_json::Value, event_ts_us: TsUs) {
+fn stamp_response(document: &mut serde_json::Value, event_ts_us: LocalTs) {
     let Some(result) = document.get_mut("result") else {
         return;
     };
     stamp_order(result, event_ts_us);
 }
 
-fn stamp_order(order: &mut serde_json::Value, event_ts_us: TsUs) {
+fn stamp_order(order: &mut serde_json::Value, event_ts_us: LocalTs) {
     let event_ts_ms = event_ts_us.micros().div_euclid(1_000);
     for field in ["transactTime", "updateTime"] {
         if order.get(field).is_some() {

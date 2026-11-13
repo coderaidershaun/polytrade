@@ -12,7 +12,7 @@ use summary::SimRunSummary;
 use crate::msg::exec::{CancelReason, ExecEvent, StampedExecCommand};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId};
 use crate::msg::inbound::InboundMessage;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::runtime::registry::AssetDictionary;
 use crate::runtime::shutdown::FatalSignal;
 use crate::venues::binance::exec::{DecodeContext, ResponseContext};
@@ -27,18 +27,18 @@ use super::core::schedule::{
 use super::core::{SimEmission, SimVenue};
 use super::wire::{SimFill, VenueWire, response_messages, stream_messages};
 
-/// The two timestamps an effect needs are both venue time and both `TsUs`, so only distinct field
+/// The two timestamps an effect needs are both venue time and both `LocalTs`, so only distinct field
 /// names stop a caller swapping them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct EffectStamp {
     /// When a request the effect sends reaches the matching model.
-    effective_ts_us: TsUs,
+    effective_ts_us: LocalTs,
     /// What the driver stamps on events it synthesises for the engine.
-    reported_ts_us: TsUs,
+    reported_ts_us: LocalTs,
 }
 
 impl EffectStamp {
-    const fn at(ts_us: TsUs) -> Self {
+    const fn at(ts_us: LocalTs) -> Self {
         Self {
             effective_ts_us: ts_us,
             reported_ts_us: ts_us,
@@ -79,7 +79,7 @@ impl SimExecDriver {
         }
     }
 
-    pub fn on_command(&mut self, stamped: StampedExecCommand, effective_ts_us: TsUs) {
+    pub fn on_command(&mut self, stamped: StampedExecCommand, effective_ts_us: LocalTs) {
         let command = stamped.command;
         let mut outgoing = Vec::new();
         self.session.core.on_command(
@@ -97,8 +97,8 @@ impl SimExecDriver {
 
     pub fn advance_to(
         &mut self,
-        horizon: TsUs,
-        effect_ts_us: TsUs,
+        horizon: LocalTs,
+        effect_ts_us: LocalTs,
         context: DecodeContext<'_>,
     ) -> Vec<InboundMessage> {
         let Self {
@@ -142,7 +142,7 @@ impl SimExecDriver {
         forwarded
     }
 
-    pub fn begin_sweep(&mut self, reason: CancelReason, at_ts_us: TsUs) {
+    pub fn begin_sweep(&mut self, reason: CancelReason, at_ts_us: LocalTs) {
         let outgoing = self.session.sweep(reason, None);
         let cancelling: Vec<ClientOrderId> = outgoing
             .iter()
@@ -192,7 +192,7 @@ impl SimExecDriver {
         request_id: RequestId,
         request: ExecRequest,
         recon_seq: u64,
-        effective_ts_us: TsUs,
+        effective_ts_us: LocalTs,
     ) {
         if !matches!(request, ExecRequest::SubscribeUserStream) {
             // `sent_at` is venue time, never a clock reading: replaying the same tape has to
@@ -221,7 +221,7 @@ impl SimExecDriver {
     fn decode(
         &mut self,
         voice: &VenueVoice,
-        event_ts_us: TsUs,
+        event_ts_us: LocalTs,
         decode: DecodeContext<'_>,
     ) -> Vec<InboundMessage> {
         let at_ts_us = decode.received_ts_us;
@@ -251,7 +251,7 @@ impl SimExecDriver {
     fn answer_messages(
         &mut self,
         answer: &VenueAnswer,
-        event_ts_us: TsUs,
+        event_ts_us: LocalTs,
         decode: DecodeContext<'_>,
     ) -> Vec<InboundMessage> {
         let Some(held) = self
@@ -278,7 +278,7 @@ impl SimExecDriver {
         messages
     }
 
-    fn mint_answer(&self, answer: &VenueAnswer, event_ts_us: TsUs) -> String {
+    fn mint_answer(&self, answer: &VenueAnswer, event_ts_us: LocalTs) -> String {
         let wire = &self.wire;
         match answer {
             VenueAnswer::PlaceAccepted(order) => wire.place_ack(order, event_ts_us),
@@ -295,7 +295,7 @@ impl SimExecDriver {
     fn mint_report(
         &self,
         report: &VenueReport,
-        event_ts_us: TsUs,
+        event_ts_us: LocalTs,
         assets: &AssetDictionary,
     ) -> String {
         let wire = &self.wire;
@@ -338,6 +338,6 @@ fn asset_name(assets: &AssetDictionary, asset: AssetId) -> &str {
         .unwrap_or_else(|| panic!("simulated wallet names unknown asset {}", asset.0))
 }
 
-fn venue_millis(at_ts_us: TsUs) -> u64 {
+fn venue_millis(at_ts_us: LocalTs) -> u64 {
     u64::try_from(at_ts_us.micros() / 1_000).unwrap_or_default()
 }

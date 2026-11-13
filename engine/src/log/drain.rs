@@ -11,7 +11,7 @@ use std::time::Duration;
 use super::lane::{AnyLane, DrainChannels, LaneReader, close_thread_lane};
 use super::output::{DropNotice, LogOutput, Output};
 use super::record::{HotRecord, TextRecord};
-use crate::msg::time::{DurationUs, EngineClock, TsUs};
+use crate::msg::time::{DurationUs, EngineClock, LocalTs};
 
 const IDLE_POLL: Duration = Duration::from_millis(1);
 
@@ -221,7 +221,7 @@ impl LogDrain {
         clippy::disallowed_methods,
         reason = "a log line and its file date take wall time, which is never engine state"
     )]
-    fn write_records(&mut self, deadline_at: Option<TsUs>) -> bool {
+    fn write_records(&mut self, deadline_at: Option<LocalTs>) -> bool {
         for ring in &mut self.rings {
             let is_in_time = drain_ring(ring, &mut self.output, &mut self.text, || {
                 deadline_at.is_none_or(|at| self.clock.now() < at)

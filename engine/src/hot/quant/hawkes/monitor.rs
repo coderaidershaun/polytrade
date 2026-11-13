@@ -2,7 +2,7 @@
 //! keeps it current, and the resident evaluator answering λ between fits.
 
 use super::{HawkesEstimate, HawkesEvents, HawkesMle, UnivariateHawkes};
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 
 /// Hawkes monitor rolling window, fit floor, refit cadence. Strategy constants, not config.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,7 +23,7 @@ pub struct HawkesSide {
     estimate: Option<HawkesEstimate>,
     arrivals_since_fit: usize,
     live: Option<UnivariateHawkes>,
-    last_exchange_ts_us: Option<TsUs>,
+    last_exchange_ts_us: Option<VenueTs>,
 }
 
 impl HawkesSide {
@@ -50,7 +50,7 @@ impl HawkesSide {
 
     /// Fold trade arrival. Multi-sweep shares exchange_ts_us -> same-stamp folds (prevent zero-gap).
     /// received_ts_us is replay-pure clock. Evaluator advances every arrival (O(1), ungated). Fit gated.
-    pub fn on_arrival(&mut self, exchange_ts_us: TsUs, received_ts_us: TsUs) {
+    pub fn on_arrival(&mut self, exchange_ts_us: VenueTs, received_ts_us: LocalTs) {
         if self.last_exchange_ts_us == Some(exchange_ts_us) {
             return;
         }
@@ -74,7 +74,7 @@ impl HawkesSide {
     ///
     /// A fresh fit re-anchors the resident: seed it once from the buffered window, then only nudge
     /// its params — the excitation carries across a param change, decaying the mismatch away.
-    pub fn refit(&mut self, now: TsUs) {
+    pub fn refit(&mut self, now: LocalTs) {
         self.arrivals_since_fit = 0;
         self.estimate = self.fitter.fit(&self.events, now);
         let Some(estimate) = self.estimate.filter(|fit| !fit.is_stale) else {

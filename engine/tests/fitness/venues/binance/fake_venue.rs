@@ -3,7 +3,7 @@
 use engine::msg::exec::{ExecEvent, OrderStyle, VenueOrderStatus};
 use engine::msg::ids::{AssetId, ClientOrderId, Price, Qty, Side, TradeId, VenueOrderId};
 use engine::msg::inbound::InboundMessage;
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::runtime::config::RunIdentity;
 use engine::runtime::registry::{AssetDictionary, Registry};
 use engine::venues::binance::exec::{
@@ -153,7 +153,7 @@ impl FakeVenue {
         self.orders.get(client_id).is_some()
     }
 
-    pub fn decode_context(&self, at: TsUs) -> DecodeContext<'_> {
+    pub fn decode_context(&self, at: LocalTs) -> DecodeContext<'_> {
         DecodeContext {
             symbols: &self.symbols,
             assets: self.registry.assets(),
@@ -178,7 +178,7 @@ impl FakeVenue {
     ///
     /// The request is ENCODED first and the encoding thrown away, so a scenario cannot reach the
     /// matching model with a request the encoder would have refused to build.
-    pub fn submit(&mut self, request: ExecRequest, at: TsUs) -> Vec<InboundMessage> {
+    pub fn submit(&mut self, request: ExecRequest, at: LocalTs) -> Vec<InboundMessage> {
         encode_request(request, &self.encode_context()).expect("the encoder builds every request");
 
         let (ack, reports) = match request {
@@ -213,7 +213,7 @@ impl FakeVenue {
 
     /// Fill `qty` of a resting order at its own price — the maker case, which is the only one a
     /// post-only strategy can reach.
-    pub fn fill(&mut self, client_id: ClientOrderId, qty: Qty, at: TsUs) -> Vec<InboundMessage> {
+    pub fn fill(&mut self, client_id: ClientOrderId, qty: Qty, at: LocalTs) -> Vec<InboundMessage> {
         let Some(order) = self.orders.get_mut(client_id) else {
             return Vec::new();
         };
@@ -237,7 +237,7 @@ impl FakeVenue {
         self.stream_messages(&[report], at)
     }
 
-    fn place(&mut self, placement: Placement, at: TsUs) -> (Vec<String>, Vec<String>) {
+    fn place(&mut self, placement: Placement, at: LocalTs) -> (Vec<String>, Vec<String>) {
         let Placement {
             client_id,
             side,
@@ -276,7 +276,7 @@ impl FakeVenue {
         )
     }
 
-    fn cancel(&mut self, client_id: ClientOrderId, at: TsUs) -> (Vec<String>, Vec<String>) {
+    fn cancel(&mut self, client_id: ClientOrderId, at: LocalTs) -> (Vec<String>, Vec<String>) {
         let Some(order) = self.orders.remove(client_id) else {
             return (vec![self.wire.unknown_order_error()], Vec::new());
         };
@@ -290,7 +290,7 @@ impl FakeVenue {
         &mut self,
         client_id: ClientOrderId,
         qty: Qty,
-        at: TsUs,
+        at: LocalTs,
     ) -> (Vec<String>, Vec<String>) {
         let Some(order) = self.orders.get_mut(client_id) else {
             return (vec![self.wire.unknown_order_error()], Vec::new());
@@ -300,7 +300,7 @@ impl FakeVenue {
         (vec![self.wire.amend_ack(&order, at)], Vec::new())
     }
 
-    fn status(&self, client_id: ClientOrderId, at: TsUs) -> Vec<String> {
+    fn status(&self, client_id: ClientOrderId, at: LocalTs) -> Vec<String> {
         let wire = &self.wire;
         match self.orders.get(client_id) {
             Some(order) => {
@@ -349,7 +349,7 @@ impl FakeVenue {
         request: ExecRequest,
         ack: Vec<String>,
         reports: Vec<String>,
-        at: TsUs,
+        at: LocalTs,
     ) -> Vec<InboundMessage> {
         let acks = self.response_messages(request, &ack, at);
         let streamed = self.stream_messages(&reports, at);
@@ -367,7 +367,7 @@ impl FakeVenue {
         &self,
         request: ExecRequest,
         payloads: &[String],
-        at: TsUs,
+        at: LocalTs,
     ) -> Vec<InboundMessage> {
         response_messages(
             payloads,
@@ -379,7 +379,7 @@ impl FakeVenue {
         )
     }
 
-    fn stream_messages(&self, payloads: &[String], at: TsUs) -> Vec<InboundMessage> {
+    fn stream_messages(&self, payloads: &[String], at: LocalTs) -> Vec<InboundMessage> {
         stream_messages(payloads, self.decode_context(at))
     }
 }

@@ -1,7 +1,7 @@
 //! The envelope every datagram opens with, checked in a fixed order so version skew is caught before
 //! a book body is misread, and the byte cursors every record is written and read through.
 
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 
 use super::wire::{WireField, wire_struct};
 
@@ -120,7 +120,7 @@ pub struct LinkIdentity {
     pub token_hash: LinkHash,
     pub strategy_hash: LinkHash,
     pub sender_te_hash: LinkHash,
-    pub boot_ts_us: TsUs,
+    pub boot_ts_us: VenueTs,
 }
 
 /// boot_ts_us load-bearing: restart sets seq=0; (sender,topic)-only gate reads as stale until seq passes old HWM.
@@ -132,7 +132,7 @@ pub struct Envelope {
     pub token_hash: LinkHash,
     pub strategy_hash: LinkHash,
     pub sender_te_hash: LinkHash,
-    pub boot_ts_us: TsUs,
+    pub boot_ts_us: VenueTs,
     pub seq: u64,
     pub mac: [u8; LINK_MAC_LEN],
 }

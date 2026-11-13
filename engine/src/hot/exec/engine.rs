@@ -10,7 +10,7 @@ use crate::log::{hot_error, hot_warn};
 use crate::msg::exec::{AccountChunk, CancelReason, ExecCommand, ExecEvent, ExecKind, Provenance};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Qty, Side};
 use crate::msg::persist::OrderTransition;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 use crate::runtime::registry::InstrumentRow;
 
@@ -88,7 +88,7 @@ pub(super) struct InstrumentExec {
     pub(super) base_asset: AssetId,
     pub(super) quote_asset: AssetId,
     pub(super) max_exposure_quote: i64,
-    pub(super) last_commit_ts_us: TsUs,
+    pub(super) last_commit_ts_us: LocalTs,
     pub(super) is_prior_run_cancel_sent: bool,
     /// What the flatten pass last refused for, so a position it cannot shed is reported when the
     /// answer CHANGES rather than on every spin — same edge-triggering as [`RefusalLatch`].
@@ -176,7 +176,7 @@ impl ExecEngine {
                 base_asset: row.base_asset,
                 quote_asset: row.quote_asset,
                 max_exposure_quote: row.max_exposure_quote,
-                last_commit_ts_us: TsUs::from_micros(0),
+                last_commit_ts_us: LocalTs::from_micros(0),
                 is_prior_run_cancel_sent: false,
                 flatten_refusal: None,
                 realised_carried_quote: 0,
@@ -270,7 +270,7 @@ impl ExecEngine {
 
     /// The staleness gate keys on this commit stamp, never on a clock read.
     #[inline]
-    pub fn on_book_commit(&mut self, instrument: InstrumentId, at: TsUs) {
+    pub fn on_book_commit(&mut self, instrument: InstrumentId, at: LocalTs) {
         self.instruments[usize::from(instrument.0)].last_commit_ts_us = at;
     }
 
@@ -331,7 +331,7 @@ impl ExecEngine {
     /// Halting stops quoting only; it never touches run state, recording markers only. It
     /// is one-way — only a restart rearms it.
     #[cold]
-    pub fn halt(&mut self, reason: HaltReason, at: TsUs) {
+    pub fn halt(&mut self, reason: HaltReason, at: LocalTs) {
         if self.halt.is_halted() {
             return;
         }
@@ -347,7 +347,7 @@ impl ExecEngine {
     }
 
     #[cold]
-    fn on_stream_reset(&mut self, at: TsUs, bank: &mut Actions) -> ExecCallback {
+    fn on_stream_reset(&mut self, at: LocalTs, bank: &mut Actions) -> ExecCallback {
         hot_warn!(
             "execution stream reset — every open order is unknown until a reconciliation lands"
         );

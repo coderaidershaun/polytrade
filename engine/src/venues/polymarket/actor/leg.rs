@@ -2,7 +2,7 @@
 
 use crate::msg::ids::{InstrumentId, Qty, Side};
 use crate::msg::inbound::{BookReset, InboundMessage, Level};
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 use crate::venues::polymarket::book::{BookNormaliser, ChunkStamps};
 use crate::venues::polymarket::parse::{PolyBook, PolyDelta};
 use crate::venues::polymarket::rotation::TokenId;
@@ -46,7 +46,7 @@ impl Leg {
         self.token.is_some()
     }
 
-    pub(super) fn assign(&mut self, token: TokenId, now: TsUs) {
+    pub(super) fn assign(&mut self, token: TokenId, now: LocalTs) {
         self.token = Some(token);
         self.shadow.resubscribe();
         self.collapse.reset();
@@ -65,7 +65,7 @@ impl Leg {
     pub(super) fn on_venue_book(
         &mut self,
         book: &PolyBook,
-        now: TsUs,
+        now: LocalTs,
         emit: &mut impl FnMut(InboundMessage),
     ) -> Option<BookMismatch> {
         let bids_ascending: Vec<Level> = book.bids.iter().rev().copied().collect();
@@ -93,8 +93,8 @@ impl Leg {
     pub(super) fn on_deltas(
         &mut self,
         deltas: &[&PolyDelta],
-        received_ts_us: TsUs,
-        exchange_ts_us: TsUs,
+        received_ts_us: LocalTs,
+        exchange_ts_us: VenueTs,
         emit: &mut impl FnMut(InboundMessage),
     ) -> bool {
         self.normaliser.emit_price_change(
@@ -129,7 +129,7 @@ impl Leg {
         }
     }
 
-    fn observe_level(&mut self, side: Side, level: &Level, exchange_ts_us: TsUs) {
+    fn observe_level(&mut self, side: Side, level: &Level, exchange_ts_us: VenueTs) {
         if level.qty == Qty(0) {
             return;
         }

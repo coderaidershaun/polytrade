@@ -9,7 +9,7 @@ use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::TradeEvent;
 use engine::msg::time::DurationUs;
 
-use crate::engine_support::ts as at;
+use crate::engine_support::{ts as at, venue_ts};
 
 fn tracker(spin_us: i64) -> MarkoutTracker {
     MarkoutTracker::new(MarkoutSpec {
@@ -37,7 +37,7 @@ fn print(side: Side, units: f64, when: i64) -> TradeEvent {
         price: price(units),
         qty: Qty(FIXED_SCALE),
         side,
-        exchange_ts_us: at(when - 7),
+        exchange_ts_us: venue_ts(when - 7),
         exchange_sent_ts_us: None,
         received_ts_us: at(when),
         queued_ts_us: at(when + 3),

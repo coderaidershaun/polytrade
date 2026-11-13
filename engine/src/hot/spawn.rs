@@ -15,7 +15,7 @@ use crate::log::{hot_error, hot_warn};
 use crate::msg::ids::{QueueId, SourceId};
 use crate::msg::inbound::{InboundMessage, MarketTapItem, TappedMessage, VenueMeta};
 use crate::msg::latency::CounterSample;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::runtime::pin::pin_current_thread;
 use crate::runtime::shutdown::{DrainSignal, FatalReason, FatalSignal};
 
@@ -61,7 +61,7 @@ impl SimTapGate {
 struct MarketTap {
     producer: Producer<MarketTapItem>,
     gate: Arc<SimTapGate>,
-    high_water_ts_us: TsUs,
+    high_water_ts_us: LocalTs,
 }
 
 /// The write end of one input queue, handed to the producer that feeds it.
@@ -93,7 +93,7 @@ impl QueueProducer {
         self.tap = Some(MarketTap {
             producer: tap,
             gate,
-            high_water_ts_us: TsUs::from_micros(i64::MIN),
+            high_water_ts_us: LocalTs::from_micros(i64::MIN),
         });
         self
     }
@@ -143,7 +143,7 @@ impl QueueProducer {
         );
     }
 
-    pub fn push_tap_watermark(&mut self, received_ts_us: TsUs) {
+    pub fn push_tap_watermark(&mut self, received_ts_us: LocalTs) {
         let Some(tap) = self.tap.as_mut() else { return };
         if !tap.gate.is_enabled() {
             return;

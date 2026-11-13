@@ -3,13 +3,13 @@
 use super::super::wire::decimal;
 use super::{EffectStamp, SimExecDriver, asset_name, venue_millis};
 use crate::msg::inbound::InboundMessage;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::venues::binance::exec::{DecodeContext, account_snapshot_chunks};
 use crate::venues::binance::rest::Balance;
 use crate::venues::exec::{Phase, open_orders_snapshot_end, stream_ready};
 
 impl SimExecDriver {
-    pub fn open(&mut self, effective_ts_us: TsUs) {
+    pub fn open(&mut self, effective_ts_us: LocalTs) {
         self.has_swept = false;
         let outgoing = self.session.connect();
         self.apply(&outgoing, EffectStamp::at(effective_ts_us));
@@ -28,7 +28,7 @@ impl SimExecDriver {
     /// If [`SimExecDriver::can_arm`] is false.
     pub fn announce_readiness(
         &mut self,
-        at_ts_us: TsUs,
+        at_ts_us: LocalTs,
         context: DecodeContext<'_>,
     ) -> Vec<InboundMessage> {
         assert!(

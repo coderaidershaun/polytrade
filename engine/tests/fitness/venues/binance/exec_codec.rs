@@ -10,7 +10,7 @@ use engine::msg::exec::{
     VenueOrderStatus,
 };
 use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::runtime::config::RunIdentity;
 use engine::runtime::secrets::Secret;
 use engine::venues::binance::exec::{
@@ -26,7 +26,7 @@ use proptest::prelude::*;
 
 use crate::venues::binance::fake_venue::{Delivery, FakeVenue, exec_events};
 
-const NOW: TsUs = TsUs::from_micros(1_785_000_000_700_000);
+const NOW: LocalTs = LocalTs::from_micros(1_785_000_000_700_000);
 
 /// A whole number of quote units as a 1e-8 mantissa. `usdt(118_000)` reads the way the price does;
 /// the expanded mantissa does not.

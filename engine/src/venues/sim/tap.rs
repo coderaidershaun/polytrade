@@ -9,14 +9,14 @@ use super::lanes::SimLane;
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::info;
 use crate::msg::inbound::{BookChunkKind, InboundMessage, MarketTapItem, TappedMessage, VenueMeta};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::runtime::config::{BinanceMarket, VenueMarket};
 use crate::runtime::registry::{ConnectionCategory, Registry};
 
 pub struct MarketTapLane {
     consumer: Consumer<MarketTapItem>,
     drained: Vec<TappedMessage>,
-    watermark_ts_us: TsUs,
+    watermark_ts_us: LocalTs,
     lane: SimLane,
 }
 
@@ -25,7 +25,7 @@ impl MarketTapLane {
         Self {
             consumer,
             drained: Vec::new(),
-            watermark_ts_us: TsUs::from_micros(i64::MIN),
+            watermark_ts_us: LocalTs::from_micros(i64::MIN),
             lane,
         }
     }
@@ -64,8 +64,8 @@ impl MarketTapLane {
         visit(&self.drained);
     }
 
-    pub fn proven_watermark_ts_us(&self) -> Option<TsUs> {
-        (self.watermark_ts_us != TsUs::from_micros(i64::MIN)).then_some(self.watermark_ts_us)
+    pub fn proven_watermark_ts_us(&self) -> Option<LocalTs> {
+        (self.watermark_ts_us != LocalTs::from_micros(i64::MIN)).then_some(self.watermark_ts_us)
     }
 
     pub fn is_producer_gone(&self) -> bool {

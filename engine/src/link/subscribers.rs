@@ -3,7 +3,7 @@
 
 use std::net::SocketAddr;
 
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs, VenueTs};
 
 use super::control::TopicSet;
 use super::envelope::{Envelope, LinkHash, TopicId};
@@ -21,7 +21,7 @@ pub const LINK_SUBSCRIPTION_TTL: DurationUs = DurationUs::from_secs(5);
 struct SubscriberEntry {
     address: SocketAddr,
     topics: TopicSet,
-    expires_ts_us: TsUs,
+    expires_ts_us: LocalTs,
 }
 
 /// Soft-state subscription: datagram inserts/renews address, aged entries expire. Subscribe opens NAT.
@@ -37,7 +37,12 @@ impl SubscriberTable {
         }
     }
 
-    pub fn refresh(&mut self, address: SocketAddr, topics: TopicSet, now: TsUs) -> RefreshOutcome {
+    pub fn refresh(
+        &mut self,
+        address: SocketAddr,
+        topics: TopicSet,
+        now: LocalTs,
+    ) -> RefreshOutcome {
         self.entries.retain(|entry| entry.expires_ts_us > now);
         let expires_ts_us = now + LINK_SUBSCRIPTION_TTL;
         if let Some(entry) = self
@@ -60,7 +65,11 @@ impl SubscriberTable {
         RefreshOutcome::Added
     }
 
-    pub fn recipients(&self, topic: TopicId, now: TsUs) -> impl Iterator<Item = SocketAddr> + '_ {
+    pub fn recipients(
+        &self,
+        topic: TopicId,
+        now: LocalTs,
+    ) -> impl Iterator<Item = SocketAddr> + '_ {
         self.entries
             .iter()
             .filter(move |entry| entry.expires_ts_us > now && entry.topics.is_wanted(topic))
@@ -93,9 +102,9 @@ pub enum RefreshOutcome {
 struct GateSlot {
     sender_te_hash: LinkHash,
     topic: TopicId,
-    boot_ts_us: TsUs,
+    boot_ts_us: VenueTs,
     last_seq: u64,
-    last_seen_ts_us: TsUs,
+    last_seen_ts_us: LocalTs,
 }
 
 /// Drops dupe/reorder at edge. Slot = (sender, topic) + boot. Full gate refuses new (restart only).
@@ -113,7 +122,7 @@ impl SequenceGate {
         }
     }
 
-    pub fn admit(&mut self, envelope: &Envelope, now: TsUs) -> GateVerdict {
+    pub fn admit(&mut self, envelope: &Envelope, now: LocalTs) -> GateVerdict {
         let found = self.slots.iter().position(|slot| {
             slot.sender_te_hash == envelope.sender_te_hash && slot.topic == envelope.topic
         });
@@ -149,7 +158,7 @@ impl SequenceGate {
     }
 
     #[cold]
-    fn track(&mut self, envelope: &Envelope, now: TsUs) -> GateVerdict {
+    fn track(&mut self, envelope: &Envelope, now: LocalTs) -> GateVerdict {
         let slot = GateSlot {
             sender_te_hash: envelope.sender_te_hash,
             topic: envelope.topic,
@@ -170,7 +179,7 @@ impl SequenceGate {
         GateVerdict::Accepted
     }
 
-    fn stalest_expired_slot(&self, now: TsUs) -> Option<usize> {
+    fn stalest_expired_slot(&self, now: LocalTs) -> Option<usize> {
         let (index, slot) = self
             .slots
             .iter()
@@ -201,7 +210,7 @@ pub enum GateVerdict {
     Accepted,
     Restarted,
     Stale { last_seq: u64 },
-    StaleBoot { tracked_boot_ts_us: TsUs },
+    StaleBoot { tracked_boot_ts_us: VenueTs },
     Untracked,
 }
 

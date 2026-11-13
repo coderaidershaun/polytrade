@@ -14,7 +14,7 @@ use engine::hot::strategy::{
 };
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{MarketRotation, SpinTick, TradeEvent};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs};
 use engine::runtime::config::StrategySpec;
 use serde::Deserialize;
 
@@ -156,7 +156,7 @@ impl Strategy for PolyUpPublisher {
 }
 
 impl PolyUpPublisher {
-    fn publish(&mut self, ctx: &mut StrategyCtx<'_>, now: TsUs) {
+    fn publish(&mut self, ctx: &mut StrategyCtx<'_>, now: LocalTs) {
         let Some(topic) = self.topic else { return };
         let mut frame = link_schema::UpFrame::ABSENT;
         let mut has_role = false;
@@ -177,7 +177,7 @@ impl PolyUpPublisher {
     /// Only the leg hosting the open window is tradeable. The other one is either pre-open — where
     /// the engine refuses a quote anyway, and asking would fill the log with its refusals — or past
     /// its close, where nothing can be traded out of what it settles into.
-    fn trade_the_open_window(&mut self, ctx: &mut StrategyCtx<'_>, now: TsUs) {
+    fn trade_the_open_window(&mut self, ctx: &mut StrategyCtx<'_>, now: LocalTs) {
         let Some(maker) = self.maker else { return };
         let Some((instrument, window)) = self.open_window(ctx, now) else {
             return;
@@ -185,7 +185,11 @@ impl PolyUpPublisher {
         maker.declare(ctx, instrument, window, now);
     }
 
-    fn open_window(&self, ctx: &StrategyCtx<'_>, now: TsUs) -> Option<(InstrumentId, WindowInfo)> {
+    fn open_window(
+        &self,
+        ctx: &StrategyCtx<'_>,
+        now: LocalTs,
+    ) -> Option<(InstrumentId, WindowInfo)> {
         self.slots.iter().flatten().find_map(|slot| {
             let window = ctx.window(slot.instrument)?;
             (role_at(window, now)? == Role::Current).then_some((slot.instrument, window))
@@ -224,7 +228,7 @@ impl Maker {
         ctx: &mut StrategyCtx<'_>,
         instrument: InstrumentId,
         window: WindowInfo,
-        now: TsUs,
+        now: LocalTs,
     ) {
         let position = ctx.position_base(instrument);
         // Past the stop there is no quote worth having: this market is minutes from settling to 0
@@ -297,7 +301,7 @@ impl UpSlot {
     fn role_block<'f>(
         &self,
         ctx: &StrategyCtx<'_>,
-        now: TsUs,
+        now: LocalTs,
         frame: &'f mut link_schema::UpFrame,
     ) -> Option<&'f mut link_schema::UpRole> {
         match role_at(ctx.window(self.instrument)?, now)? {
@@ -306,7 +310,7 @@ impl UpSlot {
         }
     }
 
-    fn write(&mut self, ctx: &StrategyCtx<'_>, now: TsUs, block: &mut link_schema::UpRole) {
+    fn write(&mut self, ctx: &StrategyCtx<'_>, now: LocalTs, block: &mut link_schema::UpRole) {
         block.buy_vol = self.buy_qty.to_f64();
         block.sell_vol = self.sell_qty.to_f64();
         self.write_book(ctx, block);
@@ -331,7 +335,7 @@ impl UpSlot {
     fn write_intensity(
         &mut self,
         ctx: &StrategyCtx<'_>,
-        now: TsUs,
+        now: LocalTs,
         block: &mut link_schema::UpRole,
     ) {
         let counts = ctx.tracker(self.instrument).intensity();
@@ -359,7 +363,8 @@ enum Role {
 /// Half-open `[open, close)`: window N's close IS window N+1's open, so the two slots tile the
 /// timeline with no instant where both are current. After close a slot has no role — the market only
 /// settles towards 0 or 1, which answers a different question from the one either caller asks.
-fn role_at(window: WindowInfo, now: TsUs) -> Option<Role> {
+fn role_at(window: WindowInfo, now: LocalTs) -> Option<Role> {
+    let now = now.as_venue_calendar();
     if window.open_ts_us <= now && now < window.close_ts_us {
         return Some(Role::Current);
     }

@@ -16,7 +16,7 @@ use crate::hot::spawn::QueueProducer;
 use crate::msg::ids::{InstrumentId, StreamEpoch};
 use crate::msg::inbound::{InboundMessage, TappedMessage, VenueMeta};
 use crate::msg::run_state::RunState;
-use crate::msg::time::{EngineClock, TsUs};
+use crate::msg::time::{EngineClock, LocalTs};
 use crate::runtime::config::{BinanceMarket, KlineInterval};
 use crate::runtime::registry::{ConnectionCategory, InstrumentRow, ProducerGroup};
 use crate::runtime::shutdown::{FatalReason, FatalSignal, RunStateCell, TaskHandle};
@@ -194,7 +194,7 @@ impl Actor {
         run_lane(spec, self).await;
     }
 
-    async fn handle_text(&mut self, raw: &str, received_ts_us: TsUs) -> Flow {
+    async fn handle_text(&mut self, raw: &str, received_ts_us: LocalTs) -> Flow {
         let frame = match parse_combined_frame(raw) {
             Ok(frame) => frame,
             Err(error) => {

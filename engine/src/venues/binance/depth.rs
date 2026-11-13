@@ -2,7 +2,7 @@
 
 use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::{BookChunkKind, BookReset, InboundMessage, VenueMeta};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::venues::edge::chunk::{ChunkEmitter, ChunkPlan};
 use crate::warn;
 
@@ -69,7 +69,7 @@ impl DepthSequencer {
     }
 
     // Prevent resync undercut.
-    pub fn note_emit_floor(&mut self, floor_ts_us: TsUs) {
+    pub fn note_emit_floor(&mut self, floor_ts_us: LocalTs) {
         self.chunks.note_emit_floor(floor_ts_us);
     }
 

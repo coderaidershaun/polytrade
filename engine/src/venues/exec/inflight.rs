@@ -2,7 +2,7 @@
 //! reconciled and never re-sent: the venue may have executed it and only the answer was lost, so a
 //! second copy could double the order.
 
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 use crate::warn;
 
 use super::{ExecRequest, RequestId};
@@ -15,7 +15,7 @@ pub struct InFlightRequest {
     /// Kept because a bare venue error names no order, so the request is the only record of what
     /// the answer is about.
     pub request: ExecRequest,
-    pub sent_at: TsUs,
+    pub sent_at: LocalTs,
     /// The hot reconcile sequence the request answers, re-attached to whatever comes back.
     pub recon_seq: u64,
 }
@@ -71,7 +71,7 @@ impl InFlightTable {
         Some(self.entries.remove(position))
     }
 
-    pub fn take_expired(&mut self, now: TsUs) -> Vec<InFlightRequest> {
+    pub fn take_expired(&mut self, now: LocalTs) -> Vec<InFlightRequest> {
         let timeout = self.timeout;
         let mut expired = Vec::new();
         self.entries.retain(|entry| {

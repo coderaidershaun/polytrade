@@ -2,8 +2,7 @@
 //! models, so no curve is drawn by hand. The risk chart takes the mid chart's window.
 
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use engine::msg::time::DurationUs;
-use engine::msg::time::TsUs;
+use engine::msg::time::{DurationUs, VenueTs};
 use engine::msg::ui::{UiBookState, UiEvent};
 use engine::operator::workstation::chart::model::{BookContinuity, ChartModel};
 use engine::operator::workstation::chart::position_model::PositionModel;
@@ -216,7 +215,7 @@ impl Feed {
         self.positions.apply_event(&UiEvent::Position {
             instrument: INSTRUMENT,
             seq: self.seq,
-            event_ts_us: TsUs::from_micros(self.at(step, COMMITS_PER_BUCKET - 1)),
+            event_ts_us: VenueTs::from_micros(self.at(step, COMMITS_PER_BUCKET - 1)),
             exposure_quote: exposure as f64 / FIXED_SCALE as f64,
             pnl_quote: (self.cash_quote + exposure) as f64 / FIXED_SCALE as f64,
         });
@@ -259,7 +258,7 @@ impl Feed {
         let event = UiEvent::Rotation {
             instrument: INSTRUMENT,
             seq: self.seq,
-            event_ts_us: TsUs::from_micros(self.at(step, 0)),
+            event_ts_us: VenueTs::from_micros(self.at(step, 0)),
         };
         self.chart.apply_event(&event);
         self.positions.apply_event(&event);

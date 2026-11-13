@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime};
 
 use engine::msg::ids::InstrumentId;
 use engine::msg::persist::{FeatureId, FeatureRow, PersistRecord};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::runtime::config::{ExecutionMode, RecordedTables, TableKind};
 use engine::tape::PersistConfig;
 
@@ -72,7 +72,7 @@ fn feature_record() -> PersistRecord {
         instrument: InstrumentId(0),
         feature: FeatureId(0),
         value: 1.0,
-        event_ts_us: TsUs::from_micros(BASE_TS_US),
+        event_ts_us: LocalTs::from_micros(BASE_TS_US),
     })
 }
 

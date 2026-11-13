@@ -11,7 +11,7 @@
 
 use crate::msg::exec::{ExecCommand, ExecEvent, ExecKind, Provenance};
 use crate::msg::ids::{ClientOrderId, InstrumentId};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::runtime::shutdown::FatalReason;
 use crate::venues::edge::EdgeDriver;
 use crate::venues::exec::{MirroredOrder, Outgoing, ResyncPoll, SessionOutcome, blank};
@@ -372,7 +372,7 @@ impl Actor {
 
     /// Checks whether the pass has stalled. A stalled pass always ends by retrying or by
     /// dropping the connection, never by hanging.
-    pub(super) fn poll_resync(&mut self, now: TsUs) -> Option<SessionOutcome> {
+    pub(super) fn poll_resync(&mut self, now: LocalTs) -> Option<SessionOutcome> {
         if self.control.exit.is_some() {
             return None;
         }

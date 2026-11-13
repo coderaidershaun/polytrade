@@ -1,7 +1,7 @@
 //! Slug + window-grid arithmetic: pure fns place 5-min windows on 300s grid, assign A/B slots,
 //! derive subscribe/prefetch/probe instants. No I/O or clock reads.
 
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, VenueTs};
 use crate::runtime::config::PolySeries;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -50,44 +50,44 @@ impl PolySchedule {
         }
     }
 
-    pub(crate) fn window_index_containing(&self, now: TsUs) -> i64 {
+    pub(crate) fn window_index_containing(&self, now: VenueTs) -> i64 {
         now.micros().div_euclid(self.window_len.micros())
     }
 
-    fn window_start_containing(&self, now: TsUs) -> TsUs {
+    fn window_start_containing(&self, now: VenueTs) -> VenueTs {
         self.window_start(self.window_index_containing(now))
     }
 
-    pub(crate) fn window_start(&self, index: i64) -> TsUs {
-        TsUs::from_micros(index * self.window_len.micros())
+    pub(crate) fn window_start(&self, index: i64) -> VenueTs {
+        VenueTs::from_micros(index * self.window_len.micros())
     }
 
-    fn window_close(&self, window_start: TsUs) -> TsUs {
+    fn window_close(&self, window_start: VenueTs) -> VenueTs {
         window_start + self.window_len
     }
 
-    pub fn subscribe_at(&self, window_start: TsUs) -> TsUs {
+    pub fn subscribe_at(&self, window_start: VenueTs) -> VenueTs {
         window_start - self.subscribe_lead
     }
 
     /// When grace-tail `/book` probing arms for a window that nominally ended at `window_close`.
-    pub fn grace_probe_start(&self, window_close: TsUs) -> TsUs {
+    pub fn grace_probe_start(&self, window_close: VenueTs) -> VenueTs {
         window_close + self.grace_probe_delay
     }
 
     /// The window covering `now`.
-    pub fn current_window(&self, now: TsUs) -> PolyWindow {
+    pub fn current_window(&self, now: VenueTs) -> PolyWindow {
         self.window_at(self.window_start_containing(now))
     }
 
-    pub fn next_window(&self, now: TsUs) -> PolyWindow {
+    pub fn next_window(&self, now: VenueTs) -> PolyWindow {
         self.window_at(self.window_start_containing(now) + self.window_len)
     }
 
     /// # Panics
     /// `window_start` is not on the window grid. Every caller mints it from this schedule, so an
     /// off-grid value means a window was computed somewhere that does not own the grid.
-    pub fn window_at(&self, window_start: TsUs) -> PolyWindow {
+    pub fn window_at(&self, window_start: VenueTs) -> PolyWindow {
         let len = self.window_len.micros();
         assert!(
             window_start.micros().rem_euclid(len) == 0,
@@ -106,8 +106,8 @@ impl PolySchedule {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PolyWindow {
-    pub window_start_ts_us: TsUs,
-    pub window_close_ts_us: TsUs,
+    pub window_start_ts_us: VenueTs,
+    pub window_close_ts_us: VenueTs,
     pub index: i64,
     pub slot: Slot,
 }

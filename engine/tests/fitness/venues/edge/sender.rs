@@ -14,7 +14,7 @@ use engine::msg::exec::{
 use engine::msg::ids::{ClientOrderId, Price, QueueId, Side};
 use engine::msg::inbound::SpinTick;
 use engine::msg::latency::{Category, Stage, WireSample};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::runtime::config::SenderPlacement;
 use engine::runtime::metrics::{Metrics, SampleProducers};
 use engine::runtime::shutdown::FatalSignal;
@@ -37,7 +37,7 @@ use crate::runtime::metrics::{Counter, Harness, Rows};
 
 type Session = ExecSession<Vec<ExecEvent>>;
 
-const NOW: TsUs = TsUs::from_micros(1_785_000_000_000_000);
+const NOW: LocalTs = LocalTs::from_micros(1_785_000_000_000_000);
 const INTERVAL_US: i64 = 60_000_000;
 const LANE_CAPACITY: usize = 8;
 const EXEC_QUEUE: QueueId = QueueId(3);
@@ -422,7 +422,7 @@ fn lane_item(counter: &Counter, command: ExecCommand) -> ExecLaneItem {
 fn lane_item_at(counter: &Counter, command: ExecCommand, issue: u64) -> ExecLaneItem {
     ExecLaneItem::Command(StampedExecCommand {
         command,
-        issued_ts_us: TsUs::from_micros(10),
+        issued_ts_us: LocalTs::from_micros(10),
         issue_tick: counter.at(issue),
     })
 }
@@ -455,7 +455,7 @@ fn lane_of_a_b_watermark(counter: &Counter) -> (Producer<ExecLaneItem>, Consumer
     for item in [
         lane_item(counter, place_a()),
         lane_item(counter, cancel_b()),
-        ExecLaneItem::Watermark(TsUs::from_micros(10)),
+        ExecLaneItem::Watermark(LocalTs::from_micros(10)),
     ] {
         producer.push(item).expect("room on the lane");
     }
@@ -523,7 +523,7 @@ fn one_placement_through<V: Venue>(make_venue: impl FnOnce(Arc<quanta::Mock>) ->
 }
 
 fn pass_interval(metrics: &mut Metrics, rows: &mut Rows) {
-    metrics.pass(TsUs::from_micros(INTERVAL_US), rows);
+    metrics.pass(LocalTs::from_micros(INTERVAL_US), rows);
 }
 
 #[test]

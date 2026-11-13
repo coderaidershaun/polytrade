@@ -11,7 +11,7 @@ use crate::msg::exec::{Liquidity, RejectClass};
 use crate::msg::ids::{
     AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId,
 };
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 use super::desired::QuoteLevel;
 use super::order::OrderState;
@@ -49,7 +49,7 @@ impl OrderView {
     }
 
     #[inline]
-    pub(crate) fn updated_at(self, event_ts_us: TsUs) -> OrderUpdate {
+    pub(crate) fn updated_at(self, event_ts_us: LocalTs) -> OrderUpdate {
         OrderUpdate {
             instrument: self.instrument,
             client_id: self.client_id,
@@ -78,7 +78,7 @@ pub struct Fill {
     pub liquidity: Option<Liquidity>,
     pub trade_id: Option<TradeId>,
     pub state: OrderState,
-    pub event_ts_us: TsUs,
+    pub event_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -91,7 +91,7 @@ pub struct OrderUpdate {
     pub price: Price,
     pub qty: Qty,
     pub filled: Qty,
-    pub event_ts_us: TsUs,
+    pub event_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -107,7 +107,7 @@ pub struct OrderReject {
     pub side: Side,
     pub level: Option<QuoteLevel>,
     pub origin: RejectOrigin,
-    pub event_ts_us: TsUs,
+    pub event_ts_us: LocalTs,
 }
 
 digest_by_hash!(OrderReject);

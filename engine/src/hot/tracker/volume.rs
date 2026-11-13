@@ -9,7 +9,7 @@ use crate::hot::quant::toxicity::VolumeBar;
 use crate::hot::series::{Element, FastQueue};
 use crate::msg::ids::{FIXED_SCALE, Side};
 use crate::msg::inbound::TradeEvent;
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 use crate::runtime::config::{TARGET_WINDOW_CANDLES, VolumeBarsSpec, VolumeThreshold};
 
 const MIN_TARGET_CANDLES: usize = 60;
@@ -21,7 +21,7 @@ impl Element for VolumeBar {}
 digest_by_hash!(VolumeBar);
 
 impl VolumeBar {
-    fn opening(open_ts_us: TsUs, target: i64) -> Self {
+    fn opening(open_ts_us: VenueTs, target: i64) -> Self {
         Self {
             open_ts_us,
             close_ts_us: open_ts_us,

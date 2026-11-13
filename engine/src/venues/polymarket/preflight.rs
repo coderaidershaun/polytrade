@@ -69,7 +69,7 @@ pub(crate) async fn preflight_poly(registry: &mut Registry) -> Result<(), ScaleE
     let rest = PolyRest::new(series).map_err(|error| classify_poly_resolve(series, error))?;
     let now = EngineClock::start().now();
     let (current, next) = rest
-        .resolve_current_and_next(now)
+        .resolve_current_and_next(now.as_venue_calendar())
         .await
         .map_err(|error| classify_poly_resolve(series, error))?;
     check_poly_market(&current)?;

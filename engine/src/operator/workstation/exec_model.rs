@@ -9,7 +9,7 @@
 use super::history::grow_to;
 use crate::hot::exec::{ExecHalt, OrderState, QuoteLevel, RejectOrigin};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 use crate::msg::ui::{UI_ORDER_SNAPSHOT_MAX_TOTAL, UiEvent, UiWorkingOrder};
 
 const WORKING_PER_SIDE: usize = 8;
@@ -60,7 +60,7 @@ pub struct OrderCell {
     pub price: Price,
     pub qty: Qty,
     pub filled: Qty,
-    pub at: TsUs,
+    pub at: VenueTs,
 }
 
 impl OrderCell {
@@ -97,7 +97,7 @@ impl SideOrders {
             .count()
     }
 
-    fn lose_confirmation(&mut self, at: TsUs) {
+    fn lose_confirmation(&mut self, at: VenueTs) {
         for order in &mut self.working {
             order.status = OrderStatus::Lost;
             order.at = at;
@@ -137,7 +137,7 @@ impl SideOrders {
 
     fn replace_snapshot(
         &mut self,
-        at: TsUs,
+        at: VenueTs,
         detail_len: u8,
         total_working: u16,
         orders: &[UiWorkingOrder],
@@ -190,7 +190,7 @@ impl SideOrders {
 pub struct BalanceCell {
     pub free: i64,
     pub locked: i64,
-    pub at: TsUs,
+    pub at: VenueTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,7 +198,7 @@ pub struct RejectCell {
     pub instrument: InstrumentId,
     pub side: Side,
     pub origin: RejectOrigin,
-    pub at: TsUs,
+    pub at: VenueTs,
 }
 
 #[derive(Debug, Default)]
@@ -295,7 +295,7 @@ impl ExecModel {
         }
     }
 
-    pub(crate) fn note_events_lost(&mut self, at: TsUs) {
+    pub(crate) fn note_events_lost(&mut self, at: VenueTs) {
         for sides in &mut self.sides {
             for orders in sides {
                 orders.lose_confirmation(at);

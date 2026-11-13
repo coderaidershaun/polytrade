@@ -23,7 +23,7 @@ use engine::venues::polymarket::exec::correlate::{
 };
 use engine::venues::polymarket::rotation::{OutcomeLeg, TokenId, WindowAssignment};
 
-use crate::engine_support::{exec_event, ts as at};
+use crate::engine_support::{exec_event, ts as at, venue_ts};
 
 const UP: InstrumentId = InstrumentId(0);
 const DOWN: InstrumentId = InstrumentId(1);
@@ -41,8 +41,8 @@ fn assignment(open: i64, close: i64) -> WindowAssignment {
             instrument: DOWN,
             token: TokenId::from(DOWN_TOKEN),
         },
-        window_open_ts_us: at(open),
-        window_close_ts_us: at(close),
+        window_open_ts_us: venue_ts(open),
+        window_close_ts_us: venue_ts(close),
         condition_id: std::sync::Arc::from(CONDITION),
     }
 }

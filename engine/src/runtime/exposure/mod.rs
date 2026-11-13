@@ -7,7 +7,7 @@ mod writer;
 use std::path::{Path, PathBuf};
 
 use crate::msg::ids::{AssetId, InstrumentId, Qty};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::runtime::config::{ExecutionMode, RunIdentity};
 use crate::runtime::registry::Registry;
 use crate::warn;
@@ -52,7 +52,7 @@ pub struct ExposureSnapshot {
     /// Mark-to-market at emission (0 if no honest mark yet); written for human, ignored on load.
     pub exposure_quote: i64,
     /// Message received_ts_us (never hot-thread clock read).
-    pub emitted_ts_us: TsUs,
+    pub emitted_ts_us: LocalTs,
 }
 
 impl ExposureSnapshot {
@@ -61,7 +61,7 @@ impl ExposureSnapshot {
         len: 0,
         seq: 0,
         exposure_quote: 0,
-        emitted_ts_us: TsUs::from_micros(0),
+        emitted_ts_us: LocalTs::from_micros(0),
     };
 
     /// Filled prefix (capacity invariant trapped here).

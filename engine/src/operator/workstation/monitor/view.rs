@@ -7,7 +7,7 @@ use crate::hot::exec::ExecHalt;
 use crate::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::persist::FeatureId;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, VenueTs};
 use crate::operator::workstation::dom_view::{DomUnit, delta_from_mid, snapshot_mid, tick_index};
 use crate::operator::workstation::exec_model::{BalanceCell, OrderStatus, RejectCell};
 use crate::operator::workstation::model::UiModel;
@@ -201,7 +201,7 @@ fn side_counts(model: &UiModel, instrument: InstrumentId, side: Side) -> SideCou
 fn feature_row(
     feature: FeatureId,
     cell: Option<FeatureCell>,
-    freshest: Option<TsUs>,
+    freshest: Option<VenueTs>,
     spin_interval: DurationUs,
 ) -> FeatureRowView {
     let Some(cell) = cell else {

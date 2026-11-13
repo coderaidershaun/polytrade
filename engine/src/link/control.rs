@@ -4,7 +4,7 @@
 use crate::msg::ids::{AssetId, InstrumentId, Price, Qty};
 use crate::msg::persist::FeatureId;
 use crate::msg::run_state::RunState;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, VenueTs};
 use crate::runtime::config::ExecutionMode;
 
 use super::envelope::{
@@ -173,7 +173,7 @@ wire_struct! {
 /// One instrument. Subscriber knows catalog complete = total_count distinct instruments at current epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CatalogInstrument {
-    pub catalog_ts_us: TsUs,
+    pub catalog_ts_us: VenueTs,
     pub total_count: u16,
     pub instrument: InstrumentId,
     pub display: WireName,
@@ -206,7 +206,7 @@ wire_struct! {
 /// One feature (keyed by FeatureId so subscriber labels rows without reading strategy).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CatalogFeature {
-    pub catalog_ts_us: TsUs,
+    pub catalog_ts_us: VenueTs,
     pub total_count: u16,
     pub feature: FeatureId,
     pub name: WireName,

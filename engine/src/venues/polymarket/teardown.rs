@@ -5,7 +5,7 @@
 //! fast path it is allowed to miss.
 
 use crate::msg::ids::{Price, Qty, Side};
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 
 use super::shadow::ShadowBook;
 
@@ -14,7 +14,7 @@ pub struct LevelUpdate {
     pub side: Side,
     pub price: Price,
     pub qty: Qty,
-    pub exchange_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -30,7 +30,7 @@ const MIN_BURST_REMOVALS: u32 = 2;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CollapseDetector {
     book: ShadowBook,
-    burst_ts: Option<TsUs>,
+    burst_ts: Option<VenueTs>,
     burst_removals: u32,
     two_sided_at_burst_start: bool,
     collapsed: bool,

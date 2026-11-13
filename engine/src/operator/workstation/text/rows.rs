@@ -4,7 +4,7 @@
 use crate::hot::exec::{CloseReason, OrderState, RejectOrigin};
 use crate::msg::exec::Liquidity;
 use crate::msg::ids::{Price, Qty, Side};
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 use crate::operator::workstation::dom_view::tick_index;
 use crate::operator::workstation::format::{self, MISSING};
 use crate::operator::workstation::monitor::model::{
@@ -67,7 +67,7 @@ pub(crate) enum Cell {
 }
 
 impl Cell {
-    fn time(at: TsUs) -> Self {
+    fn time(at: VenueTs) -> Self {
         Self::Time(format::render(|out| format::write_time_of_day(out, at)))
     }
 

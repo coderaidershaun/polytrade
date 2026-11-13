@@ -7,7 +7,7 @@ use engine::hot::ingress::IngressQueues;
 use engine::hot::spawn::QueueProducer;
 use engine::msg::ids::{QueueId, SourceId};
 use engine::msg::inbound::{InboundMessage, SpinTick};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::runtime::shutdown::FatalSignal;
 use proptest::prelude::*;
 use rtrb::RingBuffer;
@@ -15,8 +15,8 @@ use rtrb::RingBuffer;
 fn spin(seq: u64, received: i64) -> InboundMessage {
     InboundMessage::SpinTick(SpinTick {
         seq,
-        received_ts_us: TsUs::from_micros(received),
-        queued_ts_us: TsUs::from_micros(received),
+        received_ts_us: LocalTs::from_micros(received),
+        queued_ts_us: LocalTs::from_micros(received),
     })
 }
 

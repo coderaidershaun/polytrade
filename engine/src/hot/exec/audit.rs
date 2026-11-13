@@ -3,7 +3,7 @@
 use crate::hot::strategy::Actions;
 use crate::msg::exec::{ExecEvent, ExecKind, Provenance, RejectClass};
 use crate::msg::persist::{FillRow, OrderLifecycle, OrderRow, OrderTransition, PersistRecord};
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 
 use super::order::{FillDelta, OrderSlot};
 
@@ -15,8 +15,8 @@ struct OrderAudit<'a> {
     reject: Option<RejectClass>,
     reject_code: i32,
     /// 0 on engine-driven (venue never heard of it).
-    exchange_ts_us: TsUs,
-    received_ts_us: TsUs,
+    exchange_ts_us: VenueTs,
+    received_ts_us: LocalTs,
 }
 
 /// A transition the engine made on its own, so there is no venue answer, no reject and no exchange
@@ -26,7 +26,7 @@ pub(super) fn bank_engine_driven(
     slot: &OrderSlot,
     transition: OrderTransition,
     previous_state: OrderLifecycle,
-    at: TsUs,
+    at: LocalTs,
 ) {
     bank_order(
         bank,
@@ -37,7 +37,7 @@ pub(super) fn bank_engine_driven(
             provenance: Provenance::Mine,
             reject: None,
             reject_code: 0,
-            exchange_ts_us: TsUs::from_micros(0),
+            exchange_ts_us: VenueTs::from_micros(0),
             received_ts_us: at,
         },
     );

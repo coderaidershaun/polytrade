@@ -19,7 +19,7 @@ use engine::msg::exec::{ExecKind, Liquidity, OrderStyle, VenueOrderStatus};
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::persist::FeatureId;
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, VenueTs};
 use engine::msg::ui::{UiBookSnapshot, UiBookState, UiEvent};
 use engine::operator::workstation::model::UiModel;
 use engine::runtime::config::{RecordedTables, TableKind};
@@ -29,7 +29,7 @@ use crate::engine_support::{
     FillPen, Idle, ONE, book_reset, delta_chunk, detached_setup, engine_with_ui,
     engine_with_ui_and_exec, exec_event, idle_at, instrument_row, level, persist_ring,
     persist_ring_for, rotation, run_control, snapshot_pair, spin, strategy_log_ring,
-    tracker_spec_all, trade, ts, ui_event_ring,
+    tracker_spec_all, trade, ui_event_ring, venue_ts,
 };
 
 /// Counts strategy callbacks independently of the UI projection. A fill may tee two UI facts, but
@@ -126,7 +126,7 @@ fn drain<T>(consumer: &mut Consumer<T>) -> Vec<T> {
 }
 
 /// Every Position event on the lane as `(instrument, event time, exposure, PnL)`, in lane order.
-fn positions(consumer: &mut Consumer<UiEvent>) -> Vec<(InstrumentId, TsUs, f64, f64)> {
+fn positions(consumer: &mut Consumer<UiEvent>) -> Vec<(InstrumentId, VenueTs, f64, f64)> {
     drain(consumer)
         .into_iter()
         .filter_map(|event| match event {
@@ -200,7 +200,7 @@ fn book_snapshot_lifecycle_from_commit_through_reset_and_rotation() {
     assert_eq!(snap.seq, 0, "the first snapshot is sequence 0");
     assert_eq!(snap.instrument, InstrumentId(0));
     assert_eq!(snap.state, UiBookState::Valid);
-    assert_eq!(snap.event_ts_us, ts(10));
+    assert_eq!(snap.event_ts_us, venue_ts(10));
     assert_eq!((snap.bid_len, snap.ask_len), (2, 2));
     assert_eq!(snap.bids[0], level(100 * ONE, 2 * ONE));
     assert_eq!(snap.bids[1], level(99 * ONE, ONE));
@@ -261,7 +261,7 @@ fn quote_tee_declares_then_expires() {
     assert_eq!(instrument, InstrumentId(0));
     assert_eq!(
         event_ts_us,
-        ts(12_345),
+        venue_ts(12_345),
         "the event carries the spin's own event time, not a wall clock read"
     );
     assert_eq!(quote, DomQuote::top(bid, ask));
@@ -305,7 +305,7 @@ impl Strategy for DeclareOnceProbe {
 }
 
 /// Every Quote event on the lane as `(instrument, event time, quote)`, in lane order.
-fn quote_events(consumer: &mut Consumer<UiEvent>) -> Vec<(InstrumentId, TsUs, DomQuote)> {
+fn quote_events(consumer: &mut Consumer<UiEvent>) -> Vec<(InstrumentId, VenueTs, DomQuote)> {
     drain(consumer)
         .into_iter()
         .filter_map(|event| match event {
@@ -354,7 +354,7 @@ fn feed_events_tee_ahead_of_the_warmup_gate() {
     assert_eq!(seq, 0, "trade: the first event is sequence 0");
     assert_eq!(
         event_ts_us,
-        ts(1_000_000),
+        venue_ts(1_000_000),
         "trade: stamped with the ingress time"
     );
     assert_eq!(aggressor, Side::Sell, "trade: aggressor");
@@ -385,7 +385,7 @@ fn feed_events_tee_ahead_of_the_warmup_gate() {
     assert_eq!(seq, 0, "rotation: seq");
     assert_eq!(
         event_ts_us,
-        ts(30),
+        venue_ts(30),
         "rotation: stamped with the rotation's ingress time"
     );
 }
@@ -522,7 +522,7 @@ fn the_execution_gate_tee_reflects_whether_a_command_ring_is_wired() {
                         detail_len: 0,
                         total_working: 0,
                         ..
-                    } if *event_ts_us == ts(700 + spin_index as i64)
+                    } if *event_ts_us == venue_ts(700 + spin_index as i64)
                         && *side == [Side::Buy, Side::Sell][side_index]
                 ),
                 "wired: an empty complete side cut must still be emitted: {event:?}"
@@ -642,7 +642,11 @@ fn a_partial_fill_updates_the_working_order_then_tees_one_fill() {
     };
     assert_eq!(instrument, InstrumentId(0));
     assert_eq!(seq, 3, "the Fill follows its absolute order state");
-    assert_eq!(event_ts_us, ts(4_242), "stamped with the fill's event time");
+    assert_eq!(
+        event_ts_us,
+        venue_ts(4_242),
+        "stamped with the fill's event time"
+    );
     assert_eq!(quote_level, Some(QuoteLevel::ZERO));
     assert_eq!(side, Side::Buy, "a fill on our bid means we bought");
     assert_eq!(price, Price(100 * ONE));
@@ -824,7 +828,7 @@ fn spins_emit_absolute_position_state() {
     engine.dispatch(&InboundMessage::SpinTick(spin(1, 30)));
     assert_eq!(
         positions(&mut events),
-        vec![(InstrumentId(0), ts(30), 0.0, 0.0)],
+        vec![(InstrumentId(0), venue_ts(30), 0.0, 0.0)],
         "a marked but flat instrument reports zeroes stamped with the spin's event time; the \
          unmarked one is still silent"
     );
@@ -842,8 +846,8 @@ fn spins_emit_absolute_position_state() {
     assert_eq!(
         positions(&mut events),
         vec![
-            (InstrumentId(0), ts(60), 303.0, 3.0),
-            (InstrumentId(1), ts(60), 0.0, 0.0),
+            (InstrumentId(0), venue_ts(60), 303.0, 3.0),
+            (InstrumentId(1), venue_ts(60), 0.0, 0.0),
         ],
         "the fill that arrived since the last spin is folded into what this one reports, and every \
          marked instrument reports"
@@ -858,7 +862,7 @@ fn spins_emit_absolute_position_state() {
     engine.dispatch(&InboundMessage::SpinTick(spin(3, 80)));
     assert_eq!(
         positions(&mut events),
-        vec![(InstrumentId(1), ts(80), 0.0, 0.0)],
+        vec![(InstrumentId(1), venue_ts(80), 0.0, 0.0)],
         "a rotated instrument goes silent until a new two-sided book re-marks it — the old \
          window's mark would be a lie about the new one"
     );
@@ -880,7 +884,7 @@ fn position_tee_survives_gating() {
     engine.dispatch(&InboundMessage::SpinTick(spin(0, 1_000_100)));
     assert_eq!(
         positions(&mut events),
-        vec![(InstrumentId(0), ts(1_000_100), 0.0, 0.0)],
+        vec![(InstrumentId(0), venue_ts(1_000_100), 0.0, 0.0)],
         "warmup: a warmup-suppressed spin still re-states the instrument's mark-to-market"
     );
 
@@ -899,7 +903,7 @@ fn position_tee_survives_gating() {
     engine.dispatch(&InboundMessage::SpinTick(spin(0, 40)));
     assert_eq!(
         positions(&mut events),
-        vec![(InstrumentId(0), ts(40), 303.0, 3.0)],
+        vec![(InstrumentId(0), venue_ts(40), 303.0, 3.0)],
         "parked: a parked engine keeps re-stating the position it is still carrying, not a zero"
     );
 }

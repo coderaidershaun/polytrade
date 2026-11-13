@@ -4,7 +4,7 @@
 
 use crate::msg::exec::{CancelReason, ExecEvent};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Side};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::runtime::shutdown::{FatalReason, FatalSignal};
 use crate::{error, warn};
 
@@ -113,7 +113,7 @@ impl<S: EventSink> ExecSession<S> {
 
     /// Answers the hot slot for an effect the core decided must not be sent. Without the answer the
     /// slot waits out its whole in-flight timeout before the side can quote again.
-    pub fn on_unsent(&mut self, effect: &ExecEffect, now: TsUs) {
+    pub fn on_unsent(&mut self, effect: &ExecEffect, now: LocalTs) {
         match *effect {
             ExecEffect::PlaceNotSent {
                 instrument,
@@ -153,7 +153,7 @@ impl<S: EventSink> ExecSession<S> {
 
     /// The edge could not put this request on the wire, so nothing reached the venue.
     #[cold]
-    pub fn refuse(&mut self, request: ExecRequest, reason: PlaceNotSentReason, now: TsUs) {
+    pub fn refuse(&mut self, request: ExecRequest, reason: PlaceNotSentReason, now: LocalTs) {
         match request {
             ExecRequest::Place {
                 instrument,
@@ -194,7 +194,7 @@ impl<S: EventSink> ExecSession<S> {
 
     /// The bytes may have reached the venue, so the order's fate stays unknown until a read
     /// settles it.
-    pub fn mark_in_doubt(&mut self, request: ExecRequest, now: TsUs) {
+    pub fn mark_in_doubt(&mut self, request: ExecRequest, now: LocalTs) {
         let TimeoutFallout::OrderInDoubt {
             instrument,
             client_id,
@@ -208,7 +208,7 @@ impl<S: EventSink> ExecSession<S> {
             .send_exec(request_timed_out(instrument, client_id, side, now));
     }
 
-    pub fn lose_connection(&mut self, now: TsUs) {
+    pub fn lose_connection(&mut self, now: LocalTs) {
         let outstanding = self.inflight.take_all();
         if !outstanding.is_empty() {
             warn!(
@@ -227,7 +227,7 @@ impl<S: EventSink> ExecSession<S> {
     /// An expired order request is reconciled with a status probe and never resent, because the
     /// first one may have executed and a second would double the order.
     #[must_use]
-    pub fn expire(&mut self, now: TsUs) -> Expired {
+    pub fn expire(&mut self, now: LocalTs) -> Expired {
         let mut expired = Expired::default();
         for entry in self.inflight.take_expired(now) {
             let fallout = entry.request.timeout_fallout();
@@ -265,7 +265,7 @@ impl<S: EventSink> ExecSession<S> {
     }
 
     #[must_use]
-    pub fn poll_resync(&mut self, now: TsUs, reads: usize) -> ResyncPoll {
+    pub fn poll_resync(&mut self, now: LocalTs, reads: usize) -> ResyncPoll {
         match self.resync.due(now) {
             ResyncStep::Wait => ResyncPoll::Wait,
             ResyncStep::Retry => {
@@ -289,7 +289,7 @@ impl<S: EventSink> ExecSession<S> {
 
     /// A prior run's order still resting keeps readiness pending, so the pass that finished arms
     /// once that order is gone.
-    pub fn arm_readiness(&mut self, now: TsUs) -> bool {
+    pub fn arm_readiness(&mut self, now: LocalTs) -> bool {
         if !self.is_readiness_pending || !self.core.on_stream_ready() {
             return false;
         }

@@ -12,7 +12,7 @@ use super::wallet::{ReservationRequest, ReserveOutcome, SimWallet};
 use super::{EmissionBook, VenueEvent};
 use crate::msg::exec::OrderStyle;
 use crate::msg::ids::{ClientOrderId, Price, Qty, Side};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::venues::exec::ExecRequest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -47,7 +47,7 @@ pub struct RequestFold<'a> {
 }
 
 impl RequestFold<'_> {
-    pub fn admit(&mut self, request: &ExecRequest, effective_ts_us: TsUs) -> AdmitPlan {
+    pub fn admit(&mut self, request: &ExecRequest, effective_ts_us: LocalTs) -> AdmitPlan {
         match *request {
             ExecRequest::Place {
                 client_id,
@@ -82,7 +82,7 @@ impl RequestFold<'_> {
         }
     }
 
-    pub fn run(&mut self, action: TimedAction, at_ts_us: TsUs) {
+    pub fn run(&mut self, action: TimedAction, at_ts_us: LocalTs) {
         match action {
             TimedAction::Activate(index) => self.activate(index, at_ts_us),
             TimedAction::Cancel(index) => self.cancel(index, at_ts_us),
@@ -126,7 +126,7 @@ impl RequestFold<'_> {
         Some((placement.effective_ts_us, TimedAction::Activate(index)))
     }
 
-    fn refuse(&mut self, index: SimOrderIndex, reason: RefusalReason, at_ts_us: TsUs) {
+    fn refuse(&mut self, index: SimOrderIndex, reason: RefusalReason, at_ts_us: LocalTs) {
         self.close(index, ClosedReason::Refused(reason), at_ts_us);
         let snapshot = self.snapshot(index);
         self.emissions
@@ -140,7 +140,7 @@ impl RequestFold<'_> {
         self.limits.refuse(placement.price, placement.qty)
     }
 
-    fn activate(&mut self, index: SimOrderIndex, at_ts_us: TsUs) {
+    fn activate(&mut self, index: SimOrderIndex, at_ts_us: LocalTs) {
         let Some(record) = self.orders.get(index) else {
             return;
         };
@@ -205,7 +205,7 @@ impl RequestFold<'_> {
         );
     }
 
-    fn answer_status(&mut self, client_id: ClientOrderId, at_ts_us: TsUs) {
+    fn answer_status(&mut self, client_id: ClientOrderId, at_ts_us: LocalTs) {
         let event = match self.orders.find(client_id) {
             Some(index) => VenueEvent::OrderStatus {
                 snapshot: self.snapshot(index),
@@ -215,7 +215,7 @@ impl RequestFold<'_> {
         self.emissions.push(at_ts_us, event);
     }
 
-    fn answer_open_orders(&mut self, at_ts_us: TsUs) {
+    fn answer_open_orders(&mut self, at_ts_us: LocalTs) {
         let rows: Vec<OrderSnapshot> = self
             .orders
             .open_indices()
@@ -225,7 +225,7 @@ impl RequestFold<'_> {
             .push(at_ts_us, VenueEvent::OpenOrders { rows });
     }
 
-    pub(super) fn close(&mut self, index: SimOrderIndex, reason: ClosedReason, at_ts_us: TsUs) {
+    pub(super) fn close(&mut self, index: SimOrderIndex, reason: ClosedReason, at_ts_us: LocalTs) {
         let Some((side, price)) = close_order(self.orders, self.wallet, index, reason, at_ts_us)
         else {
             return;
@@ -249,7 +249,7 @@ pub(super) fn close_order(
     wallet: &mut SimWallet,
     index: SimOrderIndex,
     reason: ClosedReason,
-    at_ts_us: TsUs,
+    at_ts_us: LocalTs,
 ) -> Option<(Side, Price)> {
     let record = orders.get_mut(index)?;
     if !record.is_open() {
@@ -270,7 +270,7 @@ struct Placement {
     price: Price,
     qty: Qty,
     style: OrderStyle,
-    effective_ts_us: TsUs,
+    effective_ts_us: LocalTs,
 }
 
-pub type AdmitPlan = Option<(TsUs, TimedAction)>;
+pub type AdmitPlan = Option<(LocalTs, TimedAction)>;

@@ -7,7 +7,7 @@ use std::process::{Child, ExitStatus};
 
 use rustix::process::{Pid, Signal, kill_process};
 
-use crate::msg::time::{TsUs, boot_stamp_us};
+use crate::msg::time::{LocalTs, wall_clock_now};
 use crate::runtime::config::{ExecutionMode, RunIdentity};
 
 use super::catalog::ParsedConfig;
@@ -29,7 +29,7 @@ pub(super) enum SlotState {
 #[derive(Debug)]
 pub(super) struct LiveChild {
     pub(super) child: Child,
-    pub(super) started_ts_us: TsUs,
+    pub(super) started_ts_us: LocalTs,
     pub(super) boot: ParsedConfig,
 }
 
@@ -44,7 +44,7 @@ impl ChildSlot {
             console_log,
             state: SlotState::Running(LiveChild {
                 child,
-                started_ts_us: boot_stamp_us(),
+                started_ts_us: wall_clock_now(),
                 boot,
             }),
         }
@@ -162,7 +162,7 @@ impl Stopping {
 }
 
 /// UTC with a microsecond fraction, the shape a JSON client parses without a calendar library.
-fn format_rfc3339(at: TsUs) -> String {
+fn format_rfc3339(at: LocalTs) -> String {
     let civil = at.civil();
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:06}Z",

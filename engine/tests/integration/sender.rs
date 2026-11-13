@@ -122,7 +122,7 @@ fn pinned_sender_sends_without_waiting_for_a_tick() {
             qty: Qty(1),
             style: OrderStyle::PostOnly,
         },
-        issued_ts_us: engine::msg::time::TsUs::from_micros(0),
+        issued_ts_us: engine::msg::time::LocalTs::from_micros(0),
         issue_tick: stamper.stamp(),
     }))
     .expect("room on the lane");

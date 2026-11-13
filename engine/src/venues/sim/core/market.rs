@@ -6,7 +6,7 @@ use super::queue::{OwnFill, PriceLadder, PublicPolicy, QueueAhead, SimOrderIndex
 use crate::hot::book::{Book, LevelState, SnapshotOutcome};
 use crate::msg::ids::{AggregateTradeId, InstrumentId, Price, Qty, RawTradeId, Side, StreamEpoch};
 use crate::msg::inbound::{BookChunk, BookChunkKind, TradeEvent, VenueMeta};
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ResetReason {
@@ -114,7 +114,7 @@ impl TradeContinuity {
 #[derive(Debug, Clone)]
 struct StagedDelta {
     update_id: u64,
-    venue_ts_us: TsUs,
+    venue_ts_us: VenueTs,
     chunks: Vec<BookChunk>,
 }
 
@@ -124,7 +124,7 @@ pub struct MarketFold {
     book: Book,
     bids: PriceLadder,
     asks: PriceLadder,
-    last_commit_venue_ts_us: TsUs,
+    last_commit_venue_ts_us: VenueTs,
     continuity: TradeContinuity,
     staged: Option<StagedDelta>,
     matching: MatchingState,
@@ -138,7 +138,7 @@ impl MarketFold {
             book: Book::new_silent(book_capacity),
             bids: PriceLadder::new(Side::Buy),
             asks: PriceLadder::new(Side::Sell),
-            last_commit_venue_ts_us: TsUs::from_micros(i64::MIN),
+            last_commit_venue_ts_us: VenueTs::from_micros(i64::MIN),
             continuity: TradeContinuity::new(),
             staged: None,
             matching: MatchingState::Suspended,
@@ -245,7 +245,7 @@ impl MarketFold {
         self.stage_delta(chunk, exchange_ts_us)
     }
 
-    fn stage_delta(&mut self, chunk: &BookChunk, venue_ts_us: TsUs) -> Option<ResetReason> {
+    fn stage_delta(&mut self, chunk: &BookChunk, venue_ts_us: VenueTs) -> Option<ResetReason> {
         if let Some(staged) = &self.staged
             && (staged.update_id != chunk.update_id || staged.venue_ts_us != venue_ts_us)
         {
@@ -293,7 +293,7 @@ impl MarketFold {
     }
 
     #[cold]
-    pub fn on_book_reset(&mut self, venue_ts_us: TsUs) -> ResetReason {
+    pub fn on_book_reset(&mut self, venue_ts_us: VenueTs) -> ResetReason {
         self.staged = None;
         self.book.apply_reset();
         self.last_commit_venue_ts_us = self.last_commit_venue_ts_us.max(venue_ts_us);

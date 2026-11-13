@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use crate::msg::ids::{AggregateTradeId, InstrumentId, RawTradeId, Side};
 use crate::msg::inbound::{KlineEvent, Level, TradeEvent};
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 use crate::runtime::config::KlineInterval;
 use crate::venues::edge::decode::{
     DecimalFault, JsonFrame, levels, mantissa_field, price_field, qty_field,
@@ -17,7 +17,7 @@ const FRAME: JsonFrame = JsonFrame("binance");
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParseContext {
     pub instrument: InstrumentId,
-    pub received_ts_us: TsUs,
+    pub received_ts_us: LocalTs,
 }
 
 /// Depth delta, seq ids (spot U==prev_u+1, perp pu==prev_u), absolute levels, qty==0=removal.
@@ -29,8 +29,8 @@ pub struct DepthDiff {
     pub prev_final_update_id: Option<u64>,
     pub bids: Vec<Level>,
     pub asks: Vec<Level>,
-    pub exchange_ts_us: TsUs,
-    pub received_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
+    pub received_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,7 +39,7 @@ pub struct DepthSnapshot {
     pub last_update_id: u64,
     pub bids: Vec<Level>,
     pub asks: Vec<Level>,
-    pub received_ts_us: TsUs,
+    pub received_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

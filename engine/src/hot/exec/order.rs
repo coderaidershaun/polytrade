@@ -10,7 +10,7 @@ use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::msg::exec::{ExecEvent, OrderStyle};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side, VenueOrderId};
 use crate::msg::persist::OrderLifecycle;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 
 use super::account::AccountWatermark;
@@ -87,7 +87,7 @@ pub struct OrderClaim {
     pub price: Price,
     pub qty: Qty,
     pub style: OrderStyle,
-    pub claimed_ts_us: TsUs,
+    pub claimed_ts_us: LocalTs,
     pub recon_seq: u64,
 }
 
@@ -156,7 +156,7 @@ impl From<OrderState> for OrderLifecycle {
 pub struct ReconcilePass {
     pub instrument: InstrumentId,
     pub recon_seq: u64,
-    pub recon_ts_us: TsUs,
+    pub recon_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -178,8 +178,8 @@ pub struct OrderSlot {
     pub reserved_at: AccountWatermark,
     pub placed_recon_seq: u64,
     pub seen_recon_seq: u64,
-    pub last_event_ts_us: TsUs,
-    pub closed_ts_us: TsUs,
+    pub last_event_ts_us: LocalTs,
+    pub closed_ts_us: LocalTs,
 }
 
 impl OrderSlot {
@@ -201,8 +201,8 @@ impl OrderSlot {
         reserved_at: AccountWatermark::ZERO,
         placed_recon_seq: 0,
         seen_recon_seq: 0,
-        last_event_ts_us: TsUs::from_micros(0),
-        closed_ts_us: TsUs::from_micros(0),
+        last_event_ts_us: LocalTs::from_micros(0),
+        closed_ts_us: LocalTs::from_micros(0),
     };
 
     /// Whether the venue is holding this order PASSIVELY — the shape a cancel can actually reach.
@@ -385,7 +385,7 @@ impl OrderTable {
     }
 
     #[inline]
-    pub fn is_timed_out(&self, index: usize, now: TsUs, timeout: DurationUs) -> bool {
+    pub fn is_timed_out(&self, index: usize, now: LocalTs, timeout: DurationUs) -> bool {
         let slot = &self.slots[index];
         slot.state.is_in_flight() && now.diff(slot.last_event_ts_us) > timeout
     }
@@ -428,7 +428,7 @@ impl OrderTable {
         &mut self.slots[index]
     }
 
-    pub fn reap(&mut self, now: TsUs, window: DurationUs) {
+    pub fn reap(&mut self, now: LocalTs, window: DurationUs) {
         for slot in self.slots.iter_mut() {
             let is_reapable = matches!(slot.state, OrderState::Closed(_))
                 && now.diff(slot.closed_ts_us) >= window;

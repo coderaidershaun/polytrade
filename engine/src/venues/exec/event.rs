@@ -6,7 +6,7 @@ use crate::msg::exec::{
     Provenance, RejectClass,
 };
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 
 // A timed-out request may still have reached the venue, so its outcome is ambiguous and only a
 // reconciliation can settle it.
@@ -14,7 +14,7 @@ pub(crate) fn request_timed_out(
     instrument: InstrumentId,
     client_id: ClientOrderId,
     side: Side,
-    at: TsUs,
+    at: LocalTs,
 ) -> ExecEvent {
     ExecEvent {
         reject: Some(RejectClass::Ambiguous),
@@ -29,7 +29,7 @@ pub(crate) fn place_not_sent(
     instrument: InstrumentId,
     client_id: ClientOrderId,
     side: Side,
-    at: TsUs,
+    at: LocalTs,
 ) -> ExecEvent {
     ExecEvent {
         side,
@@ -42,18 +42,18 @@ pub(crate) fn place_not_sent(
 pub(crate) fn amend_not_sent(
     instrument: InstrumentId,
     client_id: ClientOrderId,
-    at: TsUs,
+    at: LocalTs,
 ) -> ExecEvent {
     blank(ExecKind::AmendNotSent, instrument, client_id, at)
 }
 
 // Ends an open-orders resync. The engine stays unready until it sees one.
-pub fn open_orders_snapshot_end(instrument: InstrumentId, at: TsUs) -> ExecEvent {
+pub fn open_orders_snapshot_end(instrument: InstrumentId, at: LocalTs) -> ExecEvent {
     blank(ExecKind::SnapshotEnd, instrument, ClientOrderId(0), at)
 }
 
 // Live and simulated order streams both raise this once they subscribe.
-pub(crate) fn stream_ready(at: TsUs) -> ExecEvent {
+pub(crate) fn stream_ready(at: LocalTs) -> ExecEvent {
     blank(
         ExecKind::StreamReady,
         InstrumentId::NOT_APPLICABLE,
@@ -62,7 +62,7 @@ pub(crate) fn stream_ready(at: TsUs) -> ExecEvent {
     )
 }
 
-pub(crate) fn stream_reset(at: TsUs) -> ExecEvent {
+pub(crate) fn stream_reset(at: LocalTs) -> ExecEvent {
     blank(
         ExecKind::StreamReset,
         InstrumentId::NOT_APPLICABLE,
@@ -81,7 +81,7 @@ pub(crate) fn blank(
     kind: ExecKind,
     instrument: InstrumentId,
     client_id: ClientOrderId,
-    at: TsUs,
+    at: LocalTs,
 ) -> ExecEvent {
     ExecEvent {
         instrument,
@@ -105,7 +105,7 @@ pub(crate) fn blank(
         reject_code: 0,
         amends_remaining: ExecEvent::AMENDS_UNKNOWN,
         recon_seq: 0,
-        exchange_ts_us: at,
+        exchange_ts_us: at.as_venue_calendar(),
         request_sent_ts_us: None,
         received_ts_us: at,
         queued_ts_us: at,
@@ -115,8 +115,8 @@ pub(crate) fn blank(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ChunkStamps {
     pub(crate) venue_update_ts_ms: u64,
-    pub(crate) exchange_ts_us: TsUs,
-    pub(crate) received_ts_us: TsUs,
+    pub(crate) exchange_ts_us: VenueTs,
+    pub(crate) received_ts_us: LocalTs,
 }
 
 /// The engine stays unready until it sees the last chunk of a balance snapshot, so an empty sweep

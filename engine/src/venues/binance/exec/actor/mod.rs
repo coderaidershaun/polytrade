@@ -19,7 +19,7 @@ use tokio::task::JoinHandle;
 
 use crate::msg::exec::{CancelReason, ExecCommand};
 use crate::msg::ids::{ClientOrderId, InstrumentId, TradeId, VenueOrderId};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 use crate::runtime::registry::AssetDictionary;
 use crate::venues::binance::rest::BinanceEnv;
 use crate::venues::binance::ws;
@@ -178,7 +178,7 @@ impl Actor {
         }
     }
 
-    fn decode_context(&self, received_ts_us: TsUs) -> DecodeContext<'_> {
+    fn decode_context(&self, received_ts_us: LocalTs) -> DecodeContext<'_> {
         DecodeContext {
             symbols: &self.symbols,
             assets: &self.assets,

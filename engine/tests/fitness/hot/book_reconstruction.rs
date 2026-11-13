@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use engine::hot::book::{Book, BookState, SnapshotOutcome};
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, InboundMessage, Level};
-use engine::msg::time::TsUs;
+use engine::msg::time::{LocalTs, VenueTs};
 use engine::venues::polymarket::book::BookNormaliser;
 use engine::venues::polymarket::parse::PolyBook;
 use proptest::prelude::*;
@@ -193,8 +193,8 @@ fn an_empty_snapshot_still_carries_the_terminator() {
         asset_id: "token".into(),
         bids: Vec::new(),
         asks: Vec::new(),
-        exchange_ts_us: TsUs::from_micros(1),
-        received_ts_us: TsUs::from_micros(2),
+        exchange_ts_us: VenueTs::from_micros(1),
+        received_ts_us: LocalTs::from_micros(2),
     };
 
     let mut chunks = Vec::new();

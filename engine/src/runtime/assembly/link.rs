@@ -9,7 +9,7 @@ use crate::info;
 use crate::link::{
     FrameGuard, LINK_NAME_LEN, LinkHash, LinkIdentity, PeerFeed, TopicId, schema_hash_of_fields,
 };
-use crate::msg::time::boot_stamp_us;
+use crate::msg::time::wall_clock_now;
 use crate::runtime::config::{Config, RunIdentity};
 use crate::runtime::registry::Registry;
 
@@ -91,7 +91,7 @@ pub(super) fn link_bring_up<P>(
             strategy_hash: LinkHash::of_name(identity.strategy_id.as_str()),
             sender_te_hash: LinkHash::of_name(&identity.to_string()),
             // Wall-clock boot; restarted peer's seq=0 reads as restart, not stale stream.
-            boot_ts_us: boot_stamp_us(),
+            boot_ts_us: wall_clock_now().to_peer(),
         },
         guard: FrameGuard {
             token_hash: LinkHash::of_name(token),

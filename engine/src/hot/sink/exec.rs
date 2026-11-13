@@ -6,7 +6,7 @@ use rtrb::Producer;
 use crate::hot::digest::{Digest, Digester, digest_fields};
 use crate::hot::exec::{MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS};
 use crate::msg::exec::{ExecCommand, ExecLaneItem, StampedExecCommand};
-use crate::msg::time::{DurationUs, Stamper, Tick, TsUs};
+use crate::msg::time::{DurationUs, LocalTs, Stamper, Tick};
 
 /// Commands one spin can produce for an instrument beyond the order table itself: an open-orders
 /// request, a flatten, one action per side, the sweep a halt issues, and a prior-run cancel.
@@ -119,7 +119,7 @@ impl PendingCommands {
     }
 
     /// Pushes FIFO and appends a watermark only when every command was accepted.
-    pub(crate) fn drain_into(&mut self, sink: &mut ExecSink, at: TsUs) {
+    pub(crate) fn drain_into(&mut self, sink: &mut ExecSink, at: LocalTs) {
         let items = self
             .banked
             .iter()

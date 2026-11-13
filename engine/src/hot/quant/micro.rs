@@ -3,7 +3,7 @@
 use crate::hot::quant::BPS;
 use crate::msg::ids::Price;
 use crate::msg::inbound::Level;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 /// Size-weighted mid (weighted by opposite side's qty, leans to thinner side; falls back to mid if empty).
 #[inline]
@@ -100,7 +100,7 @@ const MIN_DEVIATION_FRACTION: f64 = 0.05;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ResilienceSample {
-    pub event_ts_us: TsUs,
+    pub event_ts_us: LocalTs,
     pub mid: f64,
     pub equilibrium: f64,
     pub half_spread: f64,

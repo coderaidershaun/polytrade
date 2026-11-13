@@ -4,7 +4,7 @@ use crate::msg::ids::Side;
 use crate::msg::persist::{
     BookEventKind, BookEventRow, FeatureRow, KlineRow, LinkFrameRow, RotationRow, TradeRow,
 };
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 use super::TableRow;
 use super::column::Column;
@@ -26,7 +26,7 @@ impl TableRow for FeatureRow {
         Column::F64("value", |row| row.value),
     ];
 
-    fn partition_ts(&self) -> TsUs {
+    fn partition_ts(&self) -> LocalTs {
         self.event_ts_us
     }
 }
@@ -34,7 +34,7 @@ impl TableRow for FeatureRow {
 impl TableRow for TradeRow {
     const NAME: &'static str = "trades";
     const COLUMNS: &'static [Column<Self>] = &[
-        Column::Ts("exchange_ts_us", |row| row.exchange_ts_us),
+        Column::VenueTs("exchange_ts_us", |row| row.exchange_ts_us),
         Column::Ts("received_ts_us", |row| row.received_ts_us),
         Column::U16("instrument_id", |row| row.instrument.0),
         Column::Mantissa("price", |row| row.price.0),
@@ -42,7 +42,7 @@ impl TableRow for TradeRow {
         Column::Text("side", |row| row.side.as_str()),
     ];
 
-    fn partition_ts(&self) -> TsUs {
+    fn partition_ts(&self) -> LocalTs {
         self.received_ts_us
     }
 }
@@ -59,7 +59,7 @@ impl TableRow for BookEventRow {
         Column::U64("update_id", |row| row.update_id),
     ];
 
-    fn partition_ts(&self) -> TsUs {
+    fn partition_ts(&self) -> LocalTs {
         self.received_ts_us
     }
 }
@@ -67,11 +67,11 @@ impl TableRow for BookEventRow {
 impl TableRow for KlineRow {
     const NAME: &'static str = "klines";
     const COLUMNS: &'static [Column<Self>] = &[
-        Column::Ts("exchange_ts_us", |row| row.exchange_ts_us),
+        Column::VenueTs("exchange_ts_us", |row| row.exchange_ts_us),
         Column::Ts("received_ts_us", |row| row.received_ts_us),
         Column::U16("instrument_id", |row| row.instrument.0),
         Column::Text("interval", |row| row.interval.as_str()),
-        Column::Ts("open_ts_us", |row| row.open_ts_us),
+        Column::VenueTs("open_ts_us", |row| row.open_ts_us),
         Column::Mantissa("open", |row| row.open.0),
         Column::Mantissa("high", |row| row.high.0),
         Column::Mantissa("low", |row| row.low.0),
@@ -82,7 +82,7 @@ impl TableRow for KlineRow {
         Column::Bool("is_closed", |row| row.is_closed),
     ];
 
-    fn partition_ts(&self) -> TsUs {
+    fn partition_ts(&self) -> LocalTs {
         self.received_ts_us
     }
 }
@@ -91,7 +91,7 @@ impl TableRow for LinkFrameRow {
     const NAME: &'static str = "link_frames";
     const COLUMNS: &'static [Column<Self>] = &[
         Column::Ts("received_ts_us", |row| row.received_ts_us),
-        Column::Ts("event_ts_us", |row| row.event_ts_us),
+        Column::VenueTs("event_ts_us", |row| row.event_ts_us),
         Column::Text("kind", |row| row.kind.as_str()),
         Column::U64("sender_te_hash", |row| row.sender_te_hash),
         Column::U16("topic", |row| row.topic),
@@ -101,7 +101,7 @@ impl TableRow for LinkFrameRow {
         Column::F64("value", |row| row.value),
     ];
 
-    fn partition_ts(&self) -> TsUs {
+    fn partition_ts(&self) -> LocalTs {
         self.received_ts_us
     }
 }
@@ -111,14 +111,14 @@ impl TableRow for RotationRow {
     const COLUMNS: &'static [Column<Self>] = &[
         Column::Ts("received_ts_us", |row| row.received_ts_us),
         Column::U16("instrument_id", |row| row.instrument.0),
-        Column::Ts("window_open_ts_us", |row| row.window_open_ts_us),
-        Column::Ts("window_close_ts_us", |row| row.window_close_ts_us),
+        Column::VenueTs("window_open_ts_us", |row| row.window_open_ts_us),
+        Column::VenueTs("window_close_ts_us", |row| row.window_close_ts_us),
         Column::Text("token_id_up", |row| row.token_id_up.as_ref()),
         Column::Text("token_id_down", |row| row.token_id_down.as_ref()),
         Column::Text("condition_id", |row| row.condition_id.as_ref()),
     ];
 
-    fn partition_ts(&self) -> TsUs {
+    fn partition_ts(&self) -> LocalTs {
         self.received_ts_us
     }
 }

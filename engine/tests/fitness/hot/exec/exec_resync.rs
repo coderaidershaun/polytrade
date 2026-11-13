@@ -17,7 +17,7 @@ use engine::hot::exec::{
 };
 use engine::msg::exec::{ExecKind, OrderStyle};
 use engine::msg::ids::{Price, Qty, Side};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::msg::ui::UiEvent;
 use engine::venues::exec::{MAX_RESYNC_ATTEMPTS, ResyncPass, ResyncStep, open_orders_snapshot_end};
 
@@ -34,7 +34,7 @@ const RETRY_DELAY: i64 = 250_000;
 
 /// Later than any instant a test schedules, so `due` at this reads as "is anything scheduled at
 /// all" rather than "is it due yet".
-const FOREVER: TsUs = TsUs::from_micros(i64::MAX / 2);
+const FOREVER: LocalTs = LocalTs::from_micros(i64::MAX / 2);
 
 /// FITNESS: the undecodable-open-order policy carried all the way to completion, and retries bounded
 /// to a finite count.
@@ -131,7 +131,7 @@ fn a_cold_start_quotes_only_once_the_resync_marker_lands() {
 /// orders it just read back.
 #[test]
 fn the_resync_marker_can_retire_no_slot() {
-    let marker = open_orders_snapshot_end(INSTRUMENT, TsUs::from_micros(1_000));
+    let marker = open_orders_snapshot_end(INSTRUMENT, LocalTs::from_micros(1_000));
     assert_eq!(marker.kind, ExecKind::SnapshotEnd);
     assert_eq!(marker.instrument, INSTRUMENT);
 
@@ -144,7 +144,7 @@ fn the_resync_marker_can_retire_no_slot() {
             price: Price(100),
             qty: Qty(1),
             style: OrderStyle::PostOnly,
-            claimed_ts_us: TsUs::from_micros(0),
+            claimed_ts_us: LocalTs::from_micros(0),
             recon_seq: 0,
         })
         .expect("a fresh table has a free slot");

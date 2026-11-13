@@ -3,7 +3,7 @@
 use crate::hot::sink::ExposureSink;
 use crate::log::hot_warn;
 use crate::msg::inbound::InboundMessage;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::runtime::exposure::{ExposureSnapshot, InstrumentExposure, MAX_EXPOSURE_INSTRUMENTS};
 
 use super::HotState;
@@ -57,7 +57,7 @@ pub(super) fn warn_uncovered_instruments(instrument_count: usize) {
 
 impl HotState {
     /// Publish basis snapshot (only where changed). Compare against last published, not ledger flag (can't drift).
-    pub(super) fn publish_exposure(&mut self, at: TsUs) {
+    pub(super) fn publish_exposure(&mut self, at: LocalTs) {
         let durable = self
             .ledger
             .rows()

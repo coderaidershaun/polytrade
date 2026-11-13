@@ -7,7 +7,7 @@
 
 use engine::hot::exec::{MAX_ORDER_BUDGET_WINDOWS, OrderBudgetWindow};
 use engine::msg::ids::{AssetId, Price, Qty};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, VenueTs};
 use engine::runtime::config::{BinanceEnv, BinanceMarket, VenueMarket};
 use engine::runtime::registry::{InstrumentRow, OrderRateLimit, RateInterval, Registry};
 use engine::runtime::{EngineError, check_symbol_order_capacity};
@@ -351,8 +351,8 @@ pub(crate) fn poly_market(tick_size: Price, min_order_size: Qty) -> GammaMarket 
         token_down: "222".into(),
         tick_size,
         min_order_size,
-        window_open_ts_us: TsUs::from_micros(1_784_439_600_000_000),
-        window_close_ts_us: TsUs::from_micros(1_784_439_900_000_000),
+        window_open_ts_us: VenueTs::from_micros(1_784_439_600_000_000),
+        window_close_ts_us: VenueTs::from_micros(1_784_439_900_000_000),
     }
 }
 

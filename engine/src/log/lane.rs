@@ -12,7 +12,7 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use super::record::{Callsite, HotRecord, Level, TextRecord, WORDS_PER_RECORD, message_time};
 use super::render::LogArgs;
-use crate::msg::time::{EngineClock, TsUs, boot_stamp_us};
+use crate::msg::time::{EngineClock, LocalTs, wall_clock_now};
 
 const UNREGISTERED_TAG: &str = "unregistered";
 const HOT_LANE_CAPACITY: usize = 4096;
@@ -41,7 +41,7 @@ pub(super) enum AnyLane {
 }
 
 pub(super) struct BacktraceMessage {
-    pub(super) ts_us: TsUs,
+    pub(super) ts_us: LocalTs,
     pub(super) module: &'static str,
     pub(super) file: &'static str,
     pub(super) line: u32,
@@ -140,19 +140,19 @@ fn lane<T: Copy>(capacity: usize, marker: T) -> (LaneWriter<T>, LaneReader<T>) {
 }
 
 fn text_lane(capacity: usize) -> (LaneWriter<TextRecord>, LaneReader<TextRecord>) {
-    let marker = TextRecord::formatted(&MARKER, TsUs::from_micros(0), format_args!(""));
+    let marker = TextRecord::formatted(&MARKER, LocalTs::from_micros(0), format_args!(""));
     lane(capacity, marker)
 }
 
 fn hot_lane(capacity: usize) -> (LaneWriter<HotRecord>, LaneReader<HotRecord>) {
-    let marker = HotRecord::from_words(&MARKER, TsUs::from_micros(0), [0; WORDS_PER_RECORD]);
+    let marker = HotRecord::from_words(&MARKER, LocalTs::from_micros(0), [0; WORDS_PER_RECORD]);
     lane(capacity, marker)
 }
 
 /// A ring of hot records whose writer another owner keeps, such as the strategy lane. Each slot
 /// is touched once here, on the calling thread.
 pub(crate) fn hot_ring(capacity: usize) -> (Producer<HotRecord>, Consumer<HotRecord>) {
-    let marker = HotRecord::from_words(&MARKER, TsUs::from_micros(0), [0; WORDS_PER_RECORD]);
+    let marker = HotRecord::from_words(&MARKER, LocalTs::from_micros(0), [0; WORDS_PER_RECORD]);
     prefaulted_ring(capacity, marker)
 }
 
@@ -275,10 +275,10 @@ fn open_lane(tag: &'static str) -> Option<LaneWriter<TextRecord>> {
     clippy::disallowed_methods,
     reason = "a log line and its file date take wall time, which is never engine state"
 )]
-fn engine_time() -> TsUs {
+fn engine_time() -> LocalTs {
     GLOBALS
         .get()
-        .map_or_else(boot_stamp_us, |globals| globals.clock.now())
+        .map_or_else(wall_clock_now, |globals| globals.clock.now())
 }
 
 /// The entry point of the text macros. Only Level::Error captures a backtrace, and it always does.

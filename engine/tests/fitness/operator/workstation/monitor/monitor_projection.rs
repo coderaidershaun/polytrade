@@ -13,7 +13,7 @@ use proptest::prelude::*;
 use engine::hot::exec::{CloseReason, ExecHalt, HaltReason, OrderState, RejectOrigin};
 use engine::msg::exec::RejectClass;
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::msg::ui::{
     DomQuote, UI_ORDER_SNAPSHOT_CAPACITY, UiBookSnapshot, UiBookState, UiCatalog, UiEvent,
     UiInstrument, UiWorkingOrder,
@@ -61,7 +61,7 @@ fn quote_event(
     UiEvent::Quote {
         instrument: InstrumentId(instrument),
         seq,
-        event_ts_us: TsUs::from_micros(event_ts),
+        event_ts_us: VenueTs::from_micros(event_ts),
         quote: DomQuote::top(leg(bid), leg(ask)),
     }
 }
@@ -70,7 +70,7 @@ fn feature_event(instrument: u16, seq: u64, event_ts: i64, feature: u16, value: 
     UiEvent::Feature {
         instrument: InstrumentId(instrument),
         seq,
-        event_ts_us: TsUs::from_micros(event_ts),
+        event_ts_us: VenueTs::from_micros(event_ts),
         feature: engine::msg::persist::FeatureId(feature),
         value,
     }
@@ -80,7 +80,7 @@ fn trade_event(instrument: u16, seq: u64, event_ts: i64, qty: i64) -> UiEvent {
     UiEvent::Trade {
         instrument: InstrumentId(instrument),
         seq,
-        event_ts_us: TsUs::from_micros(event_ts),
+        event_ts_us: VenueTs::from_micros(event_ts),
         aggressor: Side::Buy,
         price: Price(100),
         qty: Qty(qty),
@@ -165,12 +165,12 @@ fn feature_fold_distinguishes_change_from_reemission() {
     assert_eq!(cell.value, 2.0, "value change: the later value wins");
     assert_eq!(
         cell.last_update_ts,
-        TsUs::from_micros(2_000),
+        VenueTs::from_micros(2_000),
         "value change: update ts"
     );
     assert_eq!(
         cell.last_changed_ts,
-        TsUs::from_micros(2_000),
+        VenueTs::from_micros(2_000),
         "value change: changed ts"
     );
 
@@ -178,12 +178,12 @@ fn feature_fold_distinguishes_change_from_reemission() {
     let cell = feature(&model, 0, 0).expect("reemission: feature seen");
     assert_eq!(
         cell.last_update_ts,
-        TsUs::from_micros(3_000),
+        VenueTs::from_micros(3_000),
         "reemission: a re-emission still refreshes the update time"
     );
     assert_eq!(
         cell.last_changed_ts,
-        TsUs::from_micros(2_000),
+        VenueTs::from_micros(2_000),
         "reemission: but the change time holds — the value did not differ"
     );
 
@@ -199,12 +199,12 @@ fn feature_fold_distinguishes_change_from_reemission() {
     );
     assert_eq!(
         cell.last_update_ts,
-        TsUs::from_micros(2_000),
+        VenueTs::from_micros(2_000),
         "nan reemission: a re-emitted NaN still refreshes the update time"
     );
     assert_eq!(
         cell.last_changed_ts,
-        TsUs::from_micros(1_000),
+        VenueTs::from_micros(1_000),
         "nan reemission: bit-equal NaN re-emission is not a change — the change time holds"
     );
 }
@@ -274,7 +274,7 @@ fn channel_projections_cases() {
         model.apply_event(UiEvent::OrderUpdate {
             instrument: InstrumentId(0),
             seq: 0,
-            event_ts_us: TsUs::from_micros(5),
+            event_ts_us: VenueTs::from_micros(5),
             client_id: ClientOrderId(41),
             quote_level: None,
             side: Side::Buy,
@@ -286,7 +286,7 @@ fn channel_projections_cases() {
         model.apply_event(UiEvent::Reject {
             instrument: InstrumentId(0),
             seq: 1,
-            event_ts_us: TsUs::from_micros(10),
+            event_ts_us: VenueTs::from_micros(10),
             side: Side::Sell,
             origin: RejectOrigin::Venue {
                 class: RejectClass::Gone,
@@ -326,7 +326,7 @@ fn channel_projections_cases() {
         model.apply_event(UiEvent::Rotation {
             instrument: InstrumentId(0),
             seq: 0,
-            event_ts_us: TsUs::from_micros(500),
+            event_ts_us: VenueTs::from_micros(500),
         });
         // An event-lane gap: the sequence jumps from 0 to 2, dropping one.
         model.apply_event(trade_event(0, 2, 900, 1));
@@ -462,7 +462,7 @@ fn balance_event(seq: u64, asset: AssetId, free: i64, locked: i64) -> UiEvent {
     UiEvent::Balance {
         asset,
         seq,
-        event_ts_us: TsUs::from_micros(seq as i64),
+        event_ts_us: VenueTs::from_micros(seq as i64),
         free,
         locked,
     }
@@ -472,7 +472,7 @@ fn order_event(seq: u64, id: u64, side: Side, state: OrderState) -> UiEvent {
     UiEvent::OrderUpdate {
         instrument: InstrumentId(0),
         seq,
-        event_ts_us: TsUs::from_micros(seq as i64),
+        event_ts_us: VenueTs::from_micros(seq as i64),
         client_id: ClientOrderId(id),
         quote_level: None,
         side,
@@ -500,7 +500,7 @@ fn order_snapshot(seq: u64, side: Side, total_working: u16, details: &[UiWorking
     UiEvent::OrderSnapshot {
         instrument: InstrumentId(0),
         seq,
-        event_ts_us: TsUs::from_micros(seq as i64),
+        event_ts_us: VenueTs::from_micros(seq as i64),
         side,
         detail_len: details.len() as u8,
         total_working,
@@ -633,7 +633,7 @@ fn account_view_cases() {
         model.set_catalog(catalog_with_assets(AssetId(3), AssetId(7)));
         model.apply_event(UiEvent::Execution {
             seq: 0,
-            event_ts_us: TsUs::from_micros(10),
+            event_ts_us: VenueTs::from_micros(10),
             halt: ExecHalt::Armed,
         });
         assert_eq!(
@@ -644,11 +644,11 @@ fn account_view_cases() {
 
         let halted = ExecHalt::Halted {
             reason: HaltReason::RealisedLoss,
-            halted_ts_us: TsUs::from_micros(20),
+            halted_ts_us: LocalTs::from_micros(20),
         };
         model.apply_event(UiEvent::Execution {
             seq: 1,
-            event_ts_us: TsUs::from_micros(20),
+            event_ts_us: VenueTs::from_micros(20),
             halt: halted,
         });
         assert_eq!(

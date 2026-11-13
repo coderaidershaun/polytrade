@@ -7,7 +7,7 @@ use crate::hot::quant::MIN_RATE;
 use crate::hot::quant::optimise::NelderMead;
 use crate::msg::ids::{Price, Side};
 use crate::msg::inbound::TradeEvent;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs, VenueTs};
 use crate::runtime::config::IntensitySpec;
 
 const PARAMS: usize = 2;
@@ -27,7 +27,7 @@ pub struct IntensityCounts {
     bid_reach: Vec<f64>,
     ask_reach: Vec<f64>,
     exposure_secs: f64,
-    last_decay_ts: Option<TsUs>,
+    last_decay_ts: Option<LocalTs>,
     open_group: Option<Group>,
     inside_spread: u64,
     without_book: u64,
@@ -36,7 +36,7 @@ pub struct IntensityCounts {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Group {
     side: Side,
-    exchange_ts_us: TsUs,
+    exchange_ts_us: VenueTs,
     deepest_bucket: usize,
     anchor: Price,
 }
@@ -169,7 +169,7 @@ impl IntensityCounts {
 
     /// Decays histograms by `e^(-lambda*dt)` and advances the exposure integral to `now`; a trade at
     /// or before `last_decay_ts` doesn't advance.
-    fn decay_to(&mut self, now: TsUs) {
+    fn decay_to(&mut self, now: LocalTs) {
         let Some(last) = self.last_decay_ts else {
             self.last_decay_ts = Some(now);
             return;
@@ -188,7 +188,7 @@ impl IntensityCounts {
     }
 
     /// Read-only: `(decay_factor, exposure_secs)` as of `now`.
-    fn decay_to_now(&self, now: TsUs) -> (f64, f64) {
+    fn decay_to_now(&self, now: LocalTs) -> (f64, f64) {
         let dt = match self.last_decay_ts {
             Some(last) => now.diff(last).to_secs().max(0.0),
             None => return (1.0, 0.0),
@@ -267,7 +267,7 @@ pub struct IntensityFit {
 
 impl IntensityFit {
     /// Fits A, k per side and pool. Below min_events returns prior fit (stale) or None.
-    pub fn fit(&mut self, counts: &IntensityCounts, now: TsUs) -> IntensityEstimate {
+    pub fn fit(&mut self, counts: &IntensityCounts, now: LocalTs) -> IntensityEstimate {
         IntensityEstimate {
             bid: self.fit_slot(Slot::Bid, counts, now),
             ask: self.fit_slot(Slot::Ask, counts, now),
@@ -279,7 +279,7 @@ impl IntensityFit {
         &mut self,
         slot: Slot,
         counts: &IntensityCounts,
-        now: TsUs,
+        now: LocalTs,
     ) -> Option<SideEstimate> {
         let index = slot.index();
         let max_depth = counts.max_depth();
@@ -336,7 +336,7 @@ pub struct PacedIntensity {
     fit: IntensityFit,
     /// (A,k) fit in force, read every spin. Re-solved on refit_interval.
     estimate: Option<IntensityEstimate>,
-    last_fit_ts_us: Option<TsUs>,
+    last_fit_ts_us: Option<LocalTs>,
     /// `None` never fits: no reach histogram is configured, so no counts reach it either.
     refit_interval: Option<DurationUs>,
 }
@@ -361,7 +361,7 @@ impl PacedIntensity {
     pub fn refit(
         &mut self,
         counts: Option<&IntensityCounts>,
-        now: TsUs,
+        now: LocalTs,
     ) -> Option<IntensityEstimate> {
         let refit_interval = self.refit_interval?;
         let counts = counts?;

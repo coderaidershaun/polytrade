@@ -4,7 +4,7 @@
 use crate::msg::ids::QueueId;
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::latency::{Category, Stage};
-use crate::msg::time::{ClockSource, TsUs};
+use crate::msg::time::{ClockSource, LocalTs};
 use crate::msg::ui::LatencyCell;
 
 use super::ring::SampleRing;
@@ -45,8 +45,8 @@ impl SinkKind {
 /// percent; the maximum is exact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LatencyRow {
-    pub interval_start_ts_us: TsUs,
-    pub interval_end_ts_us: TsUs,
+    pub interval_start_ts_us: LocalTs,
+    pub interval_end_ts_us: LocalTs,
     pub category: Category,
     pub stage: Stage,
     pub count: u64,
@@ -82,7 +82,7 @@ impl LatencyRow {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DropRow {
-    pub interval_end_ts_us: TsUs,
+    pub interval_end_ts_us: LocalTs,
     pub sink: SinkKind,
     /// Since the start of the run.
     pub dropped_total: u64,
@@ -90,7 +90,7 @@ pub struct DropRow {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BacklogRow {
-    pub interval_end_ts_us: TsUs,
+    pub interval_end_ts_us: LocalTs,
     pub queue: QueueId,
     pub max: u32,
     /// One-minute half-life average over spins, in message time.

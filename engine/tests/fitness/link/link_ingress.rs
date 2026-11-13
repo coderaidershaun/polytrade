@@ -15,12 +15,12 @@ use engine::link::{
 use engine::msg::ids::InstrumentId;
 use engine::msg::inbound::{InboundMessage, SpinTick};
 use engine::msg::persist::{FeatureId, LinkFrameRow, LinkRowKind, PersistRecord};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, VenueTs};
 use engine::runtime::config::{RecordedTables, TableKind};
 
 use crate::engine_support::{
     LinkedEngine, LinkedSetup, drain_persist, engine_with_link, idle_at, instrument_row,
-    run_control, spin, tracker_spec_all, ts,
+    run_control, spin, tracker_spec_all, ts, venue_ts,
 };
 
 const FIELDS: [&str; 2] = ["peer_mid", "peer_confidence"];
@@ -82,7 +82,7 @@ fn identity() -> LinkIdentity {
         token_hash: LinkHash::of_name(""),
         strategy_hash: LinkHash::of_name("strat"),
         sender_te_hash: SENDER,
-        boot_ts_us: ts(1_000),
+        boot_ts_us: venue_ts(1_000),
     }
 }
 
@@ -111,7 +111,11 @@ impl Edge {
     }
 
     fn admit(&mut self, seq: u64, values: &[f64], received: i64) -> Option<InboundMessage> {
-        let payload = LinkPayload::new(schema_hash_of_fields(&FIELDS), ts(received - 1), values);
+        let payload = LinkPayload::new(
+            schema_hash_of_fields(&FIELDS),
+            venue_ts(received - 1),
+            values,
+        );
         let datagram = LinkDatagram {
             envelope: Envelope::new(identity(), TopicId::FIRST_STRATEGY, seq),
             body: LinkBody::Payload(payload),
@@ -246,7 +250,7 @@ fn a_peer_frame_reaches_the_strategy_and_the_tape_under_independent_gates() {
                     && row.seq == 1
                     && row.count == case.values.len() as u16
                     && row.received_ts_us == ts(100)
-                    && row.event_ts_us == ts(99)),
+                    && row.event_ts_us == venue_ts(99)),
                 "case {}: every row carries the frame's identity and BOTH clocks, {rows:?}",
                 case.name
             );
@@ -327,7 +331,7 @@ fn link_send_banks_the_declared_schema_on_a_registered_topic() {
     assert_eq!(outbound.payload.values(), &[4.0, 0.5]);
     assert_eq!(
         outbound.payload.event_ts_us,
-        TsUs::from_micros(200),
+        VenueTs::from_micros(200),
         "stamped with the event's own time rather than a clock read, so a replayed callback banks \
          a byte-identical frame"
     );
@@ -344,7 +348,7 @@ fn link_send_banks_the_declared_schema_on_a_registered_topic() {
 fn an_overlong_payload_panics_rather_than_truncating() {
     LinkPayload::new(
         LinkHash::of_name("x"),
-        ts(1),
+        venue_ts(1),
         &vec![0.0; LINK_MAX_FIELDS + 1],
     );
 }

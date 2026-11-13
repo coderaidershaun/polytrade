@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use engine::hot::book::{Book, BookState};
 use engine::msg::ids::{InstrumentId, Price};
-use engine::msg::time::TsUs;
+use engine::msg::time::{LocalTs, VenueTs};
 use engine::runtime::config::PolySeries;
 use engine::venues::polymarket::book::{BookNormaliser, ChunkStamps};
 use engine::venues::polymarket::parse::{
@@ -31,8 +31,8 @@ const BOOK_CAPACITY: usize = 128;
 // Any receipt stamp inside the capture window keeps the ms→µs clamp exact; the checks read prices.
 const RECEIVED_US: i64 = 1_784_449_240_000_000;
 
-fn received() -> TsUs {
-    TsUs::from_micros(RECEIVED_US)
+fn received() -> LocalTs {
+    LocalTs::from_micros(RECEIVED_US)
 }
 
 struct TokenBook {
@@ -55,7 +55,7 @@ impl TokenBook {
         apply(&mut self.book, &messages);
     }
 
-    fn on_delta(&mut self, delta: &PolyDelta, exchange_ts_us: TsUs) {
+    fn on_delta(&mut self, delta: &PolyDelta, exchange_ts_us: VenueTs) {
         let mut messages = Vec::new();
         let stamps = ChunkStamps {
             exchange_ts_us,
@@ -124,7 +124,7 @@ impl Replay {
 
     /// The venue stamps every element in a frame with the post-frame touch, so apply the whole frame
     /// then compare each affected token's book against that token's last-seen `best_*`.
-    fn on_price_change(&mut self, changes: &[PolyDelta], exchange_ts_us: TsUs) {
+    fn on_price_change(&mut self, changes: &[PolyDelta], exchange_ts_us: VenueTs) {
         self.price_changes += 1;
         let mut last_best: HashMap<Box<str>, (Option<Price>, Option<Price>)> = HashMap::new();
         for delta in changes {
@@ -234,7 +234,7 @@ mod head {
         let market = parse_events(
             SERIES,
             GAMMA_CURRENT,
-            TsUs::from_micros(1_784_449_200_000_000),
+            VenueTs::from_micros(1_784_449_200_000_000),
         )
         .expect("gamma current parses");
         let replay = Replay::of(HEAD);
@@ -266,7 +266,7 @@ mod collapse {
         }
     }
 
-    fn resting(side: Side, price: Price, exchange_ts_us: TsUs) -> LevelUpdate {
+    fn resting(side: Side, price: Price, exchange_ts_us: VenueTs) -> LevelUpdate {
         LevelUpdate {
             side,
             price,
@@ -305,8 +305,8 @@ mod collapse {
             removals.len() >= 2,
             "a teardown is a mass removal, not one cancel"
         );
-        let burst_ts = TsUs::from_micros(burst_micros);
-        let seed_ts = TsUs::from_micros(burst_micros - 1);
+        let burst_ts = VenueTs::from_micros(burst_micros);
+        let seed_ts = VenueTs::from_micros(burst_micros - 1);
         let persisting = match removals[0].0 {
             Side::Buy => Side::Sell,
             Side::Sell => Side::Buy,
@@ -350,11 +350,15 @@ mod collapse {
         let old = parse_events(
             SERIES,
             GAMMA_CURRENT,
-            TsUs::from_micros(1_784_449_200_000_000),
+            VenueTs::from_micros(1_784_449_200_000_000),
         )
         .expect("current window parses");
-        let new = parse_events(SERIES, GAMMA_NEXT, TsUs::from_micros(1_784_449_500_000_000))
-            .expect("next window parses");
+        let new = parse_events(
+            SERIES,
+            GAMMA_NEXT,
+            VenueTs::from_micros(1_784_449_500_000_000),
+        )
+        .expect("next window parses");
 
         // The resolving window's real teardown burst empties each token's book.
         assert!(

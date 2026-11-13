@@ -7,7 +7,7 @@ use crate::msg::ids::{
     AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId,
 };
 use crate::msg::labelled_enum::labelled_enum;
-use crate::msg::time::{Tick, TsUs};
+use crate::msg::time::{LocalTs, Tick, VenueTs};
 
 /// A normalised order-lifecycle transition. Stream-lifecycle kinds carry only their kind
 /// and their stamps.
@@ -48,13 +48,13 @@ pub struct ExecEvent {
     /// instead. Lets the fold discard answers that have gone stale.
     pub recon_seq: u64,
     /// The venue's own transaction time, never interchanged with a local stamp.
-    pub exchange_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
     /// This process's wire-send stamp for the request this event answers. `None` for a
     /// stream event, a plain REST read, or a synthesised event, since none of those answer
     /// a timed request.
-    pub request_sent_ts_us: Option<TsUs>,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
+    pub request_sent_ts_us: Option<LocalTs>,
+    pub received_ts_us: LocalTs,
+    pub queued_ts_us: LocalTs,
 }
 
 impl ExecEvent {
@@ -222,9 +222,9 @@ pub struct AccountChunk {
     /// reservation for want of evidence is the safe direction — a local clock advances on every
     /// read and frees one before the money moved.
     pub venue_update_ts_ms: u64,
-    pub exchange_ts_us: TsUs,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
+    pub received_ts_us: LocalTs,
+    pub queued_ts_us: LocalTs,
 }
 
 impl AccountChunk {
@@ -302,7 +302,7 @@ impl ExecCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StampedExecCommand {
     pub command: ExecCommand,
-    pub issued_ts_us: TsUs,
+    pub issued_ts_us: LocalTs,
     /// The latency counter when the command entered the bank. A command that waited there keeps
     /// it. Only a sender reads it, to time the command's way to the wire.
     pub issue_tick: Tick,
@@ -312,7 +312,7 @@ pub struct StampedExecCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExecLaneItem {
     Command(StampedExecCommand),
-    Watermark(TsUs),
+    Watermark(LocalTs),
 }
 
 /// Why an exit is cancelling. Every exit path must cancel, since there is no bound on

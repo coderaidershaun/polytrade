@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use engine::msg::exec::{CancelReason, Provenance};
 use engine::msg::failure::{FailureClass, Halt};
 use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, QueueId, Side, SourceId, TradeId};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::runtime::shutdown::{AnswerPart, FatalReason, FatalSignal};
 use engine::runtime::{DrainDeadline, DrainFailure, DrainOutcome, DrainWatchdog, Exit, Trigger};
 use engine::venues::exec::{ExecCore, ExitPlan, MirroredOrder, SessionOutcome, SweepFailure};
@@ -314,16 +314,16 @@ fn sweep_past_deadline_is_not_swept() {
 
     let plan = ExitPlan::new(
         CancelReason::Shutdown,
-        TsUs::from_micros(0),
+        LocalTs::from_micros(0),
         Duration::from_micros(2_000_000),
     );
     assert_eq!(
-        plan.past_deadline(TsUs::from_micros(2_000_000), VENUE, core.mirror()),
+        plan.past_deadline(LocalTs::from_micros(2_000_000), VENUE, core.mirror()),
         None,
         "the deadline itself still belongs to the sweep"
     );
     let ended = plan
-        .past_deadline(TsUs::from_micros(2_000_001), VENUE, core.mirror())
+        .past_deadline(LocalTs::from_micros(2_000_001), VENUE, core.mirror())
         .expect("one microsecond past the deadline the session gives up");
     let SessionOutcome::SweepPastDeadline(failure) = ended else {
         panic!("a sweep past its deadline with 2 orders resting ended as {ended:?}");

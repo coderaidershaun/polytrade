@@ -23,7 +23,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::msg::exec::{AssetBalance, CancelReason, ExecCommand};
 use crate::msg::ids::{AssetId, InstrumentId};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 use crate::runtime::registry::InstrumentRow;
 use crate::venues::edge::sender::{CommandTransport, Handover};
 use crate::venues::edge::socket::{Reader, Writer};
@@ -73,7 +73,7 @@ const REQUEST_HTTP_TIMEOUT: Duration = Duration::from_secs(4);
 #[derive(Debug, Clone, Copy)]
 struct Parked {
     availability: VenueAvailability,
-    until: TsUs,
+    until: LocalTs,
 }
 
 #[derive(Default)]
@@ -95,7 +95,7 @@ struct DriverCounts {
 struct Heartbeat {
     id: Option<Box<str>>,
     is_started: bool,
-    sent_at: TsUs,
+    sent_at: LocalTs,
 }
 
 impl Heartbeat {
@@ -103,7 +103,7 @@ impl Heartbeat {
         Self {
             id: None,
             is_started: false,
-            sent_at: TsUs::from_micros(0),
+            sent_at: LocalTs::from_micros(0),
         }
     }
 }

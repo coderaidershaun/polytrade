@@ -5,7 +5,7 @@
 
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty};
 use crate::msg::persist::FeatureId;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs, VenueTs};
 
 use super::envelope::{ByteReader, ByteWriter, LinkDecodeError, LinkHash, TopicId};
 
@@ -172,7 +172,7 @@ pub(super) use {wire_array, wire_enum, wire_struct};
 
 wire_primitive!(u8, u16, u32, i32, u64, i64, f64);
 
-wire_micros!(TsUs, DurationUs);
+wire_micros!(LocalTs, VenueTs, DurationUs);
 
 wire_newtype! {
     TopicId => u16,

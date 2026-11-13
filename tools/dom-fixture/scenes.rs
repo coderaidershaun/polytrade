@@ -3,7 +3,7 @@
 use engine::msg::ids::{ClientOrderId, FIXED_SCALE, Price, Qty};
 use engine::msg::inbound::Level;
 use engine::msg::time::DurationUs;
-use engine::msg::time::TsUs;
+use engine::msg::time::VenueTs;
 use engine::msg::ui::{DomQuote, UiBookSnapshot, UiBookState};
 use engine::operator::workstation::dom_view::{DomGrouping, FeedStatus};
 use engine::operator::workstation::exec_model::{OrderCell, OrderStatus};
@@ -357,7 +357,7 @@ fn order(id: u64, price: Price, milli: i64, status: OrderStatus) -> OrderCell {
         price,
         qty: qm(milli),
         filled: Qty(0),
-        at: TsUs::from_micros(0),
+        at: VenueTs::from_micros(0),
         quote_level: None,
     }
 }

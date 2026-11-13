@@ -50,7 +50,7 @@ use rtrb::{Consumer, RingBuffer};
 use crate::engine_support::{
     Idle, ONE, account_chunk, detached_setup, engine_view, exec_event, exposure_ring,
     instrument_row, level, persist_ring_for, snapshot_pair, spin, strategy_log_ring, stream_ready,
-    tracker_spec_all, ts, ui_book_ring, ui_event_ring,
+    tracker_spec_all, ts, ui_book_ring, ui_event_ring, venue_ts,
 };
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
 use crate::poly_strategy::{PolyUpParams, PolyUpPublisher};
@@ -171,9 +171,19 @@ impl Outputs {
     }
 }
 
+/// The recorded hashes were taken when a venue stamp and a local stamp were one type, `TsUs`, so
+/// each record spells both stamp types by that name before it is hashed. The fields and their
+/// values are hashed as they are.
+fn spelled_with_one_stamp_type(record: &str) -> String {
+    record
+        .replace("LocalTs(", "TsUs(")
+        .replace("VenueTs(", "TsUs(")
+}
+
 fn digest(lane: &'static str, records: &[String]) -> Digest {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for record in records {
+        let record = spelled_with_one_stamp_type(record);
         for byte in record.bytes().chain(std::iter::once(b'\n')) {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
@@ -550,8 +560,8 @@ fn publisher_tape() -> Vec<InboundMessage> {
                 instrument: InstrumentId(1),
                 token: TokenId::from(&**down),
             },
-            window_open_ts_us: ts(POLYMARKET_WINDOW_OPEN_US),
-            window_close_ts_us: ts(POLYMARKET_WINDOW_OPEN_US + POLYMARKET_WINDOW_US),
+            window_open_ts_us: venue_ts(POLYMARKET_WINDOW_OPEN_US),
+            window_close_ts_us: venue_ts(POLYMARKET_WINDOW_OPEN_US + POLYMARKET_WINDOW_US),
             condition_id: "fitness-condition".into(),
         },
         &mut keep,

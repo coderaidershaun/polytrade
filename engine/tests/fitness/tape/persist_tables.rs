@@ -72,7 +72,7 @@ impl Strategy for EmitsEveryTable {
         ctx.emit_kline_row(KlineRow {
             instrument: event.instrument,
             interval: KlineInterval::OneMinute,
-            open_ts_us: event.received_ts_us,
+            open_ts_us: event.received_ts_us.as_venue_calendar(),
             open: event.price,
             high: event.price,
             low: event.price,

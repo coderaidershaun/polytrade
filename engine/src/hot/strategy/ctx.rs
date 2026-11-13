@@ -8,7 +8,7 @@ use crate::link::TopicId;
 use crate::log::{Callsite, HotRecord, LogArgs};
 use crate::msg::ids::{AssetId, InstrumentId, Qty, Side};
 use crate::msg::persist::{BookEventRow, FeatureId, FeatureRow, KlineRow, PersistRecord, TradeRow};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 use super::{StrategyCtx, WindowInfo};
 
@@ -110,7 +110,7 @@ impl StrategyCtx<'_> {
 
     /// `received_ts_us` of the message being processed — the deterministic stamp for emitted features.
     #[inline]
-    pub fn event_ts(&self) -> TsUs {
+    pub fn event_ts(&self) -> LocalTs {
         self.event_ts
     }
 

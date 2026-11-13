@@ -3,7 +3,7 @@
 
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunkKind, InboundMessage};
-use engine::msg::time::TsUs;
+use engine::msg::time::{LocalTs, VenueTs};
 use engine::venues::binance::depth::{ChainRule, DepthSequencer, DiffOutcome, SnapshotOutcome};
 use engine::venues::binance::parse::{
     DepthDiff, DepthSnapshot, ParseContext, parse_combined_frame, parse_perp_depth_diff,
@@ -13,7 +13,7 @@ use engine::venues::binance::parse::{
 use crate::engine_support::level;
 
 pub(crate) const INSTRUMENT: InstrumentId = InstrumentId(3);
-pub(crate) const RECEIVED: TsUs = TsUs::from_micros(1_784_410_630_000_000);
+pub(crate) const RECEIVED: LocalTs = LocalTs::from_micros(1_784_410_630_000_000);
 
 pub(crate) fn ctx() -> ParseContext {
     ParseContext {
@@ -108,7 +108,7 @@ fn synthetic_diff(
         prev_final_update_id,
         bids: vec![level(64_600_000_000, 50_000_000)],
         asks: vec![],
-        exchange_ts_us: RECEIVED,
+        exchange_ts_us: RECEIVED.as_venue_calendar(),
         received_ts_us: RECEIVED,
     }
 }
@@ -309,7 +309,7 @@ mod venue_metadata {
     use super::*;
     use engine::msg::inbound::VenueMeta;
 
-    const RESET_EXCHANGE_TS: TsUs = TsUs::from_micros(1_784_410_631_500_000);
+    const RESET_EXCHANGE_TS: VenueTs = VenueTs::from_micros(1_784_410_631_500_000);
 
     fn live_spot_sequencer() -> DepthSequencer {
         let mut sequencer = DepthSequencer::new(ChainRule::Spot, INSTRUMENT, 8);

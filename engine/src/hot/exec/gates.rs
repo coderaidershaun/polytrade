@@ -6,7 +6,7 @@ use crate::hot::ledger::{PositionLedger, narrow};
 use crate::log::hot_warn;
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
 use crate::msg::labelled_enum::labelled_enum;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 use super::engine::ExecEngine;
 use super::order::MAX_ORDER_INSTRUMENTS;
@@ -35,7 +35,7 @@ pub enum ExecHalt {
     Armed,
     Halted {
         reason: HaltReason,
-        halted_ts_us: TsUs,
+        halted_ts_us: LocalTs,
     },
 }
 
@@ -234,7 +234,7 @@ impl RefusalLatch {
         instrument: InstrumentId,
         side: Side,
         reason: Option<RejectReason>,
-        at: TsUs,
+        at: LocalTs,
     ) {
         let Some(cell) = self.slot_mut(instrument, side) else {
             return;
@@ -305,7 +305,7 @@ impl ExecEngine {
     }
 
     /// Conservatively count possibly-live (pending/amending/unknown live until venue proves terminal).
-    pub(super) fn enforce_resting_limit(&mut self, at: TsUs) {
+    pub(super) fn enforce_resting_limit(&mut self, at: LocalTs) {
         if self.halt.is_halted() {
             return;
         }

@@ -1,7 +1,7 @@
 //! The schedule of the spin timer. Its stamps decide the time of each spin, so an error in them
 //! moves every deadline and every window that a strategy measures in spins.
 
-use engine::msg::time::{DurationUs, SpinSchedule, TsUs};
+use engine::msg::time::{DurationUs, LocalTs, SpinSchedule};
 use proptest::prelude::*;
 
 /// Year 2100 in microseconds since the Unix epoch.
@@ -23,7 +23,7 @@ proptest! {
         slot in 0..=LAST_SLOT,
         raw_offset_us in 0..LONGEST_INTERVAL_US,
     ) {
-        let start = TsUs::from_micros(start_us);
+        let start = LocalTs::from_micros(start_us);
         let interval = DurationUs::from_micros(interval_us);
         let schedule = SpinSchedule::new(start, interval);
 
@@ -43,7 +43,7 @@ proptest! {
 /// that stamped its wake would move each later spin.
 #[test]
 fn late_wake_fires_only_the_latest_slot() {
-    let start = TsUs::from_micros(1_000_000);
+    let start = LocalTs::from_micros(1_000_000);
     let schedule = SpinSchedule::new(start, DurationUs::from_micros(1_000));
     let last_sent = 0;
     let woke = start + DurationUs::from_micros(3_400);
@@ -53,7 +53,7 @@ fn late_wake_fires_only_the_latest_slot() {
     assert_eq!(slot, 3, "the wake fires the latest slot that is due");
     assert_eq!(
         schedule.stamp_of(slot),
-        TsUs::from_micros(1_003_000),
+        LocalTs::from_micros(1_003_000),
         "the tick carries the time of its slot, not the time of the wake"
     );
     assert_eq!(
@@ -69,7 +69,7 @@ fn late_wake_fires_only_the_latest_slot() {
     let next_wake = schedule.stamp_of(slot + 1);
     assert_eq!(
         next_wake,
-        TsUs::from_micros(1_004_000),
+        LocalTs::from_micros(1_004_000),
         "the next sleep ends on the grid"
     );
     assert!(

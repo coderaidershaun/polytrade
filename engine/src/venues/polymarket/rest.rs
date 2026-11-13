@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use crate::msg::ids::{FIXED_SCALE, Price, Qty};
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 use crate::runtime::config::PolySeries;
 use crate::venues::edge::http::{self, Deadlines, HttpClient, TransportError};
 
@@ -21,8 +21,8 @@ pub struct GammaMarket {
     pub token_down: Box<str>,
     pub tick_size: Price,
     pub min_order_size: Qty,
-    pub window_open_ts_us: TsUs,
-    pub window_close_ts_us: TsUs,
+    pub window_open_ts_us: VenueTs,
+    pub window_close_ts_us: VenueTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,14 +66,14 @@ pub enum GammaError {
     InvalidMarket { slug: String, reason: &'static str },
 }
 
-pub fn events_slug_url(series: PolySeries, window_start: TsUs) -> String {
+pub fn events_slug_url(series: PolySeries, window_start: VenueTs) -> String {
     format!(
         "{GAMMA_BASE}/events?slug={}",
         slug_for(series, to_unix_seconds(window_start))
     )
 }
 
-pub fn fallback_url(series: PolySeries, now: TsUs) -> String {
+pub fn fallback_url(series: PolySeries, now: VenueTs) -> String {
     format!(
         "{GAMMA_BASE}/events?series_id={}&closed=false&end_date_min={}&order=endDate&ascending=true&limit=4",
         series.gamma_series_id(),
@@ -88,7 +88,7 @@ pub fn book_url(token_id: &str) -> String {
 pub fn parse_events(
     series: PolySeries,
     raw: &str,
-    window_start: TsUs,
+    window_start: VenueTs,
 ) -> Result<GammaMarket, GammaError> {
     let events: Vec<RawEvent> = decode(raw, "gamma events?slug")?;
     let window_start_s = to_unix_seconds(window_start);
@@ -128,7 +128,7 @@ impl PolyRest {
         Ok(Self { http, series })
     }
 
-    pub async fn resolve_slug(&self, window_start: TsUs) -> Result<GammaMarket, GammaError> {
+    pub async fn resolve_slug(&self, window_start: VenueTs) -> Result<GammaMarket, GammaError> {
         let body = self
             .get_ok_text(&events_slug_url(self.series, window_start))
             .await?;
@@ -137,7 +137,7 @@ impl PolyRest {
 
     pub async fn resolve_current_and_next(
         &self,
-        now: TsUs,
+        now: VenueTs,
     ) -> Result<(GammaMarket, GammaMarket), GammaError> {
         let body = self.get_ok_text(&fallback_url(self.series, now)).await?;
         parse_fallback(self.series, &body)
@@ -263,7 +263,7 @@ fn outcomes_are_up_down(raw: &str) -> bool {
     serde_json::from_str::<[String; 2]>(raw).is_ok_and(|outcomes| outcomes == ["Up", "Down"])
 }
 
-fn to_unix_seconds(ts: TsUs) -> i64 {
+fn to_unix_seconds(ts: VenueTs) -> i64 {
     ts.micros().div_euclid(1_000_000)
 }
 
@@ -279,8 +279,8 @@ fn window_start_from_slug(series: PolySeries, slug: &str) -> Option<i64> {
         .ok()
 }
 
-fn seconds_to_us(seconds: i64) -> TsUs {
-    TsUs::from_micros(seconds.saturating_mul(1_000_000))
+fn seconds_to_us(seconds: i64) -> VenueTs {
+    VenueTs::from_micros(seconds.saturating_mul(1_000_000))
 }
 
 /// Venue float → 1e-8 mantissa (one-shot config read; only venue-to-mantissa conversion).
@@ -288,7 +288,7 @@ fn mantissa(value: f64) -> i64 {
     (value * FIXED_SCALE as f64).round() as i64
 }
 
-fn iso8601_utc(at: TsUs) -> String {
+fn iso8601_utc(at: VenueTs) -> String {
     let civil = at.civil();
     format!(
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",

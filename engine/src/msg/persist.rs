@@ -7,7 +7,7 @@ use crate::msg::ids::{
 };
 use crate::msg::inbound::BookChunkKind;
 use crate::msg::labelled_enum::labelled_enum;
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 use crate::runtime::config::{KlineInterval, TableKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -49,7 +49,7 @@ pub struct FeatureRow {
     pub instrument: InstrumentId,
     pub feature: FeatureId,
     pub value: f64,
-    pub event_ts_us: TsUs,
+    pub event_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,8 +58,8 @@ pub struct TradeRow {
     pub price: Price,
     pub qty: Qty,
     pub side: Side,
-    pub exchange_ts_us: TsUs,
-    pub received_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
+    pub received_ts_us: LocalTs,
 }
 
 // Applied chunk kinds + reset (not wire).
@@ -89,14 +89,14 @@ pub struct BookEventRow {
     pub price: Price,
     pub qty: Qty,
     pub update_id: u64,
-    pub received_ts_us: TsUs,
+    pub received_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KlineRow {
     pub instrument: InstrumentId,
     pub interval: KlineInterval,
-    pub open_ts_us: TsUs,
+    pub open_ts_us: VenueTs,
     pub open: Price,
     pub high: Price,
     pub low: Price,
@@ -105,8 +105,8 @@ pub struct KlineRow {
     pub quote_volume: i64,
     pub trade_count: u32,
     pub is_closed: bool,
-    pub exchange_ts_us: TsUs,
-    pub received_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
+    pub received_ts_us: LocalTs,
 }
 
 labelled_enum! {
@@ -130,8 +130,8 @@ pub struct LinkFrameRow {
     pub slot: u16,
     pub count: u16,
     pub value: f64,
-    pub event_ts_us: TsUs,
-    pub received_ts_us: TsUs,
+    pub event_ts_us: VenueTs,
+    pub received_ts_us: LocalTs,
 }
 
 labelled_enum! {
@@ -201,8 +201,8 @@ pub struct OrderRow {
     pub filled_quote: i64,
     pub reject: Option<RejectClass>,
     pub reject_code: i32,
-    pub exchange_ts_us: TsUs,
-    pub received_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
+    pub received_ts_us: LocalTs,
 }
 
 /// One fill (line item a statement reconciles against, durable record of quantity/price/fee).
@@ -224,18 +224,18 @@ pub struct FillRow {
     // Not quote asset; wrong forever if incorrect.
     pub commission: i64,
     pub commission_asset: AssetId,
-    pub exchange_ts_us: TsUs,
-    pub received_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
+    pub received_ts_us: LocalTs,
 }
 
 // Venue lineage (side-channel).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RotationRow {
     pub instrument: InstrumentId,
-    pub window_open_ts_us: TsUs,
-    pub window_close_ts_us: TsUs,
+    pub window_open_ts_us: VenueTs,
+    pub window_close_ts_us: VenueTs,
     pub token_id_up: Box<str>,
     pub token_id_down: Box<str>,
     pub condition_id: Box<str>,
-    pub received_ts_us: TsUs,
+    pub received_ts_us: LocalTs,
 }

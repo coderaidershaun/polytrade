@@ -7,7 +7,7 @@ use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::Level;
 use engine::msg::persist::FeatureId;
 use engine::msg::time::DurationUs;
-use engine::msg::time::TsUs;
+use engine::msg::time::VenueTs;
 use engine::msg::ui::{DomQuote, UiBookState, UiCatalog, UiEvent};
 use engine::operator::workstation::model::UiModel;
 use engine::operator::workstation::monitor::model::SystemNote;
@@ -270,6 +270,6 @@ impl Feed {
 
 const TICK: Price = Price(FIXED_SCALE);
 
-fn ts_at(relative: i64) -> TsUs {
-    TsUs::from_micros(BASE_TS + relative)
+fn ts_at(relative: i64) -> VenueTs {
+    VenueTs::from_micros(BASE_TS + relative)
 }

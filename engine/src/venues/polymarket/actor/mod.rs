@@ -18,7 +18,7 @@ use tokio_tungstenite::tungstenite::{Error as ProtocolError, Message};
 use crate::hot::spawn::QueueProducer;
 use crate::msg::persist::RotationRow;
 use crate::msg::run_state::RunState;
-use crate::msg::time::{EngineClock, TsUs};
+use crate::msg::time::{EngineClock, LocalTs};
 use crate::runtime::config::PolySeries;
 use crate::runtime::registry::{InstrumentRow, ProducerGroup};
 use crate::runtime::shutdown::{FatalReason, FatalSignal, RunStateCell, TaskHandle};
@@ -159,7 +159,7 @@ impl Actor {
     )]
     async fn bootstrap(&mut self) {
         let now = self.clock.now();
-        let current = self.schedule.current_window(now);
+        let current = self.schedule.current_window(now.as_venue_calendar());
         match self.rest.resolve_slug(current.window_start_ts_us).await {
             Ok(market) => {
                 let assignment = self
@@ -229,7 +229,7 @@ impl Actor {
         }
     }
 
-    async fn on_text(&mut self, text: &str, now: TsUs, writer: &mut Writer) -> Flow {
+    async fn on_text(&mut self, text: &str, now: LocalTs, writer: &mut Writer) -> Flow {
         if is_frameless(text) {
             return Flow::Continue;
         }
@@ -252,7 +252,7 @@ impl Actor {
         }
     }
 
-    async fn drive_tick(&mut self, now: TsUs, writer: &mut Writer) -> Flow {
+    async fn drive_tick(&mut self, now: LocalTs, writer: &mut Writer) -> Flow {
         let effects = collect_effects(|emit| self.core.on_tick(now, emit));
         self.execute(effects, writer).await
     }

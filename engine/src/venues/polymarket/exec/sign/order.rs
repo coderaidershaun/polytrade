@@ -4,7 +4,7 @@
 //! The field list below IS the typehash, so reordering it invalidates every signature; and
 //! `expiration` is deliberately absent, because V2 moved it to the wire body only.
 
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 use super::address::Address;
 use super::eip712::{self, Eip712Error, Word, ZERO_WORD, keccak256};
@@ -179,7 +179,7 @@ impl OrderSignature {
 /// Uniqueness rides the signed millisecond timestamp; the salt only has to not collide within it,
 /// which the microseconds already spread. Derived rather than drawn, so a replay of the same inputs
 /// signs the same order and no RNG enters the stack.
-pub fn salt(sent_ts_us: TsUs, client_order_id: u64) -> u64 {
+pub fn salt(sent_ts_us: LocalTs, client_order_id: u64) -> u64 {
     (sent_ts_us.micros() as u64 ^ client_order_id) & SALT_MASK
 }
 

@@ -5,7 +5,7 @@
 
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
 use crate::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, Level};
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 
 // A chunk reports its own length in a `u8`, and raising the level count lives in another module.
 const _: () = assert!(
@@ -19,22 +19,22 @@ const _: () = assert!(
 pub(crate) struct ChunkPlan {
     pub(crate) kind: BookChunkKind,
     pub(crate) update_id: u64,
-    pub(crate) exchange_ts_us: Option<TsUs>,
-    pub(crate) received_ts_us: TsUs,
+    pub(crate) exchange_ts_us: Option<VenueTs>,
+    pub(crate) received_ts_us: LocalTs,
 }
 
 /// Per-instrument cutter, holding the stamp floor that keeps a resync from queueing behind itself.
 #[derive(Debug)]
 pub(crate) struct ChunkEmitter {
     instrument: InstrumentId,
-    last_emitted_ts_us: TsUs,
+    last_emitted_ts_us: LocalTs,
 }
 
 impl ChunkEmitter {
     pub(crate) fn new(instrument: InstrumentId) -> Self {
         Self {
             instrument,
-            last_emitted_ts_us: TsUs::from_micros(i64::MIN),
+            last_emitted_ts_us: LocalTs::from_micros(i64::MIN),
         }
     }
 
@@ -42,14 +42,14 @@ impl ChunkEmitter {
         self.instrument
     }
 
-    pub(crate) fn note_emit_floor(&mut self, floor_ts_us: TsUs) {
+    pub(crate) fn note_emit_floor(&mut self, floor_ts_us: LocalTs) {
         self.last_emitted_ts_us = self.last_emitted_ts_us.max(floor_ts_us);
     }
 
     /// The stamp to put on the next emission, never below one already emitted. Advances the floor,
     /// so the returned value is the only correct one to carry.
     #[must_use]
-    pub(crate) fn clamp_emit_ts(&mut self, receipt: TsUs) -> TsUs {
+    pub(crate) fn clamp_emit_ts(&mut self, receipt: LocalTs) -> LocalTs {
         self.note_emit_floor(receipt);
         self.last_emitted_ts_us
     }

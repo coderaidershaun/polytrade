@@ -8,7 +8,7 @@ use crate::hot::ledger::{PositionLedger, narrow};
 use crate::hot::strategy::Actions;
 use crate::log::hot_warn;
 use crate::msg::ids::{InstrumentId, Qty, Side};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 use super::engine::ExecEngine;
 use super::spin::SpinInput;
@@ -76,7 +76,7 @@ impl ExecEngine {
     fn cancel_resting_orders(
         &mut self,
         instrument: InstrumentId,
-        at: TsUs,
+        at: LocalTs,
         bank: &mut Actions,
     ) -> usize {
         let mut pulled = 0;

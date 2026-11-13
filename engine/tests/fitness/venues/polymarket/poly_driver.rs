@@ -15,7 +15,7 @@ use engine::venues::polymarket::rotation::{
     OutcomeLeg, ProbeOutcome, TokenId, WindowAssignment, WindowTokens,
 };
 
-use crate::engine_support::ts_secs;
+use crate::engine_support::{ts_secs, venue_ts_secs};
 
 const SECOND_US: i64 = 1_000_000;
 const WINDOW_SECS: i64 = 300;
@@ -67,8 +67,8 @@ fn assignment(open_secs: i64) -> WindowAssignment {
             instrument: down,
             token: down_token,
         },
-        window_open_ts_us: ts_secs(open_secs),
-        window_close_ts_us: ts_secs(open_secs + WINDOW_SECS),
+        window_open_ts_us: venue_ts_secs(open_secs),
+        window_close_ts_us: venue_ts_secs(open_secs + WINDOW_SECS),
         condition_id: Arc::from(format!("cond-{open_secs}").as_str()),
     }
 }
@@ -99,7 +99,7 @@ fn book_frame(token: &str, now_secs: i64) -> PolyFrame {
                 qty: Qty(250),
             },
         ],
-        exchange_ts_us: ts_secs(now_secs),
+        exchange_ts_us: venue_ts_secs(now_secs),
         received_ts_us: ts_secs(now_secs),
     })
 }

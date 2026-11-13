@@ -9,7 +9,7 @@ use engine::hot::tracker::{MicroTracker, VolumeBarSeries};
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, KlineEvent};
 use engine::msg::persist::{FeatureId, PersistRecord};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::runtime::config::{
     CandlesSpec, KlineInterval, TrackerSpec, VolumeBarsSpec, VolumeThreshold,
 };
@@ -18,7 +18,7 @@ use rtrb::Consumer;
 
 use crate::engine_support::{
     ONE, engine_without_warmup, instrument_row, persist_ring, strategy_log_ring, tracker_spec_all,
-    trade, ts,
+    trade, ts, venue_ts,
 };
 
 /// Closed-bar retention above the worst case every generator below can produce, so nothing is
@@ -123,7 +123,7 @@ fn closed_1m_kline(open_ts_us: i64, quote_volume: i64) -> KlineEvent {
     KlineEvent {
         instrument: InstrumentId(0),
         interval: KlineInterval::OneMinute,
-        open_ts_us: ts(open_ts_us),
+        open_ts_us: venue_ts(open_ts_us),
         open: Price(100 * ONE),
         high: Price(100 * ONE),
         low: Price(100 * ONE),
@@ -132,7 +132,7 @@ fn closed_1m_kline(open_ts_us: i64, quote_volume: i64) -> KlineEvent {
         quote_volume,
         trade_count: 1,
         is_closed: true,
-        exchange_ts_us: ts(open_ts_us),
+        exchange_ts_us: venue_ts(open_ts_us),
         exchange_sent_ts_us: None,
         received_ts_us: ts(open_ts_us),
         queued_ts_us: ts(open_ts_us),
@@ -314,7 +314,7 @@ impl Strategy for BarProbe {
     }
 }
 
-fn delivered_bars(consumer: &mut Consumer<PersistRecord>) -> Vec<(f64, TsUs)> {
+fn delivered_bars(consumer: &mut Consumer<PersistRecord>) -> Vec<(f64, LocalTs)> {
     let mut rows = Vec::new();
     while let Ok(record) = consumer.pop() {
         if let PersistRecord::Feature(row) = record {

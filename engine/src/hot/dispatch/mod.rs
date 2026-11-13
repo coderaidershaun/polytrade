@@ -24,7 +24,7 @@ use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
 use crate::msg::inbound::{InboundMessage, SpinTick};
 use crate::msg::run_state::RunAssertion;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::msg::ui::{DomQuote, UI_QUOTE_LEVELS};
 use crate::runtime::config::RecordedTables;
 use crate::runtime::exposure::{ExposureSnapshot, MAX_EXPOSURE_INSTRUMENTS};
@@ -72,7 +72,7 @@ impl HotState {
         }
     }
 
-    fn ctx(&mut self, event_ts: TsUs) -> StrategyCtx<'_> {
+    fn ctx(&mut self, event_ts: LocalTs) -> StrategyCtx<'_> {
         StrategyCtx {
             books: &self.books,
             trackers: &self.trackers,
@@ -181,7 +181,7 @@ impl HotEngine {
     }
 
     /// Post-drain per-spin (fills folded). Ahead of live gate (corrects late-attach UI).
-    fn emit_positions(&mut self, event_ts: TsUs) {
+    fn emit_positions(&mut self, event_ts: LocalTs) {
         for (instrument, row) in self.state.ledger.rows() {
             if row.has_mark() {
                 self.ui.emit_position(instrument, row, event_ts);

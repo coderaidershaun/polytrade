@@ -244,7 +244,7 @@ impl Actor {
         clippy::disallowed_methods,
         reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
     )]
-    fn cancel_hold(&self, request: &ExecRequest) -> Option<crate::msg::time::TsUs> {
+    fn cancel_hold(&self, request: &ExecRequest) -> Option<crate::msg::time::LocalTs> {
         let ExecRequest::Cancel { client_id, .. } = request else {
             return None;
         };

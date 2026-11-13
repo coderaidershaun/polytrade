@@ -4,7 +4,7 @@
 
 use super::model::{bucket_capacity, bucket_index};
 use crate::msg::ids::{InstrumentId, fixed_mantissa};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, VenueTs};
 use crate::msg::ui::UiEvent;
 use crate::operator::workstation::history::{BoundedHistory, grow_to};
 
@@ -87,7 +87,7 @@ impl PositionModel {
     fn bank_position(
         &mut self,
         instrument: InstrumentId,
-        at: TsUs,
+        at: VenueTs,
         exposure_quote: f64,
         pnl_quote: f64,
     ) {

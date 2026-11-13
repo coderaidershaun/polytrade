@@ -21,7 +21,7 @@ use std::path::Path;
 
 use engine::hot::sink::ExposureSink;
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Qty};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::runtime::config::{Config, ExecutionMode, NoParams, RunIdentity};
 use engine::runtime::exposure::{
     ExposureError, ExposureHandle, ExposureSnapshot, ExposureState, ExposureWriter,
@@ -78,7 +78,7 @@ fn snapshot(seq: u64, rows: &[InstrumentExposure]) -> ExposureSnapshot {
     snapshot.len = rows.len() as u8;
     snapshot.seq = seq;
     snapshot.exposure_quote = 999_999;
-    snapshot.emitted_ts_us = TsUs::from_micros(1_700_000_000_000_000);
+    snapshot.emitted_ts_us = LocalTs::from_micros(1_700_000_000_000_000);
     snapshot
 }
 

@@ -16,7 +16,7 @@ use crate::hot::quant::volatility::EwmaVol;
 use crate::hot::tracker::MicroTracker;
 use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::{BookChunk, KlineEvent, MarketRotation, SpinTick, TradeEvent};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs, VenueTs};
 use crate::runtime::config::{Instruments, StrategySpec};
 
 pub use crate::hot::exec::{
@@ -139,8 +139,8 @@ pub trait StrategyConfig: Sized {
 /// Slot's current window (latest MarketRotation). `None` until first rotation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WindowInfo {
-    pub open_ts_us: TsUs,
-    pub close_ts_us: TsUs,
+    pub open_ts_us: VenueTs,
+    pub close_ts_us: VenueTs,
 }
 
 digest_by_hash!(WindowInfo);
@@ -151,13 +151,13 @@ impl WindowInfo {
     /// `margin` before the close because an order still resting at a rotation belongs to a market
     /// that is about to stop existing, and the position it fills is one nothing can trade out of.
     #[inline]
-    pub fn admits_quote_at(self, at: TsUs, margin: DurationUs) -> bool {
-        at >= self.open_ts_us && !self.is_past_quote_stop(at, margin)
+    pub fn admits_quote_at(self, at: LocalTs, margin: DurationUs) -> bool {
+        at.as_venue_calendar() >= self.open_ts_us && !self.is_past_quote_stop(at, margin)
     }
 
     #[inline]
-    pub fn is_past_quote_stop(self, at: TsUs, margin: DurationUs) -> bool {
-        at >= self.close_ts_us - margin
+    pub fn is_past_quote_stop(self, at: LocalTs, margin: DurationUs) -> bool {
+        at.as_venue_calendar() >= self.close_ts_us - margin
     }
 }
 
@@ -173,7 +173,7 @@ pub struct StrategyCtx<'a> {
     pub(crate) exec: &'a ExecEngine,
     pub(crate) desired: &'a mut DesiredBook,
     pub(crate) actions: &'a mut Actions,
-    pub(crate) event_ts: TsUs,
+    pub(crate) event_ts: LocalTs,
     /// Declaration's current spin (see quote).
     pub(crate) spin_seq: u64,
     /// How many topics [`Strategy::link_topics`] declared — the range `link_send` accepts.

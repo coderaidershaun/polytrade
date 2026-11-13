@@ -6,7 +6,7 @@ use eframe::egui;
 
 use engine::hot::exec::{ExecHalt, HaltReason};
 use engine::msg::ids::{AssetId, InstrumentId};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::msg::ui::{UiCatalog, UiInstrument};
 use engine::operator::workstation::browser::chrome::{ChromeAction, TopBarFrame};
 use engine::operator::workstation::shell::{self, Arrangement, Navigation, Selection, SizeClass};
@@ -141,7 +141,7 @@ pub fn fit_zoom(ctx: &egui::Context) {
 fn halted() -> ExecHalt {
     ExecHalt::Halted {
         reason: HaltReason::RejectStreak,
-        halted_ts_us: TsUs::from_micros(0),
+        halted_ts_us: LocalTs::from_micros(0),
     }
 }
 

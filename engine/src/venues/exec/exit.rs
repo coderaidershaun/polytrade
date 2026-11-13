@@ -11,7 +11,7 @@ use tokio::task::JoinHandle;
 
 use crate::msg::exec::CancelReason;
 use crate::msg::ids::ClientOrderId;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 use crate::{error, warn};
 
 use super::MirroredOrder;
@@ -99,12 +99,12 @@ impl EdgeHandle {
 
 pub struct ExitPlan {
     pub(crate) reason: CancelReason,
-    pub(crate) deadline: TsUs,
-    retry_at: TsUs,
+    pub(crate) deadline: LocalTs,
+    retry_at: LocalTs,
 }
 
 impl ExitPlan {
-    pub fn new(reason: CancelReason, now: TsUs, sweep_deadline: Duration) -> Self {
+    pub fn new(reason: CancelReason, now: LocalTs, sweep_deadline: Duration) -> Self {
         Self {
             reason,
             deadline: now + DurationUs::from_micros(sweep_deadline.as_micros() as i64),
@@ -117,7 +117,7 @@ impl ExitPlan {
     }
 
     /// Returns the reason to sweep once the retry interval allows. Pacing prevents wasting the venue's cancel budget.
-    pub(crate) fn claim_retry(&mut self, now: TsUs) -> Option<CancelReason> {
+    pub(crate) fn claim_retry(&mut self, now: LocalTs) -> Option<CancelReason> {
         if now < self.retry_at {
             return None;
         }
@@ -129,7 +129,7 @@ impl ExitPlan {
     /// resting; `None` while the deadline holds. Giving up writes one ERROR line naming each order.
     pub fn past_deadline(
         &self,
-        now: TsUs,
+        now: LocalTs,
         venue: &'static str,
         resting: &[MirroredOrder],
     ) -> Option<SessionOutcome> {

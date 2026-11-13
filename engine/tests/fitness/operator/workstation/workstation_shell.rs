@@ -5,7 +5,7 @@
 //! the keys can say.
 
 use engine::hot::exec::{ExecHalt, HaltReason};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::operator::workstation::shell::{
     Area, Arrangement, Navigation, Pane, Selection, SizeClass, View, zoom_to_fit,
 };
@@ -25,7 +25,7 @@ fn canvas(width: f32, height: f32) -> Area {
 fn latched() -> Option<ExecHalt> {
     Some(ExecHalt::Halted {
         reason: HaltReason::RejectStreak,
-        halted_ts_us: TsUs::from_micros(1),
+        halted_ts_us: LocalTs::from_micros(1),
     })
 }
 

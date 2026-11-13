@@ -24,7 +24,7 @@ use engine::msg::exec::{
     ExecEvent, ExecKind, OrderStyle, Provenance, RejectClass, VenueOrderStatus,
 };
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, VenueOrderId};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use proptest::prelude::*;
 
 use crate::engine_support::{rich, top};
@@ -108,10 +108,10 @@ fn amend_answer(kind: ExecKind, qty: i64) -> ExecEvent {
         reject_code: 0,
         amends_remaining: ExecEvent::AMENDS_UNKNOWN,
         recon_seq: 0,
-        exchange_ts_us: TsUs::from_micros(2_000),
+        exchange_ts_us: VenueTs::from_micros(2_000),
         request_sent_ts_us: None,
-        received_ts_us: TsUs::from_micros(2_000),
-        queued_ts_us: TsUs::from_micros(2_000),
+        received_ts_us: LocalTs::from_micros(2_000),
+        queued_ts_us: LocalTs::from_micros(2_000),
     }
 }
 
@@ -429,7 +429,7 @@ fn an_unusable_book_withdraws_the_resting_quote() {
 
     let stale = ReconcileInput {
         top: BookTop {
-            now_ts_us: TsUs::from_micros(1_000 + DurationUs::from_secs(3).micros()),
+            now_ts_us: LocalTs::from_micros(1_000 + DurationUs::from_secs(3).micros()),
             ..top(100 * ONE, 100 * ONE + TICK)
         },
         ..input(Side::Buy, desired, resting)

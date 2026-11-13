@@ -16,7 +16,7 @@ use std::time::Duration;
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::msg::time::{
-    ClockSource, DurationUs, EngineClock, Stamper, Tick, TickAnchor, TickScale, TsUs,
+    ClockSource, DurationUs, EngineClock, LocalTs, Stamper, Tick, TickAnchor, TickScale,
 };
 use crate::msg::ui::LatencyReport;
 use crate::runtime::config::LatencyConfig;
@@ -55,7 +55,7 @@ pub struct MetricsSetup {
     pub clock_source: ClockSource,
     pub queue_count: usize,
     pub scale: TickScale,
-    pub start_ts_us: TsUs,
+    pub start_ts_us: LocalTs,
 }
 
 pub struct MetricsParts {
@@ -71,7 +71,7 @@ pub struct Metrics {
     reports: Producer<LatencyReport>,
     reports_dropped: u64,
     display_period: DurationUs,
-    next_report_ts_us: TsUs,
+    next_report_ts_us: LocalTs,
 }
 
 impl Metrics {
@@ -105,7 +105,7 @@ impl Metrics {
 
     /// One wake at engine time `now`: drains each ring into the interval that is filling, closes
     /// each interval that has ended, and sends a report once the display period has passed.
-    pub fn pass(&mut self, now: TsUs, sink: &mut impl RollupSink) {
+    pub fn pass(&mut self, now: LocalTs, sink: &mut impl RollupSink) {
         self.rollup.note_time(now);
         self.consumers.drain_into(&mut self.rollup);
         self.rollup.advance(now, sink);
@@ -130,7 +130,12 @@ impl Metrics {
         clippy::disallowed_methods,
         reason = "the metrics thread anchors ticks to engine time and turns them into time, off the fold"
     )]
-    pub fn take_anchor(&mut self, before: Tick, at: TsUs, after: Tick) -> Result<(), MetricsError> {
+    pub fn take_anchor(
+        &mut self,
+        before: Tick,
+        at: LocalTs,
+        after: Tick,
+    ) -> Result<(), MetricsError> {
         let scale = self.rollup.scale();
         let spread_ns = scale.nanos(before, after).unwrap_or(u64::MAX);
         if spread_ns > ANCHOR_SPREAD_LIMIT_NS {
@@ -147,7 +152,7 @@ impl Metrics {
 
     /// The last wake, at the stop of the run: what the rings still hold goes into the interval
     /// that is filling, and that interval closes early.
-    pub fn finish(&mut self, now: TsUs, sink: &mut impl RollupSink) {
+    pub fn finish(&mut self, now: LocalTs, sink: &mut impl RollupSink) {
         self.rollup.note_time(now);
         self.consumers.drain_into(&mut self.rollup);
         self.rollup.advance(now, sink);

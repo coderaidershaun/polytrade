@@ -25,7 +25,7 @@ use engine::msg::exec::{
 use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::persist::{FeatureId, PersistRecord};
-use engine::msg::time::{DurationUs, Stamper, TsUs};
+use engine::msg::time::{DurationUs, LocalTs, Stamper, VenueTs};
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
 use engine::runtime::config::{
     BinanceMarket, Instruments, IntensitySpec, KlineInterval, PolySeries, RecordedTables,
@@ -101,7 +101,7 @@ fn intensity_accumulator_and_fit_do_not_allocate() {
     // Prime the warm-start cache before the counted window so the in-window fits refit warm.
     fit.fit(
         tracker.intensity().expect("configured"),
-        TsUs::from_micros(1_000_000),
+        LocalTs::from_micros(1_000_000),
     );
 
     let mut estimates = 0u64;
@@ -109,7 +109,7 @@ fn intensity_accumulator_and_fit_do_not_allocate() {
     for i in 1_000..101_000i64 {
         feed(&mut tracker, i);
         if i % 1_000 == 0 {
-            let now = TsUs::from_micros(i * 1_000);
+            let now = LocalTs::from_micros(i * 1_000);
             if fit
                 .fit(tracker.intensity().expect("configured"), now)
                 .ask
@@ -679,18 +679,18 @@ impl PeerFrames {
             frame: LinkFrame {
                 origin: LinkOrigin {
                     sender_te_hash: LinkHash::of_name("peer-te"),
-                    boot_ts_us: TsUs::from_micros(1),
+                    boot_ts_us: VenueTs::from_micros(1),
                     topic: TopicId::FIRST_STRATEGY,
                     seq,
                 },
                 payload: LinkPayload::new(
                     self.schema_hash,
-                    TsUs::from_micros(when - 1),
+                    VenueTs::from_micros(when - 1),
                     &self.values,
                 ),
             },
-            received_ts_us: TsUs::from_micros(when),
-            queued_ts_us: TsUs::from_micros(when),
+            received_ts_us: LocalTs::from_micros(when),
+            queued_ts_us: LocalTs::from_micros(when),
         })
     }
 }

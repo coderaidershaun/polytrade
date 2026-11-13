@@ -10,7 +10,7 @@ use crate::msg::inbound::RunControl;
 use crate::msg::persist::{LinkFrameRow, LinkRowKind, PersistRecord};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::run_state::RunState;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 use crate::runtime::shutdown::RunStateCell;
 
 use super::HotEngine;
@@ -18,7 +18,7 @@ use super::HotEngine;
 /// Warmup suppression (message-time only, not wall clock; replay needs same prefix).
 pub(super) struct Warmup {
     span: DurationUs,
-    first_message_ts: Option<TsUs>,
+    first_message_ts: Option<LocalTs>,
     is_complete: bool,
 }
 
@@ -33,7 +33,7 @@ impl Warmup {
 
     /// True on message ending warmup (same message delivered, logs once).
     #[inline]
-    pub(super) fn observe(&mut self, received_ts: TsUs) -> bool {
+    pub(super) fn observe(&mut self, received_ts: LocalTs) -> bool {
         if self.is_complete {
             return false;
         }
@@ -136,13 +136,13 @@ impl HotEngine {
                 slot: 0,
                 count: 0,
                 value: 0.0,
-                event_ts_us: control.received_ts_us,
+                event_ts_us: control.received_ts_us.to_peer(),
                 received_ts_us: control.received_ts_us,
             }));
     }
 
     #[cold]
-    fn apply_run_state(&mut self, desired: RunAssertion, received_ts: TsUs) {
+    fn apply_run_state(&mut self, desired: RunAssertion, received_ts: LocalTs) {
         let is_transition = desired.state != self.run.state;
         self.run = desired;
         if !is_transition {
@@ -169,7 +169,7 @@ impl HotEngine {
 
     /// Resume: wipe derived state (trackers, EwmaVol, estimators); poison from pre-pause gap. Ledger NOT wiped (money≠estimator, session PnL spans all parks).
     #[cold]
-    fn resume(&mut self, received_ts: TsUs) {
+    fn resume(&mut self, received_ts: LocalTs) {
         hot_info!(
             "run state RUNNING (epoch {}) — derived state reset, warmup re-armed",
             self.run.epoch

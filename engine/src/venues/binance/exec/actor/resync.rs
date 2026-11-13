@@ -2,7 +2,7 @@
 //! ends by retrying or by reconnecting, never by wedging.
 
 use crate::msg::exec::{ExecCommand, ExecKind, Provenance};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::runtime::shutdown::FatalReason;
 use crate::venues::binance::rest::OrderRecord;
 use crate::venues::edge::EdgeDriver;
@@ -126,7 +126,7 @@ impl Actor {
         self.finish_resync(writer).await;
     }
 
-    pub(super) fn poll_resync(&mut self, now: TsUs) -> Option<SessionOutcome> {
+    pub(super) fn poll_resync(&mut self, now: LocalTs) -> Option<SessionOutcome> {
         // On the exit path the admission read is moot, and a reconnect starts a clean pass anyway.
         if self.control.exit.is_some() {
             return None;

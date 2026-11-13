@@ -5,7 +5,7 @@ use super::queue::SimOrderIndex;
 use super::wallet::Reservation;
 use crate::msg::exec::VenueOrderStatus;
 use crate::msg::ids::{ClientOrderId, Price, Qty, Side, TradeId, VenueOrderId};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 
 const FIRST_TRADE_ID: TradeId = TradeId(778_291);
 
@@ -59,16 +59,16 @@ pub struct RestingOrder {
     pub phase: OrderPhase,
     pub generation: u32,
     pub amends_used: u8,
-    pub effective_ts_us: TsUs,
+    pub effective_ts_us: LocalTs,
     pub reservation: Option<Reservation>,
-    pub joined_ts_us: TsUs,
-    pub closed_ts_us: Option<TsUs>,
+    pub joined_ts_us: LocalTs,
+    pub closed_ts_us: Option<LocalTs>,
     pub prints_seen: u32,
     pub resyncs_while_resting: u32,
 }
 
 impl RestingOrder {
-    pub fn pending(order: SimOrder, effective_ts_us: TsUs) -> Self {
+    pub fn pending(order: SimOrder, effective_ts_us: LocalTs) -> Self {
         Self {
             order,
             phase: OrderPhase::Pending,
@@ -87,7 +87,7 @@ impl RestingOrder {
         matches!(self.phase, OrderPhase::Pending | OrderPhase::Resting)
     }
 
-    pub fn is_reapable(&self, at_ts_us: TsUs) -> bool {
+    pub fn is_reapable(&self, at_ts_us: LocalTs) -> bool {
         !self.is_open() && self.closed_ts_us.is_some_and(|closed| closed < at_ts_us)
     }
 
@@ -108,7 +108,7 @@ pub struct OrderSnapshot {
     pub order: SimOrder,
     pub phase: OrderPhase,
     pub generation: u32,
-    pub joined_ts_us: TsUs,
+    pub joined_ts_us: LocalTs,
     pub prints_seen: u32,
     pub resyncs_while_resting: u32,
 }
@@ -154,7 +154,7 @@ impl RestingOrders {
         SimOrderIndex(slot)
     }
 
-    pub fn reap_through(&mut self, at_ts_us: TsUs, retention: DurationUs) {
+    pub fn reap_through(&mut self, at_ts_us: LocalTs, retention: DurationUs) {
         for record in &mut self.records {
             let is_expired = record.closed_ts_us.is_some_and(|closed| {
                 i128::from(at_ts_us.micros()) - i128::from(closed.micros())

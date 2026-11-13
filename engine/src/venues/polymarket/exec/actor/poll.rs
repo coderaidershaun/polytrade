@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use crate::msg::exec::CancelReason;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::venues::edge::EdgeDriver;
 use crate::venues::exec::SessionOutcome;
 use crate::venues::polymarket::rotation::WindowAssignment;
@@ -49,7 +49,7 @@ impl Actor {
             .finished_exit(now, self.venue(), self.session.core.mirror())
     }
 
-    fn clear_park(&mut self, now: TsUs) {
+    fn clear_park(&mut self, now: LocalTs) {
         let Some(parked) = self.parked else {
             return;
         };
@@ -64,7 +64,11 @@ impl Actor {
     }
 
     /// Unanswered requests past deadline are reconciled, never retried (venue may have accepted).
-    async fn expire_requests(&mut self, now: TsUs, writer: &mut Writer) -> Option<SessionOutcome> {
+    async fn expire_requests(
+        &mut self,
+        now: LocalTs,
+        writer: &mut Writer,
+    ) -> Option<SessionOutcome> {
         let expired = self.session.expire(now);
         for _read in &expired.unanswered_reads {
             warn!(
@@ -91,7 +95,7 @@ impl Actor {
 
     /// Arms once orders become possible; once started, the venue cancels the book after 10s
     /// of silence.
-    fn send_heartbeat(&mut self, now: TsUs) {
+    fn send_heartbeat(&mut self, now: LocalTs) {
         if !self.heartbeat.is_started {
             if !self.session.core.phase().admits_new_orders() {
                 return;
@@ -208,7 +212,7 @@ impl Actor {
     }
 
     /// Retries the enrichment reads for bindings still waiting, recovering from transient failures.
-    fn retry_binding_reads(&mut self, now: TsUs) {
+    fn retry_binding_reads(&mut self, now: LocalTs) {
         for read in self.bindings.due_enrichment_reads(now) {
             self.submit_enrichment(read);
         }

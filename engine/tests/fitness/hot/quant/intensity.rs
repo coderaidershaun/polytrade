@@ -17,7 +17,7 @@ use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, Level, TradeEvent};
 use engine::runtime::config::{IntensitySpec, TrackerSpec};
 
-use crate::engine_support::ts;
+use crate::engine_support::{ts, venue_ts};
 
 const TICK: Price = Price(10);
 const ASK: Price = Price(100_000);
@@ -71,7 +71,7 @@ fn ev(side: Side, price: Price, when: i64) -> TradeEvent {
         price,
         qty: Qty(1),
         side,
-        exchange_ts_us: ts(when),
+        exchange_ts_us: venue_ts(when),
         exchange_sent_ts_us: None,
         received_ts_us: ts(when),
         queued_ts_us: ts(when),

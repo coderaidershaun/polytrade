@@ -12,7 +12,7 @@ use crate::msg::persist::{
     BookEventRow, FeatureRow, FillRow, KlineRow, LinkFrameRow, OrderRow, PersistRecord,
     RotationRow, TradeRow,
 };
-use crate::msg::time::boot_stamp_us;
+use crate::msg::time::wall_clock_now;
 use crate::runtime::config::{ExecutionMode, RecordedTables, TableKind};
 use crate::runtime::shutdown::WriterThread;
 
@@ -38,7 +38,7 @@ impl PersistWriter {
         records: Consumer<PersistRecord>,
         rotations: mpsc::Receiver<RotationRow>,
     ) -> PersistHandle {
-        let boot_ts_us = boot_stamp_us().micros();
+        let boot_ts_us = wall_clock_now().micros();
         let footer = schema::footer_metadata(&meta);
         let run_dir = run_directory(&cfg.dir, &meta);
         let retention = Retention::new(run_dir.clone(), cfg.retention);

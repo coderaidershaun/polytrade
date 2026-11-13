@@ -10,12 +10,14 @@ use arrow_array::{
 };
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
 
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 
-/// Column name, arrow type and accessor in one. `Ts` and `Mantissa` are both non-null `Int64` and
-/// stay apart because a clock reading and a fixed-point mantissa are not the same column to a reader.
+/// Column name, arrow type and accessor in one. `Ts`, `VenueTs` and `Mantissa` are each non-null
+/// `Int64` and stay apart because a clock reading and a fixed-point mantissa are not the same column
+/// to a reader.
 pub(in crate::tape) enum Column<R> {
-    Ts(&'static str, fn(&R) -> TsUs),
+    Ts(&'static str, fn(&R) -> LocalTs),
+    VenueTs(&'static str, fn(&R) -> VenueTs),
     Mantissa(&'static str, fn(&R) -> i64),
     /// Nullable: absent means the venue never assigned one, and a zero would read as a real id.
     VenueId(&'static str, fn(&R) -> Option<i64>),
@@ -50,7 +52,7 @@ impl<R> Column<R> {
 
     fn field(&self) -> Field {
         match self {
-            Column::Ts(name, _) | Column::Mantissa(name, _) => {
+            Column::Ts(name, _) | Column::VenueTs(name, _) | Column::Mantissa(name, _) => {
                 Field::new(*name, DataType::Int64, false)
             }
             Column::VenueId(name, _) => Field::new(*name, DataType::Int64, true),
@@ -68,6 +70,9 @@ impl<R> Column<R> {
     fn array(&self, rows: &[R]) -> ArrayRef {
         match self {
             Column::Ts(_, get) => Arc::new(Int64Array::from_iter_values(
+                rows.iter().map(|row| get(row).micros()),
+            )),
+            Column::VenueTs(_, get) => Arc::new(Int64Array::from_iter_values(
                 rows.iter().map(|row| get(row).micros()),
             )),
             Column::Mantissa(_, get) => {

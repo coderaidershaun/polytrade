@@ -29,12 +29,12 @@ use wallet::{FillSettlement, SimWallet, SimWalletSetup, WalletError};
 
 use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, TradeId};
 use crate::msg::inbound::{BookChunkKind, InboundMessage, TappedMessage, VenueMeta};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 use crate::venues::exec::ExecRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct SimEmission {
-    pub at_ts_us: TsUs,
+    pub at_ts_us: LocalTs,
     pub sequence: u64,
     pub event: VenueEvent,
 }
@@ -96,7 +96,7 @@ pub(crate) struct EmissionBook {
 }
 
 impl EmissionBook {
-    pub fn push(&mut self, at_ts_us: TsUs, event: VenueEvent) {
+    pub fn push(&mut self, at_ts_us: LocalTs, event: VenueEvent) {
         self.pending.push(SimEmission {
             at_ts_us,
             sequence: self.sequence,
@@ -105,7 +105,7 @@ impl EmissionBook {
         self.sequence += 1;
     }
 
-    fn drain_through(&mut self, horizon: TsUs, out: &mut Vec<SimEmission>) {
+    fn drain_through(&mut self, horizon: LocalTs, out: &mut Vec<SimEmission>) {
         self.pending
             .sort_by_key(|emission| (emission.at_ts_us, emission.sequence));
         let split = self
@@ -126,7 +126,7 @@ pub(crate) struct SimVenue {
     emissions: EmissionBook,
     wallet: SimWallet,
     verdict_retention: DurationUs,
-    reap_due_ts_us: Option<TsUs>,
+    reap_due_ts_us: Option<LocalTs>,
     reset_announced: bool,
 }
 
@@ -173,7 +173,7 @@ impl SimVenue {
         &self.market
     }
 
-    pub fn on_request(&mut self, request: &ExecRequest, effective_ts_us: TsUs) {
+    pub fn on_request(&mut self, request: &ExecRequest, effective_ts_us: LocalTs) {
         if let Some((at_ts_us, action)) = self.fold().admit(request, effective_ts_us) {
             self.timeline.push(at_ts_us, action.phase(), action);
         }
@@ -199,7 +199,7 @@ impl SimVenue {
         }
     }
 
-    pub fn advance_to_watermark(&mut self, horizon: TsUs, due: &mut Vec<SimEmission>) {
+    pub fn advance_to_watermark(&mut self, horizon: LocalTs, due: &mut Vec<SimEmission>) {
         while let Some(source) = self.next_due(horizon) {
             match source {
                 Source::Market => {
@@ -219,7 +219,7 @@ impl SimVenue {
         self.emissions.drain_through(horizon, due);
     }
 
-    fn reap_expired_verdicts(&mut self, horizon: TsUs) {
+    fn reap_expired_verdicts(&mut self, horizon: LocalTs) {
         let due = self.reap_due_ts_us.unwrap_or(horizon);
         if horizon < due {
             return;
@@ -228,7 +228,7 @@ impl SimVenue {
         self.reap_due_ts_us = Some(latency::shifted(horizon, [self.verdict_retention]));
     }
 
-    fn next_due(&self, horizon: TsUs) -> Option<Source> {
+    fn next_due(&self, horizon: LocalTs) -> Option<Source> {
         let market = self.inbox.peek().filter(|key| key.0 <= horizon);
         let scheduled = self.timeline.peek().filter(|key| key.0 <= horizon);
         match (market, scheduled) {
@@ -288,7 +288,7 @@ impl SimVenue {
         }
     }
 
-    pub fn restore_matching(&mut self, at_ts_us: TsUs) {
+    pub fn restore_matching(&mut self, at_ts_us: LocalTs) {
         let was_suspended = !self.market.is_matching_live();
         self.market.restore_matching();
         if was_suspended {
@@ -308,7 +308,7 @@ impl SimVenue {
         }
     }
 
-    pub fn suspend_matching(&mut self, reason: ResetReason, at_ts_us: TsUs) {
+    pub fn suspend_matching(&mut self, reason: ResetReason, at_ts_us: LocalTs) {
         let reason = self.market.suspend_matching(reason);
         self.record_reset(reason, at_ts_us);
     }
@@ -317,7 +317,7 @@ impl SimVenue {
         &mut self,
         trade: &crate::msg::inbound::TradeEvent,
         venue_meta: VenueMeta,
-        at_ts_us: TsUs,
+        at_ts_us: LocalTs,
     ) -> Option<ResetReason> {
         let evidence = TradeEvidence::from_meta(venue_meta);
         let SimVenue {
@@ -372,7 +372,7 @@ impl SimVenue {
     }
 
     #[cold]
-    fn record_reset(&mut self, reason: ResetReason, at_ts_us: TsUs) {
+    fn record_reset(&mut self, reason: ResetReason, at_ts_us: LocalTs) {
         for record in self
             .orders
             .iter_mut()

@@ -6,7 +6,7 @@ use crate::msg::exec::ExecKind;
 use crate::msg::ids::QueueId;
 use crate::msg::inbound::{BookChunkKind, InboundMessage};
 use crate::msg::latency::{Category, CounterSample, StageSample};
-use crate::msg::time::{Stamper, Tick, TsUs};
+use crate::msg::time::{LocalTs, Stamper, Tick, VenueTs};
 
 /// The counter that the hot loop reads on each side of a fold, and the rings that its samples go
 /// to. A loop built without them reads no counter and pushes nothing.
@@ -47,11 +47,11 @@ impl DriverSamples {
 /// The stamps of one message that a stage can subtract.
 struct MessageStamps {
     category: Category,
-    exchange_sent_ts_us: TsUs,
-    exchange_ts_us: TsUs,
-    request_sent_ts_us: TsUs,
-    received_ts_us: TsUs,
-    queued_ts_us: TsUs,
+    exchange_sent_ts_us: VenueTs,
+    exchange_ts_us: VenueTs,
+    request_sent_ts_us: LocalTs,
+    received_ts_us: LocalTs,
+    queued_ts_us: LocalTs,
 }
 
 #[inline]
@@ -73,11 +73,12 @@ fn stage_sample(folded: &Folded<'_>) -> Option<StageSample> {
 
 /// `None` for a kind of message that no stage times.
 fn message_stamps(message: &InboundMessage) -> Option<MessageStamps> {
-    const ABSENT: TsUs = StageSample::ABSENT;
+    const ABSENT: LocalTs = StageSample::ABSENT;
+    const ABSENT_VENUE: VenueTs = StageSample::ABSENT_VENUE;
     let stamps = match message {
         InboundMessage::Trade(event) => MessageStamps {
             category: Category::Trade,
-            exchange_sent_ts_us: event.exchange_sent_ts_us.unwrap_or(ABSENT),
+            exchange_sent_ts_us: event.exchange_sent_ts_us.unwrap_or(ABSENT_VENUE),
             exchange_ts_us: event.exchange_ts_us,
             request_sent_ts_us: ABSENT,
             received_ts_us: event.received_ts_us,
@@ -88,8 +89,8 @@ fn message_stamps(message: &InboundMessage) -> Option<MessageStamps> {
                 BookChunkKind::Snapshot => Category::BookSnapshot,
                 BookChunkKind::Delta => Category::BookDelta,
             },
-            exchange_sent_ts_us: ABSENT,
-            exchange_ts_us: chunk.exchange_ts_us.unwrap_or(ABSENT),
+            exchange_sent_ts_us: ABSENT_VENUE,
+            exchange_ts_us: chunk.exchange_ts_us.unwrap_or(ABSENT_VENUE),
             request_sent_ts_us: ABSENT,
             received_ts_us: chunk.received_ts_us,
             queued_ts_us: chunk.queued_ts_us,
@@ -99,27 +100,27 @@ fn message_stamps(message: &InboundMessage) -> Option<MessageStamps> {
         // Only the send stamp is a transport fact, so a backfill row measures no wire time at all.
         InboundMessage::Kline(event) => MessageStamps {
             category: Category::Kline,
-            exchange_sent_ts_us: event.exchange_sent_ts_us.unwrap_or(ABSENT),
-            exchange_ts_us: ABSENT,
+            exchange_sent_ts_us: event.exchange_sent_ts_us.unwrap_or(ABSENT_VENUE),
+            exchange_ts_us: ABSENT_VENUE,
             request_sent_ts_us: ABSENT,
             received_ts_us: event.received_ts_us,
             queued_ts_us: event.queued_ts_us,
         },
         InboundMessage::SpinTick(tick) => MessageStamps {
             category: Category::Spin,
-            exchange_sent_ts_us: ABSENT,
-            exchange_ts_us: ABSENT,
+            exchange_sent_ts_us: ABSENT_VENUE,
+            exchange_ts_us: ABSENT_VENUE,
             request_sent_ts_us: ABSENT,
             received_ts_us: tick.received_ts_us,
             queued_ts_us: tick.queued_ts_us,
         },
         InboundMessage::Exec(event) => MessageStamps {
             category: Category::Exec,
-            exchange_sent_ts_us: ABSENT,
+            exchange_sent_ts_us: ABSENT_VENUE,
             exchange_ts_us: if is_venue_stamped(event.kind) {
                 event.exchange_ts_us
             } else {
-                ABSENT
+                ABSENT_VENUE
             },
             request_sent_ts_us: event.request_sent_ts_us.unwrap_or(ABSENT),
             received_ts_us: event.received_ts_us,

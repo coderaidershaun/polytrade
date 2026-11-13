@@ -8,7 +8,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::msg::ids::{InstrumentId, Side};
 use crate::msg::inbound::Level;
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 use crate::{warn, warn_repeating};
 
 use crate::venues::edge::lane::Flow;
@@ -27,11 +27,11 @@ use super::core::DriverEffect;
 /// REST task result fed back to single-owner loop.
 pub(super) enum CoreEvent {
     ResolveOk {
-        start: TsUs,
+        start: VenueTs,
         market: GammaMarket,
     },
     ResolveErr {
-        start: TsUs,
+        start: VenueTs,
     },
     Probed {
         tokens: WindowTokens,
@@ -48,7 +48,7 @@ pub(super) enum CoreEvent {
 /// A REST call in flight, keyed so the same call is never stacked twice.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Pending {
-    Resolve(TsUs),
+    Resolve(VenueTs),
     Probe(WindowTokens),
 }
 
@@ -266,7 +266,7 @@ fn level_word(level: Option<Level>) -> String {
     )
 }
 
-async fn resolve_window(rest: Arc<PolyRest>, start: TsUs) -> CoreEvent {
+async fn resolve_window(rest: Arc<PolyRest>, start: VenueTs) -> CoreEvent {
     match rest.resolve_slug(start).await {
         Ok(market) => CoreEvent::ResolveOk { start, market },
         Err(GammaError::RateLimited {

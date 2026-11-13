@@ -5,7 +5,7 @@ use crate::hot::exec::{OrderState, QuoteLevel, RejectOrigin};
 use crate::msg::exec::Liquidity;
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use crate::msg::persist::FeatureId;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, VenueTs};
 use crate::msg::ui::{UiBookState, UiEvent};
 use crate::operator::workstation::history::{BoundedHistory, grow_to};
 
@@ -22,13 +22,13 @@ const FILL_CAPACITY: usize = 256;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FeatureCell {
     pub value: f64,
-    pub last_update_ts: TsUs,
-    pub last_changed_ts: TsUs,
+    pub last_update_ts: VenueTs,
+    pub last_changed_ts: VenueTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TradeRow {
-    pub at: TsUs,
+    pub at: VenueTs,
     pub aggressor: Side,
     pub price: Price,
     pub qty: Qty,
@@ -52,7 +52,7 @@ pub enum OrderEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OrderRow {
-    pub at: TsUs,
+    pub at: VenueTs,
     pub instrument: InstrumentId,
     pub quote_level: Option<QuoteLevel>,
     pub side: Side,
@@ -62,7 +62,7 @@ pub struct OrderRow {
 /// One of this engine's fills as the venue reported it. The commission is in `commission_asset`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FillRow {
-    pub at: TsUs,
+    pub at: VenueTs,
     pub instrument: InstrumentId,
     pub quote_level: Option<QuoteLevel>,
     pub side: Side,
@@ -108,7 +108,7 @@ pub enum SystemEvent {
 /// `at` is the event time of what the row reports, or `None` for a lifecycle note, which has none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SystemRow {
-    pub at: Option<TsUs>,
+    pub at: Option<VenueTs>,
     pub event: SystemEvent,
 }
 
@@ -116,7 +116,7 @@ pub struct SystemRow {
 pub struct MonitorModel {
     feature_count: usize,
     features: Vec<Option<FeatureCell>>,
-    latest_feed_ts_us: Vec<Option<TsUs>>,
+    latest_feed_ts_us: Vec<Option<VenueTs>>,
     book_state: Vec<Option<UiBookState>>,
     trades: Vec<BoundedHistory<TradeRow>>,
     system: BoundedHistory<SystemRow>,
@@ -292,7 +292,7 @@ impl MonitorModel {
         &mut self,
         instrument: InstrumentId,
         state: UiBookState,
-        at: TsUs,
+        at: VenueTs,
     ) {
         let index = instrument.0 as usize;
         self.ensure_instruments(index + 1);
@@ -306,14 +306,14 @@ impl MonitorModel {
         });
     }
 
-    pub(crate) fn note_events_lost(&mut self, count: u64, at: TsUs) {
+    pub(crate) fn note_events_lost(&mut self, count: u64, at: VenueTs) {
         self.system.push(SystemRow {
             at: Some(at),
             event: SystemEvent::EventsLost { count },
         });
     }
 
-    pub(crate) fn note_books_lost(&mut self, count: u64, at: TsUs) {
+    pub(crate) fn note_books_lost(&mut self, count: u64, at: VenueTs) {
         self.system.push(SystemRow {
             at: Some(at),
             event: SystemEvent::BooksLost { count },
@@ -342,7 +342,7 @@ impl MonitorModel {
 
     /// Feature freshness is measured against this event time, so it never depends on the
     /// workstation's own clock.
-    pub(crate) fn latest_feed_ts_us(&self, instrument: InstrumentId) -> Option<TsUs> {
+    pub(crate) fn latest_feed_ts_us(&self, instrument: InstrumentId) -> Option<VenueTs> {
         self.latest_feed_ts_us
             .get(instrument.0 as usize)
             .copied()
@@ -392,7 +392,7 @@ impl MonitorModel {
         self.fills.appended()
     }
 
-    fn touch_feed(&mut self, instrument: InstrumentId, at: TsUs) {
+    fn touch_feed(&mut self, instrument: InstrumentId, at: VenueTs) {
         let index = instrument.0 as usize;
         self.ensure_instruments(index + 1);
         let slot = &mut self.latest_feed_ts_us[index];
@@ -404,7 +404,7 @@ impl MonitorModel {
         instrument: InstrumentId,
         feature: FeatureId,
         value: f64,
-        at: TsUs,
+        at: VenueTs,
     ) {
         if self.feature_count == 0 || feature.0 as usize >= self.feature_count {
             return;

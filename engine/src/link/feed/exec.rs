@@ -5,7 +5,7 @@ use crate::hot::exec::{
     CloseReason, ExecHalt, HaltReason, OrderState, ReadinessGap, RejectOrigin, RejectReason,
 };
 use crate::msg::exec::{Liquidity, RejectClass};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 use super::super::envelope::{ByteReader, ByteWriter, LinkDecodeError};
 use super::super::wire::{WireField, wire_enum};
@@ -152,7 +152,7 @@ impl WireField for ExecHalt {
         match tag {
             HALT_ARMED => {
                 let _padding = u8::read(reader)?;
-                let _stamp = TsUs::read(reader)?;
+                let _stamp = LocalTs::read(reader)?;
                 Ok(ExecHalt::Armed)
             }
             HALT_HALTED => Ok(ExecHalt::Halted {

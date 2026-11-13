@@ -4,12 +4,12 @@
 
 use engine::hot::quant::toxicity::VolumeBar;
 use engine::hot::quant::toxicity::vpin;
-use engine::msg::time::TsUs;
+use engine::msg::time::VenueTs;
 
 fn bar(buy: i64, sell: i64, target: i64) -> VolumeBar {
     VolumeBar {
-        open_ts_us: TsUs::from_micros(0),
-        close_ts_us: TsUs::from_micros(0),
+        open_ts_us: VenueTs::from_micros(0),
+        close_ts_us: VenueTs::from_micros(0),
         buy_notional: buy,
         sell_notional: sell,
         target,

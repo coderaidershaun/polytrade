@@ -14,7 +14,7 @@ use engine::hot::series::{FastQueue, MedianScratch};
 use engine::hot::strategy::{InstrumentRow, StrategyCtx};
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::Level;
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs};
 use engine::runtime::config::KlineInterval;
 
 use super::features::{
@@ -61,7 +61,7 @@ pub(crate) struct BinanceVol {
     /// Guéant tick-space grid. None if startup preflight left unstamped.
     pub(crate) tick: Option<Price>,
     pub(crate) markouts: MarkoutTracker,
-    last_mid_ts_us: Option<TsUs>,
+    last_mid_ts_us: Option<LocalTs>,
     /// None if no volume clock (on_volume never fires) or no tick (λ has no grid).
     pub(crate) kyle: Option<KyleFeed>,
     pub(crate) hawkes_bid: HawkesSide,
@@ -175,7 +175,7 @@ impl BinanceVol {
 
     /// The markout mid entry point. Spins and chunks arrive on different queues, so a late stamp is
     /// clamped forward rather than allowed to disorder the series.
-    pub(crate) fn feed_markout_mid(&mut self, ts_us: TsUs, mid: Option<f64>) {
+    pub(crate) fn feed_markout_mid(&mut self, ts_us: LocalTs, mid: Option<f64>) {
         let Some(mid) = mid else { return };
         let ts_us = self.last_mid_ts_us.map_or(ts_us, |last| last.max(ts_us));
         self.last_mid_ts_us = Some(ts_us);
@@ -440,7 +440,7 @@ pub(crate) fn emit_side_hawkes(
     instrument: InstrumentId,
     side: QuoteSide,
     hawkes: &mut HawkesSide,
-    now: TsUs,
+    now: LocalTs,
 ) {
     let HawkesColumns {
         lambda,

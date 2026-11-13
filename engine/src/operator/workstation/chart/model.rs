@@ -6,7 +6,7 @@
 use std::mem;
 
 use crate::msg::ids::{InstrumentId, Price, Side};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, VenueTs};
 use crate::msg::ui::{UiBookSnapshot, UiEvent};
 use crate::operator::workstation::dom_view::{snapshot_mid, tick_index};
 use crate::operator::workstation::history::{BoundedHistory, grow_to};
@@ -175,7 +175,7 @@ impl ChartModel {
         self.spin_interval
     }
 
-    fn bank_fill(&mut self, instrument: InstrumentId, at: TsUs, side: Side, price: Price) {
+    fn bank_fill(&mut self, instrument: InstrumentId, at: VenueTs, side: Side, price: Price) {
         let slot = instrument.0 as usize;
         self.ensure_instruments(slot + 1);
         let Some(index) = bucket_index(at, self.spin_interval) else { return };
@@ -203,7 +203,7 @@ impl ChartModel {
     }
 }
 
-pub(crate) fn bucket_index(at: TsUs, spin_interval: DurationUs) -> Option<u64> {
+pub(crate) fn bucket_index(at: VenueTs, spin_interval: DurationUs) -> Option<u64> {
     let micros = at.micros();
     let interval = u64::try_from(spin_interval.micros()).ok()?;
     if micros < 0 || interval == 0 {
@@ -212,14 +212,14 @@ pub(crate) fn bucket_index(at: TsUs, spin_interval: DurationUs) -> Option<u64> {
     Some(micros as u64 / interval)
 }
 
-pub fn bucket_open_ts(index: u64, spin_interval: DurationUs) -> Option<TsUs> {
+pub fn bucket_open_ts(index: u64, spin_interval: DurationUs) -> Option<VenueTs> {
     let interval = u64::try_from(spin_interval.micros()).ok()?;
     if interval == 0 {
         return None;
     }
     i64::try_from(index.checked_mul(interval)?)
         .ok()
-        .map(TsUs::from_micros)
+        .map(VenueTs::from_micros)
 }
 
 pub(crate) fn bucket_capacity(spin_interval: DurationUs) -> usize {

@@ -16,7 +16,7 @@ use engine::msg::exec::{
 };
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
-use engine::msg::time::{Stamper, TsUs};
+use engine::msg::time::{LocalTs, Stamper, VenueTs};
 use engine::venues::polymarket::exec::codec::{
     AccountStamps, SettlementWatermark, account_snapshot,
 };
@@ -329,11 +329,11 @@ fn a_non_locking_zero_fill_cancel_frees_its_reservation_ungated() {
 
 /// A real wall-clock reading, because that is what the edge stamps a balance answer with and the
 /// engine's own tick counter is far too small to tell a millisecond stamp from zero.
-const RECEIVED_AT: TsUs = TsUs::from_micros(1_786_046_895_000_000);
+const RECEIVED_AT: LocalTs = LocalTs::from_micros(1_786_046_895_000_000);
 
 /// The venue's own stamp on the trade that carried the fill below, seconds resolution as this venue
 /// reports it, and later than the readiness chunk the reservation was taken against.
-const SETTLED_AT: TsUs = TsUs::from_micros(1_786_046_890_000_000);
+const SETTLED_AT: VenueTs = VenueTs::from_micros(1_786_046_890_000_000);
 
 /// One balance sweep as the Polymarket edge builds it, at whatever it has watched settle so far.
 fn balance_sweep(settled_through: SettlementWatermark) -> Vec<AccountChunk> {

@@ -5,7 +5,7 @@ use engine::hot::exec::{
 };
 use engine::msg::exec::RejectClass;
 use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::msg::ui::{UiBookState, UiCatalog, UiInstrument};
 use engine::operator::workstation::monitor::model::SystemNote;
 use engine::operator::workstation::monitor::view::{Channel, MonitorDetail, MonitorUiState};
@@ -154,7 +154,7 @@ fn halted() -> MonitorScene {
         1_310_000,
         ExecHalt::Halted {
             reason: HaltReason::RealisedLoss,
-            halted_ts_us: TsUs::from_micros(BASE_TS + 1_310_000),
+            halted_ts_us: LocalTs::from_micros(BASE_TS + 1_310_000),
         },
     );
     feed.finish("halted", FULL_FEATURES, MonitorUiState::new())

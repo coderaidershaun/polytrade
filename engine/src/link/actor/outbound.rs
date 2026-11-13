@@ -5,7 +5,7 @@
 use std::net::SocketAddr;
 
 use crate::msg::persist::FeatureId;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::msg::ui::UiCatalog;
 use crate::msg::ui::channel::UiLifecycle;
 
@@ -16,7 +16,7 @@ use super::{Actor, REPORT_TICKS};
 use crate::msg::run_state::RunState;
 
 impl Actor {
-    pub(super) fn flush_feeds(&mut self, now: TsUs) {
+    pub(super) fn flush_feeds(&mut self, now: LocalTs) {
         while let Ok(outbound) = self.outbound.pop() {
             self.send(outbound.topic, LinkBody::Payload(outbound.payload), now);
         }
@@ -31,7 +31,7 @@ impl Actor {
         }
     }
 
-    pub(super) fn announce(&mut self, now: TsUs) {
+    pub(super) fn announce(&mut self, now: LocalTs) {
         self.poll_lifecycle(now);
         let lifecycle = LinkBody::Lifecycle(self.lifecycle());
         self.send(TopicId::LIFECYCLE, lifecycle, now);
@@ -60,7 +60,7 @@ impl Actor {
         }
     }
 
-    fn poll_lifecycle(&mut self, now: TsUs) {
+    fn poll_lifecycle(&mut self, now: LocalTs) {
         while let Ok(message) = self.channels.lifecycle.try_recv() {
             match message {
                 UiLifecycle::Ready(catalog) => {
@@ -76,8 +76,8 @@ impl Actor {
     /// # Panics
     /// When a name is longer than `LINK_NAME_LEN` bytes, which the engine refuses at startup before
     /// this can run.
-    fn build_catalog_frames(&mut self, catalog: &UiCatalog, now: TsUs) {
-        let catalog_ts_us = now;
+    fn build_catalog_frames(&mut self, catalog: &UiCatalog, now: LocalTs) {
+        let catalog_ts_us = now.to_peer();
         self.catalog_frames.clear();
         let instrument_count = catalog.instruments.len() as u16;
         for row in &catalog.instruments {
@@ -125,7 +125,7 @@ impl Actor {
         }
     }
 
-    fn send(&mut self, topic: TopicId, body: LinkBody, now: TsUs) {
+    fn send(&mut self, topic: TopicId, body: LinkBody, now: LocalTs) {
         self.recipients.clear();
         self.recipients
             .extend(self.subscribers.recipients(topic, now));

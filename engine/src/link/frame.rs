@@ -2,7 +2,7 @@
 //! `link_fields()` declaration and never from the wire itself, so two senders whose field lists
 //! differ do not agree about what a given slot index holds.
 
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 use crate::msg::ui::{LatencyReport, UiBookSnapshot, UiEvent};
 
 use super::control::{
@@ -32,7 +32,7 @@ const _: () = assert!(ENVELOPE_LEN + PAYLOAD_BODY_LEN <= LINK_MAX_DATAGRAM);
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LinkPayload {
     pub schema_hash: LinkHash,
-    pub event_ts_us: TsUs,
+    pub event_ts_us: VenueTs,
     count: u8,
     values: [f64; LINK_MAX_FIELDS],
 }
@@ -41,7 +41,7 @@ impl LinkPayload {
     /// # Panics
     /// When `values` is longer than `LINK_MAX_FIELDS`. The field list is a code-level fact, so
     /// exceeding it is a bug rather than a runtime condition.
-    pub fn new(schema_hash: LinkHash, event_ts_us: TsUs, values: &[f64]) -> Self {
+    pub fn new(schema_hash: LinkHash, event_ts_us: VenueTs, values: &[f64]) -> Self {
         assert!(
             values.len() <= LINK_MAX_FIELDS,
             "link payload carries {} values, capacity {LINK_MAX_FIELDS}",
@@ -78,7 +78,7 @@ impl LinkPayload {
                 expected: guard.schema_hash,
             });
         }
-        let event_ts_us = TsUs::read(reader)?;
+        let event_ts_us = VenueTs::read(reader)?;
         let count = u8::read(reader)?;
         if count as usize > LINK_MAX_FIELDS {
             return Err(LinkDecodeError::FieldCountExceeded {
@@ -102,7 +102,7 @@ wire_array! { f64; LINK_MAX_FIELDS; 0.0 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LinkOrigin {
     pub sender_te_hash: LinkHash,
-    pub boot_ts_us: TsUs,
+    pub boot_ts_us: VenueTs,
     pub topic: TopicId,
     pub seq: u64,
 }
@@ -129,8 +129,8 @@ pub struct LinkFrame {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InboundLink {
     pub frame: LinkFrame,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
+    pub received_ts_us: LocalTs,
+    pub queued_ts_us: LocalTs,
 }
 
 /// 38 slots land on InboundMessage's 384-byte budget EXACTLY, where BookChunk takes 352. A 39th

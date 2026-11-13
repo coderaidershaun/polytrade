@@ -6,7 +6,7 @@ use rtrb::Consumer;
 
 use crate::msg::ids::{MAX_INPUT_QUEUES, QueueId};
 use crate::msg::inbound::InboundMessage;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 /// The consumer ends of every input queue; only the hot thread holds this.
 pub struct IngressQueues {
@@ -26,7 +26,7 @@ impl IngressQueues {
     }
 
     pub fn pop_next(&mut self) -> Option<(QueueId, InboundMessage)> {
-        let mut chosen: Option<(usize, TsUs)> = None;
+        let mut chosen: Option<(usize, LocalTs)> = None;
         for (index, consumer) in self.consumers.iter().enumerate() {
             if let Ok(head) = consumer.peek() {
                 let received = head.received_ts_us();

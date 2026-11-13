@@ -7,7 +7,7 @@ use crate::hot::strategy::Actions;
 use crate::msg::exec::ExecCommand;
 use crate::msg::ids::{ClientOrderId, InstrumentId, Side};
 use crate::msg::persist::{OrderLifecycle, OrderTransition};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 use super::audit::bank_engine_driven;
 use super::desired::QuoteLevel;
@@ -68,7 +68,7 @@ impl ExecEngine {
 
     /// The slot moves to cancel-in-flight only once the cancel is banked: a slot waiting on an answer
     /// is one the engine stops asking about, so a cancel that never left must leave it as it was.
-    pub(super) fn cancel_slot(&mut self, index: usize, at: TsUs, bank: &mut Actions) -> bool {
+    pub(super) fn cancel_slot(&mut self, index: usize, at: LocalTs, bank: &mut Actions) -> bool {
         let slot = self.orders.slot(index);
         let command = ExecCommand::Cancel {
             instrument: slot.instrument,
@@ -87,7 +87,7 @@ impl ExecEngine {
         index: usize,
         next: OrderState,
         transition: OrderTransition,
-        at: TsUs,
+        at: LocalTs,
         bank: &mut Actions,
     ) {
         let slot = self.orders.slot_mut(index);
@@ -105,7 +105,7 @@ impl ExecEngine {
         side: Side,
         level: QuoteLevel,
         intent: PlaceIntent,
-        at: TsUs,
+        at: LocalTs,
         bank: &mut Actions,
     ) {
         let Some((index, client_id)) = self.claim(instrument, side, level, intent, at) else {
@@ -139,7 +139,7 @@ impl ExecEngine {
         side: Side,
         level: QuoteLevel,
         intent: PlaceIntent,
-        at: TsUs,
+        at: LocalTs,
     ) -> Option<(usize, ClientOrderId)> {
         let Some((index, client_id)) = self.orders.claim(OrderClaim {
             instrument,
@@ -164,7 +164,7 @@ impl ExecEngine {
     }
 
     #[cold]
-    fn unwind(&mut self, index: usize, at: TsUs, bank: &mut Actions) {
+    fn unwind(&mut self, index: usize, at: LocalTs, bank: &mut Actions) {
         self.release_unsent_reservation(index);
         self.orders.slot_mut(index).closed_ts_us = at;
         let next = OrderState::Closed(CloseReason::Rejected);
@@ -178,7 +178,7 @@ impl ExecEngine {
     /// unwind its claim before the halt, and the sweep the halt itself issues, which has nothing left
     /// to escalate to and says so out loud.
     #[inline]
-    pub(super) fn bank_or_halt(&mut self, command: ExecCommand, at: TsUs) -> bool {
+    pub(super) fn bank_or_halt(&mut self, command: ExecCommand, at: LocalTs) -> bool {
         let is_banked = self.pending.bank(command);
         if !is_banked {
             self.halt(HaltReason::CommandBankOverflow, at);

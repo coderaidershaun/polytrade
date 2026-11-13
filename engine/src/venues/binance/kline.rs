@@ -4,7 +4,7 @@
 //! Pure (fixtures replay without socket).
 
 use crate::msg::inbound::{InboundMessage, KlineEvent};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs, VenueTs};
 use crate::runtime::config::KlineInterval;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,16 +12,16 @@ pub enum KlineOutcome {
     Forwarded,
     Duplicate,
     Gap {
-        missing_from_open_ts_us: TsUs,
-        next_open_ts_us: TsUs,
+        missing_from_open_ts_us: VenueTs,
+        next_open_ts_us: VenueTs,
     },
 }
 
 /// Last finalized open time (anchor for dedupe + gap detection).
 pub struct KlineSequencer {
     interval_us: Option<DurationUs>,
-    last_closed_open_ts_us: Option<TsUs>,
-    last_emitted_received_ts_us: Option<TsUs>,
+    last_closed_open_ts_us: Option<VenueTs>,
+    last_emitted_received_ts_us: Option<LocalTs>,
 }
 
 impl KlineSequencer {
@@ -35,7 +35,7 @@ impl KlineSequencer {
 
     /// Next closed candle's expected open (driver backfills from here, not jumping gaps).
     /// None before first close or on 1M (no fixed span).
-    pub fn next_expected_open_ts_us(&self) -> Option<TsUs> {
+    pub fn next_expected_open_ts_us(&self) -> Option<VenueTs> {
         match (self.last_closed_open_ts_us, self.interval_us) {
             (Some(last), Some(interval_us)) => Some(last + interval_us),
             _ => None,
@@ -79,14 +79,14 @@ impl KlineSequencer {
         KlineOutcome::Forwarded
     }
 
-    fn is_stale_open(&self, open_ts_us: TsUs) -> bool {
+    fn is_stale_open(&self, open_ts_us: VenueTs) -> bool {
         self.last_closed_open_ts_us
             .is_some_and(|last| open_ts_us <= last)
     }
 
     /// Answers the expected open when `open_ts_us` lies past it, since that is where the hole
     /// starts. A monthly interval has no expected open, so it is never gap-checked.
-    fn gap_start(&self, open_ts_us: TsUs) -> Option<TsUs> {
+    fn gap_start(&self, open_ts_us: VenueTs) -> Option<VenueTs> {
         self.next_expected_open_ts_us()
             .filter(|&expected| open_ts_us > expected)
     }

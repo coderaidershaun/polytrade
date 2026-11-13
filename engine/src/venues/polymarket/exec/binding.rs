@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use super::super::rotation::WindowAssignment;
 use crate::msg::ids::{InstrumentId, Price};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs, VenueTs};
 
 // Bindings pending enrichment reads. Cap prevents venue refusals from growing the list unbounded.
 const PENDING_BINDINGS: usize = 4;
@@ -46,14 +46,14 @@ pub struct LegBinding {
 pub struct PendingBinding {
     pub condition_id: Arc<str>,
     pub legs: [LegBinding; 2],
-    pub window_open_ts_us: TsUs,
-    pub window_close_ts_us: TsUs,
+    pub window_open_ts_us: VenueTs,
+    pub window_close_ts_us: VenueTs,
     pub tick: Option<Price>,
     // Number of enrichment read re-issues so far.
     attempts: u32,
     // Earliest time to re-issue. Armed on first retry poll (not at creation) because initial reads
     // leave immediately with the assignment.
-    retry_at: TsUs,
+    retry_at: LocalTs,
     is_retry_armed: bool,
 }
 
@@ -77,7 +77,7 @@ impl PendingBinding {
             window_close_ts_us: assignment.window_close_ts_us,
             tick: None,
             attempts: 0,
-            retry_at: TsUs::from_micros(0),
+            retry_at: LocalTs::from_micros(0),
             is_retry_armed: false,
         }
     }
@@ -105,7 +105,7 @@ pub enum EnrichmentRead {
 pub struct LiveWindow {
     pub instrument: InstrumentId,
     pub token_id: Arc<str>,
-    pub window_close_ts_us: TsUs,
+    pub window_close_ts_us: VenueTs,
 }
 
 #[derive(Debug, Default)]
@@ -128,7 +128,7 @@ pub struct Bindings {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SweptWindow {
     instrument: InstrumentId,
-    window_close_ts_us: TsUs,
+    window_close_ts_us: VenueTs,
 }
 
 /// One instrument and the token it is trading — the pair every rotation-driven read needs.
@@ -157,8 +157,8 @@ pub struct ReadyBinding {
     pub token_id: Arc<str>,
     pub tick: Price,
     pub is_neg_risk: bool,
-    pub window_open_ts_us: TsUs,
-    pub window_close_ts_us: TsUs,
+    pub window_open_ts_us: VenueTs,
+    pub window_close_ts_us: VenueTs,
 }
 
 impl Bindings {
@@ -226,7 +226,7 @@ impl Bindings {
     /// every placement refused `UnboundInstrument` until the next rotation. Only the MISSING reads
     /// are re-issued, and a binding still incomplete after [`MAX_ENRICHMENT_ATTEMPTS`] is given up
     /// (counted as refused) rather than retried into the read budget.
-    pub fn due_enrichment_reads(&mut self, now: TsUs) -> Vec<EnrichmentRead> {
+    pub fn due_enrichment_reads(&mut self, now: LocalTs) -> Vec<EnrichmentRead> {
         // Giving up and walking are separate passes on purpose. Sharing one cursor between them
         // means every branch has to remember whether it may advance, and the branch that gets it
         // wrong spins forever on the async edge rather than returning a wrong answer.
@@ -320,12 +320,12 @@ impl Bindings {
     /// pulled. The hot engine withdraws first; this fires once per window as the backstop.
     pub fn close_margin_reached(
         &mut self,
-        now: TsUs,
+        now: LocalTs,
         margin: DurationUs,
     ) -> Vec<TokenOfInstrument> {
         let mut reached = Vec::new();
         for window in &self.live {
-            if now + margin < window.window_close_ts_us {
+            if now.as_venue_calendar() + margin < window.window_close_ts_us {
                 continue;
             }
             let marker = SweptWindow {

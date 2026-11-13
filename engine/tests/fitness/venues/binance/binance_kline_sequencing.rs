@@ -3,7 +3,7 @@
 
 use engine::msg::ids::{Price, Qty};
 use engine::msg::inbound::{InboundMessage, KlineEvent};
-use engine::msg::time::TsUs;
+use engine::msg::time::{LocalTs, VenueTs};
 use engine::runtime::config::KlineInterval;
 use engine::venues::binance::kline::{KlineOutcome, KlineSequencer};
 use engine::venues::binance::parse::{
@@ -29,11 +29,11 @@ fn parse_live(fixture: &str) -> Vec<KlineEvent> {
         .collect()
 }
 
-fn candle_at(open_ts_us: i64, is_closed: bool, received: TsUs) -> KlineEvent {
+fn candle_at(open_ts_us: i64, is_closed: bool, received: LocalTs) -> KlineEvent {
     KlineEvent {
         instrument: INSTRUMENT,
         interval: KlineInterval::OneMinute,
-        open_ts_us: TsUs::from_micros(open_ts_us),
+        open_ts_us: VenueTs::from_micros(open_ts_us),
         open: Price(1),
         high: Price(1),
         low: Price(1),
@@ -42,7 +42,7 @@ fn candle_at(open_ts_us: i64, is_closed: bool, received: TsUs) -> KlineEvent {
         quote_volume: 1,
         trade_count: 1,
         is_closed,
-        exchange_ts_us: received,
+        exchange_ts_us: received.as_venue_calendar(),
         exchange_sent_ts_us: None,
         received_ts_us: received,
         queued_ts_us: received,
@@ -78,7 +78,7 @@ fn perp_live_stream_forwards() {
         })
         .collect();
     assert_eq!(closes.len(), 1, "exactly one candle closes in the window");
-    assert_eq!(closes[0].open_ts_us, TsUs::from_micros(FIRST_OPEN_US));
+    assert_eq!(closes[0].open_ts_us, VenueTs::from_micros(FIRST_OPEN_US));
 }
 
 #[test]
@@ -113,9 +113,9 @@ fn gap_repair_never_emits_a_decreasing_receipt_stamp() {
     let mut sequencer = KlineSequencer::new(KlineInterval::OneMinute);
     let mut emitted = Vec::new();
 
-    let early = TsUs::from_micros(1_000_000);
-    let live_stamp = TsUs::from_micros(2_000_000);
-    let repair_stamp = TsUs::from_micros(9_000_000);
+    let early = LocalTs::from_micros(1_000_000);
+    let live_stamp = LocalTs::from_micros(2_000_000);
+    let repair_stamp = LocalTs::from_micros(9_000_000);
 
     sequencer.on_backfill(&[candle_at(FIRST_OPEN_US, true, early)], &mut |m| {
         emitted.push(m)

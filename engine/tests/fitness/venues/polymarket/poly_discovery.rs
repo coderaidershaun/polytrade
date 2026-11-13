@@ -5,7 +5,7 @@
 use engine::venues::polymarket::discovery::{PolySchedule, Slot};
 use proptest::prelude::*;
 
-use crate::engine_support::ts_secs;
+use crate::engine_support::venue_ts_secs;
 
 const SECOND_US: i64 = 1_000_000;
 const WINDOW_SECS: i64 = 300;
@@ -13,7 +13,7 @@ const WINDOW_SECS: i64 = 300;
 #[test]
 fn next_window_subscribe_matches_current_nominal_end_minus_lead() {
     let schedule = PolySchedule::BTC_5M;
-    let now = ts_secs(1_784_439_123); // mid-window
+    let now = venue_ts_secs(1_784_439_123); // mid-window
     let current = schedule.current_window(now);
     let next = schedule.next_window(now);
     // The pinned handover: subscribe N+1 at N's nominal end minus the 60s lead (T-60s).
@@ -30,7 +30,7 @@ proptest! {
     #[test]
     fn window_containing_is_grid_aligned_and_brackets_now(now_secs in 0i64..4_000_000_000i64) {
         let schedule = PolySchedule::BTC_5M;
-        let now = ts_secs(now_secs);
+        let now = venue_ts_secs(now_secs);
         let window = schedule.current_window(now);
         let len = schedule.window_len.micros();
 
@@ -47,7 +47,7 @@ proptest! {
     #[test]
     fn slot_is_window_index_parity(index in 0i64..20_000_000i64) {
         let schedule = PolySchedule::BTC_5M;
-        let start = ts_secs(index * WINDOW_SECS);
+        let start = venue_ts_secs(index * WINDOW_SECS);
         let window = schedule.window_at(start);
         prop_assert_eq!(window.index, index);
         let expected = if index % 2 == 0 { Slot::A } else { Slot::B };

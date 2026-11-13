@@ -15,7 +15,7 @@ use engine::msg::exec::{
     VenueOrderStatus,
 };
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, VenueOrderId};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use proptest::prelude::*;
 
 use crate::engine_support::account_chunk;
@@ -46,10 +46,10 @@ fn event(kind: ExecKind, client_id: ClientOrderId) -> ExecEvent {
         reject_code: 0,
         amends_remaining: ExecEvent::AMENDS_UNKNOWN,
         recon_seq: 0,
-        exchange_ts_us: TsUs::from_micros(1),
+        exchange_ts_us: VenueTs::from_micros(1),
         request_sent_ts_us: None,
-        received_ts_us: TsUs::from_micros(2),
-        queued_ts_us: TsUs::from_micros(3),
+        received_ts_us: LocalTs::from_micros(2),
+        queued_ts_us: LocalTs::from_micros(3),
     }
 }
 
@@ -61,7 +61,7 @@ fn buy_claim(level: QuoteLevel, price: i64, qty: i64) -> OrderClaim {
         price: Price(price),
         qty: Qty(qty),
         style: OrderStyle::PostOnly,
-        claimed_ts_us: TsUs::from_micros(1),
+        claimed_ts_us: LocalTs::from_micros(1),
         recon_seq: 0,
     }
 }
@@ -240,16 +240,16 @@ fn a_client_id_addresses_only_the_slot_and_generation_it_was_encoded_for() {
     assert_eq!(table.find(first), Some(index));
 
     let mut canceled = event(ExecKind::AckCanceled, first);
-    canceled.received_ts_us = TsUs::from_micros(10);
+    canceled.received_ts_us = LocalTs::from_micros(10);
     apply_exec_event(table.slot_mut(index), &canceled);
     table.reap(
-        TsUs::from_micros(10 + 60_000_000),
+        LocalTs::from_micros(10 + 60_000_000),
         DurationUs::from_micros(60_000_000),
     );
 
     let (reused, second) = table
         .claim(OrderClaim {
-            claimed_ts_us: TsUs::from_micros(100),
+            claimed_ts_us: LocalTs::from_micros(100),
             ..buy_claim(QuoteLevel::ZERO, 0, 0)
         })
         .expect("the reaped slot is free again");
@@ -488,9 +488,9 @@ fn balances(
     AccountChunk {
         kind,
         venue_update_ts_ms,
-        exchange_ts_us: TsUs::from_micros(1),
-        received_ts_us: TsUs::from_micros(2),
-        queued_ts_us: TsUs::from_micros(3),
+        exchange_ts_us: VenueTs::from_micros(1),
+        received_ts_us: LocalTs::from_micros(2),
+        queued_ts_us: LocalTs::from_micros(3),
         ..account_chunk(&[(asset, free)], 0)
     }
 }

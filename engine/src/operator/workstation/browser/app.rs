@@ -20,7 +20,7 @@ use super::touch;
 use crate::hot::exec::ExecHalt;
 use crate::link::LinkHash;
 use crate::msg::relay::RelayHello;
-use crate::msg::time::{DurationUs, EngineClock, TsUs};
+use crate::msg::time::{DurationUs, EngineClock, LocalTs};
 use crate::operator::workstation::link::attachment::{Attachment, Screen};
 use crate::operator::workstation::link::session::{LinkSession, LinkSessionError, LinkTarget};
 use crate::operator::workstation::shell::{self, Arrangement, Navigation, Selection};
@@ -71,7 +71,7 @@ pub(super) struct Station {
     /// assertion, and a different one means the server now names other engines.
     attached: Option<(RelayHello, Attachment)>,
     socket: Option<LinkSocket>,
-    connected_ts_us: Option<TsUs>,
+    connected_ts_us: Option<LocalTs>,
     title: Box<str>,
     navigation: Navigation,
     /// The selection the address bar already shows, so only a change writes to it.
@@ -154,7 +154,7 @@ impl Station {
         self.pump(shared);
     }
 
-    fn on_hello(&mut self, text: &str, now: TsUs) {
+    fn on_hello(&mut self, text: &str, now: LocalTs) {
         let hello = match serde_json::from_str::<RelayHello>(text) {
             Ok(hello) => hello,
             Err(error) => {
@@ -169,7 +169,7 @@ impl Station {
         }
     }
 
-    fn adopt(&mut self, hello: RelayHello, now: TsUs) {
+    fn adopt(&mut self, hello: RelayHello, now: LocalTs) {
         match attach(&hello, now) {
             Ok(attachment) => {
                 self.attached = Some((hello, attachment));
@@ -196,7 +196,7 @@ impl Station {
     // address, but the next subscribe is not due until two seconds after the last one, so the
     // engine keeps sending to the old address meanwhile. Those frames are lost and show as event
     // gaps. Subscribing as soon as the socket opens would close the gap.
-    fn connect(&mut self, shared: &Rc<RefCell<Self>>, now: TsUs) {
+    fn connect(&mut self, shared: &Rc<RefCell<Self>>, now: LocalTs) {
         self.connected_ts_us = Some(now);
         let peer = self
             .attached
@@ -256,7 +256,7 @@ impl Station {
 
     /// The new engine has its own relay socket, so the old one is closed and its callbacks are
     /// detached before the new one opens.
-    fn move_to_next_peer(&mut self, shared: &Rc<RefCell<Self>>, now: TsUs) {
+    fn move_to_next_peer(&mut self, shared: &Rc<RefCell<Self>>, now: LocalTs) {
         let Some((_, attachment)) = &mut self.attached else {
             return;
         };
@@ -367,7 +367,7 @@ impl Station {
 
 /// The relay's hello names the engines, but not a clock or a random number, so both come from
 /// here.
-fn attach(hello: &RelayHello, now: TsUs) -> Result<Attachment, HelloError> {
+fn attach(hello: &RelayHello, now: LocalTs) -> Result<Attachment, HelloError> {
     let target = LinkTarget {
         strategy: StrategyId::new(&hello.strategy)?,
         peers: hello.peers.clone(),

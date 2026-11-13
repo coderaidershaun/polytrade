@@ -8,7 +8,7 @@
 //! never rounds: [`write_venue_mid`] widens its decimals until the value is exact.
 
 use crate::msg::ids::{FIXED_SCALE, Price, Qty};
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 
 /// The whole workstation's answer to "no reading". It is plain ASCII because the bundled fonts lack
 /// many symbols, and only ASCII is sure to draw.
@@ -190,7 +190,7 @@ pub fn qty_decimals(lot: Option<Qty>) -> usize {
     }
 }
 
-pub(crate) fn write_time_of_day(buf: &mut String, at: TsUs) {
+pub(crate) fn write_time_of_day(buf: &mut String, at: VenueTs) {
     let at = at.civil();
     buf.clear();
     push_padded(buf, at.hour as u64, 2);

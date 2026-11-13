@@ -8,7 +8,7 @@
 //! rows than the panel holds costs rows, never legibility.
 
 use engine::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, VenueTs};
 use engine::msg::ui::{DomQuote, UiBookSnapshot, UiBookState, UiEvent};
 use engine::operator::workstation::dom_view::{
     DEFAULT_ROWS_PER_SIDE, DomGrouping, DomOverlay, DomRow, DomStatus, DomViewInput, FeedStatus,
@@ -404,7 +404,7 @@ fn model_judges_quote_liveness_in_event_time() {
     model.apply_event(UiEvent::Quote {
         instrument: inst,
         seq: 0,
-        event_ts_us: TsUs::from_micros(1_000_000),
+        event_ts_us: VenueTs::from_micros(1_000_000),
         quote: DomQuote::top(Some((Price(100), Qty(1))), None),
     });
 
@@ -435,7 +435,7 @@ fn working(id: u64, tick: i64, qty: i64, status: OrderStatus) -> OrderCell {
         price: Price(tick * TICK.0),
         qty: Qty(qty),
         filled: Qty(0),
-        at: TsUs::from_micros(0),
+        at: VenueTs::from_micros(0),
     }
 }
 
@@ -638,7 +638,7 @@ fn a_books_age_is_measured_against_the_engines_own_newest_stamp() {
     model.apply_event(UiEvent::Quote {
         instrument: InstrumentId(1),
         seq: 0,
-        event_ts_us: TsUs::from_micros(9_000_000),
+        event_ts_us: VenueTs::from_micros(9_000_000),
         quote: DomQuote::default(),
     });
     assert_eq!(

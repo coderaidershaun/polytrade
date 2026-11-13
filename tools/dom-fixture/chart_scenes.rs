@@ -4,7 +4,7 @@
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::Level;
 use engine::msg::latency::Stage;
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, VenueTs};
 use engine::msg::ui::{LatencyCell, LatencyFlow, LatencyReport, UiBookState};
 use engine::operator::workstation::chart::model::{BookContinuity, ChartModel};
 
@@ -62,7 +62,7 @@ pub fn latency_report() -> LatencyReport {
         })
         .collect();
     LatencyReport {
-        built_ts_us: TsUs::from_micros(BASE_TS),
+        built_ts_us: VenueTs::from_micros(BASE_TS),
         ages: [Some(DurationUs::ZERO); 3],
         cells: cells
             .try_into()

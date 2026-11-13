@@ -16,7 +16,7 @@ use crate::msg::persist::{
     LinkRowKind, OrderLifecycle, OrderRow, OrderTransition, PersistRecord, TradeRow,
 };
 use crate::msg::run_state::RunAssertion;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs, VenueTs};
 use crate::runtime::config::{KlineInterval, RecordedTables, SpinField};
 use crate::runtime::exposure::{ExposureSnapshot, InstrumentExposure};
 
@@ -219,7 +219,8 @@ impl<A: Digest, B: Digest> Digest for (A, B) {
 }
 
 digest_by_hash!(
-    TsUs,
+    LocalTs,
+    VenueTs,
     DurationUs,
     Price,
     Qty,

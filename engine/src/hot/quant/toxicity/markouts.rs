@@ -7,7 +7,7 @@ use crate::hot::quant::BPS;
 use crate::hot::series::{Element, FastQueue};
 use crate::msg::ids::{Price, Qty, Side};
 use crate::msg::inbound::TradeEvent;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 
 /// Queue heuristic: our quote joins LAST, fills when this fraction of level qty traded (9/10 covers unknown cancellations).
 const QUEUE_FILL_NUM: i128 = 9;
@@ -38,7 +38,7 @@ pub enum MarkoutSide {
 pub struct MarkoutFill {
     pub side: MarkoutSide,
     pub price: Price,
-    pub fill_ts_us: TsUs,
+    pub fill_ts_us: LocalTs,
 }
 
 impl MarkoutSide {
@@ -71,7 +71,7 @@ impl MarkoutSide {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct MidSample {
-    ts_us: TsUs,
+    ts_us: LocalTs,
     mid: f64,
 }
 
@@ -80,7 +80,7 @@ impl Element for MidSample {}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct PendingFill {
-    fill_ts_us: TsUs,
+    fill_ts_us: LocalTs,
     fill_price: f64,
 }
 
@@ -241,7 +241,7 @@ impl SideMarkouts {
     }
 
     /// Pre-fill drift over each reverse horizon (vs newest mid at/before target).
-    fn record_reverse(&mut self, fill_ts_us: TsUs, mids: &FastQueue<MidSample>) {
+    fn record_reverse(&mut self, fill_ts_us: LocalTs, mids: &FastQueue<MidSample>) {
         let Some(latest) = mids.last() else {
             self.reverse_gaps += ReverseHorizon::ALL.len() as u64;
             return;
@@ -387,7 +387,7 @@ impl MarkoutTracker {
     }
 
     /// Feed mid, mature fills (non-decreasing ts_us; skip invalid).
-    pub fn on_mid(&mut self, ts_us: TsUs, mid: f64) {
+    pub fn on_mid(&mut self, ts_us: LocalTs, mid: f64) {
         if !(mid.is_finite() && mid > 0.0) {
             return;
         }
@@ -428,7 +428,7 @@ impl MarkoutTracker {
 }
 
 /// Newest sample at/before target (None if unreachable).
-fn sample_at_or_before(mids: &FastQueue<MidSample>, target: TsUs) -> Option<MidSample> {
+fn sample_at_or_before(mids: &FastQueue<MidSample>, target: LocalTs) -> Option<MidSample> {
     let samples = mids.as_slice();
     let reaching = samples.partition_point(|sample| sample.ts_us <= target);
     reaching.checked_sub(1).map(|index| samples[index])

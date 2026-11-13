@@ -3,13 +3,13 @@
 //! no-chrono `end_date_min` ISO formatter pinned against a real capture value.
 
 use engine::msg::ids::{Price, Qty};
-use engine::msg::time::TsUs;
+use engine::msg::time::VenueTs;
 use engine::runtime::config::PolySeries;
 use engine::venues::polymarket::rest::{
     GammaError, GammaMarket, fallback_url, parse_events, parse_fallback,
 };
 
-use crate::engine_support::ts_secs;
+use crate::engine_support::venue_ts_secs;
 
 const SERIES: PolySeries = PolySeries::BtcUpDown5m;
 
@@ -25,7 +25,7 @@ const EVENT: &str = r#"[{"slug":"btc-updown-5m-1784439600","markets":[{
 
 #[test]
 fn double_parses_token_ids_and_window_from_slug() {
-    let market = parse_events(SERIES, EVENT, ts_secs(1_784_439_600)).expect("event parses");
+    let market = parse_events(SERIES, EVENT, venue_ts_secs(1_784_439_600)).expect("event parses");
     assert_eq!(
         market,
         GammaMarket {
@@ -42,8 +42,8 @@ fn double_parses_token_ids_and_window_from_slug() {
             min_order_size: Qty(500_000_000),
             // The window bounds come from the slug's grid timestamp, not from startDate (creation
             // time) or end_date_iso (too coarse).
-            window_open_ts_us: TsUs::from_micros(1_784_439_600_000_000),
-            window_close_ts_us: TsUs::from_micros(1_784_439_900_000_000),
+            window_open_ts_us: VenueTs::from_micros(1_784_439_600_000_000),
+            window_close_ts_us: VenueTs::from_micros(1_784_439_900_000_000),
         }
     );
 }
@@ -69,7 +69,7 @@ fn parse_events_rejects_malformed_input() {
         ),
     ];
     for (name, raw, expect) in cases {
-        let error = parse_events(SERIES, raw, ts_secs(1_784_439_600)).expect_err(name);
+        let error = parse_events(SERIES, raw, venue_ts_secs(1_784_439_600)).expect_err(name);
         assert!(expect(&error), "{name}: got {error:?}");
     }
 }
@@ -78,7 +78,8 @@ fn parse_events_rejects_malformed_input() {
 fn fallback_url_formats_end_date_min_as_iso_utc() {
     // 1784439540 = 2026-07-19T05:39:00Z; pins the no-chrono ISO formatter.
     assert!(
-        fallback_url(SERIES, ts_secs(1_784_439_540)).contains("end_date_min=2026-07-19T05:39:00Z"),
+        fallback_url(SERIES, venue_ts_secs(1_784_439_540))
+            .contains("end_date_min=2026-07-19T05:39:00Z"),
         "fallback query must time-filter with the mandatory end_date_min"
     );
 }
@@ -91,15 +92,15 @@ fn fallback_resolves_current_and_next_windows() {
     // Windows come from the slug grid ts, never a body date field.
     assert_eq!(
         current.window_open_ts_us,
-        TsUs::from_micros(1_784_449_200_000_000)
+        VenueTs::from_micros(1_784_449_200_000_000)
     );
     assert_eq!(
         current.window_close_ts_us,
-        TsUs::from_micros(1_784_449_500_000_000)
+        VenueTs::from_micros(1_784_449_500_000_000)
     );
     assert_eq!(
         next.window_open_ts_us,
-        TsUs::from_micros(1_784_449_500_000_000)
+        VenueTs::from_micros(1_784_449_500_000_000)
     );
     assert_eq!(
         &*current.token_up,

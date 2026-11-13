@@ -15,7 +15,7 @@ mod wire;
 
 use crate::msg::exec::VenueOrderStatus;
 use crate::msg::ids::{InstrumentId, Price, Qty};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::venues::edge::decode::{
     DecimalFault, JsonFrame, mantissa_field, qty_field, unknown_enum,
 };
@@ -87,7 +87,7 @@ pub struct DecodeContext<'a> {
     pub api_key: &'a str,
     /// When this process received the message. Venue stamps are clamped against it; it is not the
     /// venue's clock.
-    pub received_ts_us: TsUs,
+    pub received_ts_us: LocalTs,
 }
 
 /// Encoder context: the same bindings the decoder reads, plus the account material an order
@@ -99,7 +99,7 @@ pub struct EncodeContext<'a> {
     pub signer: &'a OrderSigner,
     /// Wire-send stamp. It becomes the signed order's millisecond timestamp, which is this venue's
     /// uniqueness key — the codec reads no clock of its own, so a replay re-signs identically.
-    pub sent_ts_us: TsUs,
+    pub sent_ts_us: LocalTs,
 }
 
 /// One tradeable outcome token, as the engine currently knows it.

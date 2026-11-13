@@ -19,7 +19,7 @@ use engine::link::{
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::persist::FeatureId;
 use engine::msg::run_state::RunState;
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::msg::ui::{UiBookSnapshot, UiBookState, UiCatalog, UiEvent};
 use engine::operator::workstation::link::model::{ConnectionState, ControlVerdict};
 use engine::operator::workstation::link::session::{
@@ -32,13 +32,13 @@ use proptest::prelude::*;
 use crate::operator::workstation::workstation_support::BookFixture;
 
 const STRATEGY: &str = "strat-fitness";
-const CATALOG_EPOCH: TsUs = TsUs::from_micros(1_700_000_000_000_000);
+const CATALOG_EPOCH: VenueTs = VenueTs::from_micros(1_700_000_000_000_000);
 const SPIN_INTERVAL: DurationUs = DurationUs::from_micros(1_000_000);
 const SPIN_INTERVAL_US: u64 = SPIN_INTERVAL.micros() as u64;
 
 /// The caller's clock reading for every test that does not drive time itself. One instant for a
 /// whole feed means no gate slot ever ages out mid-property.
-const NOW: TsUs = CATALOG_EPOCH;
+const NOW: LocalTs = LocalTs::from_micros(CATALOG_EPOCH.micros());
 const FIRST_BOOT_US: i64 = 1_000;
 const SECOND_BOOT_US: i64 = 2_000;
 const THIRD_BOOT_US: i64 = 3_000;
@@ -61,7 +61,7 @@ fn target(peers: Vec<SocketAddr>) -> LinkTarget {
     }
 }
 
-fn session_at(now: TsUs) -> LinkSession {
+fn session_at(now: LocalTs) -> LinkSession {
     LinkSession::new(target(peers()), now).expect("the fixture names two peers")
 }
 
@@ -82,7 +82,7 @@ fn identity(boot_ts_us: i64) -> LinkIdentity {
         token_hash: LinkHash::of_name(""),
         strategy_hash: LinkHash::of_name(STRATEGY),
         sender_te_hash: LinkHash::of_name("te-fitness"),
-        boot_ts_us: TsUs::from_micros(boot_ts_us),
+        boot_ts_us: VenueTs::from_micros(boot_ts_us),
     }
 }
 
@@ -134,7 +134,7 @@ fn topic_of(body: &LinkBody) -> TopicId {
     }
 }
 
-fn instrument_frame(index: u16, total: u16, epoch: TsUs) -> CatalogInstrument {
+fn instrument_frame(index: u16, total: u16, epoch: VenueTs) -> CatalogInstrument {
     CatalogInstrument {
         catalog_ts_us: epoch,
         total_count: total,
@@ -150,7 +150,7 @@ fn instrument_frame(index: u16, total: u16, epoch: TsUs) -> CatalogInstrument {
     }
 }
 
-fn feature_frame(index: u16, total: u16, epoch: TsUs) -> CatalogFeature {
+fn feature_frame(index: u16, total: u16, epoch: VenueTs) -> CatalogFeature {
     CatalogFeature {
         catalog_ts_us: epoch,
         total_count: total,
@@ -181,7 +181,7 @@ fn heartbeat(feature_count: u16) -> LinkBody {
 }
 
 /// The frames of a one-instrument, one-feature catalog stamped `epoch`, heartbeat first.
-fn catalog_frames(engine: &mut Engine, epoch: TsUs) -> Vec<Vec<u8>> {
+fn catalog_frames(engine: &mut Engine, epoch: VenueTs) -> Vec<Vec<u8>> {
     [
         heartbeat(1),
         LinkBody::CatalogInstrument(instrument_frame(0, 1, epoch)),
@@ -219,7 +219,7 @@ fn announce(
     session: &mut LinkSession,
     item: Announcement,
     totals: (u16, u16),
-    epoch: TsUs,
+    epoch: VenueTs,
 ) -> Option<UiCatalog> {
     let body = match item {
         Announcement::Instrument(index) => {
@@ -541,7 +541,7 @@ fn trade_event(seq: u64) -> UiEvent {
     UiEvent::Trade {
         instrument: InstrumentId(0),
         seq,
-        event_ts_us: TsUs::from_micros(seq as i64 * 1_000),
+        event_ts_us: VenueTs::from_micros(seq as i64 * 1_000),
         aggressor: Side::Buy,
         price: Price(100 + seq as i64),
         qty: Qty(7),
@@ -625,7 +625,7 @@ fn decode_subscribe(bytes: &[u8]) -> (Envelope, Subscribe) {
     }
 }
 
-fn next_subscribe(session: &mut LinkSession, now: TsUs) -> (Envelope, Subscribe) {
+fn next_subscribe(session: &mut LinkSession, now: LocalTs) -> (Envelope, Subscribe) {
     decode_subscribe(session.subscribe_due(now).expect("a subscribe is due"))
 }
 
@@ -728,7 +728,8 @@ fn a_subscribe_is_due_at_start_every_two_seconds_and_at_once_after_an_assert() {
     assert_eq!(envelope.topic, TopicId::SUBSCRIBE);
     assert_eq!(envelope.seq, 1);
     assert_eq!(
-        envelope.boot_ts_us, NOW,
+        envelope.boot_ts_us,
+        NOW.to_peer(),
         "the first clock reading is the boot stamp"
     );
     assert_eq!(
@@ -1167,7 +1168,7 @@ fn heartbeats_report_the_engines_phase_and_run_state() {
 /// tab's subscribes as another's replays.
 #[test]
 fn workstations_that_start_together_present_as_different_senders() {
-    let sender_of = |nonce: u64, now: TsUs| {
+    let sender_of = |nonce: u64, now: LocalTs| {
         let mut other = target(peers());
         other.sender_nonce = nonce;
         let mut session = LinkSession::new(other, now).expect("two peers");

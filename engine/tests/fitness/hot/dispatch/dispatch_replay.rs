@@ -10,7 +10,7 @@ use engine::msg::inbound::{
     BookChunk, InboundMessage, KlineEvent, MarketRotation, SpinTick, TradeEvent,
 };
 use engine::msg::persist::{FeatureId, PersistRecord};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs};
 use engine::runtime::config::{Instruments, KlineInterval, NoParams, StrategySpec, TableKind};
 
 use rtrb::Consumer;
@@ -307,7 +307,7 @@ fn engine_hot_log_records_replay_identically() {
         let first = replay_on_own_thread(&sequence, warmup);
         let second = replay_on_own_thread(&sequence, warmup);
         assert_eq!(first, second, "log records diverged across replays");
-        let stamps: Vec<TsUs> = sequence
+        let stamps: Vec<LocalTs> = sequence
             .iter()
             .map(InboundMessage::received_ts_us)
             .collect();
@@ -333,7 +333,7 @@ fn engine_hot_log_records_replay_identically() {
                 == "warmup complete after 10s of message time — strategy callbacks now live"
         })
         .expect("the boundary message wrote the warmup line to the hot lane");
-    assert_eq!(warmup_line.at(), TsUs::from_micros(10_000_000));
+    assert_eq!(warmup_line.at(), LocalTs::from_micros(10_000_000));
 }
 
 /// `engine.warmup_secs`: warmup is decided by message stamps alone. The suppressed prefix is

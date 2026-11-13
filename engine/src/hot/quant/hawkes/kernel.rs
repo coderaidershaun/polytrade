@@ -2,7 +2,7 @@
 //! in for the whole event history, so each event and each intensity query costs constant time.
 
 use super::HawkesEvents;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 /// Exponential kernel parameters, every rate per second.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -44,7 +44,7 @@ impl HawkesParams {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UnivariateHawkes {
     params: HawkesParams,
-    last_ts: Option<TsUs>,
+    last_ts: Option<LocalTs>,
     excitation: f64,
 }
 
@@ -79,7 +79,7 @@ impl UnivariateHawkes {
     }
 
     #[inline]
-    pub fn on_event(&mut self, ts: TsUs) {
+    pub fn on_event(&mut self, ts: LocalTs) {
         self.excitation = match self.last_ts {
             Some(last) => {
                 (-self.params.beta * ts.diff(last).to_secs().max(0.0)).exp() * self.excitation + 1.0
@@ -90,7 +90,7 @@ impl UnivariateHawkes {
     }
 
     #[inline]
-    pub fn intensity(&self, now: TsUs) -> f64 {
+    pub fn intensity(&self, now: LocalTs) -> f64 {
         let Some(last) = self.last_ts else {
             return self.params.mu;
         };

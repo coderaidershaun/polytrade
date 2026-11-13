@@ -11,7 +11,7 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::persist::{FeatureId, FeatureRow, PersistRecord, TradeRow};
-use engine::msg::time::TsUs;
+use engine::msg::time::{LocalTs, VenueTs};
 use engine::runtime::config::{RecordedTables, TableKind};
 use engine::tape::PersistError;
 
@@ -148,7 +148,7 @@ fn feature_record(index: usize) -> PersistRecord {
         instrument: InstrumentId(0),
         feature: FeatureId(0),
         value: index as f64,
-        event_ts_us: TsUs::from_micros(BASE_TS_US + index as i64),
+        event_ts_us: LocalTs::from_micros(BASE_TS_US + index as i64),
     })
 }
 
@@ -161,8 +161,8 @@ fn records_features_then_trade() -> Vec<PersistRecord> {
         price: Price(100 * ONE),
         qty: Qty(ONE),
         side: Side::Buy,
-        exchange_ts_us: TsUs::from_micros(BASE_TS_US),
-        received_ts_us: TsUs::from_micros(BASE_TS_US),
+        exchange_ts_us: VenueTs::from_micros(BASE_TS_US),
+        received_ts_us: LocalTs::from_micros(BASE_TS_US),
     }));
     records
 }

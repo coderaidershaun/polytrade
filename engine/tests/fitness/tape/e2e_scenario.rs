@@ -6,7 +6,7 @@
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::persist::RotationRow;
-use engine::msg::time::TsUs;
+use engine::msg::time::{LocalTs, VenueTs};
 use engine::runtime::config::KlineInterval;
 
 use crate::engine_support::{
@@ -45,12 +45,12 @@ impl RotationFixture {
     pub fn row(&self) -> RotationRow {
         RotationRow {
             instrument: InstrumentId(self.instrument),
-            window_open_ts_us: TsUs::from_micros(self.window_open_ts_us),
-            window_close_ts_us: TsUs::from_micros(self.window_close_ts_us),
+            window_open_ts_us: VenueTs::from_micros(self.window_open_ts_us),
+            window_close_ts_us: VenueTs::from_micros(self.window_close_ts_us),
             token_id_up: self.token_up.into(),
             token_id_down: self.token_down.into(),
             condition_id: self.condition_id.into(),
-            received_ts_us: TsUs::from_micros(self.received_ts_us),
+            received_ts_us: LocalTs::from_micros(self.received_ts_us),
         }
     }
 }

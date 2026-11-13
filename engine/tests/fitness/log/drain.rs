@@ -16,7 +16,7 @@ use engine::log::{
 };
 use engine::msg::ids::Side;
 use engine::msg::inbound::{InboundMessage, SpinTick};
-use engine::msg::time::{EngineClock, TsUs};
+use engine::msg::time::{EngineClock, LocalTs};
 
 use crate::engine_support::{
     ONE, delta_chunk, engine_without_persistence, instrument_row, spin, strategy_log_ring,
@@ -103,7 +103,7 @@ impl LogWriter for StalledDisk {}
 fn memory_output(writer: &MemoryWriter) -> LogOutput {
     let writer = writer.clone();
     LogOutput {
-        open: Box::new(move |_at: TsUs| Ok(Box::new(writer.clone()) as Box<dyn LogWriter>)),
+        open: Box::new(move |_at: LocalTs| Ok(Box::new(writer.clone()) as Box<dyn LogWriter>)),
         fallback: Box::new(MemoryWriter::default()),
         reopen_limit: 3,
     }
@@ -200,7 +200,7 @@ fn stalled_drain_never_blocks_the_hot_thread() {
     let (release_tx, release_rx) = mpsc::channel::<()>();
     let release = Arc::new(Mutex::new(release_rx));
     let output = LogOutput {
-        open: Box::new(move |_at: TsUs| {
+        open: Box::new(move |_at: LocalTs| {
             let disk = StalledDisk {
                 release: Arc::clone(&release),
                 inner: MemoryWriter::default(),
@@ -344,7 +344,7 @@ fn log_write_error_reopens_then_falls_back() {
     let open_count = Arc::clone(&opened);
     let after_reopen = reopened.clone();
     let output = LogOutput {
-        open: Box::new(move |_at: TsUs| {
+        open: Box::new(move |_at: LocalTs| {
             let writer: Box<dyn LogWriter> = match open_count.fetch_add(1, Ordering::Relaxed) {
                 0 => Box::new(FullDisk),
                 _ => Box::new(after_reopen.clone()),
@@ -378,7 +378,7 @@ fn log_reopen_limit_falls_back_to_stderr() {
     let open_count = Arc::clone(&opened);
     let stderr = MemoryWriter::default();
     let output = LogOutput {
-        open: Box::new(move |_at: TsUs| {
+        open: Box::new(move |_at: LocalTs| {
             if open_count.fetch_add(1, Ordering::Relaxed) == 0 {
                 return Ok(Box::new(FullDisk) as Box<dyn LogWriter>);
             }

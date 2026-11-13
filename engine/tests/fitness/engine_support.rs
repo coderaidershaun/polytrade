@@ -25,7 +25,7 @@ use engine::msg::inbound::{
 use engine::msg::persist::{FeatureId, FillRow, OrderRow, PersistRecord};
 use engine::msg::run_state::RunAssertion;
 use engine::msg::run_state::RunState;
-use engine::msg::time::{DurationUs, Stamper, TsUs};
+use engine::msg::time::{DurationUs, LocalTs, Stamper, VenueTs};
 use engine::msg::ui::{UI_BOOK_RING_CAPACITY, UI_EVENT_RING_CAPACITY, UiBookSnapshot, UiEvent};
 use engine::runtime::config::{BinanceMarket, Subscriptions, VenueMarket};
 use engine::runtime::config::{
@@ -42,8 +42,12 @@ use crate::micro_strategy::MicroRecorder;
 
 pub const ONE: i64 = 100_000_000;
 
-pub fn ts(us: i64) -> TsUs {
-    TsUs::from_micros(us)
+pub fn ts(us: i64) -> LocalTs {
+    LocalTs::from_micros(us)
+}
+
+pub fn venue_ts(us: i64) -> VenueTs {
+    VenueTs::from_micros(us)
 }
 
 pub fn trade(instrument: u16, price: i64, qty: i64, side: Side, when: i64) -> TradeEvent {
@@ -52,7 +56,7 @@ pub fn trade(instrument: u16, price: i64, qty: i64, side: Side, when: i64) -> Tr
         price: Price(price),
         qty: Qty(qty),
         side,
-        exchange_ts_us: ts(when),
+        exchange_ts_us: venue_ts(when),
         exchange_sent_ts_us: None,
         received_ts_us: ts(when),
         queued_ts_us: ts(when),
@@ -176,8 +180,8 @@ pub fn book_reset(instrument: u16, when: i64) -> BookReset {
 pub fn rotation(instrument: u16, open: i64, close: i64, when: i64) -> MarketRotation {
     MarketRotation {
         instrument: InstrumentId(instrument),
-        window_open_ts_us: ts(open),
-        window_close_ts_us: ts(close),
+        window_open_ts_us: venue_ts(open),
+        window_close_ts_us: venue_ts(close),
         received_ts_us: ts(when),
         queued_ts_us: ts(when),
     }
@@ -194,7 +198,7 @@ pub fn kline(
     KlineEvent {
         instrument: InstrumentId(instrument),
         interval,
-        open_ts_us: ts(when),
+        open_ts_us: venue_ts(when),
         open: Price(open),
         high: Price(high),
         low: Price(low),
@@ -203,7 +207,7 @@ pub fn kline(
         quote_volume: 42,
         trade_count: 3,
         is_closed,
-        exchange_ts_us: ts(when),
+        exchange_ts_us: venue_ts(when),
         exchange_sent_ts_us: None,
         received_ts_us: ts(when),
         queued_ts_us: ts(when),
@@ -725,7 +729,7 @@ pub fn exec_event(
         // engine-level fitness event is built from here, so a zero would have all of them make it.
         amends_remaining: ExecEvent::AMENDS_UNKNOWN,
         recon_seq: 0,
-        exchange_ts_us: ts(when),
+        exchange_ts_us: venue_ts(when),
         request_sent_ts_us: None,
         received_ts_us: ts(when),
         queued_ts_us: ts(when),
@@ -759,7 +763,7 @@ pub fn account_chunk(balances: &[(AssetId, i64)], when: i64) -> AccountChunk {
         len: u8::try_from(balances.len()).expect("a chunk holds a handful of balances"),
         is_last_chunk: true,
         venue_update_ts_ms: 1,
-        exchange_ts_us: ts(when),
+        exchange_ts_us: venue_ts(when),
         received_ts_us: ts(when),
         queued_ts_us: ts(when),
     }
@@ -826,8 +830,12 @@ pub fn level(price: i64, qty: i64) -> Level {
 }
 
 /// Whole seconds as a timestamp. [`ts`] takes microseconds.
-pub fn ts_secs(secs: i64) -> TsUs {
-    TsUs::from_micros(secs * 1_000_000)
+pub fn ts_secs(secs: i64) -> LocalTs {
+    LocalTs::from_micros(secs * 1_000_000)
+}
+
+pub fn venue_ts_secs(secs: i64) -> VenueTs {
+    VenueTs::from_micros(secs * 1_000_000)
 }
 
 /// Declares nothing and reads nothing, so every command and record a test sees is the engine's.

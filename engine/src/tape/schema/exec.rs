@@ -3,7 +3,7 @@
 
 use crate::msg::exec::{Liquidity, OrderStyle, RejectClass};
 use crate::msg::persist::{FillRow, OrderRow};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 use super::TableRow;
 use super::column::Column;
@@ -25,7 +25,7 @@ fn liquidity_str(liquidity: Option<Liquidity>) -> &'static str {
 impl TableRow for OrderRow {
     const NAME: &'static str = "orders";
     const COLUMNS: &'static [Column<Self>] = &[
-        Column::Ts("exchange_ts_us", |row| row.exchange_ts_us),
+        Column::VenueTs("exchange_ts_us", |row| row.exchange_ts_us),
         Column::Ts("received_ts_us", |row| row.received_ts_us),
         Column::U16("instrument_id", |row| row.instrument.0),
         Column::U64("client_order_id", |row| row.client_id.0),
@@ -47,7 +47,7 @@ impl TableRow for OrderRow {
         Column::I32("reject_code", |row| row.reject_code),
     ];
 
-    fn partition_ts(&self) -> TsUs {
+    fn partition_ts(&self) -> LocalTs {
         self.received_ts_us
     }
 }
@@ -55,7 +55,7 @@ impl TableRow for OrderRow {
 impl TableRow for FillRow {
     const NAME: &'static str = "fills";
     const COLUMNS: &'static [Column<Self>] = &[
-        Column::Ts("exchange_ts_us", |row| row.exchange_ts_us),
+        Column::VenueTs("exchange_ts_us", |row| row.exchange_ts_us),
         Column::Ts("received_ts_us", |row| row.received_ts_us),
         Column::U16("instrument_id", |row| row.instrument.0),
         Column::VenueId("trade_id", |row| row.trade_id.map(|id| id.0)),
@@ -75,7 +75,7 @@ impl TableRow for FillRow {
         Column::U16("commission_asset_id", |row| row.commission_asset.0),
     ];
 
-    fn partition_ts(&self) -> TsUs {
+    fn partition_ts(&self) -> LocalTs {
         self.received_ts_us
     }
 }

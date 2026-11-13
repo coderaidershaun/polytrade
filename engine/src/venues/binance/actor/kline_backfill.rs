@@ -4,7 +4,7 @@
 use std::time::Instant;
 
 use crate::msg::inbound::KlineEvent;
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 use crate::venues::binance::kline::{KlineOutcome, KlineSequencer};
 use crate::venues::binance::parse::{ParseContext, RestKlineTail, parse_kline, parse_rest_klines};
 use crate::venues::binance::rest::{KlineQuery, RestRequest};
@@ -47,8 +47,8 @@ impl Actor {
     )]
     async fn fill_kline_gap(
         &mut self,
-        missing_from_open_ts_us: TsUs,
-        next_open_ts_us: TsUs,
+        missing_from_open_ts_us: VenueTs,
+        next_open_ts_us: VenueTs,
         live: KlineEvent,
     ) {
         if self.rest_quiet.is_active(Instant::now()) {

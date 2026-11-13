@@ -21,7 +21,7 @@ use crate::hot::digest::digest_by_hash;
 use crate::log::{LogValue, Spec};
 use crate::msg::exec::OrderStyle;
 use crate::msg::ids::{Price, Qty, Side};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 
 use super::desired::DesiredQuote;
 use super::gates::ReadinessGap;
@@ -46,8 +46,8 @@ pub struct BookTop {
     pub best_ask: Option<Price>,
     pub mid: Price,
     pub is_valid: bool,
-    pub last_commit_ts_us: TsUs,
-    pub now_ts_us: TsUs,
+    pub last_commit_ts_us: LocalTs,
+    pub now_ts_us: LocalTs,
 }
 
 impl BookTop {

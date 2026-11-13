@@ -102,7 +102,7 @@ pub fn engine(instruments: &[InstrumentRow]) -> HotEngine {
 pub fn recorded_trades() -> Vec<TradeEvent> {
     let placeholder = ParseContext {
         instrument: InstrumentId(0),
-        received_ts_us: engine::msg::time::TsUs::from_micros(0),
+        received_ts_us: engine::msg::time::LocalTs::from_micros(0),
     };
     RECORDED_TRADES
         .lines()
@@ -130,8 +130,8 @@ pub fn message(trades: &[TradeEvent], index: usize, clock: &EngineClock) -> Inbo
     let mut trade = trades[index % trades.len()];
     // No venue sits behind the harness, so the venue's stamps are the send itself and the venue
     // stages read zero rather than the age of the recording.
-    trade.exchange_ts_us = at;
-    trade.exchange_sent_ts_us = Some(at);
+    trade.exchange_ts_us = at.as_venue_calendar();
+    trade.exchange_sent_ts_us = Some(at.as_venue_calendar());
     trade.received_ts_us = at;
     trade.queued_ts_us = at;
     InboundMessage::Trade(trade)

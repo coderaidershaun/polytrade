@@ -11,7 +11,7 @@ use engine::msg::exec::{
 };
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::InboundMessage;
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::msg::ui::UiEvent;
 use engine::runtime::config::{RecordedTables, TableKind};
 use rtrb::Consumer;
@@ -47,7 +47,7 @@ fn claim_at(
             price: Price(100),
             qty: Qty(1),
             style: OrderStyle::PostOnly,
-            claimed_ts_us: TsUs::from_micros(0),
+            claimed_ts_us: LocalTs::from_micros(0),
             recon_seq,
         })
         .expect("the keyed level has a generation slot");
@@ -60,7 +60,7 @@ fn sweep(orders: &mut OrderTable, instrument: InstrumentId, recon_seq: u64) -> u
         ReconcilePass {
             instrument,
             recon_seq,
-            recon_ts_us: TsUs::from_micros(1_000),
+            recon_ts_us: LocalTs::from_micros(1_000),
         },
         &mut |_, _| closed += 1,
     );

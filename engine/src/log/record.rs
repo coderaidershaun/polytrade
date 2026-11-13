@@ -7,7 +7,7 @@ use core::mem::{align_of, offset_of, size_of};
 
 use super::render::{self, LogArgs, Renderer};
 use crate::msg::labelled_enum::labelled_enum;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 labelled_enum! {
     /// Three levels only (no debug/trace).
@@ -125,7 +125,7 @@ impl Eq for Callsite {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HotRecord {
     callsite: &'static Callsite,
-    at: TsUs,
+    at: LocalTs,
     words: [u64; WORDS_PER_RECORD],
 }
 
@@ -139,7 +139,7 @@ const _: () = {
 
 impl HotRecord {
     #[inline]
-    pub(crate) fn new<A: LogArgs>(callsite: &'static Callsite, at: TsUs, args: A) -> Self {
+    pub(crate) fn new<A: LogArgs>(callsite: &'static Callsite, at: LocalTs, args: A) -> Self {
         let mut words = [0; WORDS_PER_RECORD];
         args.write_words(&mut words);
         Self::from_words(callsite, at, words)
@@ -148,7 +148,7 @@ impl HotRecord {
     #[inline]
     pub(super) fn from_words(
         callsite: &'static Callsite,
-        at: TsUs,
+        at: LocalTs,
         words: [u64; WORDS_PER_RECORD],
     ) -> Self {
         Self {
@@ -163,7 +163,7 @@ impl HotRecord {
     }
 
     /// The `received_ts_us` of the message that was under fold when the call ran.
-    pub fn at(&self) -> TsUs {
+    pub fn at(&self) -> LocalTs {
         self.at
     }
 
@@ -186,7 +186,7 @@ impl HotRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextRecord {
     callsite: &'static Callsite,
-    at: TsUs,
+    at: LocalTs,
     len: u16,
     text: [u8; TEXT_CAPACITY],
 }
@@ -203,7 +203,7 @@ const _: () = {
 impl TextRecord {
     pub(super) fn formatted(
         callsite: &'static Callsite,
-        at: TsUs,
+        at: LocalTs,
         args: fmt::Arguments<'_>,
     ) -> Self {
         Self::written(callsite, at, |writer| fmt::Write::write_fmt(writer, args))
@@ -211,7 +211,7 @@ impl TextRecord {
 
     pub(super) fn rendered(
         callsite: &'static Callsite,
-        at: TsUs,
+        at: LocalTs,
         words: &[u64; WORDS_PER_RECORD],
     ) -> Self {
         Self::written(callsite, at, |writer| {
@@ -221,7 +221,7 @@ impl TextRecord {
 
     fn written(
         callsite: &'static Callsite,
-        at: TsUs,
+        at: LocalTs,
         write: impl FnOnce(&mut TextWriter) -> fmt::Result,
     ) -> Self {
         let mut writer = TextWriter {
@@ -243,7 +243,7 @@ impl TextRecord {
         self.callsite
     }
 
-    pub fn at(&self) -> TsUs {
+    pub fn at(&self) -> LocalTs {
         self.at
     }
 
@@ -279,17 +279,17 @@ impl fmt::Write for TextWriter {
 }
 
 thread_local! {
-    static MESSAGE_TIME: Cell<Option<TsUs>> = const { Cell::new(None) };
+    static MESSAGE_TIME: Cell<Option<LocalTs>> = const { Cell::new(None) };
 }
 
 /// Called by the fold before each message, so each hot record on this thread carries the time of
 /// the message it reacted to, never a clock read.
 #[inline]
-pub(crate) fn set_message_time(at: TsUs) {
+pub(crate) fn set_message_time(at: LocalTs) {
     MESSAGE_TIME.with(|cell| cell.set(Some(at)));
 }
 
 #[inline]
-pub(super) fn message_time() -> Option<TsUs> {
+pub(super) fn message_time() -> Option<LocalTs> {
     MESSAGE_TIME.with(Cell::get)
 }

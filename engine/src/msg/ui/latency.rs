@@ -2,7 +2,7 @@
 //! metrics thread, never a mean.
 
 use crate::msg::latency::{Category, Stage};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, VenueTs};
 
 /// A percentile that a latency cell can report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -177,7 +177,7 @@ pub const LATENCY_REPORT_CELLS: usize =
 pub struct LatencyReport {
     /// Engine time when the metrics thread built the report. A reader that sees newer engine time
     /// on the feed knows how old the report is, even when the metrics thread has stopped.
-    pub built_ts_us: TsUs,
+    pub built_ts_us: VenueTs,
     /// Time since each flow took its last sample, in [`LatencyFlow::ALL`] order. `None` until the
     /// flow takes its first.
     pub ages: [Option<DurationUs>; LatencyFlow::ALL.len()],

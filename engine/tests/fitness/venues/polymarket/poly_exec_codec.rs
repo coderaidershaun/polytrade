@@ -19,7 +19,7 @@ use engine::msg::exec::{
     AccountChunkKind, ExecEvent, ExecKind, Liquidity, OrderStyle, RejectClass, VenueOrderStatus,
 };
 use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::venues::edge::decode::DecimalFault;
 use engine::venues::exec::ExecRequest;
 use engine::venues::polymarket::exec::codec::{
@@ -50,7 +50,7 @@ macro_rules! fixture {
 
 const SIGN_VECTORS: &str = include_str!("../../../../fixtures/polymarket/sign_vectors.json");
 
-const NOW: TsUs = TsUs::from_micros(1_786_046_870_000_000);
+const NOW: LocalTs = LocalTs::from_micros(1_786_046_870_000_000);
 
 const UP_TOKEN: &str =
     "112440684578249703625547365250874526064395690274269051885028145282946008600017";
@@ -966,7 +966,7 @@ fn the_place_body_is_byte_exact_against_the_sdk_signature() {
         is_neg_risk: vector["neg_risk"].as_bool().expect("vector neg_risk"),
     });
     let orders = OrderIndex::with_capacity(4);
-    let sent_ts_us = TsUs::from_micros(timestamp_millis * 1_000);
+    let sent_ts_us = LocalTs::from_micros(timestamp_millis * 1_000);
     let context = EncodeContext {
         tokens: &table,
         orders: &orders,

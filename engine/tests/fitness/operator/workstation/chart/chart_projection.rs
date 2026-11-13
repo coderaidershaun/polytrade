@@ -7,7 +7,7 @@
 
 use engine::msg::exec::Liquidity;
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, VenueTs};
 use engine::msg::ui::{UiBookSnapshot, UiBookState, UiEvent};
 use engine::operator::workstation::chart::model::{
     BookContinuity, ChartBucket, ChartFill, ChartModel, bucket_open_ts,
@@ -38,7 +38,7 @@ fn fill_event(instrument: u16, bucket: u64, side: Side, price: i64) -> UiEvent {
     UiEvent::Fill {
         instrument: InstrumentId(instrument),
         seq: 0,
-        event_ts_us: TsUs::from_micros(bucket as i64 * SPIN.micros()),
+        event_ts_us: VenueTs::from_micros(bucket as i64 * SPIN.micros()),
         quote_level: None,
         side,
         price: Price(price),
@@ -124,7 +124,7 @@ fn bucket_folding_and_boundary_invariants() {
     // Still inside spin 1: 1_999_999 µs floors to bucket 1, not 2.
     chart.apply_book(
         &UiBookSnapshot {
-            event_ts_us: TsUs::from_micros(1_999_999),
+            event_ts_us: VenueTs::from_micros(1_999_999),
             ..valid_book(0, 1, 124, 126)
         },
         BookContinuity::Continuous,
@@ -455,7 +455,7 @@ fn chart_view_fills_bounds_and_fractions() {
     const FAST_SPIN: DurationUs = DurationUs::from_micros(100_000);
     let mut fast = ChartModel::with_capacity(1, FAST_SPIN);
     fast.configure(&[Some(TICK)], FAST_SPIN);
-    let at = |bucket: u64| TsUs::from_micros(bucket as i64 * FAST_SPIN.micros());
+    let at = |bucket: u64| VenueTs::from_micros(bucket as i64 * FAST_SPIN.micros());
     // Two fills per bucket is the run's real ceiling: the recorder arms one quote per side per spin
     // and a markout side disarms itself on fill.
     let window = fast.capacity() as u64;

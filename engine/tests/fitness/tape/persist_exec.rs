@@ -19,7 +19,7 @@ use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId,
 };
 use engine::msg::persist::{FillRow, OrderLifecycle, OrderRow, OrderTransition, PersistRecord};
-use engine::msg::time::TsUs;
+use engine::msg::time::{LocalTs, VenueTs};
 use engine::runtime::config::{RecordedTables, TableKind};
 
 use crate::parquet_readback::{
@@ -34,8 +34,12 @@ const QUOTE_ASSET: AssetId = AssetId(1);
 const PRICE: Price = Price(60_000 * FIXED_SCALE);
 const QTY: Qty = Qty(FIXED_SCALE / 10_000);
 
-fn ts(offset: i64) -> TsUs {
-    TsUs::from_micros(BASE_TS_US + offset)
+fn ts(offset: i64) -> LocalTs {
+    LocalTs::from_micros(BASE_TS_US + offset)
+}
+
+fn venue_ts(offset: i64) -> VenueTs {
+    VenueTs::from_micros(BASE_TS_US + offset)
 }
 
 /// The order's life as a live run records it: sent, acknowledged, partially filled, then rejected on
@@ -59,7 +63,7 @@ fn order_rows() -> Vec<OrderRow> {
         filled_quote: 0,
         reject: None,
         reject_code: 0,
-        exchange_ts_us: TsUs::from_micros(0),
+        exchange_ts_us: VenueTs::from_micros(0),
         received_ts_us: ts(1),
     };
     vec![
@@ -69,7 +73,7 @@ fn order_rows() -> Vec<OrderRow> {
             transition: OrderTransition::AckPlaced,
             state: OrderLifecycle::Live,
             previous_state: OrderLifecycle::PendingNew,
-            exchange_ts_us: ts(2),
+            exchange_ts_us: venue_ts(2),
             received_ts_us: ts(3),
             ..sent
         },
@@ -80,7 +84,7 @@ fn order_rows() -> Vec<OrderRow> {
             previous_state: OrderLifecycle::Live,
             filled_qty: Qty(QTY.0 / 2),
             filled_quote: PRICE.notional(Qty(QTY.0 / 2)),
-            exchange_ts_us: ts(4),
+            exchange_ts_us: venue_ts(4),
             received_ts_us: ts(5),
             ..sent
         },
@@ -98,7 +102,7 @@ fn order_rows() -> Vec<OrderRow> {
             style: None,
             reject: Some(RejectClass::Ambiguous),
             reject_code: -2011,
-            exchange_ts_us: ts(6),
+            exchange_ts_us: venue_ts(6),
             received_ts_us: ts(7),
             ..sent
         },
@@ -125,7 +129,7 @@ fn fill_rows() -> Vec<FillRow> {
         booked_quote: PRICE.notional(Qty(QTY.0 / 2)),
         commission: 4_720,
         commission_asset: QUOTE_ASSET,
-        exchange_ts_us: ts(4),
+        exchange_ts_us: venue_ts(4),
         received_ts_us: ts(5),
     };
     vec![
@@ -138,7 +142,7 @@ fn fill_rows() -> Vec<FillRow> {
             liquidity: Some(Liquidity::Taker),
             commission: 9_440,
             commission_asset: AssetId::UNKNOWN,
-            exchange_ts_us: ts(8),
+            exchange_ts_us: venue_ts(8),
             received_ts_us: ts(9),
             ..maker
         },
@@ -150,7 +154,7 @@ fn fill_rows() -> Vec<FillRow> {
             booked_qty: QTY,
             booked_quote: PRICE.notional(QTY),
             commission: 0,
-            exchange_ts_us: ts(10),
+            exchange_ts_us: venue_ts(10),
             received_ts_us: ts(11),
             ..maker
         },

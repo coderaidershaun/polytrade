@@ -12,7 +12,7 @@ use engine::hot::strategy::{
 };
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Side};
 use engine::msg::inbound::{BookChunk, KlineEvent, SpinTick, TradeEvent};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs};
 use engine::runtime::config::{Instruments, StrategySpec, TableKind};
 
 #[path = "features.rs"]
@@ -334,7 +334,7 @@ fn record_spin(
     cfg: SpinCfg,
     instrument: InstrumentId,
     state: &mut InstrumentState,
-    now: TsUs,
+    now: LocalTs,
 ) {
     let max_exposure_quote = state.max_exposure_quote;
     let model = &mut state.binance;

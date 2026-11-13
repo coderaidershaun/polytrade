@@ -11,7 +11,7 @@ use engine::log::{Level, LogDrain, LogOutput, LogValue, LogWriter, open_hot_lane
 use engine::msg::exec::ExecKind;
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::InboundMessage;
-use engine::msg::time::{EngineClock, TsUs};
+use engine::msg::time::{EngineClock, LocalTs};
 use engine::runtime::config::KlineInterval;
 
 use crate::engine_support::{
@@ -116,7 +116,7 @@ fn hot_warning_is_formatted_on_the_drain() {
     let output = LogOutput {
         open: Box::new({
             let writer = writer.clone();
-            move |_at: TsUs| Ok(Box::new(writer.clone()) as Box<dyn LogWriter>)
+            move |_at: LocalTs| Ok(Box::new(writer.clone()) as Box<dyn LogWriter>)
         }),
         fallback: Box::new(io::stderr()),
         reopen_limit: 3,

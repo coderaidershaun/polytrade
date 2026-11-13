@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use engine::msg::time::TsUs;
+use engine::msg::time::VenueTs;
 use engine::venues::polymarket::rest::{PolyRest, book_url};
 use serde::Deserialize;
 
@@ -83,7 +83,7 @@ pub async fn maybe_cross_validate(
     validated.insert(window_start_s);
 
     let market = match rest
-        .resolve_slug(TsUs::from_micros(window_start_s * 1_000_000))
+        .resolve_slug(VenueTs::from_micros(window_start_s * 1_000_000))
         .await
     {
         Ok(market) => market,

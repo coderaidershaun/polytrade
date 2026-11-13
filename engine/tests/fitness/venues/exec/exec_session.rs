@@ -10,7 +10,7 @@ use engine::msg::exec::{
     VenueOrderStatus,
 };
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::runtime::shutdown::FatalSignal;
 use engine::venues::exec::{
     ExecCore, ExecEffect, ExecRequest, ExecSession, InFlightRequest, MAX_RESYNC_ATTEMPTS,
@@ -23,7 +23,7 @@ type Session = ExecSession<Vec<ExecEvent>>;
 const VENUE: &str = "test-venue";
 const INSTRUMENT: InstrumentId = InstrumentId(0);
 const OTHER_INSTRUMENT: InstrumentId = InstrumentId(1);
-const NOW: TsUs = TsUs::from_micros(1_785_000_000_000_000);
+const NOW: LocalTs = LocalTs::from_micros(1_785_000_000_000_000);
 const PRICE: Price = Price(11_800_000_000_000);
 
 fn new_session() -> (Session, FatalSignal) {
@@ -54,7 +54,7 @@ fn quoting_session() -> (Session, FatalSignal) {
 
 /// What a venue's dispatch does with the core's decision: every request it sends is recorded as in
 /// flight under the hot sequence it answers.
-fn send(session: &mut Session, command: ExecCommand, sent_at: TsUs) -> Vec<ExecRequest> {
+fn send(session: &mut Session, command: ExecCommand, sent_at: LocalTs) -> Vec<ExecRequest> {
     let mut outgoing = Vec::new();
     session.core.on_command(
         command,
@@ -63,7 +63,7 @@ fn send(session: &mut Session, command: ExecCommand, sent_at: TsUs) -> Vec<ExecR
     record(session, outgoing, sent_at)
 }
 
-fn record(session: &mut Session, outgoing: Vec<Outgoing>, sent_at: TsUs) -> Vec<ExecRequest> {
+fn record(session: &mut Session, outgoing: Vec<Outgoing>, sent_at: LocalTs) -> Vec<ExecRequest> {
     let mut sent = Vec::new();
     for Outgoing { effect, recon_seq } in outgoing {
         if let ExecEffect::Send {
@@ -149,7 +149,7 @@ fn resting_report(client_id: u64) -> ExecEvent {
         reject_code: 0,
         amends_remaining: ExecEvent::AMENDS_UNKNOWN,
         recon_seq: 0,
-        exchange_ts_us: NOW,
+        exchange_ts_us: NOW.as_venue_calendar(),
         request_sent_ts_us: None,
         received_ts_us: NOW,
         queued_ts_us: NOW,
@@ -370,7 +370,7 @@ fn a_request_the_wire_may_have_seen_is_in_doubt_and_never_resent() {
     assert_eq!(in_doubt.reject, Some(RejectClass::Ambiguous));
     assert_eq!(in_doubt.client_id, ClientOrderId(1));
     assert_eq!(in_doubt.side, Side::Sell);
-    assert_eq!(in_doubt.exchange_ts_us, NOW);
+    assert_eq!(in_doubt.exchange_ts_us, NOW.as_venue_calendar());
 
     session.events.clear();
     session.mark_in_doubt(status_request(7), NOW);
@@ -568,7 +568,7 @@ fn readiness_arms_once_after_the_pass_finishes_with_one_snapshot_end_per_instrum
 
     assert!(session.arm_readiness(NOW));
     assert_eq!(session.core.phase(), Phase::Quoting);
-    let ends: Vec<(ExecKind, InstrumentId, TsUs)> = session
+    let ends: Vec<(ExecKind, InstrumentId, VenueTs)> = session
         .events
         .iter()
         .map(|event| (event.kind, event.instrument, event.exchange_ts_us))
@@ -576,8 +576,12 @@ fn readiness_arms_once_after_the_pass_finishes_with_one_snapshot_end_per_instrum
     assert_eq!(
         ends,
         [
-            (ExecKind::SnapshotEnd, INSTRUMENT, NOW),
-            (ExecKind::SnapshotEnd, OTHER_INSTRUMENT, NOW),
+            (ExecKind::SnapshotEnd, INSTRUMENT, NOW.as_venue_calendar()),
+            (
+                ExecKind::SnapshotEnd,
+                OTHER_INSTRUMENT,
+                NOW.as_venue_calendar()
+            ),
         ]
     );
     assert!(!session.arm_readiness(NOW), "readiness armed twice");

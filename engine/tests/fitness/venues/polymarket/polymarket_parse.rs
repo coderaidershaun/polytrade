@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use engine::hot::book::{Book, SnapshotOutcome};
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BookChunkKind, InboundMessage, Level};
-use engine::msg::time::TsUs;
+use engine::msg::time::{LocalTs, VenueTs};
 use engine::venues::edge::decode::DecimalFault;
 use engine::venues::edge::venue_clock::MAX_VENUE_SKEW_US;
 use engine::venues::polymarket::book::{BookNormaliser, ChunkStamps};
@@ -20,11 +20,11 @@ const INSTRUMENT: InstrumentId = InstrumentId(9);
 const BOOK_CAPACITY: usize = 128;
 const RECEIVED_US: i64 = 1_784_439_700_000_000;
 
-fn received() -> TsUs {
-    TsUs::from_micros(RECEIVED_US)
+fn received() -> LocalTs {
+    LocalTs::from_micros(RECEIVED_US)
 }
 
-fn stamps(exchange_ts_us: TsUs) -> ChunkStamps {
+fn stamps(exchange_ts_us: VenueTs) -> ChunkStamps {
     ChunkStamps {
         exchange_ts_us,
         received_ts_us: received(),
@@ -93,7 +93,7 @@ mod book_snapshot {
         );
         assert_eq!(
             book.exchange_ts_us,
-            TsUs::from_micros(1_784_439_695_963_000)
+            VenueTs::from_micros(1_784_439_695_963_000)
         );
     }
 }
@@ -169,7 +169,7 @@ mod chunk_stamp {
     const CHANGE: &str = r#"{"event_type":"price_change","market":"0xMKT","timestamp":"1784439696100",
      "price_changes":[{"asset_id":"TOKEN_UP","price":"0.47","size":"500","side":"BUY","best_bid":"0.50","best_ask":"0.51"}]}"#;
 
-    fn emitted_stamps(messages: &[InboundMessage], kind: BookChunkKind) -> Vec<Option<TsUs>> {
+    fn emitted_stamps(messages: &[InboundMessage], kind: BookChunkKind) -> Vec<Option<VenueTs>> {
         messages
             .iter()
             .filter_map(|message| match message {
@@ -229,7 +229,7 @@ mod trade {
         assert_eq!(trade.side, Side::Buy);
         assert_eq!(
             trade.exchange_ts_us,
-            TsUs::from_micros(1_784_439_696_531_000)
+            VenueTs::from_micros(1_784_439_696_531_000)
         );
     }
 }
@@ -292,7 +292,11 @@ mod tick_size_change {
             panic!("tick_size_change frame");
         };
         assert_eq!(change.asset_id, None, "bare_shape");
-        assert_eq!(change.exchange_ts_us, received(), "bare_shape");
+        assert_eq!(
+            change.exchange_ts_us,
+            received().as_venue_calendar(),
+            "bare_shape"
+        );
     }
 }
 
@@ -368,7 +372,7 @@ mod decimals {
 mod stamp_clamp {
     use super::*;
 
-    fn trade_at(ts_ms: &str) -> TsUs {
+    fn trade_at(ts_ms: &str) -> VenueTs {
         let frame = format!(
             r#"{{"event_type":"last_trade_price","asset_id":"T","price":"0.5","size":"1","side":"BUY","timestamp":"{ts_ms}"}}"#
         );
@@ -383,13 +387,13 @@ mod stamp_clamp {
     fn absurd_future_stamp_clamps_to_upper_edge() {
         assert_eq!(
             trade_at("999999999999999"),
-            TsUs::from_micros(RECEIVED_US.saturating_add(MAX_VENUE_SKEW_US))
+            VenueTs::from_micros(RECEIVED_US.saturating_add(MAX_VENUE_SKEW_US))
         );
     }
 
     proptest! {
         /// Any millisecond stamp string stays inside the receipt window, because the parse defends
-        /// `TsUs::diff`.
+        /// `LocalTs::diff`.
         #[test]
         fn clamp_stays_inside_window(ms in 0i64..=99_999_999_999_999i64) {
             let clamped = trade_at(&ms.to_string()).micros();

@@ -25,7 +25,7 @@ use engine::msg::exec::{
 };
 use engine::msg::ids::{Price, Side};
 use engine::msg::inbound::{InboundMessage, SpinTick};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::msg::ui::UiEvent;
 use engine::runtime::config::RecordedTables;
 use rtrb::Consumer;
@@ -79,10 +79,10 @@ fn cancels(commands: &[ExecCommand]) -> usize {
 #[test]
 fn the_quote_window_opens_at_the_open_and_shuts_a_margin_before_the_close() {
     let window = WindowInfo {
-        open_ts_us: TsUs::from_micros(OPEN),
-        close_ts_us: TsUs::from_micros(CLOSE),
+        open_ts_us: VenueTs::from_micros(OPEN),
+        close_ts_us: VenueTs::from_micros(CLOSE),
     };
-    let at = |micros: i64| TsUs::from_micros(micros);
+    let at = |micros: i64| LocalTs::from_micros(micros);
 
     assert!(
         !window.admits_quote_at(at(OPEN - 1), MARGIN),

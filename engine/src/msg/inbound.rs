@@ -8,7 +8,7 @@ use crate::link::InboundLink;
 use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{AggregateTradeId, InstrumentId, Price, Qty, RawTradeId, Side, StreamEpoch};
 use crate::msg::run_state::RunAssertion;
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 use crate::runtime::config::KlineInterval;
 
 pub const BOOK_CHUNK_LEVELS: usize = 20;
@@ -37,7 +37,7 @@ pub enum InboundMessage {
 
 impl InboundMessage {
     #[inline]
-    pub fn received_ts_us(&self) -> TsUs {
+    pub fn received_ts_us(&self) -> LocalTs {
         match self {
             InboundMessage::Trade(event) => event.received_ts_us,
             InboundMessage::Book(chunk) => chunk.received_ts_us,
@@ -53,7 +53,7 @@ impl InboundMessage {
     }
 
     #[inline]
-    pub fn set_queued_ts_us(&mut self, ts: TsUs) {
+    pub fn set_queued_ts_us(&mut self, ts: LocalTs) {
         match self {
             InboundMessage::Trade(event) => event.queued_ts_us = ts,
             InboundMessage::Book(chunk) => chunk.queued_ts_us = ts,
@@ -81,11 +81,11 @@ pub struct TradeEvent {
     pub price: Price,
     pub qty: Qty,
     pub side: Side,
-    pub exchange_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
     /// Venue SEND stamp vs `exchange_ts_us`'s MATCH stamp; `None` when the venue publishes only one.
-    pub exchange_sent_ts_us: Option<TsUs>,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
+    pub exchange_sent_ts_us: Option<VenueTs>,
+    pub received_ts_us: LocalTs,
+    pub queued_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,9 +98,9 @@ pub struct BookChunk {
     pub is_last_chunk: bool,
     pub update_id: u64,
     /// Anchor varies by venue (send/transact/publish); `None` for REST. 384-byte budget affords only one field.
-    pub exchange_ts_us: Option<TsUs>,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
+    pub exchange_ts_us: Option<VenueTs>,
+    pub received_ts_us: LocalTs,
+    pub queued_ts_us: LocalTs,
 }
 
 impl BookChunk {
@@ -118,24 +118,24 @@ impl BookChunk {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BookReset {
     pub instrument: InstrumentId,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
+    pub received_ts_us: LocalTs,
+    pub queued_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MarketRotation {
     pub instrument: InstrumentId,
-    pub window_open_ts_us: TsUs,
-    pub window_close_ts_us: TsUs,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
+    pub window_open_ts_us: VenueTs,
+    pub window_close_ts_us: VenueTs,
+    pub received_ts_us: LocalTs,
+    pub queued_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KlineEvent {
     pub instrument: InstrumentId,
     pub interval: KlineInterval,
-    pub open_ts_us: TsUs,
+    pub open_ts_us: VenueTs,
     pub open: Price,
     pub high: Price,
     pub low: Price,
@@ -146,26 +146,26 @@ pub struct KlineEvent {
     pub is_closed: bool,
     /// Candle time: the frame's event time live, the candle's own CLOSE on REST backfill. Hours old
     /// there by design, so it is never a transport measurement — [`Self::exchange_sent_ts_us`] is.
-    pub exchange_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
     /// Venue SEND stamp; `None` on REST backfill rows, which carry no send time of their own.
-    pub exchange_sent_ts_us: Option<TsUs>,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
+    pub exchange_sent_ts_us: Option<VenueTs>,
+    pub received_ts_us: LocalTs,
+    pub queued_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpinTick {
     pub seq: u64,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
+    pub received_ts_us: LocalTs,
+    pub queued_ts_us: LocalTs,
 }
 
 // Run-state marker (level-triggered, dedups on epoch).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunControl {
     pub desired: RunAssertion,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
+    pub received_ts_us: LocalTs,
+    pub queued_ts_us: LocalTs,
 }
 
 const _: () = assert!(size_of::<InboundMessage>() <= 384);
@@ -180,7 +180,7 @@ pub struct TappedMessage {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MarketTapItem {
     Event(TappedMessage),
-    Watermark { received_ts_us: TsUs },
+    Watermark { received_ts_us: LocalTs },
 }
 
 /// Venue continuity metadata used only by the simulator.
@@ -193,10 +193,10 @@ pub enum VenueMeta {
         stream_epoch: StreamEpoch,
     },
     DepthDelta {
-        exchange_ts_us: TsUs,
+        exchange_ts_us: VenueTs,
     },
     DepthReset {
-        exchange_ts_us: TsUs,
+        exchange_ts_us: VenueTs,
     },
     /// Snapshot chunks and messages without venue sequence data.
     None,

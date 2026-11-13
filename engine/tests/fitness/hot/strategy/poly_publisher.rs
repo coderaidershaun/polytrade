@@ -45,7 +45,7 @@ use rtrb::{Consumer, RingBuffer};
 use crate::engine_support::{
     FillPen, LinkedSetup, account_chunk, detached_setup, engine_view, engine_with_link, exec_event,
     instrument_row, persist_ring, recorder_spec, rotation, snapshot_pair, spin, stream_ready,
-    tracker_spec_all, trade, ts, ui_event_ring,
+    tracker_spec_all, trade, ts, ui_event_ring, venue_ts,
 };
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
 /// The publisher's own copy of the shared schema — the same file the peer includes, so the frame
@@ -703,7 +703,7 @@ fn over_the_wire(published: OutboundLink, guard: &FrameGuard, when: i64) -> Inbo
         token_hash: LinkHash::of_name(TOKEN),
         strategy_hash: LinkHash::of_name(STRATEGY_ID),
         sender_te_hash: LinkHash::of_name(PUBLISHER_TE_ID),
-        boot_ts_us: ts(FIRST_OPEN),
+        boot_ts_us: venue_ts(FIRST_OPEN),
     };
     let datagram = LinkDatagram {
         envelope: Envelope::new(identity, published.topic, 1),

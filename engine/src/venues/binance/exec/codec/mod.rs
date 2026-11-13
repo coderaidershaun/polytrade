@@ -11,7 +11,7 @@ mod wire;
 
 use crate::msg::exec::VenueOrderStatus;
 use crate::msg::ids::InstrumentId;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::runtime::registry::{AssetDictionary, Registry};
 use crate::venues::edge::decode::{DecimalFault, JsonFrame, mantissa_field, unknown_enum};
 use crate::venues::exec::EngineIdentity;
@@ -33,7 +33,7 @@ pub struct DecodeContext<'a> {
     pub identity: EngineIdentity,
     /// When this process received the message. Venue stamps are clamped against it; it is not the
     /// venue's clock.
-    pub received_ts_us: TsUs,
+    pub received_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, Copy)]

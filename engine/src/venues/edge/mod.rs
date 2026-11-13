@@ -36,7 +36,7 @@ use crate::msg::ids::QueueId;
 use crate::msg::inbound::InboundMessage;
 use crate::msg::latency::WireSample;
 use crate::msg::run_state::RunState;
-use crate::msg::time::{DurationUs, EngineClock, Stamper, TsUs};
+use crate::msg::time::{DurationUs, EngineClock, LocalTs, Stamper};
 use crate::runtime::config::{ExecutionConfig, SenderPlacement};
 use crate::runtime::registry::Registry;
 use crate::runtime::shutdown::{FatalSignal, RunStateCell};
@@ -206,7 +206,7 @@ impl EdgeControl {
     /// orders still mirrored as resting.
     pub(crate) fn finished_exit(
         &self,
-        now: TsUs,
+        now: LocalTs,
         venue: &'static str,
         resting: &[MirroredOrder],
     ) -> Option<SessionOutcome> {
@@ -258,7 +258,7 @@ impl EdgeControl {
         clippy::disallowed_methods,
         reason = "the session chassis stamps queued time and paces reconnects by wall time"
     )]
-    pub(crate) fn next_attempt_at(&self, attempt: u32) -> TsUs {
+    pub(crate) fn next_attempt_at(&self, attempt: u32) -> LocalTs {
         let delay = self.backoff.delay(attempt);
         self.clock.now() + DurationUs::from_micros(delay.as_micros() as i64)
     }
@@ -361,7 +361,7 @@ pub(crate) async fn run_edge<D: EdgeDriver>(mut driver: D, lane: EdgeLane) {
     driver.start().await;
 
     let mut attempt: u32 = 0;
-    let mut down_since: Option<TsUs> = None;
+    let mut down_since: Option<LocalTs> = None;
     while !driver.control().is_finished() {
         check_latches(&mut driver).await;
         if driver.control().is_finished() {

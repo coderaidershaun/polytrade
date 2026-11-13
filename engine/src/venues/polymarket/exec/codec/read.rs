@@ -9,7 +9,7 @@ use crate::msg::exec::{
     AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind, VenueOrderStatus,
 };
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 use crate::venues::edge::decode::{order_side, price_field, qty_field, unknown_enum};
 use crate::venues::edge::venue_clock::clamp_exchange_ts;
 use crate::venues::exec::{ChunkStamps, account_chunks};
@@ -265,7 +265,7 @@ impl SettlementWatermark {
     /// Raises the mark to a settled trade's own venue stamp, and answers whether that was new
     /// evidence. Trades settle out of order and each re-sends once per settlement step, so only a
     /// mark that actually moved is worth a fresh balance read.
-    pub fn advance_to(&mut self, settled_ts_us: TsUs) -> bool {
+    pub fn advance_to(&mut self, settled_ts_us: VenueTs) -> bool {
         let millis = (settled_ts_us.micros() / 1_000).max(0) as u64;
         if millis <= self.0 {
             return false;
@@ -280,7 +280,7 @@ impl SettlementWatermark {
 #[derive(Debug, Clone, Copy)]
 pub struct AccountStamps {
     pub settled_through: SettlementWatermark,
-    pub received_ts_us: TsUs,
+    pub received_ts_us: LocalTs,
 }
 
 pub fn account_snapshot(
@@ -294,7 +294,7 @@ pub fn account_snapshot(
     } = stamps;
     let chunk_stamps = ChunkStamps {
         venue_update_ts_ms: settled_through.0,
-        exchange_ts_us: received_ts_us,
+        exchange_ts_us: received_ts_us.as_venue_calendar(),
         received_ts_us,
     };
     account_chunks(kind, balances, chunk_stamps)
