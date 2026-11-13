@@ -101,6 +101,11 @@ Each trading engine reads its `config.yaml`. Each block refuses a key that it do
 | `senders.core_id` | none | The core of the pinned senders, from 0 to 1,023. On Linux, a pin that fails refuses the start. |
 | `senders.tick_us` | `1000` | The tick of a shared sender, from 1,000 to 1,000,000 µs. |
 | `senders.link_flush_ms` | `10` | How often the link sends its frames when the senders are shared. From 1 to 1,000. |
+| `queues.input_capacity` | `65536` | Messages that the input ring of each market-data connection holds. A full ring halts the engine. Greater than 0. |
+| `queues.timer_capacity` | the spins in one `engine.drain_deadline_ms`, and 16 at least | Spin ticks that the timer ring holds. A full ring halts the engine. Greater than 0. |
+| `queues.link_capacity` | `1024` | Frames from peer engines that the link input ring holds. A full ring drops the frame and counts it. Greater than 0. |
+| `queues.execution_capacity` | the capacity of the command lane: 1,024 plus the spins in 30 s | Events of the execution edge that its input ring holds. A full ring halts the engine. Greater than 0. |
+| `persistence.seal_try_limit` | the spins in one `engine.drain_deadline_ms` | Tries of a waiting seal, at the request and at each spin, before quoting halts with the reason "persistence seal not accepted". 1 or more. |
 | `logging.dir` | `./logs` | The folder of the log files in a release build. A debug build logs to stderr. |
 | `logging.ring_capacity` | `8192` | Records that each log lane of a thread and the strategy lane hold before they drop. |
 | `logging.drain_deadline_ms` | `2000` | How long the log drain writes at shutdown. It must be below `engine.drain_deadline_ms`, or the start is refused. |

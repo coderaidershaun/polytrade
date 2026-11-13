@@ -5,6 +5,7 @@ use std::time::Duration;
 use rtrb::Producer;
 
 use crate::log::hot_warn;
+use crate::msg::failure::FailureClass;
 use crate::runtime::exposure::ExposureSnapshot;
 
 /// Output ring: replace pending, retry cadence, destructor drains final.
@@ -39,6 +40,9 @@ impl Drop for ExposureSink {
 }
 
 impl ExposureSink {
+    /// A full ring keeps the newest snapshot and drops the older one that waited.
+    pub const WHEN_FULL: FailureClass = FailureClass::Reject;
+
     pub fn new(producer: Producer<ExposureSnapshot>) -> Self {
         ExposureSink {
             producer,

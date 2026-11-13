@@ -9,13 +9,13 @@ use crate::hot::spawn::QueueProducer;
 use crate::msg::exec::{CancelReason, ExecLaneItem, StampedExecCommand};
 use crate::msg::inbound::InboundMessage;
 use crate::msg::run_state::RunState;
-use crate::msg::time::{EngineClock, TsUs};
+use crate::msg::time::{EngineClock, LocalTs};
 use crate::runtime::registry::AssetDictionary;
-use crate::runtime::shutdown::{FatalSignal, RunStateCell};
+use crate::runtime::shutdown::{FatalReason, FatalSignal, RunStateCell};
 use crate::venues::IDLE_POLL;
 use crate::venues::binance::exec::{DecodeContext, SymbolTable};
 use crate::venues::exec::{EdgeHandle, EngineIdentity, ExecStop};
-use crate::{info, warn};
+use crate::{error, info, warn};
 
 use super::core::latency::{LatencyBudget, rewound, shifted};
 use super::core::market::ResetReason;
@@ -42,7 +42,7 @@ pub(super) struct SimActor {
     pub(super) commands_due: LaneBuffer<StampedExecCommand>,
     pub(super) readiness: SimReadiness,
     pub(super) market_recovery_generation: u64,
-    pub(super) applied_through_ts_us: Option<TsUs>,
+    pub(super) applied_through_ts_us: Option<LocalTs>,
     pub(super) has_opened: bool,
     pub(super) stop: ExecStop,
     pub(super) run_state: RunStateCell,
@@ -109,7 +109,7 @@ impl SimActor {
         }
     }
 
-    fn advance_venue(&mut self, to_ts_us: TsUs) {
+    fn advance_venue(&mut self, to_ts_us: LocalTs) {
         if self
             .applied_through_ts_us
             .is_some_and(|reached| to_ts_us < reached)
@@ -130,7 +130,7 @@ impl SimActor {
     )]
     fn publish(
         &mut self,
-        received_ts_us: TsUs,
+        received_ts_us: LocalTs,
         step: impl FnOnce(&mut SimExecDriver, DecodeContext<'_>) -> Vec<InboundMessage>,
     ) {
         let Self {
@@ -149,7 +149,7 @@ impl SimActor {
             received_ts_us,
         };
         for mut message in step(driver, context) {
-            message.set_queued_ts_us(engine_clock.now());
+            message.header.queued_ts_us = engine_clock.now();
             producer.push(message);
         }
     }
@@ -236,20 +236,20 @@ impl SimActor {
         };
         self.driver.log_summary();
         match is_settled {
-            true => self.stop.settled.notify_one(),
+            true => self.stop.settle(None),
             false => warn!(
                 "simulated venue could not resolve every order in {SWEEP_PASSES} sweep passes — the handle's deadline ends the run with them invalidated"
             ),
         }
     }
 
-    fn drain_final_commands(&mut self) -> Option<TsUs> {
+    fn drain_final_commands(&mut self) -> Option<LocalTs> {
         let mut drained = 0usize;
         let mut final_ts_us = None;
         while let Some(at_ts_us) = self.commands_due.peek_ts_us() {
             let command = self
                 .commands_due
-                .next_due(TsUs::from_micros(i64::MAX))
+                .next_due(LocalTs::from_micros(i64::MAX))
                 .expect("the command just peeked remains in the lane");
             self.driver.on_command(command, at_ts_us);
             drained += 1;
@@ -292,7 +292,10 @@ impl SimActor {
                         .commands_due
                         .try_push(self.latency.arrival(stamped.issued_ts_us), stamped)
                     {
-                        self.fatal.trip(format!("exchange simulator: {error}"));
+                        error!("exchange simulator: {error}");
+                        self.fatal.trip(FatalReason::SimulatorCommandLaneFull {
+                            capacity: error.capacity,
+                        });
                         return;
                     }
                 }

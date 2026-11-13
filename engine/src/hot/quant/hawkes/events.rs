@@ -1,15 +1,14 @@
-//! The rolling window of event times that the fitter and the live evaluator both read. Its push
-//! clamps a late stamp to the one before it, because every recursion here assumes time never runs
-//! backwards.
+//! The rolling window of event times that the fitter and the live evaluator both read. A late stamp
+//! is clamped to the one before it, because each recursion here needs time that never runs back.
 
 use crate::hot::series::FastQueue;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 
 /// Event times as seconds since the first event; a full window evicts the oldest.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HawkesEvents {
     times: FastQueue<f64>,
-    origin: Option<TsUs>,
+    origin: Option<LocalTs>,
     last_secs: f64,
     out_of_order: u64,
 }
@@ -29,7 +28,7 @@ impl HawkesEvents {
 
     /// An earlier stamp than its predecessor is clamped to that predecessor so every recursion still
     /// sees `dt >= 0`, and is counted in [`HawkesEvents::out_of_order_count`].
-    pub fn push(&mut self, ts: TsUs) {
+    pub fn push(&mut self, ts: LocalTs) {
         let origin = *self.origin.get_or_insert(ts);
         let secs = ts.diff(origin).to_secs();
         if secs < self.last_secs {
@@ -66,7 +65,7 @@ impl HawkesEvents {
     }
 
     /// `now` as relative seconds, clamped to at least the last event; `None` before any event.
-    pub(super) fn end_secs(&self, now: TsUs) -> Option<f64> {
+    pub(super) fn end_secs(&self, now: LocalTs) -> Option<f64> {
         let last = self.times.last()?;
         let origin = self.origin?;
         Some(now.diff(origin).to_secs().max(last))
@@ -74,7 +73,7 @@ impl HawkesEvents {
 
     /// The absolute stamp of the newest retained event, reconstructed from the origin — exact,
     /// because the stored seconds came from an integral µs difference.
-    pub(super) fn last_ts(&self) -> Option<TsUs> {
+    pub(super) fn last_ts(&self) -> Option<LocalTs> {
         let last = self.times.last()?;
         let origin = self.origin?;
         Some(origin + DurationUs::from_micros((last * 1e6).round() as i64))

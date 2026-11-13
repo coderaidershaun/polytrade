@@ -1,8 +1,5 @@
-//! Spin-sampling fitness: the time clock samples committed state (`latest`), never the live book
-//! (a tick can pop mid-update). Holds through one-sided stretches, skips after a reset until commit.
-//! The per-side trade counts are per-tick aggregates, so they must zero at every sample point.
-//! The last case carries the other half of the contract — a strategy derives its windows from the
-//! configured spin, so they must track a change to it.
+//! The spin clock samples committed state, never the live book, and the trade counts of each side
+//! reset at each sample. A strategy's windows follow a change of the spin interval.
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::quant::micro;
@@ -10,7 +7,7 @@ use engine::hot::series::FastQueue;
 use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
 use engine::log::HotRecord;
 use engine::msg::ids::{InstrumentId, Price, Side};
-use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::time::DurationUs;
 use engine::runtime::config::{SpinField, TableKind};
@@ -20,7 +17,7 @@ use crate::engine_support::{
     ONE, book_reset, delta_chunk, engine_view, engine_without_warmup, instrument_row,
     last_snapshot_chunk, level, partial_delta_chunk, partial_snapshot_chunk, persist_ring,
     recorder_feature_id, recorder_spec, snapshot_pair, spin, strategy_log_ring, tracker_spec_all,
-    trade,
+    trade, ts,
 };
 use crate::micro_strategy::MicroRecorder;
 
@@ -56,9 +53,9 @@ impl Strategy for SpinProbe {
 fn spin_state(
     engine: &mut HotEngine,
     consumer: &mut Consumer<PersistRecord>,
-    tick: SpinTick,
+    tick: InboundMessage,
 ) -> (usize, Option<f64>) {
-    engine.dispatch(&InboundMessage::SpinTick(tick));
+    engine.dispatch(&tick);
     let mut len = 0;
     let mut last = None;
     while let Ok(record) = consumer.pop() {
@@ -130,9 +127,9 @@ impl Strategy for SidedProbe {
 fn sided_state(
     engine: &mut HotEngine,
     consumer: &mut Consumer<PersistRecord>,
-    tick: SpinTick,
+    tick: InboundMessage,
 ) -> [Option<f64>; 4] {
-    engine.dispatch(&InboundMessage::SpinTick(tick));
+    engine.dispatch(&tick);
     let mut sampled = [None; 4];
     while let Ok(record) = consumer.pop() {
         if let PersistRecord::Feature(row) = record {
@@ -163,8 +160,16 @@ fn mid_and_sided_trade_counts_sample_per_tick() {
     );
 
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, 2 * ONE)], &[(101 * ONE, ONE)], 1);
-    apply(&mut engine, &mut consumer, InboundMessage::Book(bids));
-    apply(&mut engine, &mut consumer, InboundMessage::Book(asks));
+    apply(
+        &mut engine,
+        &mut consumer,
+        InboundMessage::new(ts(1), MessageBody::Book(bids)),
+    );
+    apply(
+        &mut engine,
+        &mut consumer,
+        InboundMessage::new(ts(1), MessageBody::Book(asks)),
+    );
     for (index, side) in [Side::Buy, Side::Sell, Side::Buy, Side::Buy]
         .into_iter()
         .enumerate()
@@ -173,11 +178,17 @@ fn mid_and_sided_trade_counts_sample_per_tick() {
         apply(
             &mut engine,
             &mut consumer,
-            InboundMessage::Trade(trade(0, 100 * ONE, ONE, side, when)),
+            InboundMessage::new(
+                ts(when),
+                MessageBody::Trade(trade(0, 100 * ONE, ONE, side, when)),
+            ),
         );
     }
 
-    let expected_mid = micro::mid(Price(100 * ONE), Price(101 * ONE));
+    let expected_mid = micro::mid(
+        Price::from_mantissa(100 * ONE),
+        Price::from_mantissa(101 * ONE),
+    );
     assert_eq!(
         sided_state(&mut engine, &mut consumer, spin(1, 10)),
         [Some(expected_mid), Some(1.0), Some(3.0), Some(1.0)],
@@ -193,15 +204,14 @@ fn mid_and_sided_trade_counts_sample_per_tick() {
     // After a reset there is no committed touch to average, so mid must stop sampling (its length
     // freezes) exactly like best_bid/best_ask, while the trade counts keep landing — trades have
     // no reset concept.
+    apply(&mut engine, &mut consumer, book_reset(0, 12));
     apply(
         &mut engine,
         &mut consumer,
-        InboundMessage::BookReset(book_reset(0, 12)),
-    );
-    apply(
-        &mut engine,
-        &mut consumer,
-        InboundMessage::Trade(trade(0, 100 * ONE, ONE, Side::Sell, 13)),
+        InboundMessage::new(
+            ts(13),
+            MessageBody::Trade(trade(0, 100 * ONE, ONE, Side::Sell, 13)),
+        ),
     );
     assert_eq!(
         sided_state(&mut engine, &mut consumer, spin(3, 14)),
@@ -219,8 +229,16 @@ fn spin_samples_committed_state_only() {
         engine_without_warmup(&instruments, Box::new(SpinProbe::default()), sink, log_sink);
 
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, 2 * ONE)], &[(101 * ONE, ONE)], 1);
-    apply(&mut engine, &mut consumer, InboundMessage::Book(bids));
-    apply(&mut engine, &mut consumer, InboundMessage::Book(asks));
+    apply(
+        &mut engine,
+        &mut consumer,
+        InboundMessage::new(ts(1), MessageBody::Book(bids)),
+    );
+    apply(
+        &mut engine,
+        &mut consumer,
+        InboundMessage::new(ts(1), MessageBody::Book(asks)),
+    );
     let committed = micro::microprice(level(100 * ONE, 2 * ONE), level(101 * ONE, ONE));
 
     let (len, last) = spin_state(&mut engine, &mut consumer, spin(1, 2));
@@ -234,7 +252,11 @@ fn spin_samples_committed_state_only() {
     // a timer tick can tie-break in between): the half-applied book must not leak into the
     // sampled series.
     let partial = partial_delta_chunk(0, Side::Buy, &[(100 * ONE, 7 * ONE)], 3);
-    apply(&mut engine, &mut consumer, InboundMessage::Book(partial));
+    apply(
+        &mut engine,
+        &mut consumer,
+        InboundMessage::new(ts(3), MessageBody::Book(partial)),
+    );
     let (len, last) = spin_state(&mut engine, &mut consumer, spin(2, 4));
     assert_eq!(
         (len, last),
@@ -243,7 +265,11 @@ fn spin_samples_committed_state_only() {
     );
 
     let last_chunk = delta_chunk(0, Side::Sell, &[(101 * ONE, 3 * ONE)], 5);
-    apply(&mut engine, &mut consumer, InboundMessage::Book(last_chunk));
+    apply(
+        &mut engine,
+        &mut consumer,
+        InboundMessage::new(ts(5), MessageBody::Book(last_chunk)),
+    );
     let recommitted = micro::microprice(level(100 * ONE, 7 * ONE), level(101 * ONE, 3 * ONE));
     let (len, last) = spin_state(&mut engine, &mut consumer, spin(3, 6));
     assert_eq!(
@@ -254,7 +280,11 @@ fn spin_samples_committed_state_only() {
 
     // Mid-session one-sided stretch (no reset): continuity intact, hold the committed value.
     let emptied = delta_chunk(0, Side::Sell, &[(101 * ONE, 0)], 7);
-    apply(&mut engine, &mut consumer, InboundMessage::Book(emptied));
+    apply(
+        &mut engine,
+        &mut consumer,
+        InboundMessage::new(ts(7), MessageBody::Book(emptied)),
+    );
     let (len, last) = spin_state(&mut engine, &mut consumer, spin(4, 8));
     assert_eq!(
         (len, last),
@@ -263,21 +293,25 @@ fn spin_samples_committed_state_only() {
     );
 
     // A reset declares continuity broken: skip until a resync commits.
-    apply(
-        &mut engine,
-        &mut consumer,
-        InboundMessage::BookReset(book_reset(0, 9)),
-    );
+    apply(&mut engine, &mut consumer, book_reset(0, 9));
     let (len, _) = spin_state(&mut engine, &mut consumer, spin(5, 10));
     assert_eq!(len, 4, "no sample after a reset");
 
     let rebids = partial_snapshot_chunk(0, Side::Buy, &[(100 * ONE, 2 * ONE)], 11);
-    apply(&mut engine, &mut consumer, InboundMessage::Book(rebids));
+    apply(
+        &mut engine,
+        &mut consumer,
+        InboundMessage::new(ts(11), MessageBody::Book(rebids)),
+    );
     let (len, _) = spin_state(&mut engine, &mut consumer, spin(6, 12));
     assert_eq!(len, 4, "no sample mid-resync (snapshot uncommitted)");
 
     let reasks = last_snapshot_chunk(0, Side::Sell, &[(101 * ONE, ONE)], 13);
-    apply(&mut engine, &mut consumer, InboundMessage::Book(reasks));
+    apply(
+        &mut engine,
+        &mut consumer,
+        InboundMessage::new(ts(13), MessageBody::Book(reasks)),
+    );
     let (len, last) = spin_state(&mut engine, &mut consumer, spin(7, 14));
     assert_eq!(
         (len, last),
@@ -330,14 +364,15 @@ impl SpinDriver {
             &[(price + ONE / 2, ONE)],
             self.now,
         );
-        self.engine.dispatch(&InboundMessage::Book(bids));
-        self.engine.dispatch(&InboundMessage::Book(asks));
+        self.engine
+            .dispatch(&InboundMessage::new(ts(self.now), MessageBody::Book(bids)));
+        self.engine
+            .dispatch(&InboundMessage::new(ts(self.now), MessageBody::Book(asks)));
         while self.persist.pop().is_ok() {}
 
         self.now += self.spin_interval.micros();
         self.seq += 1;
-        self.engine
-            .dispatch(&InboundMessage::SpinTick(spin(self.seq, self.now)));
+        self.engine.dispatch(&spin(self.seq, self.now));
         let mut realised = None;
         while let Ok(record) = self.persist.pop() {
             if let PersistRecord::Feature(row) = record

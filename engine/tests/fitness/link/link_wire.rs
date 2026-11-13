@@ -1,15 +1,10 @@
-//! Link wire fitness: every frame kind survives an encode-then-decode round trip unchanged,
-//! every envelope rejection reports a distinct cause, and the sequence gate drops duplicates
-//! and reorders while letting a restarted peer back in. A fixed frame of every kind also
-//! encodes to the exact bytes checked in as `link_frames.txt`, which no round trip can pin.
-//! The failure this suite exists to prevent is silent: a trading engine and a separately built
-//! UI misdecoding each other's bytes into a plausible-looking book ladder.
+//! Each link frame survives encode and decode, each rejection names its cause, and the sequence
+//! gate drops repeats and lets a restarted peer in, so two builds never misread each other.
 
 use std::net::SocketAddr;
 
 use engine::hot::exec::{
-    CloseReason, ExecHalt, HaltReason, OrderState, QuoteLevel, ReadinessGap, RejectOrigin,
-    RejectReason,
+    CloseReason, HaltReason, OrderState, QuoteLevel, ReadinessGap, RejectOrigin, RejectReason,
 };
 use engine::link::{
     CatalogFeature, CatalogInstrument, Envelope, FrameGuard, GateVerdict, LINK_MAGIC,
@@ -23,11 +18,11 @@ use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::Level;
 use engine::msg::persist::FeatureId;
 use engine::msg::run_state::RunState;
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::msg::ui::{
     DomQuote, LATENCY_REPORT_CELLS, LatencyCell, LatencyReport, UI_BOOK_LEVELS,
     UI_ORDER_SNAPSHOT_CAPACITY, UI_ORDER_SNAPSHOT_MAX_TOTAL, UiBookSnapshot, UiBookState, UiEvent,
-    UiWorkingOrder,
+    UiHalt, UiWorkingOrder,
 };
 use engine::runtime::config::ExecutionMode;
 use proptest::prelude::*;
@@ -60,7 +55,7 @@ fn identity() -> LinkIdentity {
         token_hash: TOKEN,
         strategy_hash: STRATEGY,
         sender_te_hash: SENDER,
-        boot_ts_us: TsUs::from_micros(1_700_000_000_000_000),
+        boot_ts_us: VenueTs::from_micros(1_700_000_000_000_000),
     }
 }
 
@@ -88,17 +83,17 @@ fn book_datagram() -> LinkDatagram {
         body: LinkBody::Book(UiBookSnapshot {
             instrument: InstrumentId(0),
             seq: 7,
-            event_ts_us: TsUs::from_micros(42),
+            event_ts_us: VenueTs::from_micros(42),
             state: UiBookState::Valid,
             bid_len: 1,
             ask_len: 1,
             bids: [Level {
-                price: Price(100),
-                qty: Qty(5),
+                price: Price::from_mantissa(100),
+                qty: Qty::from_mantissa(5),
             }; UI_BOOK_LEVELS],
             asks: [Level {
-                price: Price(101),
-                qty: Qty(5),
+                price: Price::from_mantissa(101),
+                qty: Qty::from_mantissa(5),
             }; UI_BOOK_LEVELS],
         }),
     }
@@ -117,7 +112,7 @@ fn order_snapshot(detail_len: u8, total_working: u16, details: &[UiWorkingOrder]
     UiEvent::OrderSnapshot {
         instrument: InstrumentId(3),
         seq: 41,
-        event_ts_us: TsUs::from_micros(77),
+        event_ts_us: VenueTs::from_micros(77),
         side: Side::Buy,
         detail_len,
         total_working,
@@ -130,9 +125,9 @@ fn working_order(client_id: u64, state: OrderState) -> UiWorkingOrder {
         client_id: ClientOrderId(client_id),
         quote_level: QuoteLevel::new((client_id % 8) as u8),
         state,
-        price: Price(100 + client_id as i64),
-        qty: Qty(5),
-        filled: Qty(1),
+        price: Price::from_mantissa(100 + client_id as i64),
+        qty: Qty::from_mantissa(5),
+        filled: Qty::from_mantissa(1),
     }
 }
 
@@ -141,7 +136,7 @@ fn payload_datagram(schema_hash: LinkHash) -> LinkDatagram {
         envelope: envelope(TopicId::FIRST_STRATEGY, 1),
         body: LinkBody::Payload(LinkPayload::new(
             schema_hash,
-            TsUs::from_micros(99),
+            VenueTs::from_micros(99),
             &[1.5, -2.5],
         )),
     }
@@ -160,7 +155,7 @@ fn arb_envelope(topic: TopicId) -> impl Strategy<Value = Envelope> {
                     token_hash: TOKEN,
                     strategy_hash: STRATEGY,
                     sender_te_hash: LinkHash(sender),
-                    boot_ts_us: TsUs::from_micros(boot),
+                    boot_ts_us: VenueTs::from_micros(boot),
                 },
                 topic,
                 seq,
@@ -182,8 +177,8 @@ fn arb_run_state() -> impl Strategy<Value = RunState> {
 fn arb_levels() -> impl Strategy<Value = [Level; UI_BOOK_LEVELS]> {
     prop::collection::vec(
         (any::<i64>(), any::<i64>()).prop_map(|(price, qty)| Level {
-            price: Price(price),
-            qty: Qty(qty),
+            price: Price::from_mantissa(price),
+            qty: Qty::from_mantissa(qty),
         }),
         UI_BOOK_LEVELS,
     )
@@ -191,7 +186,10 @@ fn arb_levels() -> impl Strategy<Value = [Level; UI_BOOK_LEVELS]> {
 }
 
 fn arb_optional_level() -> impl Strategy<Value = Option<(Price, Qty)>> {
-    prop::option::of((any::<i64>(), any::<i64>()).prop_map(|(price, qty)| (Price(price), Qty(qty))))
+    prop::option::of(
+        (any::<i64>(), any::<i64>())
+            .prop_map(|(price, qty)| (Price::from_mantissa(price), Qty::from_mantissa(qty))),
+    )
 }
 
 fn arb_side() -> impl Strategy<Value = Side> {
@@ -251,7 +249,7 @@ fn arb_book() -> impl Strategy<Value = LinkBody> {
                 LinkBody::Book(UiBookSnapshot {
                     instrument: InstrumentId(instrument),
                     seq,
-                    event_ts_us: TsUs::from_micros(stamp),
+                    event_ts_us: VenueTs::from_micros(stamp),
                     state,
                     bid_len,
                     ask_len,
@@ -281,7 +279,7 @@ fn arb_liquidity() -> impl Strategy<Value = Option<Liquidity>> {
     ]
 }
 
-const REJECT_REASONS: [RejectReason; 19] = [
+const REJECT_REASONS: [RejectReason; 20] = [
     RejectReason::QtyBelowMin,
     RejectReason::NotionalBelowMin,
     RejectReason::NotionalAboveMax,
@@ -301,6 +299,7 @@ const REJECT_REASONS: [RejectReason; 19] = [
     RejectReason::OrderLimit,
     RejectReason::OutsideWindow,
     RejectReason::RateBudget,
+    RejectReason::Warming,
 ];
 
 /// The slot each refusal claims in [`REJECT_REASONS`], which is what stops that list rotting into a
@@ -331,6 +330,7 @@ fn listed_as(reason: RejectReason) -> RejectReason {
         RejectReason::OrderLimit => const { REJECT_REASONS[16] },
         RejectReason::OutsideWindow => const { REJECT_REASONS[17] },
         RejectReason::RateBudget => const { REJECT_REASONS[18] },
+        RejectReason::Warming => const { REJECT_REASONS[19] },
     }
 }
 
@@ -365,9 +365,9 @@ fn arb_reject_origin() -> impl Strategy<Value = RejectOrigin> {
     ]
 }
 
-fn arb_halt() -> impl Strategy<Value = ExecHalt> {
+fn arb_halt() -> impl Strategy<Value = UiHalt> {
     prop_oneof![
-        Just(ExecHalt::Armed),
+        Just(UiHalt::Armed),
         (
             prop_oneof![
                 Just(HaltReason::RejectStreak),
@@ -377,12 +377,13 @@ fn arb_halt() -> impl Strategy<Value = ExecHalt> {
                 Just(HaltReason::FilterViolation),
                 Just(HaltReason::CommandBankOverflow),
                 Just(HaltReason::DuplicateResting),
+                Just(HaltReason::SealNotAccepted),
             ],
             any::<i64>()
         )
-            .prop_map(|(reason, at)| ExecHalt::Halted {
+            .prop_map(|(reason, at)| UiHalt::Halted {
                 reason,
-                halted_ts_us: TsUs::from_micros(at)
+                halted_ts_us: VenueTs::from_micros(at)
             }),
     ]
 }
@@ -406,7 +407,7 @@ fn arb_latency_report() -> impl Strategy<Value = LinkBody> {
     )
         .prop_map(|(built_ts_us, ages, cells, backlog_ema)| {
             LinkBody::Latency(LatencyReport {
-                built_ts_us: TsUs::from_micros(built_ts_us),
+                built_ts_us: VenueTs::from_micros(built_ts_us),
                 ages: ages.map(|age| age.map(DurationUs::from_micros)),
                 cells: cells
                     .try_into()
@@ -423,7 +424,7 @@ fn arb_event() -> impl Strategy<Value = LinkBody> {
             |((instrument, seq, stamp), bid, ask)| UiEvent::Quote {
                 instrument: InstrumentId(instrument),
                 seq,
-                event_ts_us: TsUs::from_micros(stamp),
+                event_ts_us: VenueTs::from_micros(stamp),
                 quote: DomQuote::top(bid, ask),
             }
         ),
@@ -431,10 +432,10 @@ fn arb_event() -> impl Strategy<Value = LinkBody> {
             |((instrument, seq, stamp), aggressor, price, qty)| UiEvent::Trade {
                 instrument: InstrumentId(instrument),
                 seq,
-                event_ts_us: TsUs::from_micros(stamp),
+                event_ts_us: VenueTs::from_micros(stamp),
                 aggressor,
-                price: Price(price),
-                qty: Qty(qty),
+                price: Price::from_mantissa(price),
+                qty: Qty::from_mantissa(qty),
             }
         ),
         (
@@ -457,14 +458,14 @@ fn arb_event() -> impl Strategy<Value = LinkBody> {
                     UiEvent::OrderUpdate {
                         instrument: InstrumentId(instrument),
                         seq,
-                        event_ts_us: TsUs::from_micros(stamp),
+                        event_ts_us: VenueTs::from_micros(stamp),
                         client_id: ClientOrderId(client_id),
                         quote_level,
                         side,
                         state,
-                        price: Price(price),
-                        qty: Qty(qty),
-                        filled: Qty(filled),
+                        price: Price::from_mantissa(price),
+                        qty: Qty::from_mantissa(qty),
+                        filled: Qty::from_mantissa(filled),
                     }
                 }
             ),
@@ -472,7 +473,7 @@ fn arb_event() -> impl Strategy<Value = LinkBody> {
             |((_, seq, stamp), asset, free, locked)| UiEvent::Balance {
                 asset: AssetId(asset),
                 seq,
-                event_ts_us: TsUs::from_micros(stamp),
+                event_ts_us: VenueTs::from_micros(stamp),
                 free,
                 locked,
             }
@@ -481,7 +482,7 @@ fn arb_event() -> impl Strategy<Value = LinkBody> {
             |((instrument, seq, stamp), side, origin)| UiEvent::Reject {
                 instrument: InstrumentId(instrument),
                 seq,
-                event_ts_us: TsUs::from_micros(stamp),
+                event_ts_us: VenueTs::from_micros(stamp),
                 side,
                 origin,
             }
@@ -489,7 +490,7 @@ fn arb_event() -> impl Strategy<Value = LinkBody> {
         (any::<u64>(), any::<i64>(), arb_halt()).prop_map(|(seq, stamp, halt)| {
             UiEvent::Execution {
                 seq,
-                event_ts_us: TsUs::from_micros(stamp),
+                event_ts_us: VenueTs::from_micros(stamp),
                 halt,
             }
         }),
@@ -497,7 +498,7 @@ fn arb_event() -> impl Strategy<Value = LinkBody> {
             |((instrument, seq, stamp), feature, value)| UiEvent::Feature {
                 instrument: InstrumentId(instrument),
                 seq,
-                event_ts_us: TsUs::from_micros(stamp),
+                event_ts_us: VenueTs::from_micros(stamp),
                 feature: FeatureId(feature),
                 value,
             }
@@ -521,11 +522,11 @@ fn arb_event() -> impl Strategy<Value = LinkBody> {
                 )| UiEvent::Fill {
                     instrument: InstrumentId(instrument),
                     seq,
-                    event_ts_us: TsUs::from_micros(stamp),
+                    event_ts_us: VenueTs::from_micros(stamp),
                     quote_level,
                     side,
-                    price: Price(price),
-                    qty: Qty(qty),
+                    price: Price::from_mantissa(price),
+                    qty: Qty::from_mantissa(qty),
                     commission,
                     commission_asset: AssetId(commission_asset),
                     liquidity,
@@ -534,13 +535,13 @@ fn arb_event() -> impl Strategy<Value = LinkBody> {
         head.prop_map(|(instrument, seq, stamp)| UiEvent::Rotation {
             instrument: InstrumentId(instrument),
             seq,
-            event_ts_us: TsUs::from_micros(stamp),
+            event_ts_us: VenueTs::from_micros(stamp),
         }),
         (head, arb_wire_f64(), arb_wire_f64()).prop_map(
             |((instrument, seq, stamp), exposure_quote, pnl_quote)| UiEvent::Position {
                 instrument: InstrumentId(instrument),
                 seq,
-                event_ts_us: TsUs::from_micros(stamp),
+                event_ts_us: VenueTs::from_micros(stamp),
                 exposure_quote,
                 pnl_quote,
             }
@@ -572,12 +573,12 @@ fn arb_catalog_instrument() -> impl Strategy<Value = LinkBody> {
                 (base_asset, quote_asset, base, quote),
             )| {
                 LinkBody::CatalogInstrument(CatalogInstrument {
-                    catalog_ts_us: TsUs::from_micros(catalog_ts_us),
+                    catalog_ts_us: VenueTs::from_micros(catalog_ts_us),
                     total_count,
                     instrument: InstrumentId(instrument),
                     display,
-                    tick_size: tick.map(Price),
-                    lot_size: lot.map(Qty),
+                    tick_size: tick.map(Price::from_mantissa),
+                    lot_size: lot.map(Qty::from_mantissa),
                     qty_scale,
                     base_asset: AssetId(base_asset),
                     quote_asset: AssetId(quote_asset),
@@ -626,7 +627,7 @@ fn arb_datagram() -> impl Strategy<Value = LinkDatagram> {
                 LinkDatagram {
                     envelope,
                     body: LinkBody::CatalogFeature(CatalogFeature {
-                        catalog_ts_us: TsUs::from_micros(catalog_ts_us),
+                        catalog_ts_us: VenueTs::from_micros(catalog_ts_us),
                         total_count,
                         feature: FeatureId(feature),
                         name,
@@ -686,7 +687,7 @@ fn arb_datagram() -> impl Strategy<Value = LinkDatagram> {
                 envelope,
                 body: LinkBody::Payload(LinkPayload::new(
                     SCHEMA,
-                    TsUs::from_micros(stamp),
+                    VenueTs::from_micros(stamp),
                     &values
                 )),
             }),
@@ -714,7 +715,7 @@ proptest! {
         let values: Vec<f64> = bits.iter().copied().map(f64::from_bits).collect();
         let datagram = LinkDatagram {
             envelope: envelope(TopicId::FIRST_STRATEGY, 3),
-            body: LinkBody::Payload(LinkPayload::new(SCHEMA, TsUs::from_micros(1), &values)),
+            body: LinkBody::Payload(LinkPayload::new(SCHEMA, VenueTs::from_micros(1), &values)),
         };
         let decoded = round_trip(&datagram).expect("a canonical payload decodes");
         let LinkBody::Payload(payload) = decoded.body else {
@@ -739,7 +740,7 @@ proptest! {
         let decoded = round_trip(&event_datagram(UiEvent::Feature {
             instrument: InstrumentId(3),
             seq: 8,
-            event_ts_us: TsUs::from_micros(11),
+            event_ts_us: VenueTs::from_micros(11),
             feature: FeatureId(2),
             value: f64::from_bits(feature_bits),
         }))
@@ -752,7 +753,7 @@ proptest! {
         let decoded = round_trip(&event_datagram(UiEvent::Position {
             instrument: InstrumentId(3),
             seq: 9,
-            event_ts_us: TsUs::from_micros(12),
+            event_ts_us: VenueTs::from_micros(12),
             exposure_quote: f64::from_bits(exposure_bits),
             pnl_quote: f64::from_bits(pnl_bits),
         }))
@@ -1030,27 +1031,33 @@ fn saturated_order_update(state: OrderState) -> UiEvent {
     UiEvent::OrderUpdate {
         instrument: InstrumentId(u16::MAX),
         seq: u64::MAX,
-        event_ts_us: TsUs::from_micros(i64::MAX),
+        event_ts_us: VenueTs::from_micros(i64::MAX),
         client_id: ClientOrderId(u64::MAX),
         quote_level: Some(QuoteLevel::new(7).expect("valid quote level")),
         side: Side::Sell,
         state,
-        price: Price(i64::MIN),
-        qty: Qty(i64::MAX),
-        filled: Qty(i64::MIN),
+        price: Price::from_mantissa(i64::MIN),
+        qty: Qty::from_mantissa(i64::MAX),
+        filled: Qty::from_mantissa(i64::MIN),
     }
 }
 
 fn full_quote_ladder() -> UiEvent {
     let mut quote = DomQuote::default();
     for level in 0..8 {
-        quote.bids[level] = Some((Price(100 - level as i64), Qty(level as i64 + 1)));
-        quote.asks[level] = Some((Price(101 + level as i64), Qty(level as i64 + 11)));
+        quote.bids[level] = Some((
+            Price::from_mantissa(100 - level as i64),
+            Qty::from_mantissa(level as i64 + 1),
+        ));
+        quote.asks[level] = Some((
+            Price::from_mantissa(101 + level as i64),
+            Qty::from_mantissa(level as i64 + 11),
+        ));
     }
     UiEvent::Quote {
         instrument: InstrumentId(3),
         seq: 9,
-        event_ts_us: TsUs::from_micros(77),
+        event_ts_us: VenueTs::from_micros(77),
         quote,
     }
 }
@@ -1122,7 +1129,7 @@ fn event_encoding_is_independent_of_buffer_reuse() {
         body: LinkBody::Event(UiEvent::Rotation {
             instrument: InstrumentId(1),
             seq: 5,
-            event_ts_us: TsUs::from_micros(11),
+            event_ts_us: VenueTs::from_micros(11),
         }),
     };
     let quote = LinkDatagram {
@@ -1130,10 +1137,10 @@ fn event_encoding_is_independent_of_buffer_reuse() {
         body: LinkBody::Event(UiEvent::Quote {
             instrument: InstrumentId(1),
             seq: 4,
-            event_ts_us: TsUs::from_micros(10),
+            event_ts_us: VenueTs::from_micros(10),
             quote: DomQuote::top(
-                Some((Price(i64::MAX), Qty(i64::MAX))),
-                Some((Price(i64::MIN), Qty(i64::MIN))),
+                Some((Price::from_mantissa(i64::MAX), Qty::from_mantissa(i64::MAX))),
+                Some((Price::from_mantissa(i64::MIN), Qty::from_mantissa(i64::MIN))),
             ),
         }),
     };
@@ -1175,17 +1182,17 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
         body: LinkBody::Book(UiBookSnapshot {
             instrument: InstrumentId(0x0a0b),
             seq: 0x0c0d_0e0f_1011_1213,
-            event_ts_us: TsUs::from_micros(1_700_000_123_456_789),
+            event_ts_us: VenueTs::from_micros(1_700_000_123_456_789),
             state: UiBookState::AwaitingSnapshot,
             bid_len: 29,
             ask_len: 31,
             bids: std::array::from_fn(|level| Level {
-                price: Price(11_800_000_000_000 - 1_000_000 * level as i64),
-                qty: Qty(1_000 + 7 * level as i64),
+                price: Price::from_mantissa(11_800_000_000_000 - 1_000_000 * level as i64),
+                qty: Qty::from_mantissa(1_000 + 7 * level as i64),
             }),
             asks: std::array::from_fn(|level| Level {
-                price: Price(-(2_000_000_000_000 + 3_000_000 * level as i64)),
-                qty: Qty(-(500 + 11 * level as i64)),
+                price: Price::from_mantissa(-(2_000_000_000_000 + 3_000_000 * level as i64)),
+                qty: Qty::from_mantissa(-(500 + 11 * level as i64)),
             }),
         }),
     };
@@ -1199,12 +1206,12 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
         body: LinkBody::CatalogInstrument(instrument),
     };
     let stamped = CatalogInstrument {
-        catalog_ts_us: TsUs::from_micros(1_700_000_000_000_001),
+        catalog_ts_us: VenueTs::from_micros(1_700_000_000_000_001),
         total_count: 0x0203,
         instrument: InstrumentId(0x0405),
         display: WireName::new("BTCUSDT"),
-        tick_size: Some(Price(1_000_000)),
-        lot_size: Some(Qty(-7_000)),
+        tick_size: Some(Price::from_mantissa(1_000_000)),
+        lot_size: Some(Qty::from_mantissa(-7_000)),
         qty_scale: 100_000_000,
         base_asset: AssetId(0x0607),
         quote_asset: AssetId(0x0809),
@@ -1212,7 +1219,7 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
         quote: WireName::new("USDT"),
     };
     let unstamped = CatalogInstrument {
-        catalog_ts_us: TsUs::from_micros(1_700_000_000_000_002),
+        catalog_ts_us: VenueTs::from_micros(1_700_000_000_000_002),
         total_count: 0x0a0b,
         instrument: InstrumentId(0x0c0d),
         display: WireName::new("ETH-UP-15M"),
@@ -1227,10 +1234,16 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
 
     let mut quote = DomQuote::default();
     for level in [0, 1, 2, 5] {
-        quote.bids[level] = Some((Price(-90_000 - level as i64), Qty(300 + level as i64)));
+        quote.bids[level] = Some((
+            Price::from_mantissa(-90_000 - level as i64),
+            Qty::from_mantissa(300 + level as i64),
+        ));
     }
     for level in [0, 3, 7] {
-        quote.asks[level] = Some((Price(91_000 + level as i64), Qty(-400 - level as i64)));
+        quote.asks[level] = Some((
+            Price::from_mantissa(91_000 + level as i64),
+            Qty::from_mantissa(-400 - level as i64),
+        ));
     }
 
     vec![
@@ -1277,7 +1290,7 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
             LinkDatagram {
                 envelope: envelope(TopicId::CATALOG_FEATURES, 0x0708_090a_0b0c_0d0e),
                 body: LinkBody::CatalogFeature(CatalogFeature {
-                    catalog_ts_us: TsUs::from_micros(1_700_000_000_000_003),
+                    catalog_ts_us: VenueTs::from_micros(1_700_000_000_000_003),
                     total_count: 0x1213,
                     feature: FeatureId(0x1415),
                     name: WireName::new("microprice_gap_bps"),
@@ -1290,7 +1303,7 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                 envelope: envelope(TopicId(0x0011), 0x0809_0a0b_0c0d_0e0f),
                 body: LinkBody::Payload(LinkPayload::new(
                     SCHEMA,
-                    TsUs::from_micros(1_700_000_000_000_004),
+                    VenueTs::from_micros(1_700_000_000_000_004),
                     &[
                         std::f64::consts::PI,
                         -std::f64::consts::E,
@@ -1311,7 +1324,7 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                 UiEvent::Quote {
                     instrument: InstrumentId(0x0102),
                     seq: 0x1101,
-                    event_ts_us: TsUs::from_micros(1_700_000_000_001_001),
+                    event_ts_us: VenueTs::from_micros(1_700_000_000_001_001),
                     quote,
                 },
             ),
@@ -1323,10 +1336,10 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                 UiEvent::Trade {
                     instrument: InstrumentId(0x0203),
                     seq: 0x1102,
-                    event_ts_us: TsUs::from_micros(1_700_000_000_001_002),
+                    event_ts_us: VenueTs::from_micros(1_700_000_000_001_002),
                     aggressor: Side::Sell,
-                    price: Price(-123_456_789),
-                    qty: Qty(987_654_321),
+                    price: Price::from_mantissa(-123_456_789),
+                    qty: Qty::from_mantissa(987_654_321),
                 },
             ),
         ),
@@ -1337,14 +1350,14 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                 UiEvent::OrderUpdate {
                     instrument: InstrumentId(0x0304),
                     seq: 0x1103,
-                    event_ts_us: TsUs::from_micros(1_700_000_000_001_003),
+                    event_ts_us: VenueTs::from_micros(1_700_000_000_001_003),
                     client_id: ClientOrderId(0x1a2b_3c4d_5e6f_7081),
                     quote_level: QuoteLevel::new(5),
                     side: Side::Buy,
                     state: OrderState::CancelInFlight,
-                    price: Price(118_000_123_000_000),
-                    qty: Qty(-5_000_001),
-                    filled: Qty(2_000_003),
+                    price: Price::from_mantissa(118_000_123_000_000),
+                    qty: Qty::from_mantissa(-5_000_001),
+                    filled: Qty::from_mantissa(2_000_003),
                 },
             ),
         ),
@@ -1355,7 +1368,7 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                 UiEvent::Feature {
                     instrument: InstrumentId(0x0405),
                     seq: 0x1104,
-                    event_ts_us: TsUs::from_micros(1_700_000_000_001_004),
+                    event_ts_us: VenueTs::from_micros(1_700_000_000_001_004),
                     feature: FeatureId(0x0506),
                     value: -std::f64::consts::PI * 1.0e-7,
                 },
@@ -1368,11 +1381,11 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                 UiEvent::Fill {
                     instrument: InstrumentId(0x0607),
                     seq: 0x1105,
-                    event_ts_us: TsUs::from_micros(1_700_000_000_001_005),
+                    event_ts_us: VenueTs::from_micros(1_700_000_000_001_005),
                     quote_level: None,
                     side: Side::Sell,
-                    price: Price(66_123_450_000_000),
-                    qty: Qty(1_250_000),
+                    price: Price::from_mantissa(66_123_450_000_000),
+                    qty: Qty::from_mantissa(1_250_000),
                     commission: -944_000,
                     commission_asset: AssetId(0x0708),
                     liquidity: Some(Liquidity::Taker),
@@ -1386,7 +1399,7 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                 UiEvent::Rotation {
                     instrument: InstrumentId(0x0809),
                     seq: 0x1106,
-                    event_ts_us: TsUs::from_micros(1_700_000_000_001_006),
+                    event_ts_us: VenueTs::from_micros(1_700_000_000_001_006),
                 },
             ),
         ),
@@ -1397,7 +1410,7 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                 UiEvent::Position {
                     instrument: InstrumentId(0x0a0b),
                     seq: 0x1107,
-                    event_ts_us: TsUs::from_micros(1_700_000_000_001_007),
+                    event_ts_us: VenueTs::from_micros(1_700_000_000_001_007),
                     exposure_quote: 12_345.678_9,
                     pnl_quote: -0.000_123_4,
                 },
@@ -1410,7 +1423,7 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                 UiEvent::Balance {
                     asset: AssetId(0x0c0d),
                     seq: 0x1108,
-                    event_ts_us: TsUs::from_micros(1_700_000_000_001_008),
+                    event_ts_us: VenueTs::from_micros(1_700_000_000_001_008),
                     free: 5_000_000_000_000,
                     locked: -250_000_000,
                 },
@@ -1423,7 +1436,7 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                 UiEvent::Reject {
                     instrument: InstrumentId(0x0e0f),
                     seq: 0x1109,
-                    event_ts_us: TsUs::from_micros(1_700_000_000_001_009),
+                    event_ts_us: VenueTs::from_micros(1_700_000_000_001_009),
                     side: Side::Buy,
                     origin: RejectOrigin::Local(RejectReason::NotReady(ReadinessGap::Balances)),
                 },
@@ -1436,7 +1449,7 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                 UiEvent::Reject {
                     instrument: InstrumentId(0x1011),
                     seq: 0x110a,
-                    event_ts_us: TsUs::from_micros(1_700_000_000_001_010),
+                    event_ts_us: VenueTs::from_micros(1_700_000_000_001_010),
                     side: Side::Sell,
                     origin: RejectOrigin::Venue {
                         class: RejectClass::Ambiguous,
@@ -1451,8 +1464,8 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                 0x100b,
                 UiEvent::Execution {
                     seq: 0x110b,
-                    event_ts_us: TsUs::from_micros(1_700_000_000_001_011),
-                    halt: ExecHalt::Armed,
+                    event_ts_us: VenueTs::from_micros(1_700_000_000_001_011),
+                    halt: UiHalt::Armed,
                 },
             ),
         ),
@@ -1462,10 +1475,10 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                 0x100c,
                 UiEvent::Execution {
                     seq: 0x110c,
-                    event_ts_us: TsUs::from_micros(1_700_000_000_001_012),
-                    halt: ExecHalt::Halted {
+                    event_ts_us: VenueTs::from_micros(1_700_000_000_001_012),
+                    halt: UiHalt::Halted {
                         reason: HaltReason::DuplicateResting,
-                        halted_ts_us: TsUs::from_micros(1_700_000_000_000_999),
+                        halted_ts_us: VenueTs::from_micros(1_700_000_000_000_999),
                     },
                 },
             ),
@@ -1493,7 +1506,7 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
             LinkDatagram {
                 envelope: envelope(TopicId::LATENCY, 0x1010),
                 body: LinkBody::Latency(LatencyReport {
-                    built_ts_us: TsUs::from_micros(1_700_000_000_001_016),
+                    built_ts_us: VenueTs::from_micros(1_700_000_000_001_016),
                     ages: [
                         Some(DurationUs::from_micros(0x0102_0304)),
                         None,
@@ -1518,7 +1531,7 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
             LinkDatagram {
                 envelope: envelope(TopicId::LATENCY, 0x1011),
                 body: LinkBody::Latency(LatencyReport {
-                    built_ts_us: TsUs::from_micros(1_700_000_000_001_017),
+                    built_ts_us: VenueTs::from_micros(1_700_000_000_001_017),
                     ages: [None; 3],
                     cells: [LatencyCell::EMPTY; LATENCY_REPORT_CELLS],
                     backlog_ema: None,
@@ -1613,9 +1626,9 @@ fn every_frame_kind_encodes_to_checked_in_bytes() {
 
 /// The gate ages its slots, so every fixture stamps from one instant unless it is deliberately
 /// walking the clock past the TTL.
-const GATE_START: TsUs = TsUs::from_micros(1_000_000);
+const GATE_START: LocalTs = LocalTs::from_micros(1_000_000);
 
-fn admit_from(gate: &mut SequenceGate, sender: u64, seq: u64, now: TsUs) -> GateVerdict {
+fn admit_from(gate: &mut SequenceGate, sender: u64, seq: u64, now: LocalTs) -> GateVerdict {
     let mut envelope = envelope(TopicId::FIRST_STRATEGY, seq);
     envelope.sender_te_hash = LinkHash(sender);
     gate.admit(&envelope, now)
@@ -1623,7 +1636,7 @@ fn admit_from(gate: &mut SequenceGate, sender: u64, seq: u64, now: TsUs) -> Gate
 
 fn admit_boot(gate: &mut SequenceGate, boot_ts_us: i64, topic: TopicId, seq: u64) -> bool {
     let mut envelope = envelope(topic, seq);
-    envelope.boot_ts_us = TsUs::from_micros(boot_ts_us);
+    envelope.boot_ts_us = VenueTs::from_micros(boot_ts_us);
     gate.admit(&envelope, GATE_START).is_accepted()
 }
 
@@ -1773,7 +1786,7 @@ fn subscriber(port: u16) -> SocketAddr {
 #[test]
 fn a_subscription_renews_in_place_and_expires_at_its_ttl() {
     let mut table = SubscriberTable::new();
-    let start = TsUs::from_micros(1_000_000);
+    let start = LocalTs::from_micros(1_000_000);
     assert_eq!(
         table.refresh(subscriber(9310), TopicSet::ALL, start),
         RefreshOutcome::Added
@@ -1807,7 +1820,7 @@ fn a_subscription_renews_in_place_and_expires_at_its_ttl() {
 #[test]
 fn full_subscriber_table_rejects_and_counts() {
     let mut table = SubscriberTable::new();
-    let now = TsUs::from_micros(1_000_000);
+    let now = LocalTs::from_micros(1_000_000);
     for port in 0..LINK_MAX_SUBSCRIBERS as u16 {
         assert_eq!(
             table.refresh(subscriber(9310 + port), TopicSet::ALL, now),

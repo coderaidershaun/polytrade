@@ -1,6 +1,5 @@
-//! The writer deletes Parquet files older than the configured age while it runs, and removes the
-//! date folders it empties. A wrong deletion loses data silently, so everything else must survive:
-//! fresh files, files it does not target, and the whole tree of the other execution mode.
+//! The writer deletes Parquet files past their age, and the folders it empties, while each other
+//! file survives, since a wrong deletion loses data with no sign.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -8,7 +7,7 @@ use std::time::{Duration, SystemTime};
 
 use engine::msg::ids::InstrumentId;
 use engine::msg::persist::{FeatureId, FeatureRow, PersistRecord};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::runtime::config::{ExecutionMode, RecordedTables, TableKind};
 use engine::tape::PersistConfig;
 
@@ -72,7 +71,7 @@ fn feature_record() -> PersistRecord {
         instrument: InstrumentId(0),
         feature: FeatureId(0),
         value: 1.0,
-        event_ts_us: TsUs::from_micros(BASE_TS_US),
+        event_ts_us: LocalTs::from_micros(BASE_TS_US),
     })
 }
 

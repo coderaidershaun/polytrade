@@ -1,8 +1,5 @@
-//! The workstation's view of the engine it is attached to: which run its frames come from, whether
-//! the heartbeat is still arriving, what run state the engine reports against the one this
-//! workstation asserts, and the run catalog rebuilt from the loose per-item frames the link
-//! announces. No socket and no clock of its own, so the link session and the link bar read one
-//! source of truth rather than two.
+//! The workstation's view of its attached engine: its run, its heartbeat, its reported run state,
+//! and its catalog, in one model, so the link session and the link bar agree.
 
 use std::net::SocketAddr;
 
@@ -12,7 +9,7 @@ use crate::link::{
 };
 use crate::msg::run_state::RunAssertion;
 use crate::msg::run_state::RunState;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs, VenueTs};
 use crate::msg::ui::{UiCatalog, UiInstrument};
 
 /// Silence past which a peer's feed reads as stale rather than merely quiet. The engine announces
@@ -26,7 +23,7 @@ pub(crate) const PEER_SILENCE_LIMIT: DurationUs = LINK_SUBSCRIPTION_TTL;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RemoteRun {
     sender_te_hash: LinkHash,
-    boot_ts_us: TsUs,
+    boot_ts_us: VenueTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,7 +101,7 @@ pub(crate) struct Controller {
 }
 
 impl Controller {
-    pub(crate) fn new(boot_ts_us: TsUs) -> Self {
+    pub(crate) fn new(boot_ts_us: LocalTs) -> Self {
         Self {
             boot_epoch: boot_ts_us.micros().max(0) as u64,
             assertions: 0,
@@ -178,7 +175,7 @@ impl LinkStatus {
 
 #[derive(Debug, Default)]
 pub(crate) struct CatalogAssembly {
-    catalog_ts_us: Option<TsUs>,
+    catalog_ts_us: Option<VenueTs>,
     instruments: Vec<CatalogInstrument>,
     features: Vec<CatalogFeature>,
     instrument_total: Option<u16>,
@@ -191,7 +188,7 @@ impl CatalogAssembly {
 
     /// When the engine stamped the catalog these frames belong to. Not the control epoch: that is
     /// an assertion ordinal, and comparing the two numbers would mean nothing.
-    pub(crate) fn catalog_ts_us(&self) -> Option<TsUs> {
+    pub(crate) fn catalog_ts_us(&self) -> Option<VenueTs> {
         self.catalog_ts_us
     }
 
@@ -278,7 +275,7 @@ impl CatalogAssembly {
             && self.features.len() == usize::from(feature_count)
     }
 
-    fn adopt(&mut self, catalog_ts_us: TsUs) -> bool {
+    fn adopt(&mut self, catalog_ts_us: VenueTs) -> bool {
         match self.catalog_ts_us {
             Some(held) if catalog_ts_us < held => false,
             Some(held) if catalog_ts_us == held => true,

@@ -1,9 +1,5 @@
-//! Translates Polymarket JSON to and from `ExecEvent` and `AccountChunk`, holding no socket, clock
-//! or state. Three venue quirks are normalised here and nowhere else, because each yields a
-//! silently wrong answer rather than a parse failure: order status has three spellings (`live`,
-//! `LIVE`, `ORDER_STATUS_LIVE`) and trade status two; the read surfaces send decimal strings where
-//! the write surface sends 6-decimal integers; and three payloads report fills, of which only two
-//! can be trusted.
+//! Translates Polymarket JSON to and from the execution vocabulary, with no socket, clock or state.
+//! The venue quirks that give a wrong answer, not a parse error, are normalised here only.
 
 mod correlation;
 mod read;
@@ -15,7 +11,7 @@ mod wire;
 
 use crate::msg::exec::VenueOrderStatus;
 use crate::msg::ids::{InstrumentId, Price, Qty};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::venues::edge::decode::{
     DecimalFault, JsonFrame, mantissa_field, qty_field, unknown_enum,
 };
@@ -87,7 +83,7 @@ pub struct DecodeContext<'a> {
     pub api_key: &'a str,
     /// When this process received the message. Venue stamps are clamped against it; it is not the
     /// venue's clock.
-    pub received_ts_us: TsUs,
+    pub received_ts_us: LocalTs,
 }
 
 /// Encoder context: the same bindings the decoder reads, plus the account material an order
@@ -99,7 +95,7 @@ pub struct EncodeContext<'a> {
     pub signer: &'a OrderSigner,
     /// Wire-send stamp. It becomes the signed order's millisecond timestamp, which is this venue's
     /// uniqueness key — the codec reads no clock of its own, so a replay re-signs identically.
-    pub sent_ts_us: TsUs,
+    pub sent_ts_us: LocalTs,
 }
 
 /// One tradeable outcome token, as the engine currently knows it.
@@ -235,7 +231,10 @@ fn venue_status(field: &'static str, status: &str) -> Result<VenueOrderStatus, W
 /// A resting order with a partial fill answers `LIVE`, which the engine spells `PartiallyFilled`.
 /// The venue never says so itself; the size is the only evidence.
 fn status_with_fill(status: VenueOrderStatus, filled: Qty, total: Qty) -> VenueOrderStatus {
-    match status == VenueOrderStatus::New && filled.0 > 0 && filled.0 < total.0 {
+    match status == VenueOrderStatus::New
+        && filled.mantissa() > 0
+        && filled.mantissa() < total.mantissa()
+    {
         true => VenueOrderStatus::PartiallyFilled,
         false => status,
     }
@@ -279,7 +278,7 @@ fn optional_venue_amount(field: &'static str, text: &str) -> Result<i64, WireErr
 
 pub(super) fn optional_qty(field: &'static str, text: &str) -> Result<Qty, WireError> {
     match text.trim().is_empty() {
-        true => Ok(Qty(0)),
+        true => Ok(Qty::from_mantissa(0)),
         false => Ok(qty_field(field, text)?),
     }
 }

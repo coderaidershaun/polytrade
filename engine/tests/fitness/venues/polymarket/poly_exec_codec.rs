@@ -1,10 +1,10 @@
-//! Polymarket execution codec goldens. With no testnet, these committed venue payloads are the only
-//! place the normalisation layer is exercised before real money moves through it.
+//! Polymarket order messages, decoded from recorded venue payloads. With no test network, these
+//! tests are the only check of that decoding before real money moves through it.
 //!
-//! Four judgements are pinned, because each is silent and expensive when wrong: the fill law (which
-//! payload may be folded and which may not), the message-string → [`RejectClass`] table, the split
-//! between an order rejection and a venue-wide outage, and the byte-exact place body — whose
-//! signature is checked against a vector the official SDK minted, not against our own output.
+//! Four judgements are checked, because each fails silently and costs money when wrong: which
+//! payload may be folded as a fill, the message text to a [`RejectClass`], the split between an
+//! order rejection and an outage of the whole venue, and the exact bytes of a place body, whose
+//! signature is checked against a vector from the official SDK, not against our own output.
 //!
 //! A fifth is the startup gate's protocol-version read, which must accept the real venue's JSON
 //! shape and fail closed on anything else, because nothing else stands between it and a live run.
@@ -18,8 +18,10 @@ use std::collections::BTreeSet;
 use engine::msg::exec::{
     AccountChunkKind, ExecEvent, ExecKind, Liquidity, OrderStyle, RejectClass, VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use engine::msg::time::TsUs;
+use engine::msg::ids::{
+    AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
+};
+use engine::msg::time::LocalTs;
 use engine::venues::edge::decode::DecimalFault;
 use engine::venues::exec::ExecRequest;
 use engine::venues::polymarket::exec::codec::{
@@ -50,7 +52,7 @@ macro_rules! fixture {
 
 const SIGN_VECTORS: &str = include_str!("../../../../fixtures/polymarket/sign_vectors.json");
 
-const NOW: TsUs = TsUs::from_micros(1_786_046_870_000_000);
+const NOW: LocalTs = LocalTs::from_micros(1_786_046_870_000_000);
 
 const UP_TOKEN: &str =
     "112440684578249703625547365250874526064395690274269051885028145282946008600017";
@@ -71,9 +73,9 @@ const CLIENT_A: ClientOrderId = ClientOrderId(0x6a64_f040_000c_0001);
 const CLIENT_B: ClientOrderId = ClientOrderId(0x6a64_f040_000c_0002);
 
 /// `0.52` and `10` shares, the size every fixture is written around.
-const PRICE: Price = Price(52_000_000);
-const SIZE: Qty = Qty(10 * FIXED_SCALE);
-const TICK: Price = Price(1_000_000);
+const PRICE: Price = Price::from_mantissa(52_000_000);
+const SIZE: Qty = Qty::from_mantissa(10 * FIXED_SCALE);
+const TICK: Price = Price::from_mantissa(1_000_000);
 
 fn tokens() -> TokenTable {
     let mut table = TokenTable::with_retired_capacity(4);
@@ -187,7 +189,10 @@ fn place_responses_decode_to_the_outcome_each_shape_demands() {
             .expect("committed fixture decodes"),
         );
         assert_eq!(outcome.event.cumulative_qty, SIZE);
-        assert_eq!(outcome.event.cumulative_quote, 520_000_000);
+        assert_eq!(
+            outcome.event.cumulative_quote,
+            Notional::from_mantissa(520_000_000)
+        );
         assert_eq!(outcome.event.status, Some(VenueOrderStatus::Filled));
         assert_eq!(outcome.event.kind, ExecKind::AckPlaced);
         let placed = outcome.placed.expect("a matched placement still has an id");
@@ -205,8 +210,14 @@ fn place_responses_decode_to_the_outcome_each_shape_demands() {
             )
             .expect("the live decimal-dollar amounts decode"),
         );
-        assert_eq!(outcome.event.cumulative_qty, Qty(542_553_000));
-        assert_eq!(outcome.event.cumulative_quote, 254_999_900);
+        assert_eq!(
+            outcome.event.cumulative_qty,
+            Qty::from_mantissa(542_553_000)
+        );
+        assert_eq!(
+            outcome.event.cumulative_quote,
+            Notional::from_mantissa(254_999_900)
+        );
         assert_eq!(outcome.event.status, Some(VenueOrderStatus::Filled));
         assert_eq!(outcome.event.kind, ExecKind::AckPlaced);
         assert_eq!(
@@ -232,7 +243,7 @@ fn place_responses_decode_to_the_outcome_each_shape_demands() {
             outcome.placed.expect("delayed is accepted").status,
             PlacementStatus::Delayed
         );
-        assert_eq!(outcome.event.cumulative_qty, Qty(0));
+        assert_eq!(outcome.event.cumulative_qty, Qty::from_mantissa(0));
         assert_eq!(outcome.event.status, Some(VenueOrderStatus::New));
         assert_eq!(outcome.event.reject, None);
     }
@@ -254,7 +265,7 @@ fn place_responses_decode_to_the_outcome_each_shape_demands() {
         );
         assert_eq!(outcome.event.kind, ExecKind::AckPlaced);
         assert_eq!(outcome.event.status, Some(VenueOrderStatus::New));
-        assert_eq!(outcome.event.cumulative_qty, Qty(0));
+        assert_eq!(outcome.event.cumulative_qty, Qty::from_mantissa(0));
         assert_eq!(outcome.event.reject, None);
     }
 
@@ -273,8 +284,8 @@ fn place_responses_decode_to_the_outcome_each_shape_demands() {
             outcome.placed.expect("unmatched rests").status,
             PlacementStatus::Unmatched
         );
-        assert_eq!(outcome.event.cumulative_qty, Qty(0));
-        assert_eq!(outcome.event.cumulative_quote, 0);
+        assert_eq!(outcome.event.cumulative_qty, Qty::from_mantissa(0));
+        assert_eq!(outcome.event.cumulative_quote, Notional::from_mantissa(0));
     }
 
     // HTTP 200 with success:false is a rejection, not an accepted order.
@@ -358,15 +369,18 @@ fn a_maker_fill_folds_from_the_cumulative_size_matched() {
 
     assert_eq!(partial.kind, ExecKind::ReportTrade);
     assert_eq!(partial.liquidity, Some(Liquidity::Maker));
-    assert_eq!(partial.cumulative_qty, Qty(4 * FIXED_SCALE));
-    assert_eq!(partial.cumulative_quote, 208_000_000);
+    assert_eq!(partial.cumulative_qty, Qty::from_mantissa(4 * FIXED_SCALE));
+    assert_eq!(
+        partial.cumulative_quote,
+        Notional::from_mantissa(208_000_000)
+    );
     // The venue answers LIVE for a partly filled resting order and never says "partially filled".
     assert_eq!(partial.status, Some(VenueOrderStatus::PartiallyFilled));
 
     assert_eq!(filled.cumulative_qty, SIZE);
     assert_eq!(filled.status, Some(VenueOrderStatus::Filled));
     assert!(
-        filled.cumulative_qty.0 > partial.cumulative_qty.0,
+        filled.cumulative_qty.mantissa() > partial.cumulative_qty.mantissa(),
         "size_matched must be cumulative or the fold is a delta fold in disguise"
     );
 }
@@ -383,7 +397,7 @@ fn placement_and_cancellation_frames_report_their_own_kind() {
     assert_eq!(placed.client_id, CLIENT_A);
     assert_eq!(placed.status, Some(VenueOrderStatus::New));
     assert_eq!(placed.liquidity, None);
-    assert_eq!(placed.cumulative_qty, Qty(0));
+    assert_eq!(placed.cumulative_qty, Qty::from_mantissa(0));
 
     let canceled = stream_order(fixture!("ws_order_cancellation"), &wiring);
     assert_eq!(canceled.kind, ExecKind::ReportCanceled);
@@ -391,8 +405,11 @@ fn placement_and_cancellation_frames_report_their_own_kind() {
     assert_eq!(canceled.status, Some(VenueOrderStatus::Canceled));
     assert_eq!(canceled.liquidity, None);
     assert_eq!(canceled.qty, SIZE);
-    assert_eq!(canceled.cumulative_qty, Qty(4 * FIXED_SCALE));
-    assert_eq!(canceled.cumulative_quote, 208_000_000);
+    assert_eq!(canceled.cumulative_qty, Qty::from_mantissa(4 * FIXED_SCALE));
+    assert_eq!(
+        canceled.cumulative_quote,
+        Notional::from_mantissa(208_000_000)
+    );
 }
 
 /// Everything downstream of a trade frame that is NOT the failed↔matched settlement transition
@@ -552,7 +569,10 @@ fn open_orders_and_trades_pages_paginate_and_separate_unmapped_orders() {
         assert_eq!(decoded.events.len(), 2);
         assert_eq!(decoded.events[0].client_id, CLIENT_A);
         assert_eq!(decoded.events[0].kind, ExecKind::SnapshotOrder);
-        assert_eq!(decoded.events[0].cumulative_qty, Qty(4 * FIXED_SCALE));
+        assert_eq!(
+            decoded.events[0].cumulative_qty,
+            Qty::from_mantissa(4 * FIXED_SCALE)
+        );
         assert_eq!(decoded.events[0].recon_seq, 7);
         assert_eq!(decoded.events[1].kind, ExecKind::SnapshotEnd);
         assert_eq!(decoded.unmapped.len(), 1);
@@ -671,7 +691,7 @@ fn single_fixture_reads_decode_their_documented_shape() {
             decode_clob_market(fixture!("clob_market")).expect("committed fixture decodes");
         assert_eq!(market.condition_id.as_ref(), CONDITION);
         assert_eq!(market.tick_size, TICK);
-        assert_eq!(market.min_order_size, Qty(5 * FIXED_SCALE));
+        assert_eq!(market.min_order_size, Qty::from_mantissa(5 * FIXED_SCALE));
         assert_eq!(market.tokens.len(), 2);
         assert_eq!(market.tokens[0].token_id.as_ref(), UP_TOKEN);
         assert_eq!(market.tokens[0].outcome.as_ref(), "Up");
@@ -707,11 +727,11 @@ fn account_snapshot_chunks_arm_readiness_and_stamp_from_settlement() {
         let chunks = account_snapshot(&balances, AccountChunkKind::Snapshot, stamps(NONE));
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].is_last_chunk);
-        assert_eq!(chunks[0].len, 3);
+        assert_eq!(chunks[0].active_balances().len(), 3);
         let empty = account_snapshot(&[], AccountChunkKind::Snapshot, stamps(NONE));
         assert_eq!(empty.len(), 1);
         assert!(empty[0].is_last_chunk);
-        assert_eq!(empty[0].len, 0);
+        assert_eq!(empty[0].active_balances().len(), 0);
     }
 
     // A balance chunk is stamped by settlement, not by our clock.
@@ -966,7 +986,7 @@ fn the_place_body_is_byte_exact_against_the_sdk_signature() {
         is_neg_risk: vector["neg_risk"].as_bool().expect("vector neg_risk"),
     });
     let orders = OrderIndex::with_capacity(4);
-    let sent_ts_us = TsUs::from_micros(timestamp_millis * 1_000);
+    let sent_ts_us = LocalTs::from_micros(timestamp_millis * 1_000);
     let context = EncodeContext {
         tokens: &table,
         orders: &orders,

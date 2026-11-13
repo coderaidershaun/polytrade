@@ -2,8 +2,10 @@
 //! ends by retrying or by reconnecting, never by wedging.
 
 use crate::msg::exec::{ExecCommand, ExecKind, Provenance};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
+use crate::runtime::shutdown::FatalReason;
 use crate::venues::binance::rest::OrderRecord;
+use crate::venues::edge::EdgeDriver;
 use crate::venues::exec::{MirroredOrder, Outgoing, ResyncPoll, SessionOutcome};
 use crate::{error, info, warn};
 
@@ -43,16 +45,18 @@ impl Actor {
             // it never needs a SnapshotEnd, because it feeds the mirror, not the hot table.
             // An order this build cannot read leaves the mirror incomplete, and quoting against an
             // incomplete mirror is what strands somebody's order.
-            let Some(event) = self.decode_order(order, ExecKind::SnapshotOrder, 0) else {
+            let Some((event, _)) = self.decode_order(order, ExecKind::SnapshotOrder, 0) else {
                 self.session.core.stop_quoting();
                 self.fail_resync(resync_seq);
-                self.control.fatal.trip(format!(
-                    "binance execution cannot decode a possibly-owned open order {}",
-                    order.order_id
-                ));
+                self.control.fatal.trip(FatalReason::UndecodableOpenOrder {
+                    venue: self.venue(),
+                    venue_order_id: order.order_id,
+                });
                 return;
             };
-            let mut mirrored = MirroredOrder::observed(&event);
+            let Some(mut mirrored) = MirroredOrder::observed(&event) else {
+                continue;
+            };
             let is_cold_start = !self.session.core.has_opened_quoting();
             if is_cold_start && mirrored.provenance != Provenance::Foreign {
                 // On a cold start, quoting has not opened yet, so any order already resting
@@ -67,8 +71,8 @@ impl Actor {
                     "binance execution sees a foreign order resting on {}: {:?} {} @ {} — it will never be cancelled by this engine",
                     self.symbols.symbol(mirrored.instrument).unwrap_or("?"),
                     mirrored.side,
-                    mirrored.qty.0,
-                    mirrored.price.0
+                    mirrored.qty.mantissa(),
+                    mirrored.price.mantissa()
                 ),
                 provenance => {
                     seen_owned.push(mirrored.client_id);
@@ -81,9 +85,9 @@ impl Actor {
                             "binance execution cannot retain venue order {:016x} in its possibly-live set ({error:?}) — quoting is disabled",
                             mirrored.client_id.0
                         );
-                        self.control.fatal.trip(format!(
-                            "binance execution possibly-live mirror failed: {error:?}"
-                        ));
+                        self.control.fatal.trip(FatalReason::MirrorRetainFailed {
+                            venue: self.venue(),
+                        });
                         self.fail_resync(resync_seq);
                         return;
                     }
@@ -124,7 +128,7 @@ impl Actor {
         self.finish_resync(writer).await;
     }
 
-    pub(super) fn poll_resync(&mut self, now: TsUs) -> Option<SessionOutcome> {
+    pub(super) fn poll_resync(&mut self, now: LocalTs) -> Option<SessionOutcome> {
         // On the exit path the admission read is moot, and a reconnect starts a clean pass anyway.
         if self.control.exit.is_some() {
             return None;

@@ -1,10 +1,9 @@
-//! The account band and the status strip above it. The strip holds the halt latch and the last
-//! refusal and never scrolls, so they stay in view whatever the pane height. Each value the band
-//! projects can be absent on its own.
+//! The account band, and the status strip above it that never scrolls, so the halt latch and the
+//! last refusal stay in view at any pane height. Each value of the band can be absent on its own.
 
 use eframe::egui;
 
-use crate::hot::exec::ExecHalt;
+use crate::msg::ui::UiHalt;
 
 use super::sizes::content_column;
 use crate::operator::workstation::browser::theme::{self, DARK, METRICS};
@@ -280,7 +279,7 @@ fn paint_status_row(
     view: &AccountView<'_>,
 ) {
     let y = theme::crisp(painter, rect.center().y);
-    if let Some(ExecHalt::Halted { reason, .. }) = view.halt {
+    if let Some(UiHalt::Halted { reason, .. }) = view.halt {
         // Filled, not outlined, so the halt is easy to find from the corner of the eye.
         painter.rect_filled(
             rect.shrink2(egui::vec2(METRICS.space_2, 1.0)),
@@ -315,7 +314,7 @@ fn paint_status_row(
     );
 
     let (gate, gate_color) = match view.halt {
-        Some(ExecHalt::Armed) => ("ARMED", DARK.positive),
+        Some(UiHalt::Armed) => ("ARMED", DARK.positive),
         _ => (MISSING, DARK.text_secondary),
     };
     paint_number(painter, grid.column(rect, 2), gate, gate_color);

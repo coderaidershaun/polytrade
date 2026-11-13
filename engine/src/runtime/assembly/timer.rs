@@ -1,18 +1,19 @@
-//! Spin-tick timer actor: wall clock as message venue. Drift-free: every tick at start + n*interval; overran wake emits latest.
+//! The timer turns the passing of time into spin-tick messages, so the hot thread reads time only
+//! from its input. Each tick carries the time of its slot of the spin schedule, never of the wake.
 
 use std::time::Duration;
 
 use tokio::runtime::Handle;
-use tokio::time::{self, Instant};
+use tokio::time;
 
 use crate::hot::spawn::QueueProducer;
-use crate::msg::inbound::{InboundMessage, SpinTick};
-use crate::msg::time::{DurationUs, EngineClock};
+use crate::msg::inbound::{InboundMessage, MessageBody, MessageHeader, SpinTick};
+use crate::msg::time::{DurationUs, EngineClock, SpinSchedule};
 use crate::runtime::shutdown::TaskHandle;
 use crate::warn;
 
-/// Pushes `SpinTick`s onto `producer`'s input queue, each stamped with its scheduled fire time
-/// as `received_ts_us` (the timer is the venue), spaced by `interval`.
+/// Pushes one tick for each slot of a schedule that starts now. A late wake fires only the newest
+/// slot that is due, and counts the slots it skipped in one WARN line.
 #[expect(
     clippy::disallowed_methods,
     reason = "the timer actor schedules the spin ticks, so time enters the engine as a message"
@@ -24,36 +25,31 @@ pub(super) fn spawn_timer(
     tokio_handle: &Handle,
 ) -> TaskHandle {
     let clock = clock.clone();
-    let interval_us = interval.micros().max(1) as u64;
     let body = async move {
-        let start_instant = Instant::now();
-        let start_wall = clock.now();
-        let mut seq: u64 = 0;
+        let mut woke_ts_us = clock.now();
+        let schedule = SpinSchedule::new(woke_ts_us, interval);
+        let (mut slot, mut skipped) = (0, 0);
+        let mut skipped_slots: u64 = 0;
         loop {
-            let offset = Duration::from_micros(interval_us.saturating_mul(seq));
-            time::sleep_until(start_instant + offset).await;
-
-            // Which slot has the schedule reached? A late wake lands later — fire it, skip the rest.
-            let elapsed = start_instant.elapsed();
-            let current = (elapsed.as_micros() / u128::from(interval_us)) as u64;
-            if current > seq {
+            producer.push(InboundMessage {
+                header: MessageHeader {
+                    received_ts_us: schedule.stamp_of(slot),
+                    queued_ts_us: woke_ts_us,
+                },
+                body: MessageBody::SpinTick(SpinTick { seq: slot }),
+            });
+            if skipped > 0 {
+                skipped_slots += skipped;
                 warn!(
-                    "timer skipped {} spin ticks (seq {}..{}) — schedule held, no drift",
-                    current - seq,
-                    seq,
-                    current - 1
+                    "timer woke late: fired spin slot {} and skipped the {} slots before it, {} skipped since start",
+                    slot, skipped, skipped_slots
                 );
             }
 
-            let scheduled_offset =
-                DurationUs::from_micros((current as i64).saturating_mul(interval_us as i64));
-            let tick = SpinTick {
-                seq: current,
-                received_ts_us: start_wall + scheduled_offset,
-                queued_ts_us: clock.now(),
-            };
-            producer.push(InboundMessage::SpinTick(tick));
-            seq = current + 1;
+            let wait = schedule.stamp_of(slot + 1).diff(clock.now());
+            time::sleep(Duration::from_micros(wait.micros().max(0) as u64)).await;
+            woke_ts_us = clock.now();
+            (slot, skipped) = schedule.slot_to_fire(slot, woke_ts_us);
         }
     };
     let join = tokio_handle.spawn(crate::log::tag_task("timer", body));

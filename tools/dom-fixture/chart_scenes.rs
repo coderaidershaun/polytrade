@@ -4,7 +4,7 @@
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::Level;
 use engine::msg::latency::Stage;
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, VenueTs};
 use engine::msg::ui::{LatencyCell, LatencyFlow, LatencyReport, UiBookState};
 use engine::operator::workstation::chart::model::{BookContinuity, ChartModel};
 
@@ -18,7 +18,7 @@ const COARSE_WINDOW_BUCKETS: i64 = 20;
 
 const COMMITS_PER_BUCKET: i64 = 4;
 
-const TICK: Price = Price(FIXED_SCALE);
+const TICK: Price = Price::from_mantissa(FIXED_SCALE);
 const BASE_BID: i64 = 65_990;
 
 /// Enough samples for a 99th percentile.
@@ -27,7 +27,7 @@ const LATENCY_SAMPLES: u64 = 12_000;
 /// Too few samples for a 99th percentile.
 const THIN_SAMPLES: u64 = 600;
 
-/// `tick` is `Price(0)` for an instrument with no venue grid.
+/// `tick` is `Price::from_mantissa(0)` for an instrument with no venue grid.
 pub struct ChartScene {
     pub name: &'static str,
     pub chart: ChartModel,
@@ -62,7 +62,7 @@ pub fn latency_report() -> LatencyReport {
         })
         .collect();
     LatencyReport {
-        built_ts_us: TsUs::from_micros(BASE_TS),
+        built_ts_us: VenueTs::from_micros(BASE_TS),
         ages: [Some(DurationUs::ZERO); 3],
         cells: cells
             .try_into()
@@ -151,7 +151,7 @@ fn no_tick_grid() -> ChartScene {
         name: "no tick grid",
         chart: feed.chart,
         instrument: INSTRUMENT,
-        tick: Price(0),
+        tick: Price::from_mantissa(0),
     }
 }
 
@@ -268,7 +268,7 @@ impl Feed {
             self.at(step, 1),
             side,
             px(tick),
-            Qty(FIXED_SCALE),
+            Qty::from_mantissa(FIXED_SCALE),
         ));
     }
 

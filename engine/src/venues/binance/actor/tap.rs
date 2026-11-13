@@ -5,6 +5,7 @@ use std::time::Duration;
 use crate::error;
 use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::TappedMessage;
+use crate::runtime::shutdown::FatalReason;
 use crate::venues::binance::parse::ParseContext;
 use crate::venues::binance::rest::RestRequest;
 
@@ -19,7 +20,7 @@ impl Actor {
     pub(super) fn flush_tapped(&mut self, out: Vec<TappedMessage>) {
         for tapped in out {
             let mut message = tapped.message;
-            message.set_queued_ts_us(self.clock.now());
+            message.header.queued_ts_us = self.clock.now();
             self.producer.push_tapped(message, tapped.venue_meta);
         }
     }
@@ -75,9 +76,8 @@ impl Actor {
             "binance adapter {} exhausted its connection epoch counter",
             self.label
         );
-        self.fatal.trip(format!(
-            "binance adapter {} exhausted its connection epoch counter",
-            self.label
-        ));
+        self.fatal.trip(FatalReason::EpochExhausted {
+            source_id: self.producer.source_id(),
+        });
     }
 }

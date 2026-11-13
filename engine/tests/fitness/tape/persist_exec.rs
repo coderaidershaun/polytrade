@@ -1,8 +1,5 @@
-//! The audit trail must survive the round trip. `orders` and `fills` are the only durable record of
-//! what this engine did with real money, and the only thing a venue statement can be reconciled
-//! against — so every column has to come back out of a real Parquet file byte-identical, and the
-//! columns that answer "which asset was the fee in" and "did the venue ever accept this order" have
-//! to come back as themselves rather than as a zero.
+//! The orders and fills tables come back from a real Parquet file byte for byte, because they are
+//! the only record of what this engine did with real money.
 //!
 //! Three properties, each pinning a way the trail goes silently wrong:
 //!  - the round trip, cell for cell, over rows chosen to cover every absent-value path;
@@ -19,7 +16,7 @@ use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId,
 };
 use engine::msg::persist::{FillRow, OrderLifecycle, OrderRow, OrderTransition, PersistRecord};
-use engine::msg::time::TsUs;
+use engine::msg::time::{LocalTs, VenueTs};
 use engine::runtime::config::{RecordedTables, TableKind};
 
 use crate::parquet_readback::{
@@ -31,11 +28,15 @@ const QUOTE_ASSET: AssetId = AssetId(1);
 
 /// One BTC at $60,000 in 1e-8 mantissas, so a scale slip anywhere shows as a factor of 1e8 rather
 /// than as a plausible-looking number.
-const PRICE: Price = Price(60_000 * FIXED_SCALE);
-const QTY: Qty = Qty(FIXED_SCALE / 10_000);
+const PRICE: Price = Price::from_mantissa(60_000 * FIXED_SCALE);
+const QTY: Qty = Qty::from_mantissa(FIXED_SCALE / 10_000);
 
-fn ts(offset: i64) -> TsUs {
-    TsUs::from_micros(BASE_TS_US + offset)
+fn ts(offset: i64) -> LocalTs {
+    LocalTs::from_micros(BASE_TS_US + offset)
+}
+
+fn venue_ts(offset: i64) -> VenueTs {
+    VenueTs::from_micros(BASE_TS_US + offset)
 }
 
 /// The order's life as a live run records it: sent, acknowledged, partially filled, then rejected on
@@ -55,11 +56,11 @@ fn order_rows() -> Vec<OrderRow> {
         style: Some(OrderStyle::PostOnly),
         price: PRICE,
         qty: QTY,
-        filled_qty: Qty(0),
+        filled_qty: Qty::from_mantissa(0),
         filled_quote: 0,
         reject: None,
         reject_code: 0,
-        exchange_ts_us: TsUs::from_micros(0),
+        exchange_ts_us: VenueTs::from_micros(0),
         received_ts_us: ts(1),
     };
     vec![
@@ -69,7 +70,7 @@ fn order_rows() -> Vec<OrderRow> {
             transition: OrderTransition::AckPlaced,
             state: OrderLifecycle::Live,
             previous_state: OrderLifecycle::PendingNew,
-            exchange_ts_us: ts(2),
+            exchange_ts_us: venue_ts(2),
             received_ts_us: ts(3),
             ..sent
         },
@@ -78,9 +79,9 @@ fn order_rows() -> Vec<OrderRow> {
             transition: OrderTransition::ReportTrade,
             state: OrderLifecycle::Live,
             previous_state: OrderLifecycle::Live,
-            filled_qty: Qty(QTY.0 / 2),
-            filled_quote: PRICE.notional(Qty(QTY.0 / 2)),
-            exchange_ts_us: ts(4),
+            filled_qty: Qty::from_mantissa(QTY.mantissa() / 2),
+            filled_quote: (PRICE.notional(Qty::from_mantissa(QTY.mantissa() / 2))).mantissa(),
+            exchange_ts_us: venue_ts(4),
             received_ts_us: ts(5),
             ..sent
         },
@@ -98,7 +99,7 @@ fn order_rows() -> Vec<OrderRow> {
             style: None,
             reject: Some(RejectClass::Ambiguous),
             reject_code: -2011,
-            exchange_ts_us: ts(6),
+            exchange_ts_us: venue_ts(6),
             received_ts_us: ts(7),
             ..sent
         },
@@ -120,12 +121,12 @@ fn fill_rows() -> Vec<FillRow> {
         side: Side::Buy,
         liquidity: Some(Liquidity::Maker),
         last_price: PRICE,
-        last_qty: Qty(QTY.0 / 2),
-        booked_qty: Qty(QTY.0 / 2),
-        booked_quote: PRICE.notional(Qty(QTY.0 / 2)),
+        last_qty: Qty::from_mantissa(QTY.mantissa() / 2),
+        booked_qty: Qty::from_mantissa(QTY.mantissa() / 2),
+        booked_quote: (PRICE.notional(Qty::from_mantissa(QTY.mantissa() / 2))).mantissa(),
         commission: 4_720,
         commission_asset: QUOTE_ASSET,
-        exchange_ts_us: ts(4),
+        exchange_ts_us: venue_ts(4),
         received_ts_us: ts(5),
     };
     vec![
@@ -138,7 +139,7 @@ fn fill_rows() -> Vec<FillRow> {
             liquidity: Some(Liquidity::Taker),
             commission: 9_440,
             commission_asset: AssetId::UNKNOWN,
-            exchange_ts_us: ts(8),
+            exchange_ts_us: venue_ts(8),
             received_ts_us: ts(9),
             ..maker
         },
@@ -146,11 +147,11 @@ fn fill_rows() -> Vec<FillRow> {
             trade_id: None,
             venue_order_id: None,
             liquidity: None,
-            last_qty: Qty(QTY.0 / 4),
+            last_qty: Qty::from_mantissa(QTY.mantissa() / 4),
             booked_qty: QTY,
-            booked_quote: PRICE.notional(QTY),
+            booked_quote: PRICE.notional(QTY).mantissa(),
             commission: 0,
-            exchange_ts_us: ts(10),
+            exchange_ts_us: venue_ts(10),
             received_ts_us: ts(11),
             ..maker
         },
@@ -390,9 +391,9 @@ fn order_cells(row: &OrderRow) -> Vec<Cell> {
         Cell::Str(provenance_str(row.provenance).to_owned()),
         Cell::Str(side_str(row.side).to_owned()),
         Cell::Str(style_str(row.style).to_owned()),
-        Cell::I64(row.price.0),
-        Cell::I64(row.qty.0),
-        Cell::I64(row.filled_qty.0),
+        Cell::I64(row.price.mantissa()),
+        Cell::I64(row.qty.mantissa()),
+        Cell::I64(row.filled_qty.mantissa()),
         Cell::I64(row.filled_quote),
         Cell::Str(reject_str(row.reject).to_owned()),
         Cell::I32(row.reject_code),
@@ -412,9 +413,9 @@ fn fill_cells(row: &FillRow) -> Vec<Cell> {
         Cell::Str(provenance_str(row.provenance).to_owned()),
         Cell::Str(side_str(row.side).to_owned()),
         Cell::Str(liquidity_str(row.liquidity).to_owned()),
-        Cell::I64(row.last_price.0),
-        Cell::I64(row.last_qty.0),
-        Cell::I64(row.booked_qty.0),
+        Cell::I64(row.last_price.mantissa()),
+        Cell::I64(row.last_qty.mantissa()),
+        Cell::I64(row.booked_qty.mantissa()),
         Cell::I64(row.booked_quote),
         Cell::I64(row.commission),
         Cell::U16(row.commission_asset.0),

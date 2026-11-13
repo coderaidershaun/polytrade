@@ -1,12 +1,12 @@
 //! VPIN: avg absolute classified imbalance / bucket volume over equal-notional bars. Directionless
 //! by construction; signed-flow companion. Integer-sum, one f64 divide.
 
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VolumeBar {
-    pub open_ts_us: TsUs,
-    pub close_ts_us: TsUs,
+    pub open_ts_us: VenueTs,
+    pub close_ts_us: VenueTs,
     pub buy_notional: i64,
     pub sell_notional: i64,
     pub target: i64,

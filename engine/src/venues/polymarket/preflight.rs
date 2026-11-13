@@ -1,6 +1,5 @@
-//! Startup scale preflight for Polymarket: resolve the current and next window through Gamma,
-//! confirm each quotes on a tick the engine accepts with a positive minimum size, and stamp that
-//! grid and the order limits onto every Polymarket row. Any failure refuses the start loudly.
+//! The start check of Polymarket scales: the current and next windows must quote on a tick the
+//! engine accepts, and their grid and limits go onto the registry. A failure refuses the start.
 
 use crate::info;
 use crate::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty};
@@ -12,10 +11,13 @@ use super::rest::{GammaError, GammaMarket, PolyRest};
 
 /// Quote ticks for btc-updown-5m: 0.01 normally, and 0.001 near the 0/1 bounds at resolution.
 /// Any other tick refuses the start.
-const POLY_ACCEPTED_TICKS: [Price; 2] = [Price(FIXED_SCALE / 100), Price(FIXED_SCALE / 1000)];
+const POLY_ACCEPTED_TICKS: [Price; 2] = [
+    Price::from_mantissa(FIXED_SCALE / 100),
+    Price::from_mantissa(FIXED_SCALE / 1000),
+];
 
 /// Polymarket sizes in shares to two decimals, whatever the tick.
-const POLY_SHARE_STEP: Qty = Qty(FIXED_SCALE / 100);
+const POLY_SHARE_STEP: Qty = Qty::from_mantissa(FIXED_SCALE / 100);
 
 /// Our own ceiling, not the venue's: Polymarket publishes no per-market order count, and an
 /// unstamped one leaves the edge's mirror sized zero and the first placement fatal. Four full
@@ -55,33 +57,32 @@ pub enum ScaleError {
 }
 
 /// Resolves the current and next btc-updown-5m windows through Gamma, confirms both quote on an
-/// accepted tick, and stamps the current grid onto every Polymarket row. A run with no Polymarket
-/// source returns at once. The stamp is taken once and a tick change mid-run is not re-stamped, so
+/// accepted tick, and returns the current one, whose grid preflight stamps onto every Polymarket
+/// row. A run with no Polymarket source returns `None` at once. The stamp is taken once and a tick change mid-run is not re-stamped, so
 /// a price off that grid shows as invalid rather than being silently rounded.
 #[expect(
     clippy::disallowed_methods,
     reason = "a start preflight reads the wall clock once, before any message exists"
 )]
-pub(crate) async fn preflight_poly(registry: &mut Registry) -> Result<(), ScaleError> {
+pub(crate) async fn preflight_poly(registry: &Registry) -> Result<Option<GammaMarket>, ScaleError> {
     let Some(series) = poly_series(registry) else {
-        return Ok(());
+        return Ok(None);
     };
     let rest = PolyRest::new(series).map_err(|error| classify_poly_resolve(series, error))?;
     let now = EngineClock::start().now();
     let (current, next) = rest
-        .resolve_current_and_next(now)
+        .resolve_current_and_next(now.as_venue_calendar())
         .await
         .map_err(|error| classify_poly_resolve(series, error))?;
     check_poly_market(&current)?;
     check_poly_market(&next)?;
-    stamp_poly_scales(registry, &current);
     info!(
         "polymarket preflight ok — {} current tick {} next tick {} (current grid stamped on all slots)",
         series.as_str(),
         current.tick_size.to_f64(),
         next.tick_size.to_f64()
     );
-    Ok(())
+    Ok(Some(current))
 }
 
 /// Stamps the trading grid and order limits onto every Polymarket row, one grid across all slots.
@@ -103,7 +104,7 @@ pub fn stamp_poly_scales(registry: &mut Registry, market: &GammaMarket) {
             PolyLimits {
                 min_qty: market.min_order_size,
                 max_num_orders: POLY_MAX_ORDERS,
-                max_price: Price(FIXED_SCALE - market.tick_size.0),
+                max_price: Price::from_mantissa(FIXED_SCALE - market.tick_size.mantissa()),
             },
         );
     }
@@ -122,7 +123,7 @@ pub fn check_poly_market(market: &GammaMarket) -> Result<(), ScaleError> {
             actual: market.tick_size,
         });
     }
-    if market.min_order_size.0 <= 0 {
+    if market.min_order_size.mantissa() <= 0 {
         return Err(ScaleError::MinSizeNotPositive {
             symbol: market.slug.clone(),
             value: market.min_order_size,

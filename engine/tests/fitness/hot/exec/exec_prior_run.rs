@@ -23,7 +23,7 @@ use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, Provenance, VenueOrderStatus,
 };
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
-use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::persist::PersistRecord;
 use engine::msg::time::Stamper;
 use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
@@ -31,7 +31,8 @@ use engine::runtime::registry::InstrumentRow;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
-    ONE, detached_setup, drain_orders_and_fills, exec_event, instrument_row, persist_ring_for, spin,
+    ONE, detached_setup, drain_orders_and_fills, exec_event, instrument_row, persist_ring_for,
+    spin, ts,
 };
 use crate::exec_support::drain_commands;
 
@@ -62,7 +63,7 @@ impl Strategy for LedgerProbe {
     fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
         *self.latest.lock().expect("probe mutex poisoned") = Some(Reading {
             position_base: ctx.position_base(INSTRUMENT),
-            pnl_quote: ctx.pnl_quote(INSTRUMENT),
+            pnl_quote: ctx.pnl_quote(INSTRUMENT).mantissa(),
             resting_buy: ctx
                 .resting(INSTRUMENT, Side::Buy, engine::hot::exec::QuoteLevel::ZERO)
                 .is_some(),
@@ -123,34 +124,38 @@ fn prior_run_trade(
         run_nonce: PRIOR_NONCE,
     }
     .encode(slot_index, 1);
-    InboundMessage::Exec(ExecEvent {
-        kind: ExecKind::ReportTrade,
-        provenance: Provenance::PriorRun,
-        status: Some(VenueOrderStatus::PartiallyFilled),
-        qty: Qty(4 * ONE),
-        last_price: Price(price),
-        last_qty: Qty(last),
-        cumulative_qty: Qty(cumulative),
-        cumulative_quote: Price(price).notional(Qty(cumulative)),
-        ..exec_event(INSTRUMENT, client_id, side, price, when)
-    })
+    InboundMessage::new(
+        ts(when),
+        MessageBody::Exec(ExecEvent {
+            kind: ExecKind::ReportTrade,
+            provenance: Provenance::PriorRun,
+            status: Some(VenueOrderStatus::PartiallyFilled),
+            qty: Qty::from_mantissa(4 * ONE),
+            last_price: Price::from_mantissa(price),
+            last_qty: Qty::from_mantissa(last),
+            cumulative_qty: Qty::from_mantissa(cumulative),
+            cumulative_quote: Price::from_mantissa(price).notional(Qty::from_mantissa(cumulative)),
+            ..exec_event(INSTRUMENT, client_id, side, price, when)
+        }),
+    )
 }
 
 /// An order of THIS run that the venue names once and then never answers about. It leaves the
 /// engine something to chase every spin, which is what fills the bank while nothing drains it.
 fn unanswered_order(when: i64) -> InboundMessage {
     let client_id = ClientIdLayout { run_nonce: 0 }.encode(side_base(INSTRUMENT, Side::Buy) + 1, 1);
-    InboundMessage::Exec(ExecEvent {
-        kind: ExecKind::SnapshotOrder,
-        qty: Qty(4 * ONE),
-        ..exec_event(INSTRUMENT, client_id, Side::Buy, 100 * ONE, when)
-    })
+    InboundMessage::new(
+        ts(when),
+        MessageBody::Exec(ExecEvent {
+            kind: ExecKind::SnapshotOrder,
+            qty: Qty::from_mantissa(4 * ONE),
+            ..exec_event(INSTRUMENT, client_id, Side::Buy, 100 * ONE, when)
+        }),
+    )
 }
 
 fn read(fixture: &mut Fixture, seq: u64, when: i64) -> Reading {
-    fixture
-        .engine
-        .dispatch(&InboundMessage::SpinTick(spin(seq, when)));
+    fixture.engine.dispatch(&spin(seq, when));
     fixture
         .latest
         .lock()
@@ -175,7 +180,7 @@ fn a_prior_run_fill_moves_the_money_once_banks_its_rows_and_still_cancels() {
     let first = read(&mut fixture, 0, 20);
     assert_eq!(
         first.position_base,
-        Qty(ONE),
+        Qty::from_mantissa(ONE),
         "the venue filled an order this account owns and the position did not move"
     );
     assert_eq!(
@@ -193,7 +198,7 @@ fn a_prior_run_fill_moves_the_money_once_banks_its_rows_and_still_cancels() {
     );
     let fill = banked.fills[0];
     assert_eq!(fill.provenance, Provenance::PriorRun);
-    assert_eq!(fill.booked_qty, Qty(ONE));
+    assert_eq!(fill.booked_qty, Qty::from_mantissa(ONE));
     assert_eq!(fill.side, Side::Buy);
     assert!(
         banked
@@ -225,7 +230,7 @@ fn a_prior_run_fill_moves_the_money_once_banks_its_rows_and_still_cancels() {
     let redelivered = read(&mut fixture, 1, 40);
     assert_eq!(
         redelivered.position_base,
-        Qty(ONE),
+        Qty::from_mantissa(ONE),
         "a redelivered report carries totals already folded and must move nothing"
     );
     assert_eq!(redelivered.pnl_quote, -(100 * ONE));
@@ -244,7 +249,7 @@ fn a_prior_run_fill_moves_the_money_once_banks_its_rows_and_still_cancels() {
     let second = read(&mut fixture, 2, 60);
     assert_eq!(
         second.position_base,
-        Qty(2 * ONE),
+        Qty::from_mantissa(2 * ONE),
         "the second execution is a real one — its cumulative advanced"
     );
     assert_eq!(second.pnl_quote, -(200 * ONE));
@@ -274,7 +279,7 @@ fn a_prior_run_order_takes_no_slot_this_run_quotes_from() {
     let reading = read(&mut fixture, 0, 20);
     assert_eq!(
         reading.position_base,
-        Qty(ONE),
+        Qty::from_mantissa(ONE),
         "the fill still has to land — this test is about WHERE the order lives, not whether it paid"
     );
     assert!(
@@ -311,10 +316,9 @@ fn a_prior_run_cancel_the_full_bank_refused_is_sent_once_there_is_room() {
 
     let mut banked = 0;
     for step in 0..JAM_SPINS {
-        fixture.engine.dispatch(&InboundMessage::SpinTick(spin(
-            step as u64,
-            1_010 + 10 * step as i64,
-        )));
+        fixture
+            .engine
+            .dispatch(&spin(step as u64, 1_010 + 10 * step as i64));
         banked = banked_so_far(&fixture.engine);
     }
 
@@ -322,10 +326,9 @@ fn a_prior_run_cancel_the_full_bank_refused_is_sent_once_there_is_room() {
     // out and this test would pass without ever reaching the case it exists for.
     let jammed = banked;
     for step in JAM_SPINS..JAM_SPINS + 4 {
-        fixture.engine.dispatch(&InboundMessage::SpinTick(spin(
-            step as u64,
-            1_010 + 10 * step as i64,
-        )));
+        fixture
+            .engine
+            .dispatch(&spin(step as u64, 1_010 + 10 * step as i64));
         banked = banked_so_far(&fixture.engine);
     }
     assert_eq!(
@@ -341,10 +344,9 @@ fn a_prior_run_cancel_the_full_bank_refused_is_sent_once_there_is_room() {
     let mut sent = Vec::new();
     for step in 0..JAM_SPINS {
         sent.extend(drain_commands(&mut fixture.commands));
-        fixture.engine.dispatch(&InboundMessage::SpinTick(spin(
-            step as u64,
-            200_000 + 10 * step as i64,
-        )));
+        fixture
+            .engine
+            .dispatch(&spin(step as u64, 200_000 + 10 * step as i64));
         banked = banked_so_far(&fixture.engine);
     }
     assert!(
@@ -361,9 +363,7 @@ fn a_prior_run_cancel_the_full_bank_refused_is_sent_once_there_is_room() {
         2 * ONE,
         400_000,
     ));
-    fixture
-        .engine
-        .dispatch(&InboundMessage::SpinTick(spin(0, 400_010)));
+    fixture.engine.dispatch(&spin(0, 400_010));
     sent.extend(drain_commands(&mut fixture.commands));
 
     assert!(

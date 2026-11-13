@@ -6,11 +6,11 @@ use crate::hot::quant::volatility::EwmaVol;
 use crate::hot::tracker::MicroTracker;
 use crate::link::TopicId;
 use crate::log::{Callsite, HotRecord, LogArgs};
-use crate::msg::ids::{AssetId, InstrumentId, Qty, Side};
+use crate::msg::ids::{AssetId, InstrumentId, Notional, Qty, Side};
 use crate::msg::persist::{BookEventRow, FeatureId, FeatureRow, KlineRow, PersistRecord, TradeRow};
-use crate::msg::time::TsUs;
+use crate::msg::time::{FoldTime, LocalTs};
 
-use super::{StrategyCtx, WindowInfo};
+use super::{StrategyCtx, StrategyGate, WindowInfo};
 
 impl StrategyCtx<'_> {
     /// Declare resting quote this side SHOULD have; `None` withdraws. Declare every spin: absent = expire.
@@ -77,6 +77,13 @@ impl StrategyCtx<'_> {
             .and_then(EwmaVol::volatility)
     }
 
+    /// Whether the engine calls this market back and lets its quotes out yet. While it warms, a
+    /// quote declared for it is held, and the spin callback still runs for the markets that are live.
+    #[inline]
+    pub fn gate(&self, instrument: InstrumentId) -> StrategyGate {
+        self.gates[usize::from(instrument.0)]
+    }
+
     /// Current window. `None` until first MarketRotation.
     #[inline]
     pub fn window(&self, instrument: InstrumentId) -> Option<WindowInfo> {
@@ -89,16 +96,15 @@ impl StrategyCtx<'_> {
         self.ledger.row(instrument).position_base()
     }
 
-    /// MTM signed notional (1e-8 units); 0 until has_mark or flat.
+    /// The signed value of the position at the mark, zero while there is no mark or no position.
     #[inline]
-    pub fn exposure_quote(&self, instrument: InstrumentId) -> i64 {
+    pub fn exposure_quote(&self, instrument: InstrumentId) -> Notional {
         self.ledger.row(instrument).exposure_quote()
     }
 
-    /// Total PnL (realized + unrealized) in quote mantissa (1e-8 units).
-    /// Before has_mark: cash + cost basis. After: includes MTM.
+    /// Realised and unrealised PnL. Before the first mark it is cash plus cost basis.
     #[inline]
-    pub fn pnl_quote(&self, instrument: InstrumentId) -> i64 {
+    pub fn pnl_quote(&self, instrument: InstrumentId) -> Notional {
         self.ledger.row(instrument).pnl_quote()
     }
 
@@ -108,10 +114,18 @@ impl StrategyCtx<'_> {
         self.ledger.row(instrument).has_mark()
     }
 
-    /// `received_ts_us` of the message being processed — the deterministic stamp for emitted features.
+    /// The received stamp of the message under fold: the stamp of a row that the strategy builds
+    /// itself, as [`Self::emit`] stamps its rows. To decide by time, read [`Self::now`].
     #[inline]
-    pub fn event_ts(&self) -> TsUs {
+    pub fn event_ts(&self) -> LocalTs {
         self.event_ts
+    }
+
+    /// The time of the fold, the latest received stamp so far. Unlike [`Self::event_ts`] it never
+    /// steps back, so a strategy that paces or ages by it decides as the engine's own deadlines do.
+    #[inline]
+    pub fn now(&self) -> FoldTime {
+        self.fold_time
     }
 
     /// Always reaches the UI monitor; reaches Parquet only when `strategy.tables` names `features`.

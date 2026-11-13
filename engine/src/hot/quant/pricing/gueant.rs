@@ -137,16 +137,22 @@ impl QuoteCoefficients {
             inputs.inventory
         );
         assert!(
-            inputs.tick.0 > 0,
+            inputs.tick.mantissa() > 0,
             "gueant quote tick must be positive, got {}",
-            inputs.tick.0
+            inputs.tick.mantissa()
         );
         let bid_depth = self.bid_depth(inputs.inventory);
         let ask_depth = self.ask_depth(inputs.inventory);
         let fair_ticks = inputs.fair / inputs.tick.to_f64();
         // Exact tick indices from mantissas (never float modulo on price).
-        let best_bid_tick = inputs.best_bid.0.div_euclid(inputs.tick.0);
-        let best_ask_tick = inputs.best_ask.0.div_euclid(inputs.tick.0);
+        let best_bid_tick = inputs
+            .best_bid
+            .mantissa()
+            .div_euclid(inputs.tick.mantissa());
+        let best_ask_tick = inputs
+            .best_ask
+            .mantissa()
+            .div_euclid(inputs.tick.mantissa());
 
         // Quantisation never more aggressive (bid floors, ask ceils).
         let model_bid_tick = (fair_ticks - bid_depth).floor() as i64;
@@ -166,8 +172,8 @@ impl QuoteCoefficients {
         }
 
         Quotes {
-            bid: Price(bid_tick * inputs.tick.0),
-            ask: Price(ask_tick * inputs.tick.0),
+            bid: Price::from_mantissa(bid_tick * inputs.tick.mantissa()),
+            ask: Price::from_mantissa(ask_tick * inputs.tick.mantissa()),
             bid_tick,
             ask_tick,
             bid_depth,

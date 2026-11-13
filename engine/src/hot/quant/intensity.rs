@@ -1,12 +1,12 @@
-//! Trade-intensity (A, k) estimator — feeds Guéant-Lehalle-Fernandez-Tapia quoting.
-//! Hot thread: [`IntensityCounts`] (in-place, zero alloc). Strategy: [`IntensityFit`] (warm-started Poisson MLE).
-//! Depth in ticks behind same-side best; A in /sec, k in /tick.
+//! Estimates how often trades reach each depth (A per second, k per tick) for the quoting model:
+//! the hot thread counts in place, and the strategy fits by Poisson likelihood.
 
+use crate::hot::digest::digest_fields;
 use crate::hot::quant::MIN_RATE;
 use crate::hot::quant::optimise::NelderMead;
 use crate::msg::ids::{Price, Side};
 use crate::msg::inbound::TradeEvent;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs, VenueTs};
 use crate::runtime::config::IntensitySpec;
 
 const PARAMS: usize = 2;
@@ -26,7 +26,7 @@ pub struct IntensityCounts {
     bid_reach: Vec<f64>,
     ask_reach: Vec<f64>,
     exposure_secs: f64,
-    last_decay_ts: Option<TsUs>,
+    last_decay_ts: Option<LocalTs>,
     open_group: Option<Group>,
     inside_spread: u64,
     without_book: u64,
@@ -35,9 +35,17 @@ pub struct IntensityCounts {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Group {
     side: Side,
-    exchange_ts_us: TsUs,
+    exchange_ts_us: VenueTs,
     deepest_bucket: usize,
     anchor: Price,
+}
+
+digest_fields! { Group { side, exchange_ts_us, deepest_bucket, anchor } }
+digest_fields! {
+    IntensityCounts {
+        tick, decay_per_sec, min_events, bid_reach, ask_reach, exposure_secs, last_decay_ts,
+        open_group, inside_spread, without_book,
+    }
 }
 
 impl IntensityCounts {
@@ -67,7 +75,13 @@ impl IntensityCounts {
     }
 
     /// Buy -> ASK side, sell -> BID side. Sweep (same side + ts) extends group; else new.
-    pub fn on_trade(&mut self, event: &TradeEvent, bid: Option<Price>, ask: Option<Price>) {
+    pub(crate) fn on_trade(
+        &mut self,
+        event: &TradeEvent,
+        received_ts_us: LocalTs,
+        bid: Option<Price>,
+        ask: Option<Price>,
+    ) {
         if let Some(group) = self.open_group
             && group.side == event.side
             && group.exchange_ts_us == event.exchange_ts_us
@@ -75,7 +89,7 @@ impl IntensityCounts {
             self.extend_group(group, event.price);
             return;
         }
-        self.start_group(event, bid, ask);
+        self.start_group(event, received_ts_us, bid, ask);
     }
 
     /// Wipes histograms/exposure/open sweep (lifetime counters survive).
@@ -108,8 +122,14 @@ impl IntensityCounts {
         }
     }
 
-    fn start_group(&mut self, event: &TradeEvent, bid: Option<Price>, ask: Option<Price>) {
-        self.decay_to(event.received_ts_us);
+    fn start_group(
+        &mut self,
+        event: &TradeEvent,
+        received_ts_us: LocalTs,
+        bid: Option<Price>,
+        ask: Option<Price>,
+    ) {
+        self.decay_to(received_ts_us);
         let anchor = match event.side {
             Side::Buy => ask,
             Side::Sell => bid,
@@ -160,7 +180,7 @@ impl IntensityCounts {
 
     /// Decays histograms by `e^(-lambda*dt)` and advances the exposure integral to `now`; a trade at
     /// or before `last_decay_ts` doesn't advance.
-    fn decay_to(&mut self, now: TsUs) {
+    fn decay_to(&mut self, now: LocalTs) {
         let Some(last) = self.last_decay_ts else {
             self.last_decay_ts = Some(now);
             return;
@@ -179,7 +199,7 @@ impl IntensityCounts {
     }
 
     /// Read-only: `(decay_factor, exposure_secs)` as of `now`.
-    fn decay_to_now(&self, now: TsUs) -> (f64, f64) {
+    fn decay_to_now(&self, now: LocalTs) -> (f64, f64) {
         let dt = match self.last_decay_ts {
             Some(last) => now.diff(last).to_secs().max(0.0),
             None => return (1.0, 0.0),
@@ -258,7 +278,7 @@ pub struct IntensityFit {
 
 impl IntensityFit {
     /// Fits A, k per side and pool. Below min_events returns prior fit (stale) or None.
-    pub fn fit(&mut self, counts: &IntensityCounts, now: TsUs) -> IntensityEstimate {
+    pub fn fit(&mut self, counts: &IntensityCounts, now: LocalTs) -> IntensityEstimate {
         IntensityEstimate {
             bid: self.fit_slot(Slot::Bid, counts, now),
             ask: self.fit_slot(Slot::Ask, counts, now),
@@ -270,7 +290,7 @@ impl IntensityFit {
         &mut self,
         slot: Slot,
         counts: &IntensityCounts,
-        now: TsUs,
+        now: LocalTs,
     ) -> Option<SideEstimate> {
         let index = slot.index();
         let max_depth = counts.max_depth();
@@ -327,7 +347,7 @@ pub struct PacedIntensity {
     fit: IntensityFit,
     /// (A,k) fit in force, read every spin. Re-solved on refit_interval.
     estimate: Option<IntensityEstimate>,
-    last_fit_ts_us: Option<TsUs>,
+    last_fit_ts_us: Option<LocalTs>,
     /// `None` never fits: no reach histogram is configured, so no counts reach it either.
     refit_interval: Option<DurationUs>,
 }
@@ -352,7 +372,7 @@ impl PacedIntensity {
     pub fn refit(
         &mut self,
         counts: Option<&IntensityCounts>,
-        now: TsUs,
+        now: LocalTs,
     ) -> Option<IntensityEstimate> {
         let refit_interval = self.refit_interval?;
         let counts = counts?;
@@ -374,10 +394,10 @@ impl PacedIntensity {
 
 fn tick_depth(side: Side, anchor: Price, price: Price, tick: Price) -> i64 {
     let diff = match side {
-        Side::Buy => price.0 - anchor.0,
-        Side::Sell => anchor.0 - price.0,
+        Side::Buy => price.mantissa() - anchor.mantissa(),
+        Side::Sell => anchor.mantissa() - price.mantissa(),
     };
-    diff.div_euclid(tick.0)
+    diff.div_euclid(tick.mantissa())
 }
 
 /// Poisson NLL: mu_j = T*A*(e^(-k j) - e^(-k(j+1))) over exact interior bins, censored tail at mu = T*A*e^(-k(max-1)).

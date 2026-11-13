@@ -16,6 +16,10 @@ comply. IF one cannot comply, THEN surface conflict explicitly. Amendments: §15
 | gate G              | the six gate steps of §14                                                    |
 | live policy         | rules of the owner for keys and live runs. Git does not track them (§12)     |
 | `live-runner`       | the one role of a job that starts a live run, by the live policy (§12)       |
+| failure class       | the reaction to an error: HALT, RESET, RETRY, or REJECT (§6)                 |
+| quoting halt        | quoting stops, and the process stays up: `HaltReason` (§6)                   |
+| engine halt         | fatal latch, bounded drain, exit code not 0: `FatalReason` (§6)              |
+| ring-pressure halt  | a quoting halt that follows ring space, not messages (§6)                    |
 | polysim             | the repo that this workspace came from. In a clause: the code of this repo   |
 | Amended `<date>`    | amendment of that date, with its WHY (§15)                                   |
 | Replaced, WITHDRAWN | record of earlier law, not in force                                          |
@@ -74,6 +78,41 @@ M13 `exchange-sim`. Ratified O1.
   IF it reads a clock to decide what to emit, THEN it relocates the nondeterminism. It does not
   remove it.
 
+### Amended 2026-11-13: preflight, then the start in pin order
+
+WHY: a start that was refused after its threads ran left threads running, spent a run nonce, and
+could prune tape files. A hot thread that could not pin tripped the fatal latch after each thread
+had started.
+
+Preflight:
+
+- [ ] `Preflight { identity, config, strategy }` runs each start check before any thread starts:
+  the registry (with the cap of 20 input queues), the core id, the scale read, the order capacity,
+  the exposure file, the permission probe, the link names and the link bind, the execution checks,
+  and the checks of the venue setup.
+- [ ] The execution lease is the last check. So each other refusal leaves the run nonce unspent.
+- [ ] The venue reads go through one `VenuePort`. `Preflight::run` uses the real port, which runs
+  them on one current-thread runtime and drops it before it returns. `Preflight::run_with(port)`
+  takes a stand-in, so a test needs no key.
+- [ ] A refused check returns a `StartError` (HALT, start refused). Preflight writes no file and
+  starts no thread. The binary prints the error, and the exit is `Exit::StartRefused`.
+- [ ] The link socket is bound in preflight and held in the `StartPlan`. A drop of the plan closes
+  it, so a refusal needs no teardown.
+- [ ] Preflight runs before the log exists. It hands what it found to the start, which logs it.
+
+The start:
+
+- [ ] `Engine::start(config, strategy, plan, pin)` starts what the plan checked. Each thread that
+  can refuse its pin starts first, in this order: the hot thread, the log, the metrics thread, and
+  the thread of the pinned senders. The pin is the first statement of each.
+- [ ] Then the engine runtime and the writers start. The hot thread builds its input rings and its
+  engine on its own core, and touches that memory. Then the timer, the execution edge, the
+  market-data actors, and the link start.
+- [ ] IF a pin is refused (Linux), THEN each thread that started stops before the start returns.
+  No writer has started, so no tape file is pruned. The run nonce is spent by then.
+- [ ] The pin call is a parameter (`PinCall`). `run_trading_engine` passes `pin_to_core`, and a
+  test passes a stand-in.
+
 ## 3. Memory
 
 - [ ] Fixed capacity wherever practical: preallocated at startup, contiguous, predictable layout,
@@ -95,6 +134,25 @@ M13 `exchange-sim`. Ratified O1.
 - [ ] `f64` only downstream of exact state: derived features, statistics, model math.
 - [ ] Float is never: a key, a money accumulator, an equality operand in book logic.
 
+### Amended 2026-11-13: money types
+
+WHY: quote money was a bare `i64`, and one field held quote money for a buy and base quantity for a
+sell. A swap of the two units compiled.
+
+- [ ] `Price`, `Qty`, and `Notional` (quote money) keep their mantissa private, at `FIXED_SCALE`.
+  `from_mantissa` and `mantissa` are the only ways in and out.
+- [ ] No operator and no conversion leads from a `Qty` or a `Price` to a `Notional`. Only
+  `Price::notional(qty)` makes quote money from a trade. Its product is exact in `i128`, and a
+  result outside the `i64` mantissa panics with the price and the quantity.
+- [ ] What an order reserves is a `Spend`: `Quote(Notional)` for a buy, `Base(Qty)` for a sell.
+  `Side::spend` gives it.
+- [ ] An amount in an asset that a field beside it names (a commission, a row of balances) stays an
+  `i64` with that asset.
+- [ ] A market statistic in quote units (the quote volume of a candle, the notional of sampled
+  prints) stays a plain number. It never reaches the order path or the ledger.
+- [ ] A rate (the taker fee rate, a distance in hundredths of a basis point) stays an `i64` at its
+  own scale. It is not money.
+
 ## 5. Time
 
 - [ ] µs resolution everywhere.
@@ -109,25 +167,60 @@ M13 `exchange-sim`. Ratified O1.
 ### Amended 2026-10-14: MCP wire timestamps
 
 WHY: the MCP wire is an external JSON contract read by agents and a UI, so its timestamps are
-civil strings, and every internal field stays `TsUs`/`_ts_us`.
+civil strings, and every internal field stays a stamp type with the `_ts_us` suffix.
 
 - [ ] A timestamp on the MCP wire is an RFC3339 UTC string with a µs fraction, for example
   `started_at: "2026-10-14T19:05:03.123456Z"`.
-- [ ] It is formatted from a `TsUs` at the wire edge, by the crate's own civil-time conversion.
-  No calendar crate.
-- [ ] Internal fields stay `TsUs` with the `_ts_us` suffix.
+- [ ] It is formatted from a `LocalTs` or a `VenueTs` at the wire edge, by the crate's own
+  civil-time conversion. No calendar crate.
+- [ ] Internal fields stay a `LocalTs` or a `VenueTs` with the `_ts_us` suffix.
+- Replaced 2026-11-13: "every internal field stays `TsUs`/`_ts_us`", "It is formatted from a `TsUs`
+  at the wire edge", and "Internal fields stay `TsUs` with the `_ts_us` suffix." WHY: one stamp
+  type became two clock domains (2026-11-13 section below).
 - [ ] A duration on the MCP wire is an integer whose field name ends in its unit (`duration_ms`),
   while every internal duration stays `DurationUs`.
 - [ ] Scope: the MCP wire ONLY. Every other API, record and file keeps the rules above.
 
+### Amended 2026-11-13: two clock domains and the fold time
+
+WHY: one stamp type served each clock, so a span from a venue stamp to a local stamp compiled with
+no sign. A tick stamped at its slot can pop after a newer message, so a deadline could read an
+earlier time than the one before.
+
+- [ ] Two stamp types, each in µs since the Unix epoch:
+  - `VenueTs`: a stamp that this process did not read from its own clock: a venue clock, a venue
+    calendar (a window or a candle grid), a peer engine, and, in the workstation, each stamp of
+    the feed.
+  - `LocalTs`: a reading of this process's `EngineClock`, and each time computed from such
+    readings: scheduled spin slots, deadlines, and the times of the simulator.
+- [ ] A `DurationUs` comes only from two stamps of one type (`a.diff(b)`). No operator takes a
+  `VenueTs` and a `LocalTs` together.
+- [ ] A span or a comparison across the two domains goes through one named method, so its
+  assumption stays visible at each call: `VenueTs::offset_from(local)`,
+  `LocalTs::on_venue_clock(offset)`, `LocalTs::as_venue_calendar()` (the host clock read as the
+  venue calendar, or the stand-in for a venue stamp that is missing), and `LocalTs::to_peer()` (a
+  stamp of this process as another process reads it).
+- [ ] A stamp that crosses to another process (a link frame, a UI event, the latency report) has
+  the type of its reader: `VenueTs`. The writer converts it one time, with `to_peer()`.
+- [ ] `FoldTime` is the time of the fold: the latest received stamp of the messages folded so far.
+  It never decreases. Deadlines, warmup, and the time of the strategy context (`ctx.now()`) read
+  it.
+- [ ] The raw received stamp of a message stays on the message, on each tape row, and on each log
+  record (`ctx.event_ts()`), so a replay writes the same rows.
+- [ ] `wall_clock_now()` reads the wall clock of this process, for a stamp that never becomes
+  engine state: the link boot stamp, and the dates of logs and files. It returns a `LocalTs`, and
+  it can step.
+
 ## 6. Errors & Failure
 
-- [ ] Two failure classes. Never confuse them.
+- [ ] Two kinds of failure. Never confuse them.
   - **External, expected** (disconnect, malformed frame, HTTP fail, full queue, full disk): typed
     `thiserror` per concept. Variant = what failed + values seen. Handle by policy: reconnect,
     backoff, resync, drop + count.
   - **Internal invariant violation** (bug: corrupt book, impossible index, broken sequence logic):
     assert + panic immediately. Fail fast, fail loud.
+  - Replaced 2026-11-13: "Two failure classes." WHY: "failure class" now names the reaction to an
+    error (2026-11-13 section on failure classes, below).
 - [ ] Queue-full policy = asymmetric by design.
   - IF INPUT queue is full, THEN fatal drain (engine cannot keep up). Exception: untrusted remote
     producer, amended 2026-07-25.
@@ -180,9 +273,17 @@ WHY: execution command ring carries EVENTS, not state. Thus the precondition of 
   that must never be dropped.
 - [ ] Thus ring pressure delays the WIRE, never the STATE.
 - [ ] Two consequences bind:
-  - Sink still counts drops. §6's letter holds, and in steady state the count is unreachable.
-  - Reachable failure becomes the bank's own high-water mark. It is a message-driven count, not a
-    ring occupancy. Thus §2 replay determinism survives.
+  - The command lane is RETRY. A command that the ring refuses stays in the bank, in order, with
+    the fold time of its banking (`StampedExecCommand.issued_ts_us`), and goes out at the next
+    spin. The sink drops no command, so it has no count of drops.
+    - Replaced 2026-11-13: "Sink still counts drops. §6's letter holds, and in steady state the
+      count is unreachable." WHY: the sink drops no command, and no code held such a count.
+  - Reachable failure becomes the bank's own high-water mark: a full bank is a quoting halt. It is
+    one of the two ring-pressure halts (2026-11-13 section on failure classes, below). The bank is
+    full when it holds `COMMAND_BANK_CAPACITY` commands, never at the capacity of its `Vec`.
+    - Replaced 2026-11-13: "It is a message-driven count, not a ring occupancy. Thus §2 replay
+      determinism survives." WHY: a bank fills only while the ring refuses its commands, so its
+      halt follows ring space.
 - IF hot pass gates on ring space instead, THEN hot state becomes a function of how fast the
   ASYNC consumer drained. That is a function of wall time. Replay diverges.
 
@@ -225,6 +326,97 @@ and `panic = "abort"` skips both.
   and the safety of funds rank above low latency (the ranking of §8).
 - [ ] IF a change wants `abort`, THEN it amends this clause first, with a drain that needs no
   unwind.
+
+### Amended 2026-11-13: failure classes, two kinds of halt, and the end of the process
+
+WHY: one error gets one reaction, decided once in code. "Halt" named two different stops. The lib
+ended the process itself, so no test could drive the drain deadline.
+
+Failure classes:
+
+- [ ] One enum `FailureClass` for the crate, in `engine/src/msg/`: HALT, RESET, RETRY, REJECT. A
+  HALT names its kind: quoting, engine, or start refused.
+- [ ] Each error enum that reaches a supervisor has `failure_class()`. Its `match` has no catch-all
+  arm, so a new variant does not compile until it has a class.
+  - Amended 2026-11-13, as built: only `StartError`, `ConfigError`, and `FatalReason` have
+    `failure_class()`. Four error enums reach the drain of the start code with none:
+    `PersistError`, `ExposureError`, `SweepFailure`, and `DrainFailure`. The next part of the plan,
+    part 3 (money), closes the gap. Until then this clause is the rule, not yet a fact of the code.
+- [ ] An error that wraps another error gives the class of the inner error, or a higher class.
+  Never a lower one.
+- [ ] One supervisor acts on the class at each thread root: the driver of the hot thread, the
+  session chassis of a venue edge, the root of each writer thread, and the start code. Lower code
+  returns the error.
+  - Amended 2026-11-13, as built: no supervisor reads `failure_class()` yet, and only fitness tests
+    read it. Each of the 19 sites that trip the fatal latch trips it itself, where the error is
+    found. The next part of the plan, part 3 (money), closes the gap. Until then this clause is the
+    rule, not yet a fact of the code.
+- [ ] An internal invariant violation has no failure class. It is a bug, and it panics (top of §6).
+
+Lanes:
+
+- [ ] Each lane type names its failure class in code, beside the type:
+
+| Lane | When the ring is full | Class |
+| --- | --- | --- |
+| Engine-fed input queue: market data (`queues.input_capacity`), timer (`queues.timer_capacity`), execution events (`queues.execution_capacity`) | fatal latch, bounded drain | HALT (engine) |
+| Market tap ring of the simulator | fatal latch, bounded drain | HALT (engine) |
+| Link input queue (`queues.link_capacity`) | drop the frame, count it (2026-07-25) | REJECT |
+| State lanes: UI books and events, outbound link, strategy log, latency samples | drop the record, count it | REJECT |
+| Exposure lane | keep the newest snapshot | REJECT (of the older snapshot) |
+| Command lane | commands stay in the bank, in order, with their bank stamps (2026-07-27) | RETRY |
+| Command bank | quoting halt `HaltReason::CommandBankOverflow` | HALT (quoting) |
+| Persistence seal | try at the request and at each spin, up to `persistence.seal_try_limit` tries, then quoting halt `HaltReason::SealNotAccepted` | RETRY, then HALT (quoting) |
+
+Two kinds of halt:
+
+- [ ] Quoting halt (`HaltReason`): quoting stops, and the engine sweeps its own orders. State stays,
+  and the process stays up. Only a person starts quoting again.
+- [ ] Engine halt (`FatalReason`): the fatal latch trips with a typed reason, and the first reason
+  stays. The drain runs inside its deadline, and the exit code is not 0.
+- [ ] A refused start is a HALT. The start returns a typed error before an edge can send an order,
+  and the exit code is not 0. Only a person starts the engine again.
+
+Two ring-pressure halts:
+
+- [ ] Two halts follow ring space, not messages: the bank halt (`CommandBankOverflow`) and the seal
+  halt (`SealNotAccepted`). Each is a designed capacity event: a consumer that stalls for a whole
+  bank, or for a whole cap of tries.
+- [ ] A replay of a tape gives the same state up to the first ring-pressure halt. A comparison of
+  two runs ends at the message where one of them shows such a halt.
+- [ ] The state digest leaves out each field that reads ring space: the commands that the bank
+  holds, a pending seal and its count of tries, and the drop counters.
+- [ ] No other state follows ring space (2026-07-27).
+
+The end of the process:
+
+- [ ] The lib never ends the process: no `std::process::exit` below `engine/src/`, outside
+  `engine/src/bin/`.
+- [ ] The lib returns `Exit` to the binary, and the binary sets the exit code. Only a graceful exit
+  gives code 0.
+- [ ] IF the drain passes `engine.drain_deadline_ms`, THEN the watchdog calls the forced-exit
+  function that the binary gives, one time.
+
+### Amended 2026-11-13: fatal reasons and the exit
+
+WHY: a fatal reason was a string behind a lock, made at 20 sites, and the exit was a flag and a
+string. A sweep that gave up with orders at rest reported a clean sweep.
+
+- [ ] `FatalReason` names each trip of the fatal latch: one variant for each cause, with only plain
+  copied values. Its `failure_class()` is HALT (engine). Text that no value can hold, such as a
+  parse error, goes to the ERROR line that the site writes before it trips.
+- [ ] `FatalSignal` keeps the first reason, with no lock. The reason is set before the flag, so a
+  reader that sees the flag also finds the reason.
+- [ ] The drain decides the exit one time, from what it saw: `Exit::decide(DrainOutcome)`. A fatal
+  reason names the exit first, then a passed deadline, then the first failed step of the drain.
+  Only a request to stop with none of the three gives `Exit::Graceful`.
+- [ ] `Exit` is `Graceful`, `DrainFailed`, `DeadlinePassed`, `Halted(FatalReason)`, or
+  `StartRefused`. `Exit::code` is 0 only for `Graceful`.
+- [ ] `run_trading_engine::<S>(strategy_id, te_id, forced_exit)` returns the `Exit`. The binary
+  gives the forced-exit function and exits with `Exit::code`.
+- [ ] IF an exit sweep passes its deadline with orders at rest, THEN the session reports
+  `SessionOutcome::SweepPastDeadline` with the client ids of those orders, never `Swept`. The
+  drain counts it as a failed step, so the exit is `DrainFailed`.
 
 ## 7. Logging
 
@@ -468,7 +660,10 @@ source. Thus identity is two-part and the folder nests.
 - [ ] Identity = `(strategy-id, te-id)`.
 - [ ] bin name = `<strategy-id>-<te-id>`. Path = `strategies/<strategy-id>/<te-id>/main.rs`.
 - [ ] Pass both ids as literals to the lib seam's runner, now
-  `run_trading_engine::<S>(strategy_id, te_id)`.
+  `run_trading_engine::<S>(strategy_id, te_id, forced_exit)`. It returns the `Exit`, and the
+  binary exits with `Exit::code` (§6, 2026-11-13).
+  - Replaced 2026-11-13: "`run_trading_engine::<S>(strategy_id, te_id)`", which returned the exit
+    code. WHY: the lib never ends the process, so the binary gives the forced-exit function.
 - [ ] `env!("CARGO_BIN_NAME")` no longer derives identity.
 - [ ] Enforcement is structural: a fitness config-guard parses `engine/Cargo.toml` and each
   `strategies/<strategy-id>/Cargo.toml`, and asserts that name/path pair on every `[[bin]]`. Thus
@@ -652,9 +847,14 @@ that is gone.
 - [ ] Public paths: `polysim::…` = `engine::…`. An exported macro sits at the crate root
   (`engine::info!`). Each other path follows its folder: `engine::venues::sim::…`,
   `engine::tape::…`, `engine::runtime::config::…`.
-- [ ] `engine::runtime::{EngineError, ExecutionLease, ExitReport, check_symbol_order_capacity,
-  decide_exit, run_trading_engine}` keep their path: the root file of `runtime` exports them from
-  `assembly`.
+- [ ] `engine::runtime::{StartError, ExecutionLease, Exit, check_symbol_order_capacity,
+  run_trading_engine}` keep their path: the root file of `runtime` exports them from `assembly`,
+  with the start and exit items of 2026-11-13 (`Preflight`, `StartPlan`, `Engine`, `DrainOutcome`,
+  `Trigger`, `DrainFailure`, `DrainDeadline`, `DrainWatchdog`, `ForcedExit`).
+  - Replaced 2026-11-13: "`engine::runtime::{EngineError, ExecutionLease, ExitReport,
+    check_symbol_order_capacity, decide_exit, run_trading_engine}` keep their path". WHY:
+    `EngineError` became `StartError`, `ExitReport` became `Exit`, and the exit decision became
+    `Exit::decide`.
 - [ ] `engine/tests/fitness/` groups its modules by the top module that they test: `hot/`,
   `venues/`, `link/`, `tape/`, `runtime/`, `operator/`. Folder `scans/` holds the tests that read
   the repo as data.
@@ -678,14 +878,102 @@ the same path. A flatter tree gives each venue its own shape.
 - [ ] Four levels is the limit, and it holds only below `engine/src/venues/`. Here this clause wins
   over the folder rule of `rex-code-folder-management` (max three levels below `<package>/src/`).
 
+### Amended 2026-11-13: the fold, start, and exit seams are `pub` on merit
+
+WHY: §12 (2026-07-28) forbids `pub` for a test's sake. Each item below has a caller that is not a
+test, or sits in a module that is a concept in its own right, and each clause names it.
+
+- [ ] `HotEngine::state_digest` (`engine::hot::dispatch`) is `pub`: the fold's own statement of its
+  state, the subject of the first Never line. `dispatch` never calls it. Merit: the fold is a
+  concept in its own right, and the timing harness builds a `HotEngine` outside the crate
+  (`tools/latency-probe/rig.rs`).
+- [ ] `select_oldest` (`engine::hot::ingress`) is `pub`: the pure rule that picks the next message
+  from the queue heads. It is the one place that decides the order across queues. Merit: the
+  module is a concept in its own right, and the timing harness builds `IngressQueues`
+  (`tools/latency-probe/idle.rs`, `tools/latency-probe/step.rs`).
+- [ ] `SpinSchedule` (`engine::msg::time`) is `pub`: the slot and the stamp of each spin tick.
+  Merit: it is vocabulary of `msg`, the data that crosses domains (root comment of
+  `engine/src/lib.rs`). It states the stamp that each `SpinTick` carries. The timing harness names
+  `engine::msg::time` (`tools/latency-probe/clock.rs`, `tools/latency-probe/rig.rs`).
+- [ ] `Preflight`, `StartPlan`, `Engine::start`, the pin parameter of `Engine::start`, and the venue
+  port trait that `Preflight::run_with` takes are `pub` by a ruling of §12 (2026-11-13 ruling on
+  the start seam, in the section on seams that change). The engine binaries of package
+  `strat-micro-recorder` reach them only through `run_trading_engine`
+  (`strategies/strat-micro-recorder/te-binance-spot-btcusdt/main.rs`,
+  `strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/main.rs`). The pin call
+  `pin_to_core` keeps its merit: the timing harness passes it (`tools/latency-probe/rig.rs`,
+  `tools/latency-probe/idle.rs`, `tools/latency-probe/sender.rs`).
+  - Replaced 2026-11-13: "`Preflight`, `StartPlan`, `Engine::start`, the pin parameter of
+    `Engine::start`, and the venue port trait that `Preflight::run_with` takes are `pub`. Merit:
+    the engine binaries of package `strat-micro-recorder`, another compile root, start the engine
+    through them (`strategies/strat-micro-recorder/te-binance-spot-btcusdt/main.rs`,
+    `strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/main.rs`)." With its line
+    "Amended 2026-11-13, as built: the binaries start the engine through `run_trading_engine`,
+    which runs `Preflight` and `Engine::start` in the crate. The timing harness passes the pin call
+    `pin_to_core` (`tools/latency-probe/rig.rs`, `tools/latency-probe/idle.rs`,
+    `tools/latency-probe/sender.rs`)." WHY: the binaries call only `run_trading_engine`, so the
+    merit that the clause named did not hold as built.
+- [ ] `Exit`, the decision that gives it, the forced-exit parameter, and `FatalReason` are `pub`.
+  Merit: the same binaries give the forced-exit function and map `Exit` to the exit code.
+  `FatalReason` is the value of an `Exit` that halted.
+- [ ] Each other item of these modules keeps its visibility. Two seams have no caller outside the
+  tests: the drain watchdog and the exit outcome of the session chassis. §12 rules on them
+  (2026-11-13 ruling in the section on seams that change).
+- [ ] Amended 2026-11-13, as built: each other new `pub` item, with its merit:
+  - `VenueTs`, `LocalTs`, `FoldTime`, and their named methods: vocabulary of `msg`. A strategy
+    crate calls `as_venue_calendar`
+    (`strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/strategy.rs`).
+  - `Notional`, `Spend`, and `from_mantissa` and `mantissa` of `Price`, `Qty`, and `Notional`:
+    vocabulary of `msg`. The strategies and the timing harness call them.
+  - `QueueId::new`, its error `QueueIdError`, and `QueueId::index`, which replaces the public field:
+    vocabulary of `msg`. The timing harness calls `QueueId::new` (`tools/latency-probe/sender.rs`).
+  - `FailureClass` and `Halt` (`engine::msg::failure`): vocabulary of `msg` (§6).
+  - `MessageHeader`, `MessageBody`, `MessageKind`, and `InboundMessage::kind`
+    (`engine::msg::inbound`), `StageSample::ABSENT_VENUE` (`engine::msg::latency`), and the
+    builders of the two chunks, `BookChunk::new`, `BookChunk::push_levels`, `AccountChunk::new`,
+    and `AccountChunk::push_balances`: vocabulary of `msg`, the data that crosses domains. The
+    timing harness builds each message from a `MessageBody` (`tools/latency-probe/rig.rs`). A
+    chunk keeps its entries and its length private, and its filled part is read through
+    `active_levels` and `active_balances`, which were `pub` before.
+  - `UiHalt` with `is_halted` (`engine::msg::ui`), the kill switch as a workstation reads it, its
+    halt stamp a `VenueTs` that the writer converts with `to_peer()`: vocabulary of `msg`, the data
+    that crosses domains. The dom fixture, another compile root, builds it
+    (`tools/dom-fixture/shell_scene.rs`, `tools/dom-fixture/monitor_scenes.rs`).
+  - `SpinSchedule::slot_to_fire`, with the type of the clause above. `StateDigest`, the value of
+    `state_digest`.
+  - `PinCall` and `pin_to_core`: the timing harness passes `pin_to_core`.
+  - `HotLoop`, `PinnedHotThread`, and `touched_input_ring` (`engine::hot::spawn`): the timing
+    harness starts its hot thread through them (`tools/latency-probe/rig.rs`).
+  - The failure class of each lane, as a constant beside its type: `QueueProducer::WHEN_FULL` and
+    `LinkQueueProducer::WHEN_FULL` (`engine::hot::spawn`), and `DropCountingSink::WHEN_FULL`,
+    `StrategyLogSink::WHEN_FULL`, `SampleSink::WHEN_FULL`, `ExecSink::WHEN_FULL`,
+    `PersistSink::ROW_WHEN_FULL`, `PersistSink::SEAL_WHEN_FULL`, `PersistSink::SEAL_PAST_CAP`, and
+    `ExposureSink::WHEN_FULL` (`engine::hot::sink`). Merit, for the group: the rule of §6 that each
+    lane type names its failure class in code, beside the type (2026-11-13 section on failure
+    classes). The sinks sit in the concept module `engine::hot::sink`, and the two input producers
+    in `engine::hot::spawn`.
+  - `StrategyGate`: `StrategyCtx::gate` returns it to strategy code, the seam of §8 (2026-07-20).
+  - `Ema` (`engine::hot::series`): the series module is a concept in its own right, and the
+    strategies name it (`strategies/strat-micro-recorder/te-binance-spot-btcusdt/models.rs`).
+  - `FastQueue::ema_over_window` and `FastQueue::median_over_window` (`engine::hot::series`), the
+    new names of `ema` and `median`, and `FastQueue::running_mean`, which takes the place of `mean`
+    for a queue of `f64`: the strategies call them
+    (`strategies/strat-micro-recorder/te-binance-spot-btcusdt/strategy.rs`, `models.rs` beside it).
+  - `DrainOutcome`, `Trigger`, `DrainFailure`, `DrainDeadline`, `ForcedExit`, `AnswerPart`, and
+    `SweepFailure`: the inputs and the values of `Exit` and `FatalReason`, by the clause on `Exit`.
+  - `DrainWatchdog` and `ExitPlan`: by the ruling of §12 (2026-11-13).
+- [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
+
 ## 9. Naming & API Ergonomics
 
 - [ ] rex-code-ergonomics binds.
 - [ ] No abbreviations (`cfg`, `ctx` idiomatic OK).
 - [ ] Predicates: `is_`/`has_`/`can_`.
 - [ ] Verbs on functions, nouns on types.
-- [ ] Domain primitives = newtypes (`SourceId`, `InstrumentId`, `Price`, `Qty`, `TsUs`, …). Bare
-  `u64` never impersonates another.
+- [ ] Domain primitives = newtypes (`SourceId`, `InstrumentId`, `Price`, `Qty`, `Notional`,
+  `LocalTs`, `VenueTs`, …). Bare `u64` never impersonates another.
+  - Replaced 2026-11-13: "(`SourceId`, `InstrumentId`, `Price`, `Qty`, `TsUs`, …)". WHY: one stamp
+    type became two clock domains (§5), and quote money got its own type (§4).
 - [ ] No `bool` parameters in `pub` functions.
 - [ ] IF >3 parameters, THEN use struct.
 - [ ] Accept `&str`/`&[T]`/`&Path`. Return owned when allocating.
@@ -1272,6 +1560,33 @@ drives both. A seam that a change reshapes and that no test drives can break wit
   changes, and `log::init` runs once in a process, so no test can drive it more than one time.
 - [ ] This ruling makes no other item `pub`. A further item needs its own ruling in this section.
   The ban of 2026-07-28 on `pub(crate) -> pub` for a test holds for each other item.
+- [ ] Ruling, 2026-11-13: two more seams have no caller outside the tests, and they are `pub` by
+  this ruling.
+  - The drain watchdog of the engine: its deadline and the forced-exit function passed in, and the
+    one call that it makes when the drain passes the deadline. Test:
+    `drain_past_deadline_calls_the_forced_exit_once`.
+  - The exit outcome of the session chassis of a venue edge (`engine/src/venues/edge/mod.rs`,
+    `engine/src/venues/exec/exit.rs`): what a session reports when its exit sweep ends, with the
+    client ids of the orders that stay, and the decision that gives it from the exit plan, the
+    time, and the mirror. Test: `sweep_past_deadline_is_not_swept`.
+  - WHY: each is a seam that changes. In a run the watchdog ends the process, so no test can drive
+    it with the real forced exit. The chassis runs only inside a live venue edge, and a test cannot
+    start one with no key.
+- [ ] Ruling, 2026-11-13: the start seam has no caller outside the tests, and it is `pub` by this
+  ruling. It is `Preflight` with `run` and `run_with`, `StartPlan`, `StartError`, `Engine` and
+  `Engine::start` with its pin parameter (`engine::runtime`), and the venue port trait `VenuePort`
+  with its values `VenueScales` and `ProbedVenue` (`engine::venues::port`). Tests:
+  `each_refusal_starts_no_thread_and_spends_no_nonce`,
+  `pin_failure_refuses_start_before_any_producer`.
+  - WHY: a refused start can be driven only with a stand-in venue port and a stand-in pin. The real
+    start path, `run_trading_engine`, reads the arguments and a config path, and it is the path by
+    which an engine loads `.env`, so no test may drive it.
+  - The pin call keeps its own merit (§8, 2026-11-13 section on the fold, start, and exit seams):
+    the timing harness passes `pin_to_core`, of type `PinCall`, which returns `PinRefused`.
+- [ ] Each other item of 2026-11-13 that a contract test reaches has a caller outside the tests,
+  and §8 names it (2026-11-13 section on the fold, start, and exit seams).
+- [ ] This ruling makes no other item `pub`. The ban of 2026-07-28 on `pub(crate) -> pub` for a
+  test holds for each other item.
 
 ## 13. Performance
 
@@ -1326,8 +1641,10 @@ drives both. A seam that a change reshapes and that no test drives can break wit
       crate of the workspace.
     - [ ] The ban holds each call that reads a clock or a counter, or that turns a counter tick
       into time: the std, wasm, tokio and `quanta` clocks, and the clocks of the engine
-      (`EngineClock::start`, `EngineClock::now`, `boot_stamp_us`, `Stamper::stamp`, and the tick
+      (`EngineClock::start`, `EngineClock::now`, `wall_clock_now`, `Stamper::stamp`, and the tick
       scale).
+      - Replaced 2026-11-13: "`boot_stamp_us`" in that list. WHY: the function got the name
+        `wall_clock_now`, which says what it reads (§5, 2026-11-13).
     - [ ] Each permitted site carries `#[expect(clippy::disallowed_methods, reason = "...")]`. An
       `#[expect]` that meets no read fails step 2. The fitness test
       `permitted_clock_sites_equal_the_list` holds the list of permitted sites, and each banned

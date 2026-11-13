@@ -1,8 +1,10 @@
-//! HTTP answers. Every request this engine makes is answered here, and the placement answer is the
-//! only place an order's venue id ever appears — so this is also where correlation is established
-//! and where the frames held waiting for it are released.
+//! The HTTP answers of each request. A placement's answer is the only place where an order's venue
+//! id appears, so the correlation is made here and the frames that wait for it are released.
 
 use crate::msg::exec::ExecEvent;
+use crate::msg::time::LocalTs;
+use crate::runtime::shutdown::FatalReason;
+use crate::venues::edge::EdgeDriver;
 use crate::venues::edge::http::TransportError;
 use crate::venues::exec::{ExecRequest, Outgoing, PlaceNotSentReason, SessionOutcome};
 use crate::{error, info, warn};
@@ -146,7 +148,7 @@ impl Actor {
 
         let mut outgoing = Vec::new();
         let events = self.decode_core(&request, place, recon_seq, &response, &mut outgoing);
-        for event in events {
+        for (received_ts_us, event) in events {
             let event = ExecEvent {
                 request_sent_ts_us: Some(entry.sent_at),
                 ..event
@@ -158,7 +160,7 @@ impl Actor {
             {
                 self.session.core.re_arm_cancel(event.client_id);
             }
-            self.forward_exec(event);
+            self.forward_exec(received_ts_us, event);
         }
         let ended = self.dispatch(outgoing, writer).await;
         self.finish_readiness_if_clean();
@@ -172,7 +174,7 @@ impl Actor {
         recon_seq: u64,
         response: &ClobResponse,
         outgoing: &mut Vec<Outgoing>,
-    ) -> Vec<ExecEvent> {
+    ) -> Vec<(LocalTs, ExecEvent)> {
         match request {
             ExecRequest::Place { .. } => {
                 let Some(context) = place else {
@@ -181,15 +183,24 @@ impl Actor {
                 self.on_place_answer(*request, &context, response, outgoing)
             }
             ExecRequest::Cancel { .. } => {
-                let decoded = decode_cancel(response.answer(), &self.decode_context());
-                self.answered(decoded, "a cancel answer")
-                    .unwrap_or_default()
+                let context = self.decode_context();
+                let received_ts_us = context.received_ts_us;
+                let decoded = decode_cancel(response.answer(), &context);
+                let events = self
+                    .answered(decoded, "a cancel answer")
+                    .unwrap_or_default();
+                events
+                    .into_iter()
+                    .map(|event| (received_ts_us, event))
+                    .collect()
             }
             ExecRequest::OrderStatus { .. } => {
-                let decoded =
-                    decode_single_order(response.answer(), recon_seq, &self.decode_context());
-                self.answered(decoded, "an order answer")
-                    .flatten()
+                let context = self.decode_context();
+                let received_ts_us = context.received_ts_us;
+                let decoded = decode_single_order(response.answer(), recon_seq, &context);
+                let event = self.answered(decoded, "an order answer").flatten();
+                event
+                    .map(|event| (received_ts_us, event))
                     .into_iter()
                     .collect()
             }
@@ -230,8 +241,10 @@ impl Actor {
         context: &PlaceRequestContext,
         response: &ClobResponse,
         outgoing: &mut Vec<Outgoing>,
-    ) -> Vec<ExecEvent> {
-        let decoded = decode_place(response.answer(), context, &self.decode_context());
+    ) -> Vec<(LocalTs, ExecEvent)> {
+        let decode = self.decode_context();
+        let received_ts_us = decode.received_ts_us;
+        let decoded = decode_place(response.answer(), context, &decode);
         let outcome = match decoded {
             Ok(VenueAnswer::Answered(outcome)) => outcome,
             Ok(VenueAnswer::Unavailable(availability)) => {
@@ -268,7 +281,7 @@ impl Actor {
             }
             self.drain_pending(outgoing);
         }
-        vec![outcome.event]
+        vec![(received_ts_us, outcome.event)]
     }
 
     /// Stores the mapping from venue order id to client id. If the index is full, stale
@@ -292,9 +305,9 @@ impl Actor {
             error!(
                 "polymarket execution cannot record venue order {venue_order_id} ({error}) — it can never be cancelled"
             );
-            self.control
-                .fatal
-                .trip(format!("polymarket execution correlation: {error}"));
+            self.control.fatal.trip(FatalReason::OrderIndexFull {
+                venue: self.venue(),
+            });
         }
     }
 

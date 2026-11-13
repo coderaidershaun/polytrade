@@ -14,15 +14,15 @@ use engine::hot::exec::{
 use engine::hot::ingress::IngressQueues;
 use engine::hot::metrics::DriverSamples;
 use engine::hot::sink::ExecSink;
-use engine::hot::spawn::{HotDriver, HotThreadConfig, IdleWait, Step, spawn_hot_thread};
+use engine::hot::spawn::{HotDriver, HotLoop, HotThreadConfig, IdleWait, Step, spawn_hot_thread};
 use engine::hot::strategy::{Strategy, StrategyConfig, StrategyCtx};
 use engine::log::{HotRecord, LaneReader, TextRecord, open_hot_lane, open_text_lane};
 use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, Provenance, StampedExecCommand,
     VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty, QueueId, Side};
-use engine::msg::inbound::{InboundMessage, SpinTick, TradeEvent};
+use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, QueueId, Side};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick, TradeEvent};
 use engine::msg::latency::{Category, CommandKind, Stage, WireSample};
 use engine::msg::persist::PersistRecord;
 use engine::msg::time::{DurationUs, Stamper};
@@ -33,6 +33,7 @@ use engine::runtime::config::{
 };
 use engine::runtime::exposure::ExposureSnapshot;
 use engine::runtime::metrics::{SampleProducers, SinkKind};
+use engine::runtime::pin_to_core;
 use engine::runtime::registry::InstrumentRow;
 use engine::runtime::shutdown::{DrainSignal, FatalSignal};
 use engine::venues::binance::depth::{ChainRule, DepthSequencer, DiffOutcome, SnapshotOutcome};
@@ -50,7 +51,7 @@ use rtrb::{Consumer, RingBuffer};
 use crate::engine_support::{
     Idle, ONE, account_chunk, detached_setup, engine_view, exec_event, exposure_ring,
     instrument_row, level, persist_ring_for, snapshot_pair, spin, strategy_log_ring, stream_ready,
-    tracker_spec_all, ts, ui_book_ring, ui_event_ring,
+    tracker_spec_all, ts, ui_book_ring, ui_event_ring, venue_ts,
 };
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
 use crate::poly_strategy::{PolyUpParams, PolyUpPublisher};
@@ -171,9 +172,21 @@ impl Outputs {
     }
 }
 
+/// The name under which the recorded hashes spell every stamp: they were taken while a venue stamp
+/// and a local stamp were one type. Each record spells both stamp types by it before it is hashed,
+/// and the fields and their values are hashed as they are.
+const RECORDED_STAMP_TYPE: &str = "TsUs(";
+
+fn spelled_as_recorded(record: &str) -> String {
+    record
+        .replace("LocalTs(", RECORDED_STAMP_TYPE)
+        .replace("VenueTs(", RECORDED_STAMP_TYPE)
+}
+
 fn digest(lane: &'static str, records: &[String]) -> Digest {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for record in records {
+        let record = spelled_as_recorded(record);
         for byte in record.bytes().chain(std::iter::once(b'\n')) {
             hash ^= u64::from(byte);
             hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
@@ -258,13 +271,13 @@ fn settings(fee_model: FeeModel, holds_reservations_until_settled: bool) -> Exec
             requote_threshold_ticks: 1,
             max_quote_distance_centi_bps: 100_000_000,
             max_book_age: DurationUs::from_secs(3_600),
-            max_order_notional_quote: 1_000_000 * ONE,
+            max_order_notional_quote: Notional::from_mantissa(1_000_000 * ONE),
         },
         max_orders_per_side: 1,
-        min_base_balance: 0,
-        min_quote_balance: 0,
+        min_base_balance: Qty::from_mantissa(0),
+        min_quote_balance: Notional::from_mantissa(0),
         max_consecutive_rejects: 5,
-        max_session_loss_quote: 1_000_000 * ONE,
+        max_session_loss_quote: Notional::from_mantissa(1_000_000 * ONE),
         inflight_timeout: DurationUs::from_secs(5),
         exec_silence_spins: u32::MAX,
         order_reap_window: DurationUs::from_secs(3_600),
@@ -280,10 +293,10 @@ fn settings(fee_model: FeeModel, holds_reservations_until_settled: bool) -> Exec
 fn recorder_row() -> InstrumentRow {
     let mut row = instrument_row(0, tracker_spec_all(100), 128);
     row.market = VenueMarket::Binance(BinanceMarket::Spot);
-    row.tick_size = Some(Price(ONE / 100));
-    row.lot_size = Some(Qty(1_000));
-    row.min_qty = Some(Qty(1_000));
-    row.min_notional = Some(5 * ONE);
+    row.tick_size = Some(Price::from_mantissa(ONE / 100));
+    row.lot_size = Some(Qty::from_mantissa(1_000));
+    row.min_qty = Some(Qty::from_mantissa(1_000));
+    row.min_notional = Some(Notional::from_mantissa(5 * ONE));
     row.tracker.intensity = Some(IntensitySpec {
         max_depth_ticks: 16,
         half_life_secs: 600.0,
@@ -302,17 +315,17 @@ fn publisher_rows() -> Vec<InstrumentRow> {
             display: format!("btc-updown-5m-{leg}").into(),
             base: "BTC".into(),
             quote: "USDC".into(),
-            tick_size: Some(Price(FIXED_SCALE / 100)),
-            lot_size: Some(Qty(FIXED_SCALE / 100)),
-            min_qty: Some(Qty(5 * FIXED_SCALE)),
-            max_price: Some(Price(FIXED_SCALE * 99 / 100)),
+            tick_size: Some(Price::from_mantissa(FIXED_SCALE / 100)),
+            lot_size: Some(Qty::from_mantissa(FIXED_SCALE / 100)),
+            min_qty: Some(Qty::from_mantissa(5 * FIXED_SCALE)),
+            max_price: Some(Price::from_mantissa(FIXED_SCALE * 99 / 100)),
             max_num_orders: Some(32),
             subscriptions: Subscriptions {
                 klines: false,
                 ..Subscriptions::default()
             },
             kline_intervals: Vec::new(),
-            max_exposure_quote: 500 * FIXED_SCALE,
+            max_exposure_quote: Notional::from_mantissa(500 * FIXED_SCALE),
             tracker: TrackerSpec {
                 intensity: Some(IntensitySpec {
                     max_depth_ticks: 32,
@@ -370,11 +383,17 @@ pub(crate) fn exec_settings(shipped: Shipped) -> ExecSettings {
 pub(crate) fn readiness(at: i64) -> [InboundMessage; 3] {
     [
         stream_ready(InstrumentId(0), at),
-        InboundMessage::Exec(open_orders_snapshot_end(InstrumentId(0), ts(at))),
-        InboundMessage::Account(account_chunk(
-            &[(AssetId(0), 1_000 * ONE), (AssetId(1), 1_000_000 * ONE)],
-            at,
-        )),
+        InboundMessage::new(
+            ts(at),
+            MessageBody::Exec(open_orders_snapshot_end(InstrumentId(0), ts(at))),
+        ),
+        InboundMessage::new(
+            ts(at),
+            MessageBody::Account(account_chunk(
+                &[(AssetId(0), 1_000 * ONE), (AssetId(1), 1_000_000 * ONE)],
+                at,
+            )),
+        ),
     ]
 }
 
@@ -385,17 +404,20 @@ fn prior_run_fill(price: i64, cumulative: i64, at: i64) -> InboundMessage {
         run_nonce: PRIOR_NONCE,
     }
     .encode(side_base(InstrumentId(0), Side::Buy) + 1, 1);
-    InboundMessage::Exec(ExecEvent {
-        kind: ExecKind::ReportTrade,
-        provenance: Provenance::PriorRun,
-        status: Some(VenueOrderStatus::PartiallyFilled),
-        qty: Qty(4 * cumulative),
-        last_price: Price(price),
-        last_qty: Qty(cumulative / 2),
-        cumulative_qty: Qty(cumulative),
-        cumulative_quote: Price(price).notional(Qty(cumulative)),
-        ..exec_event(InstrumentId(0), client_id, Side::Buy, price, at)
-    })
+    InboundMessage::new(
+        ts(at),
+        MessageBody::Exec(ExecEvent {
+            kind: ExecKind::ReportTrade,
+            provenance: Provenance::PriorRun,
+            status: Some(VenueOrderStatus::PartiallyFilled),
+            qty: Qty::from_mantissa(4 * cumulative),
+            last_price: Price::from_mantissa(price),
+            last_qty: Qty::from_mantissa(cumulative / 2),
+            cumulative_qty: Qty::from_mantissa(cumulative),
+            cumulative_quote: Price::from_mantissa(price).notional(Qty::from_mantissa(cumulative)),
+            ..exec_event(InstrumentId(0), client_id, Side::Buy, price, at)
+        }),
+    )
 }
 
 /// Market messages in receive order, with a spin each time the timer would fire, the venue's
@@ -407,15 +429,15 @@ fn with_spins_and_answers(
 ) -> Vec<InboundMessage> {
     let first = market
         .first()
-        .map_or(0, |message| message.received_ts_us().micros());
+        .map_or(0, |message| message.header.received_ts_us.micros());
     let fills = [market.len() / 3, 2 * market.len() / 3];
     let mut tape: Vec<InboundMessage> = readiness(first).into();
     let mut next_spin = first + SPIN_US;
     let mut spin_seq = 0;
     for (index, message) in market.into_iter().enumerate() {
-        let at = message.received_ts_us().micros();
+        let at = message.header.received_ts_us.micros();
         while next_spin <= at {
-            tape.push(InboundMessage::SpinTick(spin(spin_seq, next_spin)));
+            tape.push(spin(spin_seq, next_spin));
             spin_seq += 1;
             next_spin += SPIN_US;
         }
@@ -424,7 +446,7 @@ fn with_spins_and_answers(
         }
         tape.push(message);
     }
-    tape.push(InboundMessage::SpinTick(spin(spin_seq, next_spin)));
+    tape.push(spin(spin_seq, next_spin));
     tape
 }
 
@@ -441,12 +463,10 @@ fn recorder_tape() -> Vec<InboundMessage> {
         .filter(|line| !line.trim().is_empty())
     {
         let frame = parse_combined_frame(line).expect("a recorded frame has its envelope");
-        let mut trade = parse_agg_trade(&frame.data, placeholder)
+        let trade = parse_agg_trade(&frame.data, placeholder)
             .expect("a recorded trade parses")
             .trade;
         let at = trade.exchange_ts_us.micros() + WIRE_DELAY_US;
-        trade.received_ts_us = ts(at);
-        trade.queued_ts_us = ts(at);
         frames.push((at, Frame::Trade(trade)));
     }
     for line in BINANCE_DEPTH.lines().filter(|line| !line.trim().is_empty()) {
@@ -484,9 +504,11 @@ fn recorder_tape() -> Vec<InboundMessage> {
         SnapshotOutcome::Applied,
         "the snapshot opens the book"
     );
-    for (_, frame) in frames {
+    for (at, frame) in frames {
         match frame {
-            Frame::Trade(trade) => market.push(InboundMessage::Trade(trade)),
+            Frame::Trade(trade) => {
+                market.push(InboundMessage::new(ts(at), MessageBody::Trade(trade)));
+            }
             Frame::Depth(diff) => {
                 let outcome = sequencer.on_diff(diff, &mut |message, _| market.push(message));
                 assert_eq!(
@@ -550,8 +572,8 @@ fn publisher_tape() -> Vec<InboundMessage> {
                 instrument: InstrumentId(1),
                 token: TokenId::from(&**down),
             },
-            window_open_ts_us: ts(POLYMARKET_WINDOW_OPEN_US),
-            window_close_ts_us: ts(POLYMARKET_WINDOW_OPEN_US + POLYMARKET_WINDOW_US),
+            window_open_ts_us: venue_ts(POLYMARKET_WINDOW_OPEN_US),
+            window_close_ts_us: venue_ts(POLYMARKET_WINDOW_OPEN_US + POLYMARKET_WINDOW_US),
             condition_id: "fitness-condition".into(),
         },
         &mut keep,
@@ -733,7 +755,7 @@ const RECORDED: [(Shipped, [Digest; 8]); 2] = [
 
 const RECORDER_OUTPUTS: [Digest; 8] = [
     recorded("tape rows", 46_415, 0x6a6d_77e4_2f76_4512),
-    recorded("commands", 241, 0xa5c3_8b1f_1c6d_e8ff),
+    recorded("commands", 241, 0x60ea_828f_819b_c86e),
     recorded("ui books", 601, 0xd1ca_5f6f_2e33_bab2),
     recorded("ui events", 48_281, 0x24ad_47c2_3baf_320e),
     recorded("exposure", 2, 0x27cc_3d45_433e_2022),
@@ -744,7 +766,7 @@ const RECORDER_OUTPUTS: [Digest; 8] = [
 
 const PUBLISHER_OUTPUTS: [Digest; 8] = [
     recorded("tape rows", 11, 0x22fa_8faf_4d66_cae5),
-    recorded("commands", 80, 0xad4e_f8d5_f78b_5301),
+    recorded("commands", 80, 0xc4c1_7609_303b_edd7),
     recorded("ui books", 1_734, 0x4116_b312_52d1_9732),
     recorded("ui events", 1_245, 0xc5fe_6b6d_338d_87c0),
     recorded("exposure", 2, 0xe632_e3fd_5bf1_4ad7),
@@ -799,7 +821,7 @@ fn backlog_counts_each_queue_and_not_the_popped_message() {
         let (mut producer, consumer) = RingBuffer::new(spins.len());
         for (seq, when) in spins {
             producer
-                .push(InboundMessage::SpinTick(spin(seq, when)))
+                .push(spin(seq, when))
                 .expect("the ring holds its own spins");
         }
         consumers.push(consumer);
@@ -811,7 +833,7 @@ fn backlog_counts_each_queue_and_not_the_popped_message() {
     assert_eq!(driver.step(), Step::Folded);
     harness.metrics.pass(ts(INTERVAL_US), &mut harness.rows);
 
-    let waiting = [QueueId(0), QueueId(1)].map(|queue| harness.rows.backlog_max(queue));
+    let waiting = [0, 1].map(|index| harness.rows.backlog_max(QueueId::new(index).unwrap()));
     assert_eq!(
         waiting,
         [Some(2), Some(3)],
@@ -1064,8 +1086,8 @@ impl Strategy for ThreeBids {
                 Side::Buy,
                 QuoteLevel::ZERO,
                 Some(DesiredQuote {
-                    price: Price(99 * ONE),
-                    qty: Qty(ONE / 10),
+                    price: Price::from_mantissa(99 * ONE),
+                    qty: Qty::from_mantissa(ONE / 10),
                     style: OrderStyle::PostOnly,
                 }),
             );
@@ -1092,8 +1114,8 @@ fn held_command_keeps_its_issue_tick() {
     const INTERVAL_US: i64 = 60_000_000;
     let mut harness = Harness::new(10);
     let instruments = BID_INSTRUMENTS.map(|id| InstrumentRow {
-        tick_size: Some(Price(ONE)),
-        lot_size: Some(Qty(1)),
+        tick_size: Some(Price::from_mantissa(ONE)),
+        lot_size: Some(Qty::from_mantissa(1)),
         ..instrument_row(id, TrackerSpec::default(), 64)
     });
     let (commands_producer, mut lane) = RingBuffer::<ExecLaneItem>::new(2);
@@ -1109,12 +1131,12 @@ fn held_command_keeps_its_issue_tick() {
     let mut start: Vec<InboundMessage> = readiness(1).into();
     for instrument in BID_INSTRUMENTS {
         let (bids, asks) = snapshot_pair(instrument, &[(99 * ONE, ONE)], &[(101 * ONE, ONE)], 1);
-        start.push(InboundMessage::Book(bids));
-        start.push(InboundMessage::Book(asks));
-        start.push(InboundMessage::Exec(open_orders_snapshot_end(
-            InstrumentId(instrument),
+        start.push(InboundMessage::new(ts(1), MessageBody::Book(bids)));
+        start.push(InboundMessage::new(ts(1), MessageBody::Book(asks)));
+        start.push(InboundMessage::new(
             ts(1),
-        )));
+            MessageBody::Exec(open_orders_snapshot_end(InstrumentId(instrument), ts(1))),
+        ));
     }
     for message in start {
         input.push(message).expect("the input ring has room");
@@ -1122,7 +1144,7 @@ fn held_command_keeps_its_issue_tick() {
     let mut driver = HotDriver::new(IngressQueues::new(vec![queue]), engine, None);
     let mut fold_spin = |input: &mut rtrb::Producer<InboundMessage>, seq: u64| {
         input
-            .push(InboundMessage::SpinTick(spin(seq, 10 + seq as i64)))
+            .push(spin(seq, 10 + seq as i64))
             .expect("the input ring has room");
         while driver.step() == Step::Folded {}
     };
@@ -1176,7 +1198,7 @@ fn held_command_keeps_its_issue_tick() {
         issued_ts_us: held.issued_ts_us,
         client_id,
         kind: CommandKind::Place,
-        queue: QueueId(0),
+        queue: QueueId::new(0).unwrap(),
     });
     harness.pass(INTERVAL_US);
     let stage = |stage: Stage| {
@@ -1242,28 +1264,32 @@ fn park_setting_parks_idle_loop() {
     let engine = HotEngine::new(detached_setup(&instruments, Box::new(strategy)));
     let (mut input, queue) = RingBuffer::new(4);
     let drain = DrainSignal::new();
+    let samples = DriverSamples {
+        stamper: harness.counter.stamper.clone(),
+        stages,
+        counters,
+    };
+    let hot_drain = drain.clone();
     let hot = spawn_hot_thread(
         HotThreadConfig {
             core_id: None,
             tag: "fitness-idle",
-            samples: Some(DriverSamples {
-                stamper: harness.counter.stamper.clone(),
-                stages,
-                counters,
-            }),
-            idle: IdleWait::Park(Duration::from_micros(50)),
         },
-        IngressQueues::new(vec![queue]),
-        engine,
-        FatalSignal::new(),
-        drain.clone(),
-    );
+        pin_to_core,
+    )
+    .expect("a thread with no core never refuses its pin")
+    .start(move || HotLoop {
+        driver: HotDriver::new(IngressQueues::new(vec![queue]), engine, Some(samples)),
+        idle: IdleWait::Park(Duration::from_micros(50)),
+        fatal: FatalSignal::new(),
+        drain: hot_drain,
+    });
     for seq in 0..3u64 {
         if seq > 0 {
             std::thread::sleep(GAP);
         }
         input
-            .push(InboundMessage::SpinTick(spin(seq, 10 * (seq as i64 + 1))))
+            .push(spin(seq, 10 * (seq as i64 + 1)))
             .expect("the input ring has room");
     }
     drain.request();

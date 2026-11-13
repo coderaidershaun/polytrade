@@ -12,8 +12,8 @@ use engine::hot::dispatch::{ExposureWiring, HotEngine, HotEngineSetup};
 use engine::hot::sink::{ExposureSink, StrategyLogSink, UiBookSink, UiEventSink};
 use engine::hot::strategy::{EngineView, Strategy, StrategyConfig};
 use engine::log::{LogConfig, LogHandle};
-use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty};
-use engine::msg::inbound::{InboundMessage, SpinTick, TradeEvent};
+use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Notional, Price, Qty};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick, TradeEvent};
 use engine::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, Stamper};
 use engine::runtime::config::{
     BinanceMarket, KlineInterval, LatencyConfig, NoParams, StrategySpec, Subscriptions,
@@ -22,6 +22,7 @@ use engine::runtime::config::{
 use engine::runtime::metrics::{
     Metrics, MetricsParts, MetricsSetup, MetricsThread, MetricsThreadSetup, SampleProducers,
 };
+use engine::runtime::pin_to_core;
 use engine::runtime::registry::InstrumentRow;
 use engine::venues::binance::parse::{ParseContext, parse_agg_trade, parse_combined_frame};
 
@@ -62,10 +63,10 @@ pub fn instrument() -> InstrumentRow {
         quote: "USDT".into(),
         base_asset: AssetId(0),
         quote_asset: AssetId(1),
-        tick_size: Some(Price(FIXED_SCALE / 100)),
-        lot_size: Some(Qty(1_000)),
-        min_qty: Some(Qty(1_000)),
-        min_notional: Some(5 * FIXED_SCALE),
+        tick_size: Some(Price::from_mantissa(FIXED_SCALE / 100)),
+        lot_size: Some(Qty::from_mantissa(1_000)),
+        min_qty: Some(Qty::from_mantissa(1_000)),
+        min_notional: Some(Notional::from_mantissa(5 * FIXED_SCALE)),
         max_num_orders: None,
         max_num_order_amends: None,
         max_price: None,
@@ -73,7 +74,7 @@ pub fn instrument() -> InstrumentRow {
         subscriptions: Subscriptions::default(),
         kline_intervals: vec![KlineInterval::OneMinute],
         book_capacity: 128,
-        max_exposure_quote: 1_000_000 * FIXED_SCALE,
+        max_exposure_quote: Notional::from_mantissa(1_000_000 * FIXED_SCALE),
         tracker: TrackerSpec::default(),
     }
 }
@@ -102,7 +103,7 @@ pub fn engine(instruments: &[InstrumentRow]) -> HotEngine {
 pub fn recorded_trades() -> Vec<TradeEvent> {
     let placeholder = ParseContext {
         instrument: InstrumentId(0),
-        received_ts_us: engine::msg::time::TsUs::from_micros(0),
+        received_ts_us: engine::msg::time::LocalTs::from_micros(0),
     };
     RECORDED_TRADES
         .lines()
@@ -121,20 +122,17 @@ pub fn recorded_trades() -> Vec<TradeEvent> {
 pub fn message(trades: &[TradeEvent], index: usize, clock: &EngineClock) -> InboundMessage {
     let at = clock::now(clock);
     if index % TRADES_PER_SPIN == TRADES_PER_SPIN - 1 {
-        return InboundMessage::SpinTick(SpinTick {
+        let tick = SpinTick {
             seq: (index / TRADES_PER_SPIN) as u64,
-            received_ts_us: at,
-            queued_ts_us: at,
-        });
+        };
+        return InboundMessage::new(at, MessageBody::SpinTick(tick));
     }
     let mut trade = trades[index % trades.len()];
     // No venue sits behind the harness, so the venue's stamps are the send itself and the venue
     // stages read zero rather than the age of the recording.
-    trade.exchange_ts_us = at;
-    trade.exchange_sent_ts_us = Some(at);
-    trade.received_ts_us = at;
-    trade.queued_ts_us = at;
-    InboundMessage::Trade(trade)
+    trade.exchange_ts_us = at.as_venue_calendar();
+    trade.exchange_sent_ts_us = Some(at.as_venue_calendar());
+    InboundMessage::new(at, MessageBody::Trade(trade))
 }
 
 /// Pins the calling thread when the run names a core. On Linux a run that names a core and cannot
@@ -187,6 +185,7 @@ impl MetricsRun {
                 ..LogConfig::default()
             },
             clock,
+            pin_to_core,
         )
         .context("the harness cannot start the engine's log")?;
         let stamper = clock::counter_stamper();
@@ -210,6 +209,7 @@ impl MetricsRun {
             clock: clock.clone(),
             stamper: stamper.clone(),
             core_id: None,
+            pin: pin_to_core,
         })
         .context("the harness cannot start the metrics thread")?;
         let run = MetricsRun {

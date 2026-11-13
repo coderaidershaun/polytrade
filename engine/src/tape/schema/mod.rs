@@ -1,5 +1,5 @@
-//! Arrow schema + footer metadata: one [`TableRow`] impl per row type; mantissas as `i64`, enums as strings.
-//! Split by subject: `market` (what venue did), `exec` (what engine did).
+//! Arrow schema + footer metadata: one [`TableRow`] impl per row type; mantissas as `i64`, enums as
+//! strings. Split by subject: `market` (what venue did), `exec` (what engine did).
 
 mod column;
 mod exec;
@@ -8,7 +8,7 @@ mod market;
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef};
 
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::runtime::config::ExecutionMode;
 
 use self::column::Column;
@@ -19,7 +19,7 @@ pub(super) trait TableRow: Sized + 'static {
     const COLUMNS: &'static [Column<Self>];
 
     /// Record's local-receipt time (hour rotation + date/HH partitioning key).
-    fn partition_ts(&self) -> TsUs;
+    fn partition_ts(&self) -> LocalTs;
 
     fn schema() -> SchemaRef {
         Column::schema(Self::COLUMNS)

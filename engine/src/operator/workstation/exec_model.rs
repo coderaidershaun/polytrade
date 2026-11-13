@@ -1,15 +1,15 @@
-//! The workstation's fold of the execution feed: which of this engine's orders exist and in what
-//! state, what the account holds, the last refusal and the kill switch. The ladder and the account
-//! band both read this one model, so they can never disagree about what is resting.
+//! The workstation's fold of the execution feed: this engine's orders and their states, the
+//! account, the last refusal, and the halt. The ladder and the account band read this one model.
 //!
 //! The newest update replaces an order's cell, which is correct only because events arrive in
 //! order. A lost event shows as a gap in their sequence, which the model counts and the monitor
 //! reports, so a stale cell is never silent.
 
 use super::history::grow_to;
-use crate::hot::exec::{ExecHalt, OrderState, QuoteLevel, RejectOrigin};
+use crate::hot::exec::{OrderState, QuoteLevel, RejectOrigin};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
+use crate::msg::ui::UiHalt;
 use crate::msg::ui::{UI_ORDER_SNAPSHOT_MAX_TOTAL, UiEvent, UiWorkingOrder};
 
 const WORKING_PER_SIDE: usize = 8;
@@ -60,7 +60,7 @@ pub struct OrderCell {
     pub price: Price,
     pub qty: Qty,
     pub filled: Qty,
-    pub at: TsUs,
+    pub at: VenueTs,
 }
 
 impl OrderCell {
@@ -97,7 +97,7 @@ impl SideOrders {
             .count()
     }
 
-    fn lose_confirmation(&mut self, at: TsUs) {
+    fn lose_confirmation(&mut self, at: VenueTs) {
         for order in &mut self.working {
             order.status = OrderStatus::Lost;
             order.at = at;
@@ -137,7 +137,7 @@ impl SideOrders {
 
     fn replace_snapshot(
         &mut self,
-        at: TsUs,
+        at: VenueTs,
         detail_len: u8,
         total_working: u16,
         orders: &[UiWorkingOrder],
@@ -190,7 +190,7 @@ impl SideOrders {
 pub struct BalanceCell {
     pub free: i64,
     pub locked: i64,
-    pub at: TsUs,
+    pub at: VenueTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -198,7 +198,7 @@ pub struct RejectCell {
     pub instrument: InstrumentId,
     pub side: Side,
     pub origin: RejectOrigin,
-    pub at: TsUs,
+    pub at: VenueTs,
 }
 
 #[derive(Debug, Default)]
@@ -209,7 +209,7 @@ pub struct ExecModel {
     balances: Vec<(AssetId, BalanceCell)>,
     unknown_asset_balances: u64,
     last_reject: Option<RejectCell>,
-    halt: Option<ExecHalt>,
+    halt: Option<UiHalt>,
 }
 
 impl ExecModel {
@@ -295,7 +295,7 @@ impl ExecModel {
         }
     }
 
-    pub(crate) fn note_events_lost(&mut self, at: TsUs) {
+    pub(crate) fn note_events_lost(&mut self, at: VenueTs) {
         for sides in &mut self.sides {
             for orders in sides {
                 orders.lose_confirmation(at);
@@ -328,7 +328,7 @@ impl ExecModel {
         self.last_reject
     }
 
-    pub fn halt(&self) -> Option<ExecHalt> {
+    pub fn halt(&self) -> Option<UiHalt> {
         self.halt
     }
 

@@ -1,17 +1,18 @@
 //! Kline candles: rolling closed-candle window + open-forming candle per interval.
 
 use super::BACKING_MULTIPLE;
+use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::hot::series::{Element, FastQueue};
 use crate::msg::ids::{Price, Qty};
 use crate::msg::inbound::KlineEvent;
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 use crate::runtime::config::{CandlesSpec, KlineInterval};
 
 /// POD KlineEvent (minus instrument/transport stamps).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Candle {
     pub interval: KlineInterval,
-    pub open_ts_us: TsUs,
+    pub open_ts_us: VenueTs,
     pub open: Price,
     pub high: Price,
     pub low: Price,
@@ -51,6 +52,10 @@ pub struct CandleSeries {
 pub(super) struct CandleBook {
     pub(super) series: Vec<(KlineInterval, CandleSeries)>,
 }
+
+digest_by_hash!(Candle);
+digest_fields! { CandleSeries { closed, open } }
+digest_fields! { CandleBook { series } }
 
 impl CandleBook {
     pub(super) fn new(spec: &CandlesSpec, intervals: &[KlineInterval]) -> Self {

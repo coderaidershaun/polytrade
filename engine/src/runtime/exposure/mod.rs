@@ -1,5 +1,5 @@
-//! Durable cost basis (one JSON per engine, written off hot path). Only basis durable, not mark (recomputes on boot).
-//! Position keyed by VENUE SYMBOL, not InstrumentId (index reordering would silently swap markets).
+//! The durable cost basis, one JSON file for each engine, written off the hot path. Position is
+//! keyed by venue symbol, because an instrument id can change between runs.
 
 mod file;
 mod writer;
@@ -7,7 +7,7 @@ mod writer;
 use std::path::{Path, PathBuf};
 
 use crate::msg::ids::{AssetId, InstrumentId, Qty};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::runtime::config::{ExecutionMode, RunIdentity};
 use crate::runtime::registry::Registry;
 use crate::warn;
@@ -30,7 +30,7 @@ pub struct InstrumentExposure {
 impl InstrumentExposure {
     pub const EMPTY: InstrumentExposure = InstrumentExposure {
         instrument: InstrumentId(0),
-        position_base: Qty(0),
+        position_base: Qty::from_mantissa(0),
         cash_quote: 0,
         basis_quote: 0,
     };
@@ -38,7 +38,7 @@ impl InstrumentExposure {
     /// An all-zero row can be dropped on a config change without losing anything.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.position_base.0 == 0 && self.cash_quote == 0 && self.basis_quote == 0
+        self.position_base.mantissa() == 0 && self.cash_quote == 0 && self.basis_quote == 0
     }
 }
 
@@ -52,7 +52,7 @@ pub struct ExposureSnapshot {
     /// Mark-to-market at emission (0 if no honest mark yet); written for human, ignored on load.
     pub exposure_quote: i64,
     /// Message received_ts_us (never hot-thread clock read).
-    pub emitted_ts_us: TsUs,
+    pub emitted_ts_us: LocalTs,
 }
 
 impl ExposureSnapshot {
@@ -61,7 +61,7 @@ impl ExposureSnapshot {
         len: 0,
         seq: 0,
         exposure_quote: 0,
-        emitted_ts_us: TsUs::from_micros(0),
+        emitted_ts_us: LocalTs::from_micros(0),
     };
 
     /// Filled prefix (capacity invariant trapped here).
@@ -217,7 +217,7 @@ pub fn load(
         };
         instruments.push(InstrumentExposure {
             instrument: row.instrument_id,
-            position_base: Qty(entry.position_base),
+            position_base: Qty::from_mantissa(entry.position_base),
             cash_quote: entry.cash_quote,
             basis_quote: entry.basis_quote,
         });
@@ -241,7 +241,11 @@ fn aggregate_assets(instruments: &[InstrumentExposure], registry: &Registry) -> 
     let mut amounts = vec![0i128; registry.assets().len()];
     for exposure in instruments {
         let row = registry.instrument(exposure.instrument);
-        add_amount(&mut amounts, row.base_asset, exposure.position_base.0);
+        add_amount(
+            &mut amounts,
+            row.base_asset,
+            exposure.position_base.mantissa(),
+        );
         add_amount(&mut amounts, row.quote_asset, exposure.cash_quote);
     }
     asset_amounts(&amounts)

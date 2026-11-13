@@ -1,6 +1,5 @@
-//! Strategy seam: hot-path market-state consumer via StrategyCtx (post-event, no wall clock → replay-safe).
-//! Output gated by strategy.tables: config is sole authority (read once, checked at dispatch).
-//! emit() exception: features tee to UI regardless of tables (only Parquet half gated).
+//! The strategy interface: a strategy reads market state after each event and reads no clock, so a
+//! replay calls it the same way. The config decides which tables it writes.
 
 mod actions;
 mod ctx;
@@ -9,13 +8,14 @@ mod declare;
 use std::collections::HashSet;
 
 use crate::hot::book::Book;
+use crate::hot::digest::digest_by_hash;
 use crate::hot::exec::{DesiredBook, ExecEngine};
 use crate::hot::ledger::PositionLedger;
 use crate::hot::quant::volatility::EwmaVol;
 use crate::hot::tracker::MicroTracker;
 use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::{BookChunk, KlineEvent, MarketRotation, SpinTick, TradeEvent};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, FoldTime, LocalTs, VenueTs};
 use crate::runtime::config::{Instruments, StrategySpec};
 
 pub use crate::hot::exec::{
@@ -32,6 +32,7 @@ pub use crate::msg::ui::DomQuote;
 /// declared column's id, what a book read reports — each homed in engine plumbing rather than in
 /// strategy vocabulary; re-exported for the reason above.
 pub use crate::hot::book::BookState;
+pub use crate::hot::dispatch::StrategyGate;
 pub use crate::hot::quant::toxicity::VolumeBar;
 pub use crate::link::{LinkFrame, TopicId};
 pub use crate::msg::persist::FeatureId;
@@ -138,9 +139,11 @@ pub trait StrategyConfig: Sized {
 /// Slot's current window (latest MarketRotation). `None` until first rotation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WindowInfo {
-    pub open_ts_us: TsUs,
-    pub close_ts_us: TsUs,
+    pub open_ts_us: VenueTs,
+    pub close_ts_us: VenueTs,
 }
+
+digest_by_hash!(WindowInfo);
 
 impl WindowInfo {
     /// Whether a quote may rest here at `at` — the stamp on the message being processed, never a
@@ -148,13 +151,13 @@ impl WindowInfo {
     /// `margin` before the close because an order still resting at a rotation belongs to a market
     /// that is about to stop existing, and the position it fills is one nothing can trade out of.
     #[inline]
-    pub fn admits_quote_at(self, at: TsUs, margin: DurationUs) -> bool {
-        at >= self.open_ts_us && !self.is_past_quote_stop(at, margin)
+    pub fn admits_quote_at(self, at: LocalTs, margin: DurationUs) -> bool {
+        at.as_venue_calendar() >= self.open_ts_us && !self.is_past_quote_stop(at, margin)
     }
 
     #[inline]
-    pub fn is_past_quote_stop(self, at: TsUs, margin: DurationUs) -> bool {
-        at >= self.close_ts_us - margin
+    pub fn is_past_quote_stop(self, at: LocalTs, margin: DurationUs) -> bool {
+        at.as_venue_calendar() >= self.close_ts_us - margin
     }
 }
 
@@ -170,7 +173,9 @@ pub struct StrategyCtx<'a> {
     pub(crate) exec: &'a ExecEngine,
     pub(crate) desired: &'a mut DesiredBook,
     pub(crate) actions: &'a mut Actions,
-    pub(crate) event_ts: TsUs,
+    pub(crate) event_ts: LocalTs,
+    pub(crate) fold_time: FoldTime,
+    pub(crate) gates: &'a [StrategyGate],
     /// Declaration's current spin (see quote).
     pub(crate) spin_seq: u64,
     /// How many topics [`Strategy::link_topics`] declared — the range `link_send` accepts.

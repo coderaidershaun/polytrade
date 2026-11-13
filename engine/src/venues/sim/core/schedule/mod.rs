@@ -4,7 +4,7 @@ mod transition;
 mod voice;
 
 use crate::msg::ids::{ClientOrderId, Qty};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 
 use super::latency::shifted;
 use super::resting::OrderSnapshot;
@@ -60,8 +60,8 @@ enum AnswerKind {
 struct Scheduled {
     key: Option<GenerationKey>,
     kind: AnswerKind,
-    earned_ts_us: TsUs,
-    due_ts_us: TsUs,
+    earned_ts_us: LocalTs,
+    due_ts_us: LocalTs,
     sequence: u64,
     voice: VenueVoice,
 }
@@ -72,14 +72,14 @@ struct Spoken {
     has_said_terminal_ack: bool,
     has_said_terminal_report: bool,
     cumulative_qty: Qty,
-    new_barrier_ts_us: Option<TsUs>,
+    new_barrier_ts_us: Option<LocalTs>,
 }
 
 pub struct DeliverySchedule {
     pending: Vec<Scheduled>,
     spoken: Vec<Spoken>,
     limits: DeliveryLimits,
-    spoken_through_ts_us: TsUs,
+    spoken_through_ts_us: LocalTs,
 }
 
 impl DeliverySchedule {
@@ -88,7 +88,7 @@ impl DeliverySchedule {
             pending: Vec::with_capacity(limits.answer_capacity),
             spoken: Vec::new(),
             limits,
-            spoken_through_ts_us: TsUs::from_micros(i64::MIN),
+            spoken_through_ts_us: LocalTs::from_micros(i64::MIN),
         }
     }
 
@@ -131,7 +131,7 @@ impl DeliverySchedule {
         }
     }
 
-    pub fn advance_to(&mut self, horizon: TsUs, due: &mut Vec<DueAnswer>) {
+    pub fn advance_to(&mut self, horizon: LocalTs, due: &mut Vec<DueAnswer>) {
         due.clear();
         while let Some(index) = self.next_speakable(horizon) {
             let entry = self.pending.remove(index);
@@ -139,7 +139,7 @@ impl DeliverySchedule {
         }
     }
 
-    pub fn force_sweep(&mut self, at_ts_us: TsUs, exited: &[ForcedOrderExit]) {
+    pub fn force_sweep(&mut self, at_ts_us: LocalTs, exited: &[ForcedOrderExit]) {
         for entry in &mut self.pending {
             entry.due_ts_us = entry.due_ts_us.min(at_ts_us);
         }
@@ -159,7 +159,7 @@ impl DeliverySchedule {
         self.pending.is_empty()
     }
 
-    fn open_barrier(&mut self, key: GenerationKey, due_ts_us: TsUs) {
+    fn open_barrier(&mut self, key: GenerationKey, due_ts_us: LocalTs) {
         self.ensure_spoken(key).new_barrier_ts_us = Some(due_ts_us);
     }
 
@@ -199,7 +199,7 @@ impl DeliverySchedule {
         &mut self.spoken[at]
     }
 
-    fn next_speakable(&self, horizon: TsUs) -> Option<usize> {
+    fn next_speakable(&self, horizon: LocalTs) -> Option<usize> {
         self.pending
             .iter()
             .enumerate()
@@ -215,7 +215,7 @@ impl DeliverySchedule {
             .map(|(index, _)| index)
     }
 
-    fn release_of(&self, entry: &Scheduled) -> TsUs {
+    fn release_of(&self, entry: &Scheduled) -> LocalTs {
         if matches!(entry.kind, AnswerKind::PlaceAck | AnswerKind::ReportNew) {
             return entry.due_ts_us;
         }
@@ -261,7 +261,7 @@ impl Spoken {
             has_said_new: false,
             has_said_terminal_ack: false,
             has_said_terminal_report: false,
-            cumulative_qty: Qty(0),
+            cumulative_qty: Qty::from_mantissa(0),
             new_barrier_ts_us: None,
         }
     }
@@ -274,11 +274,11 @@ impl Spoken {
         );
         if let Some(cumulative) = voice.cumulative_qty() {
             assert!(
-                cumulative.0 >= self.cumulative_qty.0,
+                cumulative.mantissa() >= self.cumulative_qty.mantissa(),
                 "cumulative quantity on {:?} went backwards, {} then {}",
                 self.key,
-                self.cumulative_qty.0,
-                cumulative.0
+                self.cumulative_qty.mantissa(),
+                cumulative.mantissa()
             );
             self.cumulative_qty = cumulative;
         }
@@ -326,13 +326,13 @@ impl Spoken {
 
 #[derive(Debug, Clone, Copy)]
 struct Landing {
-    earned_ts_us: TsUs,
-    due_ts_us: TsUs,
+    earned_ts_us: LocalTs,
+    due_ts_us: LocalTs,
     sequence: u64,
 }
 
 impl Landing {
-    const fn at(ts_us: TsUs) -> Self {
+    const fn at(ts_us: LocalTs) -> Self {
         Self {
             earned_ts_us: ts_us,
             due_ts_us: ts_us,

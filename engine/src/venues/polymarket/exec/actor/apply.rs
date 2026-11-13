@@ -1,17 +1,14 @@
-//! Turns effects into HTTP requests; the socket is only ever used to open the user stream.
-//! Three withholding policies live here, each preventing a request from being sent under a
-//! specific condition. A placement is withheld when the venue reports unavailability, since a
-//! 425 or 503 describes the venue's own state, not a problem with the order. A cancel is
-//! withheld during the venue's taker hold window, to avoid a refusal or a hard reject. A sell
-//! is withheld until its token's allowance cache is warm, because the venue treats a cold
-//! cache as an empty wallet.
+//! Turns effects into HTTP requests, and holds a request back while the venue says it is
+//! unavailable, while its taker hold runs, or until the allowance cache of a sell is warm.
 
 use futures_util::SinkExt;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::msg::exec::{CancelReason, ExecEvent};
 use crate::msg::ids::{ClientOrderId, Side};
-use crate::msg::time::DurationUs;
+use crate::msg::time::{DurationUs, LocalTs};
+use crate::runtime::shutdown::FatalReason;
+use crate::venues::edge::EdgeDriver;
 use crate::venues::exec::{
     EventSink, ExecEffect, ExecRequest, InFlightRequest, Outgoing, PlaceNotSentReason, RequestId,
     SessionOutcome, SkipReason, stream_ready,
@@ -174,9 +171,9 @@ impl Actor {
                 Ok(frame) => frame,
                 Err(error) => {
                     error!("polymarket execution cannot build its stream subscription: {error}");
-                    self.control
-                        .fatal
-                        .trip(format!("polymarket execution subscribe: {error}"));
+                    self.control.fatal.trip(FatalReason::SubscribeUnbuildable {
+                        venue: self.venue(),
+                    });
                     return Some(SessionOutcome::Reconnect);
                 }
             };
@@ -187,7 +184,7 @@ impl Actor {
             self.is_subscribed = true;
         }
         let now = self.control.clock.now();
-        self.forward_exec(stream_ready(now));
+        self.forward_exec(now, stream_ready(now));
         self.start_resync();
         None
     }
@@ -242,7 +239,7 @@ impl Actor {
         clippy::disallowed_methods,
         reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
     )]
-    fn cancel_hold(&self, request: &ExecRequest) -> Option<crate::msg::time::TsUs> {
+    fn cancel_hold(&self, request: &ExecRequest) -> Option<crate::msg::time::LocalTs> {
         let ExecRequest::Cancel { client_id, .. } = request else {
             return None;
         };
@@ -357,11 +354,12 @@ impl Actor {
         if self.session.connect().is_empty() {
             return;
         }
-        self.forward_exec(stream_ready(self.control.clock.now()));
+        let now = self.control.clock.now();
+        self.forward_exec(now, stream_ready(now));
         self.start_resync();
     }
 
-    pub(super) fn forward_exec(&mut self, event: ExecEvent) {
+    pub(super) fn forward_exec(&mut self, received_ts_us: LocalTs, event: ExecEvent) {
         // A fill changes the account, so the read is triggered where the report is rather than
         // where a caller remembers to ask for it. It does not release the reservation the fill
         // took: this venue answers a read taken now with the pre-fill number, and only the trade's
@@ -369,6 +367,6 @@ impl Actor {
         if restates_balances(&event) {
             self.restate_balances();
         }
-        self.session.events.send_exec(event);
+        self.session.events.send_exec(received_ts_us, event);
     }
 }

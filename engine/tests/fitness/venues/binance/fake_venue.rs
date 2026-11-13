@@ -1,9 +1,9 @@
 //! Deterministic Binance Spot scenarios over the production simulator.
 
 use engine::msg::exec::{ExecEvent, OrderStyle, VenueOrderStatus};
-use engine::msg::ids::{AssetId, ClientOrderId, Price, Qty, Side, TradeId, VenueOrderId};
-use engine::msg::inbound::InboundMessage;
-use engine::msg::time::TsUs;
+use engine::msg::ids::{AssetId, ClientOrderId, Notional, Price, Qty, Side, TradeId, VenueOrderId};
+use engine::msg::inbound::{InboundMessage, MessageBody};
+use engine::msg::time::LocalTs;
 use engine::runtime::config::RunIdentity;
 use engine::runtime::registry::{AssetDictionary, Registry};
 use engine::venues::binance::exec::{
@@ -134,8 +134,8 @@ impl FakeVenue {
             identity,
             wire: VenueWire::new(identity),
             orders: ScenarioOrders::new(),
-            best_bid: Price(117_999 * engine::msg::ids::FIXED_SCALE),
-            best_ask: Price(118_001 * engine::msg::ids::FIXED_SCALE),
+            best_bid: Price::from_mantissa(117_999 * engine::msg::ids::FIXED_SCALE),
+            best_ask: Price::from_mantissa(118_001 * engine::msg::ids::FIXED_SCALE),
             delivery: Delivery::AckFirst,
             next_trade_id: FIRST_TRADE_ID,
         }
@@ -153,7 +153,7 @@ impl FakeVenue {
         self.orders.get(client_id).is_some()
     }
 
-    pub fn decode_context(&self, at: TsUs) -> DecodeContext<'_> {
+    pub fn decode_context(&self, at: LocalTs) -> DecodeContext<'_> {
         DecodeContext {
             symbols: &self.symbols,
             assets: self.registry.assets(),
@@ -178,7 +178,7 @@ impl FakeVenue {
     ///
     /// The request is ENCODED first and the encoding thrown away, so a scenario cannot reach the
     /// matching model with a request the encoder would have refused to build.
-    pub fn submit(&mut self, request: ExecRequest, at: TsUs) -> Vec<InboundMessage> {
+    pub fn submit(&mut self, request: ExecRequest, at: LocalTs) -> Vec<InboundMessage> {
         encode_request(request, &self.encode_context()).expect("the encoder builds every request");
 
         let (ack, reports) = match request {
@@ -213,7 +213,7 @@ impl FakeVenue {
 
     /// Fill `qty` of a resting order at its own price — the maker case, which is the only one a
     /// post-only strategy can reach.
-    pub fn fill(&mut self, client_id: ClientOrderId, qty: Qty, at: TsUs) -> Vec<InboundMessage> {
+    pub fn fill(&mut self, client_id: ClientOrderId, qty: Qty, at: LocalTs) -> Vec<InboundMessage> {
         let Some(order) = self.orders.get_mut(client_id) else {
             return Vec::new();
         };
@@ -224,7 +224,7 @@ impl FakeVenue {
         if order.is_complete() {
             self.orders.remove(client_id);
         }
-        let settlement = settlement_of(&order, taken, quote_before);
+        let settlement = settlement_of(&order, taken, quote_before.mantissa());
         let report = self.wire.trade_report(
             &order,
             SimFill {
@@ -237,7 +237,7 @@ impl FakeVenue {
         self.stream_messages(&[report], at)
     }
 
-    fn place(&mut self, placement: Placement, at: TsUs) -> (Vec<String>, Vec<String>) {
+    fn place(&mut self, placement: Placement, at: LocalTs) -> (Vec<String>, Vec<String>) {
         let Placement {
             client_id,
             side,
@@ -252,8 +252,8 @@ impl FakeVenue {
                 side,
                 price,
                 qty,
-                filled: Qty(0),
-                filled_quote: 0,
+                filled: Qty::from_mantissa(0),
+                filled_quote: Notional::from_mantissa(0),
             };
             return (
                 vec![self.wire.would_match_error()],
@@ -266,8 +266,8 @@ impl FakeVenue {
             side,
             price,
             qty,
-            filled: Qty(0),
-            filled_quote: 0,
+            filled: Qty::from_mantissa(0),
+            filled_quote: Notional::from_mantissa(0),
         };
         self.orders.insert(order);
         (
@@ -276,7 +276,7 @@ impl FakeVenue {
         )
     }
 
-    fn cancel(&mut self, client_id: ClientOrderId, at: TsUs) -> (Vec<String>, Vec<String>) {
+    fn cancel(&mut self, client_id: ClientOrderId, at: LocalTs) -> (Vec<String>, Vec<String>) {
         let Some(order) = self.orders.remove(client_id) else {
             return (vec![self.wire.unknown_order_error()], Vec::new());
         };
@@ -290,7 +290,7 @@ impl FakeVenue {
         &mut self,
         client_id: ClientOrderId,
         qty: Qty,
-        at: TsUs,
+        at: LocalTs,
     ) -> (Vec<String>, Vec<String>) {
         let Some(order) = self.orders.get_mut(client_id) else {
             return (vec![self.wire.unknown_order_error()], Vec::new());
@@ -300,11 +300,11 @@ impl FakeVenue {
         (vec![self.wire.amend_ack(&order, at)], Vec::new())
     }
 
-    fn status(&self, client_id: ClientOrderId, at: TsUs) -> Vec<String> {
+    fn status(&self, client_id: ClientOrderId, at: LocalTs) -> Vec<String> {
         let wire = &self.wire;
         match self.orders.get(client_id) {
             Some(order) => {
-                let status = match order.filled.0 > 0 {
+                let status = match order.filled.mantissa() > 0 {
                     true => VenueOrderStatus::PartiallyFilled,
                     false => VenueOrderStatus::New,
                 };
@@ -318,9 +318,9 @@ impl FakeVenue {
                     venue_order_id: self.orders.latest_venue_order_id(),
                     side: Side::Buy,
                     price: self.best_bid,
-                    qty: Qty(10_000),
-                    filled: Qty(10_000),
-                    filled_quote: self.best_bid.notional(Qty(10_000)),
+                    qty: Qty::from_mantissa(10_000),
+                    filled: Qty::from_mantissa(10_000),
+                    filled_quote: self.best_bid.notional(Qty::from_mantissa(10_000)),
                 },
                 VenueOrderStatus::Filled,
                 at,
@@ -349,7 +349,7 @@ impl FakeVenue {
         request: ExecRequest,
         ack: Vec<String>,
         reports: Vec<String>,
-        at: TsUs,
+        at: LocalTs,
     ) -> Vec<InboundMessage> {
         let acks = self.response_messages(request, &ack, at);
         let streamed = self.stream_messages(&reports, at);
@@ -367,7 +367,7 @@ impl FakeVenue {
         &self,
         request: ExecRequest,
         payloads: &[String],
-        at: TsUs,
+        at: LocalTs,
     ) -> Vec<InboundMessage> {
         response_messages(
             payloads,
@@ -379,22 +379,22 @@ impl FakeVenue {
         )
     }
 
-    fn stream_messages(&self, payloads: &[String], at: TsUs) -> Vec<InboundMessage> {
+    fn stream_messages(&self, payloads: &[String], at: LocalTs) -> Vec<InboundMessage> {
         stream_messages(payloads, self.decode_context(at))
     }
 }
 
 /// Builds a fee-free settlement.
 fn settlement_of(order: &SimOrder, last_qty: Qty, quote_before: i64) -> FillSettlement {
-    let last_quote = order.filled_quote - quote_before;
+    let last_quote = order.filled_quote - Notional::from_mantissa(quote_before);
     FillSettlement {
         last_qty,
         last_quote,
         cumulative_qty: order.filled,
         cumulative_quote: order.filled_quote,
-        debit: last_quote,
-        received_gross: last_qty.0,
-        received_net: last_qty.0,
+        debit: last_quote.mantissa(),
+        received_gross: last_qty.mantissa(),
+        received_net: last_qty.mantissa(),
         fee: 0,
         fee_asset: AssetId::UNKNOWN,
     }
@@ -403,8 +403,8 @@ fn settlement_of(order: &SimOrder, last_qty: Qty, quote_before: i64) -> FillSett
 pub fn exec_events(messages: &[InboundMessage]) -> Vec<ExecEvent> {
     messages
         .iter()
-        .filter_map(|message| match message {
-            InboundMessage::Exec(event) => Some(*event),
+        .filter_map(|message| match &message.body {
+            MessageBody::Exec(event) => Some(*event),
             _ => None,
         })
         .collect()

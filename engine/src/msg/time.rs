@@ -1,6 +1,5 @@
-//! Microsecond time types, the engine's monotonic clock, and the counter ticks of latency stamps.
-//! A timestamp is microseconds since the Unix epoch in a typed wrapper; a tick becomes a time only
-//! through the scale between two anchors.
+//! Time in two clock domains, so a span across the venue clock and the local clock needs a named
+//! method, with the engine's clock, the spin schedule, and the ticks of latency stamps.
 
 use core::ops::{Add, Sub};
 #[cfg(not(target_arch = "wasm32"))]
@@ -10,45 +9,122 @@ use web_time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::msg::labelled_enum::labelled_enum;
 
-/// Microseconds since the Unix epoch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TsUs(i64);
+/// The shared form of the two stamp types: microseconds since the Unix epoch, a span only to a
+/// stamp of the same type, and a move by a duration.
+macro_rules! stamp_type {
+    ($(#[$doc:meta])* $name:ident) => {
+        $(#[$doc])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct $name(i64);
 
-impl TsUs {
-    #[inline]
-    pub const fn from_micros(us: i64) -> Self {
-        Self(us)
-    }
+        impl $name {
+            #[inline]
+            pub const fn from_micros(us: i64) -> Self {
+                Self(us)
+            }
 
-    #[inline]
-    pub const fn micros(self) -> i64 {
-        self.0
-    }
+            #[inline]
+            pub const fn micros(self) -> i64 {
+                self.0
+            }
 
-    /// Signed span `self - earlier`; negative when `self` precedes `earlier`.
-    #[inline]
-    pub const fn diff(self, earlier: TsUs) -> DurationUs {
-        DurationUs(self.0 - earlier.0)
-    }
+            /// Signed span `self - earlier`; negative when `self` precedes `earlier`.
+            #[inline]
+            pub const fn diff(self, earlier: $name) -> DurationUs {
+                DurationUs(self.0 - earlier.0)
+            }
 
-    pub(crate) fn civil(self) -> CivilTime {
-        let seconds = self.0.div_euclid(1_000_000);
-        let day_seconds = seconds.rem_euclid(86_400);
-        let (year, month, day) = civil_from_days(seconds.div_euclid(86_400));
-        CivilTime {
-            year,
-            month,
-            day,
-            hour: day_seconds / 3_600,
-            minute: (day_seconds % 3_600) / 60,
-            second: day_seconds % 60,
-            micros: self.0.rem_euclid(1_000_000),
+            pub(crate) fn civil(self) -> CivilTime {
+                CivilTime::of_micros(self.0)
+            }
         }
+
+        impl Add<DurationUs> for $name {
+            type Output = $name;
+
+            #[inline]
+            fn add(self, rhs: DurationUs) -> $name {
+                $name(self.0 + rhs.0)
+            }
+        }
+
+        impl Sub<DurationUs> for $name {
+            type Output = $name;
+
+            #[inline]
+            fn sub(self, rhs: DurationUs) -> $name {
+                $name(self.0 - rhs.0)
+            }
+        }
+    };
+}
+
+stamp_type! {
+    /// A stamp that this process did not read from its own clock: a venue clock, a venue calendar,
+    /// or another process. It is never compared with a [`LocalTs`] except by a named method.
+    VenueTs
+}
+
+stamp_type! {
+    /// A reading of this process's clock, or a time computed from such readings: scheduled slots,
+    /// deadlines, and the simulator's times.
+    LocalTs
+}
+
+impl LocalTs {
+    /// This local time read on the venue clock, given the venue's offset from this host.
+    #[inline]
+    pub const fn on_venue_clock(self, offset: DurationUs) -> VenueTs {
+        VenueTs(self.0 + offset.0)
+    }
+
+    /// This local time read as a venue time: a point of the venue calendar, or the stand-in for a
+    /// stamp that the venue did not send. It assumes that the host clock and the venue clock agree,
+    /// as the clamp of each venue stamp already does.
+    #[inline]
+    pub const fn as_venue_calendar(self) -> VenueTs {
+        VenueTs(self.0)
+    }
+
+    /// This stamp as another process reads it: for that reader it is a stamp of a clock that is
+    /// not its own.
+    #[inline]
+    pub const fn to_peer(self) -> VenueTs {
+        VenueTs(self.0)
+    }
+}
+
+impl VenueTs {
+    /// How far the venue clock runs ahead of the local stamp taken at the same moment.
+    #[inline]
+    pub const fn offset_from(self, local: LocalTs) -> DurationUs {
+        DurationUs(self.0 - local.0)
+    }
+}
+
+/// The time of the fold: the latest received stamp of the messages folded so far. A tick stamped
+/// at its slot can pop after a newer message, and then this time stays where it is, so no deadline
+/// is read at an earlier time than the one before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FoldTime(LocalTs);
+
+impl FoldTime {
+    /// Before the first message: each stamp is later.
+    pub(crate) const BEFORE_FIRST: FoldTime = FoldTime(LocalTs(i64::MIN));
+
+    #[inline]
+    pub(crate) fn advanced_to(self, received: LocalTs) -> FoldTime {
+        FoldTime(self.0.max(received))
+    }
+
+    #[inline]
+    pub const fn as_local(self) -> LocalTs {
+        self.0
     }
 }
 
 /// UTC calendar breakdown of an instant, for the display paths that spell a timestamp out. Held
-/// apart from [`TsUs`] because nothing downstream of it is a timestamp any more.
+/// apart from the stamp types because nothing downstream of it is a timestamp any more.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CivilTime {
     pub(crate) year: i64,
@@ -58,6 +134,23 @@ pub(crate) struct CivilTime {
     pub(crate) minute: i64,
     pub(crate) second: i64,
     pub(crate) micros: i64,
+}
+
+impl CivilTime {
+    fn of_micros(micros: i64) -> CivilTime {
+        let seconds = micros.div_euclid(1_000_000);
+        let day_seconds = seconds.rem_euclid(86_400);
+        let (year, month, day) = civil_from_days(seconds.div_euclid(86_400));
+        CivilTime {
+            year,
+            month,
+            day,
+            hour: day_seconds / 3_600,
+            minute: (day_seconds % 3_600) / 60,
+            second: day_seconds % 60,
+            micros: micros.rem_euclid(1_000_000),
+        }
+    }
 }
 
 /// A signed span in microseconds. Latency uses it too, so there is no third time type.
@@ -96,21 +189,44 @@ impl DurationUs {
     }
 }
 
-impl Add<DurationUs> for TsUs {
-    type Output = TsUs;
-
-    #[inline]
-    fn add(self, rhs: DurationUs) -> TsUs {
-        TsUs(self.0 + rhs.0)
-    }
+/// The grid of spin slots: slot `n` is due at `start + n * interval`. Each stamp is counted from
+/// the start, never from the stamp before it, so a late wake cannot move a later slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SpinSchedule {
+    start: LocalTs,
+    interval: DurationUs,
 }
 
-impl Sub<DurationUs> for TsUs {
-    type Output = TsUs;
+impl SpinSchedule {
+    /// # Panics
+    /// When `interval` is not positive.
+    pub fn new(start: LocalTs, interval: DurationUs) -> SpinSchedule {
+        assert!(
+            interval.0 > 0,
+            "a spin schedule needs a positive interval, got {} us",
+            interval.0
+        );
+        SpinSchedule { start, interval }
+    }
 
-    #[inline]
-    fn sub(self, rhs: DurationUs) -> TsUs {
-        TsUs(self.0 - rhs.0)
+    /// The latest slot that is due at `at`, so a late wake gets the newest slot and not the
+    /// oldest one it missed. A time before the start gives slot 0.
+    pub fn slot_at(&self, at: LocalTs) -> u64 {
+        let elapsed = at.diff(self.start).0.max(0);
+        (elapsed / self.interval.0) as u64
+    }
+
+    pub fn stamp_of(&self, slot: u64) -> LocalTs {
+        self.start + DurationUs((slot as i64).saturating_mul(self.interval.0))
+    }
+
+    /// The slot to fire for a wake at `at` once slot `last_sent` is sent, and how many slots
+    /// between the two get no tick. A late wake fires only the newest slot that is due, and a
+    /// wake before the next slot is due still fires that slot, so no slot fires twice.
+    pub fn slot_to_fire(&self, last_sent: u64, at: LocalTs) -> (u64, u64) {
+        let first_unsent = last_sent + 1;
+        let slot = self.slot_at(at).max(first_unsent);
+        (slot, slot - first_unsent)
     }
 }
 
@@ -144,9 +260,9 @@ impl EngineClock {
         clippy::disallowed_methods,
         reason = "the clock module wraps the std clocks and the counter, so every other read goes through it"
     )]
-    pub fn now(&self) -> TsUs {
+    pub fn now(&self) -> LocalTs {
         let elapsed_us = self.mono_anchor.elapsed().as_micros() as i64;
-        TsUs::from_micros(self.wall_anchor_ts_us + elapsed_us)
+        LocalTs::from_micros(self.wall_anchor_ts_us + elapsed_us)
     }
 }
 
@@ -190,7 +306,7 @@ impl Stamper {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TickAnchor {
     pub tick: Tick,
-    pub at: TsUs,
+    pub at: LocalTs,
 }
 
 /// The rate of the counter between two anchors. This is the only way to turn ticks into time, and
@@ -239,7 +355,7 @@ impl TickScale {
     }
 
     /// Nanoseconds from the engine time `since` to `tick`. `None` when the tick reads before it.
-    pub fn nanos_since(&self, since: TsUs, tick: Tick) -> Option<u64> {
+    pub fn nanos_since(&self, since: LocalTs, tick: Tick) -> Option<u64> {
         let ticks_after_last = i128::from(tick.0) - i128::from(self.last.tick.0);
         let nanos_after_last =
             ticks_after_last.saturating_mul(i128::from(self.span_ns)) / i128::from(self.span_ticks);
@@ -342,18 +458,19 @@ impl ClockError {
     }
 }
 
-/// The wall clock now, for stamps that never become engine state, so a plain clock read is fine:
-/// the link's restart marker, the base of the controller epoch, and log and file timestamps. A
-/// clock set before the epoch gives 0 rather than a panic.
+/// The wall clock now, the same clock that anchors [`EngineClock`], for stamps that never become
+/// engine state: the link's restart marker, the base of the controller epoch, and log and file
+/// timestamps. Unlike [`EngineClock::now`] it can step when the system clock is set. A clock set
+/// before the epoch gives 0 rather than a panic.
 #[expect(
     clippy::disallowed_methods,
     reason = "the clock module wraps the std clocks and the counter, so every other read goes through it"
 )]
-pub(crate) fn boot_stamp_us() -> TsUs {
+pub(crate) fn wall_clock_now() -> LocalTs {
     let micros = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_micros() as i64);
-    TsUs::from_micros(micros)
+    LocalTs::from_micros(micros)
 }
 
 /// Howard Hinnant's `civil_from_days`: the Gregorian year, month and day for a signed count of days

@@ -1,9 +1,5 @@
-//! The session chassis every venue edge runs on: dial, serve, back off, sweep, stop, with the one
-//! sender that drains the command lane. A venue brings its own select! loop and its own idea of what
-//! can be sent while the socket is down; the ordering rules — which latch wins, how long blind
-//! before resting orders are pulled, when the settled signal is raised — live here once. Two copies
-//! of a safety rule drift, and the cost of the drift is an order left resting with nothing watching
-//! it.
+//! The session loop that each venue edge runs on: dial, serve, back off, sweep, and stop. Its
+//! safety rules live here once, since two copies drift and strand an order.
 //!
 //! It sits beside the venue-neutral execution machinery rather than inside it. That machinery is
 //! scanned for clock reads, because hot state has to replay identically from a recorded tape,
@@ -33,10 +29,10 @@ use crate::hot::sink::SampleSink;
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::msg::exec::{AccountChunk, CancelReason, ExecEvent, ExecLaneItem};
 use crate::msg::ids::QueueId;
-use crate::msg::inbound::InboundMessage;
+use crate::msg::inbound::{InboundMessage, MessageBody};
 use crate::msg::latency::WireSample;
 use crate::msg::run_state::RunState;
-use crate::msg::time::{DurationUs, EngineClock, Stamper, TsUs};
+use crate::msg::time::{DurationUs, EngineClock, LocalTs, Stamper};
 use crate::runtime::config::{ExecutionConfig, SenderPlacement};
 use crate::runtime::registry::Registry;
 use crate::runtime::shutdown::{FatalSignal, RunStateCell};
@@ -45,7 +41,8 @@ use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::sender::{SendWait, Sender, SenderSetup};
 use crate::venues::edge::socket::{Reader, Writer, connect};
 use crate::venues::exec::{
-    EdgeHandle, EngineIdentity, EventSink, ExecStop, ExitPlan, SessionOutcome,
+    EdgeHandle, EngineIdentity, EventSink, ExecStop, ExitPlan, MirroredOrder, SessionOutcome,
+    SweepFailure,
 };
 use crate::{info, warn};
 
@@ -74,6 +71,16 @@ pub(crate) struct EdgeSettings {
     pub(crate) max_orders_per_side: usize,
 }
 
+/// What preflight checks a venue's bring-up against, before any thread starts or the lease spends a
+/// run nonce.
+#[derive(Clone, Copy)]
+pub(crate) struct EdgeCheck<'a> {
+    pub(crate) registry: &'a Registry,
+    pub(crate) execution: &'a ExecutionConfig,
+    pub(crate) spin_interval: DurationUs,
+    pub(crate) input_capacity: usize,
+}
+
 /// What the runtime hands every venue's bring-up, whichever venue it is.
 pub(crate) struct EdgeInputs<'a> {
     pub(crate) registry: &'a Registry,
@@ -86,7 +93,6 @@ pub(crate) struct EdgeInputs<'a> {
     /// market attaches its taps here before the adapters that own these producers start.
     pub(crate) groups: &'a mut Vec<QueueProducer>,
     pub(crate) lane_capacity: usize,
-    pub(crate) spin_interval: DurationUs,
     pub(crate) input_capacity: usize,
     /// A simulated venue reads its lane itself and has no sender.
     pub(crate) sender: SenderSettings,
@@ -155,6 +161,8 @@ pub(crate) struct EdgeControl {
     pub(crate) disconnect_sweep_after: DurationUs,
     pub(crate) exit: Option<ExitPlan>,
     pub(crate) is_swept: bool,
+    /// Why the sweep of the final exit did not end clean, handed to the runtime as the edge stops.
+    sweep_failure: Option<SweepFailure>,
 }
 
 impl EdgeControl {
@@ -169,6 +177,7 @@ impl EdgeControl {
             disconnect_sweep_after: settings.disconnect_sweep_after,
             exit: None,
             is_swept: false,
+            sweep_failure: None,
         }
     }
 
@@ -202,25 +211,23 @@ impl EdgeControl {
     /// orders still mirrored as resting.
     pub(crate) fn finished_exit(
         &self,
-        now: TsUs,
-        venue: &str,
-        mirrored: usize,
+        now: LocalTs,
+        venue: &'static str,
+        resting: &[MirroredOrder],
     ) -> Option<SessionOutcome> {
         let exit = self.exit.as_ref()?;
         if self.is_swept {
             return Some(SessionOutcome::Swept);
         }
-        if now > exit.deadline {
-            warn!(
-                "{venue} execution gave up waiting for its {:?} sweep — {mirrored} orders are still mirrored as resting",
-                exit.reason
-            );
-            // SMELL: past the deadline this reports `Swept` although orders are still mirrored as
-            // resting, so a caller cannot tell a clean sweep from one that gave up. This case needs
-            // its own outcome.
-            return Some(SessionOutcome::Swept);
+        exit.past_deadline(now, venue, resting)
+    }
+
+    /// Only the final exit's sweep can fail the run: a park that gave up is swept again before
+    /// the edge stops.
+    fn keep_sweep_failure(&mut self, failure: SweepFailure) {
+        if self.exit.as_ref().is_some_and(ExitPlan::is_final) {
+            self.sweep_failure = Some(failure);
         }
-        None
     }
 
     /// Opens the exit unless one is already under way, answering whether this call is the one that
@@ -256,7 +263,7 @@ impl EdgeControl {
         clippy::disallowed_methods,
         reason = "the session chassis stamps queued time and paces reconnects by wall time"
     )]
-    pub(crate) fn next_attempt_at(&self, attempt: u32) -> TsUs {
+    pub(crate) fn next_attempt_at(&self, attempt: u32) -> LocalTs {
         let delay = self.backoff.delay(attempt);
         self.clock.now() + DurationUs::from_micros(delay.as_micros() as i64)
     }
@@ -274,9 +281,12 @@ impl EventFunnel {
         Self { producer, clock }
     }
 
-    pub(crate) fn send_account(&mut self, chunks: Vec<AccountChunk>) {
+    pub(crate) fn send_account(&mut self, received_ts_us: LocalTs, chunks: Vec<AccountChunk>) {
         for chunk in chunks {
-            self.send(InboundMessage::Account(chunk));
+            self.send(InboundMessage::new(
+                received_ts_us,
+                MessageBody::Account(chunk),
+            ));
         }
     }
 
@@ -285,14 +295,17 @@ impl EventFunnel {
         reason = "the session chassis stamps queued time and paces reconnects by wall time"
     )]
     pub(crate) fn send(&mut self, mut message: InboundMessage) {
-        message.set_queued_ts_us(self.clock.now());
+        message.header.queued_ts_us = self.clock.now();
         self.producer.push(message);
     }
 }
 
 impl EventSink for EventFunnel {
-    fn send_exec(&mut self, event: ExecEvent) {
-        self.send(InboundMessage::Exec(event));
+    fn send_exec(&mut self, received_ts_us: LocalTs, event: ExecEvent) {
+        self.send(InboundMessage::new(
+            received_ts_us,
+            MessageBody::Exec(event),
+        ));
     }
 }
 
@@ -359,7 +372,7 @@ pub(crate) async fn run_edge<D: EdgeDriver>(mut driver: D, lane: EdgeLane) {
     driver.start().await;
 
     let mut attempt: u32 = 0;
-    let mut down_since: Option<TsUs> = None;
+    let mut down_since: Option<LocalTs> = None;
     while !driver.control().is_finished() {
         check_latches(&mut driver).await;
         if driver.control().is_finished() {
@@ -374,8 +387,13 @@ pub(crate) async fn run_edge<D: EdgeDriver>(mut driver: D, lane: EdgeLane) {
                 down_since = None;
                 attempt = 0;
                 let (writer, reader) = socket.split();
-                if driver.serve(writer, reader, &mut sender).await == SessionOutcome::Swept {
-                    complete_exit(&mut driver).await;
+                match driver.serve(writer, reader, &mut sender).await {
+                    SessionOutcome::Reconnect => {}
+                    SessionOutcome::Swept => complete_exit(&mut driver).await,
+                    SessionOutcome::SweepPastDeadline(failure) => {
+                        driver.control().keep_sweep_failure(failure);
+                        complete_exit(&mut driver).await;
+                    }
                 }
             }
             Err(error) => {
@@ -401,7 +419,8 @@ pub(crate) async fn run_edge<D: EdgeDriver>(mut driver: D, lane: EdgeLane) {
     }
 
     driver.report_stop();
-    driver.control().stop.settled.notify_one();
+    let control = driver.control();
+    control.stop.settle(control.sweep_failure.take());
     driver.abort_workers();
 }
 
@@ -414,6 +433,14 @@ async fn check_latches<D: EdgeDriver>(driver: &mut D) {
     if driver.control().exit.is_some() {
         let wait = driver.control().sweep_deadline;
         settle_offline(driver, wait).await;
+        let venue = driver.venue();
+        let control = driver.control();
+        if !control.is_swept {
+            control.keep_sweep_failure(SweepFailure::Unconfirmed {
+                venue,
+                deadline_ms: wait.as_millis(),
+            });
+        }
         complete_exit(driver).await;
     }
 }

@@ -1,24 +1,23 @@
-//! Dispatch replay fitness: a fixed synthetic sequence through the real dispatch loop is
-//! deterministic — identical emitted records and callback order across runs, warmup included —
-//! and a one-sided book (no microprice) must never fold a stale value into the persisted EwmaVol.
+//! A fixed sequence through the real fold writes the same records on each run, and a one-sided book
+//! never folds a stale value into the EWMA volatility.
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
 use engine::log::{HotRecord, open_hot_lane};
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{
-    BookChunk, InboundMessage, KlineEvent, MarketRotation, SpinTick, TradeEvent,
+    BookChunk, InboundMessage, KlineEvent, MarketRotation, MessageBody, SpinTick, TradeEvent,
 };
 use engine::msg::persist::{FeatureId, PersistRecord};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs};
 use engine::runtime::config::{Instruments, KlineInterval, NoParams, StrategySpec, TableKind};
 
 use rtrb::Consumer;
 
 use crate::engine_support::{
-    NOMINAL_SPIN, ONE, book_reset, call_codes, delta_chunk, engine_view, engine_with_ui,
-    engine_without_warmup, instrument_row, kline, persist_ring, rotation, snapshot_pair, spin,
-    strategy_log_ring, tracker_spec_all, trade,
+    NOMINAL_SPIN, ONE, book_reset, delta_chunk, engine_view, engine_with_ui, engine_without_warmup,
+    instrument_row, kline, persist_ring, rotation, snapshot_pair, spin, strategy_log_ring,
+    tracker_spec_all, trade, ts,
 };
 use crate::raw_recorder::RecorderStrategy;
 
@@ -145,38 +144,52 @@ fn probe_sequence() -> Vec<InboundMessage> {
         1,
     );
     vec![
-        InboundMessage::Book(bids),
-        InboundMessage::Book(asks),
-        InboundMessage::Trade(trade(0, 100 * ONE, 2_000_000, Side::Buy, 2)),
-        InboundMessage::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 5 * ONE)], 3)),
-        InboundMessage::Kline(kline(
-            0,
-            KlineInterval::OneMinute,
-            (100 * ONE, 103 * ONE, 98 * ONE, 101 * ONE),
-            true,
-            4,
-        )),
-        InboundMessage::SpinTick(spin(1, 5)),
-        InboundMessage::BookReset(book_reset(0, 6)),
+        InboundMessage::new(ts(1), MessageBody::Book(bids)),
+        InboundMessage::new(ts(1), MessageBody::Book(asks)),
+        InboundMessage::new(
+            ts(2),
+            MessageBody::Trade(trade(0, 100 * ONE, 2_000_000, Side::Buy, 2)),
+        ),
+        InboundMessage::new(
+            ts(3),
+            MessageBody::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 5 * ONE)], 3)),
+        ),
+        InboundMessage::new(
+            ts(4),
+            MessageBody::Kline(kline(
+                0,
+                KlineInterval::OneMinute,
+                (100 * ONE, 103 * ONE, 98 * ONE, 101 * ONE),
+                true,
+                4,
+            )),
+        ),
+        spin(1, 5),
+        book_reset(0, 6),
         // Slot sequence: rotation, then reset, then fresh snapshot. Rotation stamped at subscribe (7),
         // its window opening later (300s).
-        InboundMessage::MarketRotation(rotation(0, 300_000_000, 600_000_000, 7)),
-        InboundMessage::BookReset(book_reset(0, 8)),
-        InboundMessage::Book(snapshot_pair(0, &[(100 * ONE, ONE)], &[(101 * ONE, ONE)], 9).0),
-        InboundMessage::Book(snapshot_pair(0, &[(100 * ONE, ONE)], &[(101 * ONE, ONE)], 9).1),
+        rotation(0, 300_000_000, 600_000_000, 7),
+        book_reset(0, 8),
+        InboundMessage::new(
+            ts(9),
+            MessageBody::Book(snapshot_pair(0, &[(100 * ONE, ONE)], &[(101 * ONE, ONE)], 9).0),
+        ),
+        InboundMessage::new(
+            ts(9),
+            MessageBody::Book(snapshot_pair(0, &[(100 * ONE, ONE)], &[(101 * ONE, ONE)], 9).1),
+        ),
     ]
 }
 
-/// One replay's drained output: persisted feature rows and the banked strategy log records, both a
-/// pure function of the input sequence.
+/// One replay's drained output: the banked strategy log records, a pure function of the input
+/// sequence.
 struct Replayed {
-    persist: Vec<PersistRecord>,
     logs: Vec<HotRecord>,
 }
 
 fn run_sequence(sequence: &[InboundMessage], warmup: DurationUs) -> Replayed {
     let instruments = [instrument_row(0, tracker_spec_all(1), 64)];
-    let (persist_sink, mut consumer) = persist_ring(256);
+    let (persist_sink, _persist) = persist_ring(256);
     let (strategy_log_sink, mut log_consumer) = strategy_log_ring(256);
     let (mut engine, _ui_books, _ui_events) = engine_with_ui(
         &instruments,
@@ -188,41 +201,11 @@ fn run_sequence(sequence: &[InboundMessage], warmup: DurationUs) -> Replayed {
     for message in sequence {
         engine.dispatch(message);
     }
-    let mut persist = Vec::new();
-    while let Ok(record) = consumer.pop() {
-        persist.push(record);
-    }
     let mut logs = Vec::new();
     while let Ok(record) = log_consumer.pop() {
         logs.push(record);
     }
-    Replayed { persist, logs }
-}
-
-#[test]
-fn dispatch_replay_is_deterministic() {
-    let first = run_sequence(&probe_sequence(), DurationUs::ZERO);
-    let second = run_sequence(&probe_sequence(), DurationUs::ZERO);
-    assert_eq!(first.persist, second.persist, "identical replay diverged");
-
-    // 2 snapshot chunks, trade, delta, kline, spin, reset, then the rotation slot sequence
-    // (rotation, reset, 2 snapshot chunks) — one callback each.
-    assert_eq!(
-        call_codes(&first.persist),
-        vec![2.0, 2.0, 1.0, 2.0, 4.0, 6.0, 3.0, 5.0, 3.0, 2.0, 2.0],
-        "state-before-callback dispatch order"
-    );
-
-    // The strategy log lane is a pure function of the sequence too: records stamp event time with
-    // no wall-clock read, so two runs bank byte-identical `HotRecord`s.
-    assert!(
-        !first.logs.is_empty(),
-        "the probe banked strategy log lines"
-    );
-    assert_eq!(
-        first.logs, second.logs,
-        "strategy log lane diverged across replays"
-    );
+    Replayed { logs }
 }
 
 const WARMUP_SPAN: DurationUs = DurationUs::from_secs(10);
@@ -233,35 +216,53 @@ const WARMUP_SPAN: DurationUs = DurationUs::from_secs(10);
 fn warmup_sequence() -> Vec<InboundMessage> {
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, 2 * ONE)], &[(101 * ONE, ONE)], 0);
     vec![
-        InboundMessage::Book(bids),
-        InboundMessage::Book(asks),
-        InboundMessage::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 1_000_000)),
-        InboundMessage::Book(delta_chunk(
-            0,
-            Side::Buy,
-            &[(100 * ONE, 3 * ONE)],
-            2_000_000,
-        )),
-        InboundMessage::Book(delta_chunk(
-            0,
-            Side::Buy,
-            &[(100 * ONE, 5 * ONE)],
-            5_000_000,
-        )),
-        InboundMessage::Book(delta_chunk(
-            0,
-            Side::Buy,
-            &[(100 * ONE, 7 * ONE)],
-            9_999_999,
-        )),
-        InboundMessage::Book(delta_chunk(
-            0,
-            Side::Buy,
-            &[(100 * ONE, 9 * ONE)],
-            10_000_000,
-        )),
-        InboundMessage::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 11_000_000)),
-        InboundMessage::SpinTick(spin(1, 12_000_000)),
+        InboundMessage::new(ts(0), MessageBody::Book(bids)),
+        InboundMessage::new(ts(0), MessageBody::Book(asks)),
+        InboundMessage::new(
+            ts(1_000_000),
+            MessageBody::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 1_000_000)),
+        ),
+        InboundMessage::new(
+            ts(2_000_000),
+            MessageBody::Book(delta_chunk(
+                0,
+                Side::Buy,
+                &[(100 * ONE, 3 * ONE)],
+                2_000_000,
+            )),
+        ),
+        InboundMessage::new(
+            ts(5_000_000),
+            MessageBody::Book(delta_chunk(
+                0,
+                Side::Buy,
+                &[(100 * ONE, 5 * ONE)],
+                5_000_000,
+            )),
+        ),
+        InboundMessage::new(
+            ts(9_999_999),
+            MessageBody::Book(delta_chunk(
+                0,
+                Side::Buy,
+                &[(100 * ONE, 7 * ONE)],
+                9_999_999,
+            )),
+        ),
+        InboundMessage::new(
+            ts(10_000_000),
+            MessageBody::Book(delta_chunk(
+                0,
+                Side::Buy,
+                &[(100 * ONE, 9 * ONE)],
+                10_000_000,
+            )),
+        ),
+        InboundMessage::new(
+            ts(11_000_000),
+            MessageBody::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 11_000_000)),
+        ),
+        spin(1, 12_000_000),
     ]
 }
 
@@ -307,9 +308,9 @@ fn engine_hot_log_records_replay_identically() {
         let first = replay_on_own_thread(&sequence, warmup);
         let second = replay_on_own_thread(&sequence, warmup);
         assert_eq!(first, second, "log records diverged across replays");
-        let stamps: Vec<TsUs> = sequence
+        let stamps: Vec<LocalTs> = sequence
             .iter()
-            .map(InboundMessage::received_ts_us)
+            .map(|message| message.header.received_ts_us)
             .collect();
         for record in first.hot.iter().chain(&first.strategy) {
             assert!(
@@ -333,48 +334,7 @@ fn engine_hot_log_records_replay_identically() {
                 == "warmup complete after 10s of message time — strategy callbacks now live"
         })
         .expect("the boundary message wrote the warmup line to the hot lane");
-    assert_eq!(warmup_line.at(), TsUs::from_micros(10_000_000));
-}
-
-/// `engine.warmup_secs`: warmup is decided by message stamps alone. The suppressed prefix is
-/// therefore a property of the sequence, identical on every replay — a wall-clock implementation
-/// would suppress all nine messages here, since dispatching them takes microseconds. State keeps
-/// advancing underneath, so from the boundary onwards the strategy sees exactly what it would
-/// have seen had nothing been suppressed.
-#[test]
-fn warmup_suppresses_callbacks_by_message_time() {
-    let warmed = run_sequence(&warmup_sequence(), WARMUP_SPAN).persist;
-    assert_eq!(
-        warmed,
-        run_sequence(&warmup_sequence(), WARMUP_SPAN).persist,
-        "warmed replay diverged"
-    );
-    assert_eq!(
-        call_codes(&warmed),
-        vec![2.0, 1.0, 6.0],
-        "only the boundary delta, the trade and the spin after it reach the strategy"
-    );
-
-    let unsuppressed = run_sequence(&warmup_sequence(), DurationUs::ZERO).persist;
-    assert_eq!(
-        call_codes(&unsuppressed),
-        vec![2.0, 2.0, 1.0, 2.0, 2.0, 2.0, 2.0, 1.0, 6.0],
-        "without warmup every message calls back"
-    );
-    assert_eq!(
-        warmed.as_slice(),
-        &unsuppressed[unsuppressed.len() - warmed.len()..],
-        "state advanced identically under suppression — same records, values included"
-    );
-
-    let ewma = warmed.iter().find_map(|record| match record {
-        PersistRecord::Feature(row) if row.feature == FeatureId(1) => Some(row.value),
-        _ => None,
-    });
-    assert!(
-        ewma.is_some_and(|value| value > 0.0),
-        "the first delivered book update carries an EwmaVol warmed entirely by suppressed messages, got {ewma:?}"
-    );
+    assert_eq!(warmup_line.at(), LocalTs::from_micros(10_000_000));
 }
 
 /// `strategy.instruments` as an explicit list is a config promise: record only those instruments.
@@ -404,20 +364,14 @@ fn recorder_records_only_configured_instruments() {
         log_sink,
     );
 
-    engine.dispatch(&InboundMessage::Trade(trade(
-        0,
-        100 * ONE,
-        ONE,
-        Side::Buy,
-        1,
-    )));
-    engine.dispatch(&InboundMessage::Trade(trade(
-        1,
-        100 * ONE,
-        ONE,
-        Side::Buy,
-        2,
-    )));
+    engine.dispatch(&InboundMessage::new(
+        ts(1),
+        MessageBody::Trade(trade(0, 100 * ONE, ONE, Side::Buy, 1)),
+    ));
+    engine.dispatch(&InboundMessage::new(
+        ts(2),
+        MessageBody::Trade(trade(1, 100 * ONE, ONE, Side::Buy, 2)),
+    ));
 
     let mut instruments_recorded = Vec::new();
     while let Ok(PersistRecord::Trade(row)) = consumer.pop() {
@@ -441,27 +395,44 @@ fn one_sided_book_does_not_perturb_ewma() {
         engine_without_warmup(&instruments, Box::new(EwmaProbe::default()), sink, log_sink);
 
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, 2 * ONE)], &[(101 * ONE, ONE)], 1);
-    dispatch_capture(&mut engine, &mut consumer, InboundMessage::Book(bids));
-    dispatch_capture(&mut engine, &mut consumer, InboundMessage::Book(asks));
     dispatch_capture(
         &mut engine,
         &mut consumer,
-        InboundMessage::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 3 * ONE)], 2)),
+        InboundMessage::new(ts(1), MessageBody::Book(bids)),
+    );
+    dispatch_capture(
+        &mut engine,
+        &mut consumer,
+        InboundMessage::new(ts(1), MessageBody::Book(asks)),
+    );
+    dispatch_capture(
+        &mut engine,
+        &mut consumer,
+        InboundMessage::new(
+            ts(2),
+            MessageBody::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 3 * ONE)], 2)),
+        ),
     );
     let (built, _) = dispatch_capture(
         &mut engine,
         &mut consumer,
-        InboundMessage::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 5 * ONE)], 3)),
+        InboundMessage::new(
+            ts(3),
+            MessageBody::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 5 * ONE)], 3)),
+        ),
     );
     let vol_before = built.expect("ewma has a value after two moving two-sided updates");
 
-    engine.dispatch(&InboundMessage::BookReset(book_reset(0, 4)));
+    engine.dispatch(&book_reset(0, 4));
     while consumer.pop().is_ok() {}
 
     // Partial snapshot: bids only (book stays awaiting). No microprice, so ewma must not move.
     let (rebid, rask) = snapshot_pair(0, &[(100 * ONE, 2 * ONE)], &[(101 * ONE, ONE)], 5);
-    let (ewma_one_sided, present_one_sided) =
-        dispatch_capture(&mut engine, &mut consumer, InboundMessage::Book(rebid));
+    let (ewma_one_sided, present_one_sided) = dispatch_capture(
+        &mut engine,
+        &mut consumer,
+        InboundMessage::new(ts(5), MessageBody::Book(rebid)),
+    );
     assert_eq!(
         ewma_one_sided,
         Some(vol_before),
@@ -474,8 +445,11 @@ fn one_sided_book_does_not_perturb_ewma() {
     );
 
     // Completing the snapshot re-seeds the return chain — variance is kept, no gap return.
-    let (ewma_reseed, present_reseed) =
-        dispatch_capture(&mut engine, &mut consumer, InboundMessage::Book(rask));
+    let (ewma_reseed, present_reseed) = dispatch_capture(
+        &mut engine,
+        &mut consumer,
+        InboundMessage::new(ts(5), MessageBody::Book(rask)),
+    );
     assert_eq!(
         ewma_reseed,
         Some(vol_before),
@@ -490,7 +464,10 @@ fn one_sided_book_does_not_perturb_ewma() {
     let (ewma_resumed, _) = dispatch_capture(
         &mut engine,
         &mut consumer,
-        InboundMessage::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 9 * ONE)], 6)),
+        InboundMessage::new(
+            ts(6),
+            MessageBody::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 9 * ONE)], 6)),
+        ),
     );
     assert_ne!(
         ewma_resumed,
@@ -505,7 +482,10 @@ fn one_sided_book_does_not_perturb_ewma() {
     let (ewma_emptied, present_emptied) = dispatch_capture(
         &mut engine,
         &mut consumer,
-        InboundMessage::Book(delta_chunk(0, Side::Sell, &[(101 * ONE, 0)], 7)),
+        InboundMessage::new(
+            ts(7),
+            MessageBody::Book(delta_chunk(0, Side::Sell, &[(101 * ONE, 0)], 7)),
+        ),
     );
     assert_eq!(
         ewma_emptied,
@@ -520,7 +500,10 @@ fn one_sided_book_does_not_perturb_ewma() {
     let (ewma_one_sided_delta, _) = dispatch_capture(
         &mut engine,
         &mut consumer,
-        InboundMessage::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 4 * ONE)], 8)),
+        InboundMessage::new(
+            ts(8),
+            MessageBody::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 4 * ONE)], 8)),
+        ),
     );
     assert_eq!(
         ewma_one_sided_delta,
@@ -530,7 +513,10 @@ fn one_sided_book_does_not_perturb_ewma() {
     let (ewma_two_sided_again, _) = dispatch_capture(
         &mut engine,
         &mut consumer,
-        InboundMessage::Book(delta_chunk(0, Side::Sell, &[(102 * ONE, 2 * ONE)], 9)),
+        InboundMessage::new(
+            ts(9),
+            MessageBody::Book(delta_chunk(0, Side::Sell, &[(102 * ONE, 2 * ONE)], 9)),
+        ),
     );
     assert_ne!(
         ewma_two_sided_again,

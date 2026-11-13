@@ -5,7 +5,7 @@ use hdrhistogram::Histogram;
 
 use crate::msg::ids::{MAX_INPUT_QUEUES, QueueId};
 use crate::msg::latency::{Category, CounterSample, Stage, StageSample, WireSample};
-use crate::msg::time::{ClockSource, DurationUs, TickScale, TsUs};
+use crate::msg::time::{ClockSource, DurationUs, LocalTs, TickScale};
 use crate::msg::ui::{LatencyCell, LatencyFlow, Percentile};
 use crate::runtime::config::LatencyBudgets;
 
@@ -81,11 +81,11 @@ struct PairWindow {
 #[derive(Debug, Clone, Copy)]
 struct Ema {
     value: f64,
-    sampled_ts_us: TsUs,
+    sampled_ts_us: LocalTs,
 }
 
 impl Ema {
-    fn folded(previous: Option<Ema>, fresh: f64, at: TsUs) -> Ema {
+    fn folded(previous: Option<Ema>, fresh: f64, at: LocalTs) -> Ema {
         let Some(previous) = previous else {
             return Ema {
                 value: fresh,
@@ -109,8 +109,8 @@ pub(super) struct LatencyRollup {
     pairs: Vec<PairWindow>,
     filling: usize,
     interval_index: i64,
-    now: TsUs,
-    last_sample_ts_us: [Option<TsUs>; Category::ALL.len()],
+    now: LocalTs,
+    last_sample_ts_us: [Option<LocalTs>; Category::ALL.len()],
     backlog_total: Option<Ema>,
     backlog_queues: [Option<Ema>; MAX_INPUT_QUEUES],
     backlog_max: [u32; MAX_INPUT_QUEUES],
@@ -124,7 +124,7 @@ pub(super) struct LatencyRollup {
 }
 
 impl LatencyRollup {
-    pub(super) fn new(settings: RollupSettings, scale: TickScale, now: TsUs) -> LatencyRollup {
+    pub(super) fn new(settings: RollupSettings, scale: TickScale, now: LocalTs) -> LatencyRollup {
         let slot_count = settings.window_intervals + 1;
         let pairs = PAIRS
             .iter()
@@ -163,13 +163,13 @@ impl LatencyRollup {
         self.scale = scale;
     }
 
-    pub(super) fn now(&self) -> TsUs {
+    pub(super) fn now(&self) -> LocalTs {
         self.now
     }
 
     /// Samples recorded from now on are stamped `now` and still join the interval that is filling,
     /// even when `now` is past its end: they were produced before the wake that reads them.
-    pub(super) fn note_time(&mut self, now: TsUs) {
+    pub(super) fn note_time(&mut self, now: LocalTs) {
         self.now = self.now.max(now);
     }
 
@@ -244,7 +244,7 @@ impl LatencyRollup {
 
     /// Moves the clock to `now`, closing each interval that ends on the way. Only the first of
     /// them can hold samples: the rest of a long gap is empty intervals.
-    pub(super) fn advance(&mut self, now: TsUs, sink: &mut impl RollupSink) {
+    pub(super) fn advance(&mut self, now: LocalTs, sink: &mut impl RollupSink) {
         self.note_time(now);
         let target = interval_index(self.now, self.settings.interval);
         let gap = target - self.interval_index;
@@ -311,14 +311,15 @@ impl LatencyRollup {
                 dropped_total: self.drop_totals[sink_kind as usize],
             }));
         }
-        for queue in 0..self.settings.queue_count.min(MAX_INPUT_QUEUES) {
-            let Some(ema) = self.backlog_queues[queue] else {
+        let queue_ids = (0..self.settings.queue_count).map_while(|index| QueueId::new(index).ok());
+        for queue_id in queue_ids {
+            let Some(ema) = self.backlog_queues[queue_id.index()] else {
                 continue;
             };
             sink.write(RollupRow::Backlog(BacklogRow {
                 interval_end_ts_us,
-                queue: QueueId(queue as u8),
-                max: self.backlog_max[queue],
+                queue: queue_id,
+                max: self.backlog_max[queue_id.index()],
                 ema: ema.value,
             }));
         }
@@ -437,10 +438,10 @@ fn micros_to_nanos(micros: u64) -> u64 {
     micros.saturating_mul(1_000)
 }
 
-fn interval_index(at: TsUs, interval: DurationUs) -> i64 {
+fn interval_index(at: LocalTs, interval: DurationUs) -> i64 {
     at.micros().div_euclid(interval.micros())
 }
 
-fn interval_start(index: i64, interval: DurationUs) -> TsUs {
-    TsUs::from_micros(index.saturating_mul(interval.micros()))
+fn interval_start(index: i64, interval: DurationUs) -> LocalTs {
+    LocalTs::from_micros(index.saturating_mul(interval.micros()))
 }

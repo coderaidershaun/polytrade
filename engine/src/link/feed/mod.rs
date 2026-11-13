@@ -7,7 +7,7 @@ mod latency;
 use crate::hot::exec::QuoteLevel;
 use crate::msg::ids::{Price, Qty, Side};
 use crate::msg::inbound::Level;
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 use crate::msg::ui::{
     DomQuote, UI_BOOK_LEVELS, UI_ORDER_SNAPSHOT_CAPACITY, UI_ORDER_SNAPSHOT_MAX_TOTAL,
     UI_QUOTE_LEVELS, UiBookSnapshot, UiBookState, UiEvent, UiWorkingOrder,
@@ -95,7 +95,7 @@ wire_struct! {
 }
 
 wire_array! {
-    Level; UI_BOOK_LEVELS; Level { price: Price(0), qty: Qty(0) },
+    Level; UI_BOOK_LEVELS; Level { price: Price::from_mantissa(0), qty: Qty::from_mantissa(0) },
     UiWorkingOrder; UI_ORDER_SNAPSHOT_CAPACITY; UiWorkingOrder::EMPTY,
     Option<(Price, Qty)>; UI_QUOTE_LEVELS; None,
 }
@@ -152,7 +152,7 @@ macro_rules! ui_events {
             fn read(reader: &mut ByteReader<'_>) -> Result<Self, LinkDecodeError> {
                 let kind = u8::read(reader)?;
                 let seq = u64::read(reader)?;
-                let event_ts_us = TsUs::read(reader)?;
+                let event_ts_us = VenueTs::read(reader)?;
                 match kind {
                     $( $tag => {
                         $(

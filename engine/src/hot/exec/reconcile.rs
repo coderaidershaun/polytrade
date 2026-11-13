@@ -1,36 +1,39 @@
 //! The quote reconciler: one pure function from "what the strategy wants" and "what is actually
 //! resting" to the single primitive that closes the gap.
 //!
-//! No `&mut self`, no clock, no ring, no allocation — every input is a parameter, so fitness drives
+//! No `&mut self`, no clock, no ring, no allocation: every input is a parameter, so a test drives
 //! it with no engine at all. That is the point: this is where the money decisions live, and a
 //! function testable only through a running engine is a function tested less.
 //!
-//! Guard-clause ordered, and the order is load-bearing rather than stylistic: the cross guard comes
-//! before the funds gate because a quote that would take liquidity must be refused whether or not we
-//! could have afforded it.
+//! The order of the guard clauses carries meaning, not style: the cross guard comes before the
+//! funds gate, because a quote that would take liquidity must be refused whether or not we could
+//! have afforded it.
 //!
-//! What is NOT here is the single-flight rule. This function decides one level; whether the side is
-//! already awaiting an answer is a side-wide fact, and the engine holds it — see the guard in
-//! `spin.rs`'s ladder pass and the matching one in `flatten.rs`. A second copy here would be a
-//! second place to get `max_orders_per_side` wrong.
+//! The single-flight rule is NOT here. This function decides one level, and whether the side
+//! already waits for an answer is a fact of the whole side, so the engine holds it, in its ladder
+//! pass and in its flatten pass. A second copy here would be a second place to get
+//! `max_orders_per_side` wrong.
 
 use core::fmt;
 use core::mem::discriminant;
 
+use crate::hot::digest::digest_by_hash;
 use crate::log::{LogValue, Spec};
 use crate::msg::exec::OrderStyle;
-use crate::msg::ids::{Price, Qty, Side};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::ids::{Notional, Price, Qty, Side, Spend};
+use crate::msg::time::{DurationUs, LocalTs};
 
 use super::desired::DesiredQuote;
 use super::gates::ReadinessGap;
+
+digest_by_hash!(TickGrid, RejectReason);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TickGrid {
     pub tick: i64,
     pub step: i64,
     pub min_qty: Qty,
-    pub min_notional: i64,
+    pub min_notional: Notional,
     pub max_amends: u8,
     /// Venue price ceiling where one is published. Only an aggressive price can reach it, so the
     /// passive reconciler never consults it and the flatten planner always does.
@@ -43,8 +46,8 @@ pub struct BookTop {
     pub best_ask: Option<Price>,
     pub mid: Price,
     pub is_valid: bool,
-    pub last_commit_ts_us: TsUs,
-    pub now_ts_us: TsUs,
+    pub last_commit_ts_us: LocalTs,
+    pub now_ts_us: LocalTs,
 }
 
 impl BookTop {
@@ -62,7 +65,7 @@ pub struct ExecLimits {
     pub requote_threshold_ticks: u32,
     pub max_quote_distance_centi_bps: i64,
     pub max_book_age: DurationUs,
-    pub max_order_notional_quote: i64,
+    pub max_order_notional_quote: Notional,
 }
 
 impl ExecLimits {
@@ -71,7 +74,7 @@ impl ExecLimits {
             requote_threshold_ticks: 0,
             max_quote_distance_centi_bps: 0,
             max_book_age: DurationUs::ZERO,
-            max_order_notional_quote: 0,
+            max_order_notional_quote: Notional::ZERO,
         }
     }
 }
@@ -84,8 +87,8 @@ pub struct FundsView {
 
 impl FundsView {
     #[inline]
-    fn can_spend(&self, amount: i64) -> bool {
-        self.spendable >= self.floor + amount
+    fn can_spend(&self, amount: Spend) -> bool {
+        self.spendable >= self.floor + amount.mantissa()
     }
 }
 
@@ -145,6 +148,8 @@ pub enum RejectReason {
     RateBudget,
     /// Declared before the market opened, or inside the margin before it closes.
     OutsideWindow,
+    /// Declared for a market whose warmup has not passed: the quote is held until it is live.
+    Warming,
 }
 
 impl RejectReason {
@@ -171,13 +176,14 @@ impl RejectReason {
             Self::OrderLimit => "order limit reached",
             Self::RateBudget => "order rate budget spent",
             Self::OutsideWindow => "outside the trading window",
+            Self::Warming => "market still warming up",
         }
     }
 }
 
 /// Every kind of refusal, in the order whose place a hot log record carries. `NotReady` stands for
 /// each gap here, and the gap itself travels in the second word.
-const REJECT_KINDS: [RejectReason; 17] = [
+const REJECT_KINDS: [RejectReason; 18] = [
     RejectReason::QtyBelowMin,
     RejectReason::NotionalBelowMin,
     RejectReason::NotionalAboveMax,
@@ -195,6 +201,7 @@ const REJECT_KINDS: [RejectReason; 17] = [
     RejectReason::OrderLimit,
     RejectReason::RateBudget,
     RejectReason::OutsideWindow,
+    RejectReason::Warming,
 ];
 
 /// Prints what `{:?}` prints, `NotReady(Stream)` included, whatever the placeholder: the operator
@@ -231,6 +238,9 @@ impl LogValue for RejectReason {
 }
 
 /// The one decision function; see the module header for why the guard order is not stylistic.
+///
+/// # Panics
+/// When the tick or the step of the grid is not positive.
 pub fn reconcile_side(input: ReconcileInput) -> ReconcileOutcome {
     let ReconcileInput {
         side,
@@ -241,7 +251,7 @@ pub fn reconcile_side(input: ReconcileInput) -> ReconcileOutcome {
         limits,
         funds,
     } = input;
-    debug_assert!(
+    assert!(
         grid.tick > 0 && grid.step > 0,
         "grid increments must be positive, got tick {} step {}",
         grid.tick,
@@ -290,7 +300,8 @@ pub fn reconcile_side(input: ReconcileInput) -> ReconcileOutcome {
         return ReconcileOutcome::Place(intent);
     };
 
-    let delta_ticks = price.0.abs_diff(resting.price.0) / grid.tick.unsigned_abs();
+    let delta_ticks =
+        price.mantissa().abs_diff(resting.price.mantissa()) / grid.tick.unsigned_abs();
     if delta_ticks > u64::from(limits.requote_threshold_ticks) {
         return ReconcileOutcome::Cancel;
     }
@@ -328,6 +339,6 @@ fn would_cross(side: Side, price: Price, top: &BookTop) -> bool {
 
 #[inline]
 fn is_outside_band(price: Price, mid: Price, max_centi_bps: i64) -> bool {
-    let distance = i128::from(price.0.abs_diff(mid.0));
-    distance * 1_000_000 > i128::from(mid.0) * i128::from(max_centi_bps)
+    let distance = i128::from(price.mantissa().abs_diff(mid.mantissa()));
+    distance * 1_000_000 > i128::from(mid.mantissa()) * i128::from(max_centi_bps)
 }

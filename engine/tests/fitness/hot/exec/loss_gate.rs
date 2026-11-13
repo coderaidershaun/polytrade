@@ -13,7 +13,7 @@
 //! permanent side restriction, and losses would keep growing on the side that was still admitted.
 
 use engine::hot::exec::{ExecSettings, LossVerdict, SessionPnl, assess_loss};
-use engine::msg::ids::{InstrumentId, Qty, Side};
+use engine::msg::ids::{InstrumentId, Notional, Qty, Side};
 use engine::msg::inbound::InboundMessage;
 use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
 use engine::runtime::exposure::InstrumentExposure;
@@ -29,7 +29,7 @@ const BUDGET: i64 = 5 * ONE;
 
 /// One mantissa of base: the residue a partial fill leaves, and the smallest amount that could
 /// turn a kill switch into a side restriction.
-const DUST: Qty = Qty(1);
+const DUST: Qty = Qty::from_mantissa(1);
 
 fn session(
     mark_to_market_quote: Option<i64>,
@@ -37,8 +37,8 @@ fn session(
     position_base: Qty,
 ) -> SessionPnl {
     SessionPnl {
-        mark_to_market_quote,
-        realised_quote,
+        mark_to_market_quote: mark_to_market_quote.map(Notional::from_mantissa),
+        realised_quote: Notional::from_mantissa(realised_quote),
         position_base,
     }
 }
@@ -48,12 +48,20 @@ fn session(
 /// may go on quoting.
 #[test]
 fn a_realised_breach_halts_whatever_residue_the_position_holds() {
-    for position in [Qty(0), DUST, Qty(ONE), Qty(-ONE)] {
+    for position in [
+        Qty::from_mantissa(0),
+        DUST,
+        Qty::from_mantissa(ONE),
+        Qty::from_mantissa(-ONE),
+    ] {
         assert_eq!(
-            assess_loss(session(Some(-6 * ONE), -6 * ONE, position), BUDGET),
+            assess_loss(
+                session(Some(-6 * ONE), -6 * ONE, position),
+                Notional::from_mantissa(BUDGET)
+            ),
             LossVerdict::Realised,
             "a realised loss past the budget while holding {} is still a realised loss",
-            position.0
+            position.mantissa()
         );
     }
 }
@@ -97,7 +105,7 @@ fn assess_loss_verdicts_match_named_cases() {
             name: "within_budget_on_both_legs",
             mark_to_market_quote: Some(-4 * ONE),
             realised_quote: -4 * ONE,
-            position_base: DUST.0,
+            position_base: DUST.mantissa(),
             budget: BUDGET,
             expected: LossVerdict::Within,
         },
@@ -105,7 +113,7 @@ fn assess_loss_verdicts_match_named_cases() {
             name: "realised_breach_judged_before_any_mark_exists",
             mark_to_market_quote: None,
             realised_quote: -6 * ONE,
-            position_base: DUST.0,
+            position_base: DUST.mantissa(),
             budget: BUDGET,
             expected: LossVerdict::Realised,
         },
@@ -163,9 +171,9 @@ fn assess_loss_verdicts_match_named_cases() {
             session(
                 case.mark_to_market_quote,
                 case.realised_quote,
-                Qty(case.position_base),
+                Qty::from_mantissa(case.position_base),
             ),
-            case.budget,
+            Notional::from_mantissa(case.budget),
         );
         assert_eq!(
             got, case.expected,
@@ -190,7 +198,7 @@ fn fixture_restoring(
         // Every limit except the session budget is set so wide it cannot be what stops a quote, so
         // a halt in the command stream can only have come from the loss gate.
         settings: ExecSettings {
-            max_session_loss_quote,
+            max_session_loss_quote: Notional::from_mantissa(max_session_loss_quote),
             ..exec_settings()
         },
         tables: RecordedTables::new(&[TableKind::Orders]),
@@ -324,7 +332,7 @@ fn the_halt_fires_on_the_average_cost_realised_loss() {
 fn restored(position_base: i64, cash_quote: i64, basis_quote: i64) -> [InstrumentExposure; 1] {
     [InstrumentExposure {
         instrument: InstrumentId(0),
-        position_base: Qty(position_base),
+        position_base: Qty::from_mantissa(position_base),
         cash_quote,
         basis_quote,
     }]
@@ -404,12 +412,7 @@ fn restored_ledger_boundaries_match_named_cases() {
 fn rotate(fixture: &mut QuotingEngine, when: i64) {
     fixture
         .engine
-        .dispatch(&InboundMessage::MarketRotation(rotation(
-            0,
-            when,
-            when + 300 * 1_000_000,
-            when,
-        )));
+        .dispatch(&rotation(0, when, when + 300 * 1_000_000, when));
 }
 
 /// FITNESS: the budget spans the RUN, not the market. A venue that rotates every few minutes hands

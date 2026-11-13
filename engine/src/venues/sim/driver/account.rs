@@ -5,13 +5,13 @@ use super::super::wire::{SimBalance, stream_messages};
 use super::{SimExecDriver, asset_name, venue_millis};
 use crate::msg::ids::Qty;
 use crate::msg::inbound::InboundMessage;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::venues::binance::exec::DecodeContext;
 
 impl SimExecDriver {
     pub(super) fn settlement_messages(
         &mut self,
-        at_ts_us: TsUs,
+        at_ts_us: LocalTs,
         decode: DecodeContext<'_>,
     ) -> Vec<InboundMessage> {
         let settlement = self.venue.wallet_mut().settle(venue_millis(at_ts_us));
@@ -20,8 +20,8 @@ impl SimExecDriver {
             .iter()
             .map(|balance| SimBalance {
                 asset: asset_name(decode.assets, balance.asset),
-                free: Qty(balance.free),
-                locked: Qty(balance.locked),
+                free: Qty::from_mantissa(balance.free),
+                locked: Qty::from_mantissa(balance.locked),
             })
             .collect();
         let payload = self

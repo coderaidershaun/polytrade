@@ -1,8 +1,5 @@
-//! Execution-core fitness: the phase gate, the cancel policy and the sweep. These are the rules
-//! standing between a strategy bug and money, and every one of them fails SILENTLY if broken — an
-//! order placed while resyncing rests against state the engine has not verified, a cancelled
-//! `Foreign` order is a human's order destroyed, and a sweep that reports complete while an order
-//! still rests leaves a position nobody is watching after the process exits.
+//! The phase gate, the cancel rule and the sweep of the execution core, the rules between a
+//! strategy bug and money, each of which fails with no sign if broken.
 
 use engine::msg::exec::{CancelReason, ExecCommand, OrderStyle, Provenance};
 use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
@@ -34,8 +31,8 @@ fn place(client_id: u64) -> ExecCommand {
         instrument: INSTRUMENT,
         client_id: ClientOrderId(client_id),
         side: Side::Buy,
-        price: Price(11_800_000_000_000),
-        qty: Qty(8_000),
+        price: Price::from_mantissa(11_800_000_000_000),
+        qty: Qty::from_mantissa(8_000),
         style: OrderStyle::PostOnly,
     }
 }
@@ -44,7 +41,7 @@ fn amend(client_id: u64) -> ExecCommand {
     ExecCommand::AmendQty {
         instrument: INSTRUMENT,
         client_id: ClientOrderId(client_id),
-        qty: Qty(4_000),
+        qty: Qty::from_mantissa(4_000),
     }
 }
 
@@ -53,8 +50,8 @@ fn mirrored(client_id: u64, provenance: Provenance) -> MirroredOrder {
         instrument: INSTRUMENT,
         client_id: ClientOrderId(client_id),
         side: Side::Buy,
-        price: Price(11_800_000_000_000),
-        qty: Qty(8_000),
+        price: Price::from_mantissa(11_800_000_000_000),
+        qty: Qty::from_mantissa(8_000),
         provenance,
         has_sent_cancel: false,
         is_ambiguous: false,
@@ -166,7 +163,7 @@ fn a_refused_amend_is_reported_back_rather_than_swallowed() {
         [ExecRequest::AmendQty {
             instrument: INSTRUMENT,
             client_id: ClientOrderId(1),
-            qty: Qty(4_000),
+            qty: Qty::from_mantissa(4_000),
         }],
         "the one phase that admits an amend refused it instead"
     );
@@ -262,14 +259,16 @@ fn a_sweep_completes_only_once_its_scoped_orders_are_confirmed_gone() {
             .any(|effect| matches!(effect, ExecEffect::SweepComplete { .. })),
         "the sweep reported complete before either cancel was confirmed"
     );
-    let first_gone = effects_of(|emit| own_orders.on_order_gone(ClientOrderId(1), Qty(0), emit));
+    let first_gone =
+        effects_of(|emit| own_orders.on_order_gone(ClientOrderId(1), Qty::from_mantissa(0), emit));
     assert!(
         !first_gone
             .iter()
             .any(|effect| matches!(effect, ExecEffect::SweepComplete { .. })),
         "the sweep reported complete with one order still resting"
     );
-    let second_gone = effects_of(|emit| own_orders.on_order_gone(ClientOrderId(2), Qty(0), emit));
+    let second_gone =
+        effects_of(|emit| own_orders.on_order_gone(ClientOrderId(2), Qty::from_mantissa(0), emit));
     assert!(second_gone.iter().any(|effect| matches!(
         effect,
         ExecEffect::SweepComplete {
@@ -420,15 +419,15 @@ fn on_command_admission_is_permissive_for_cancels_and_fail_closed_for_places() {
         }
     )));
     assert_eq!(side_capacity.possibly_live_count(INSTRUMENT, Side::Buy), 1);
-    effects_of(|emit| side_capacity.on_order_gone(ClientOrderId(1), Qty(0), emit));
+    effects_of(|emit| side_capacity.on_order_gone(ClientOrderId(1), Qty::from_mantissa(0), emit));
     assert_eq!(
         sent_requests(&effects_of(|emit| side_capacity.on_command(place(2), emit))),
         [ExecRequest::Place {
             instrument: INSTRUMENT,
             client_id: ClientOrderId(2),
             side: Side::Buy,
-            price: Price(11_800_000_000_000),
-            qty: Qty(8_000),
+            price: Price::from_mantissa(11_800_000_000_000),
+            qty: Qty::from_mantissa(8_000),
             style: OrderStyle::PostOnly,
         }]
     );
@@ -468,7 +467,7 @@ fn venue_discovered_orders_are_retained_in_full_and_fail_closed_on_the_side_cap(
     assert!(!inherited.on_stream_ready());
     assert_eq!(inherited.phase(), Phase::Resyncing);
     assert_eq!(inherited.possibly_live_count(INSTRUMENT, Side::Buy), 1);
-    effects_of(|emit| inherited.on_order_gone(ClientOrderId(7), Qty(0), emit));
+    effects_of(|emit| inherited.on_order_gone(ClientOrderId(7), Qty::from_mantissa(0), emit));
     assert!(inherited.on_stream_ready());
     assert_eq!(inherited.phase(), Phase::Quoting);
 
@@ -655,7 +654,8 @@ fn a_refused_cancel_is_re_sent_by_either_the_next_command_or_the_next_sweep() {
             .any(|effect| matches!(effect, ExecEffect::SweepComplete { .. })),
         "a sweep reported complete with an order still resting"
     );
-    let settled = effects_of(|emit| swept.on_order_gone(ClientOrderId(1), Qty(0), emit));
+    let settled =
+        effects_of(|emit| swept.on_order_gone(ClientOrderId(1), Qty::from_mantissa(0), emit));
     assert!(
         settled
             .iter()
@@ -730,7 +730,7 @@ fn an_outstanding_cancels_latch_is_touched_only_by_its_own_resolving_answer() {
     assert!(snapshot.mirror()[0].has_sent_cancel);
     snapshot
         .observe_venue_order(MirroredOrder {
-            price: Price(11_700_000_000_000),
+            price: Price::from_mantissa(11_700_000_000_000),
             ..mirrored(1, Provenance::Mine)
         })
         .unwrap();
@@ -738,7 +738,10 @@ fn an_outstanding_cancels_latch_is_touched_only_by_its_own_resolving_answer() {
         snapshot.mirror()[0].has_sent_cancel,
         "a generic snapshot falsely answered a correlated cancel"
     );
-    assert_eq!(snapshot.mirror()[0].price, Price(11_700_000_000_000));
+    assert_eq!(
+        snapshot.mirror()[0].price,
+        Price::from_mantissa(11_700_000_000_000)
+    );
 
     let mut lost_probe = quoting_core();
     effects_of(|emit| lost_probe.on_command(place(1), emit));
@@ -774,7 +777,8 @@ fn an_outstanding_cancels_latch_is_touched_only_by_its_own_resolving_answer() {
             .any(|effect| matches!(effect, ExecEffect::SweepComplete { .. })),
         "a sweep reported complete with an unresolved order still mirrored"
     );
-    let settled = effects_of(|emit| lost_probe.on_order_gone(ClientOrderId(1), Qty(0), emit));
+    let settled =
+        effects_of(|emit| lost_probe.on_order_gone(ClientOrderId(1), Qty::from_mantissa(0), emit));
     assert!(
         settled
             .iter()

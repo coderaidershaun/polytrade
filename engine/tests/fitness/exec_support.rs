@@ -1,5 +1,7 @@
-//! Shared fixture for the engine-driven execution tests: a quoting engine on a two-sided book, the
-//! three readiness legs, and the helpers that read its command stream.
+//! The shared fixture of the execution tests: a quoting engine on a two-sided book, its readiness,
+//! the readers of its command stream, and the sink that a session test reads.
+
+use std::ops::{Deref, DerefMut};
 
 use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{
@@ -7,15 +9,15 @@ use engine::hot::exec::{
 };
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{Strategy, StrategyCtx};
-use engine::msg::exec::{CancelReason, ExecCommand, ExecLaneItem, OrderStyle};
-use engine::msg::ids::{AssetId, InstrumentId, Qty, Side};
-use engine::msg::inbound::{InboundMessage, SpinTick};
-use engine::msg::time::{DurationUs, Stamper};
+use engine::msg::exec::{CancelReason, ExecCommand, ExecEvent, ExecLaneItem, OrderStyle};
+use engine::msg::ids::{AssetId, InstrumentId, Notional, Qty, Side};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
+use engine::msg::time::{DurationUs, LocalTs, Stamper};
 use engine::msg::ui::UiEvent;
 use engine::runtime::config::{RecordedTables, TrackerSpec};
 use engine::runtime::exposure::InstrumentExposure;
 use engine::runtime::registry::InstrumentRow;
-use engine::venues::exec::open_orders_snapshot_end;
+use engine::venues::exec::{EventSink, open_orders_snapshot_end};
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
@@ -27,9 +29,9 @@ use crate::engine_support::{
 pub(crate) fn reseat_book(bid: i64, ask: i64, when: i64) -> [InboundMessage; 3] {
     let (bids, asks) = snapshot_pair(0, &[(bid, ONE)], &[(ask, ONE)], when);
     [
-        InboundMessage::BookReset(book_reset(0, when)),
-        InboundMessage::Book(bids),
-        InboundMessage::Book(asks),
+        book_reset(0, when),
+        InboundMessage::new(ts(when), MessageBody::Book(bids)),
+        InboundMessage::new(ts(when), MessageBody::Book(asks)),
     ]
 }
 
@@ -42,7 +44,7 @@ const QUOTE_ASSET: AssetId = AssetId(1);
 pub(crate) const CEILING: i64 = 100 * ONE;
 
 /// The declared size, and the number the "real notional, not a fixed step" pin turns on.
-pub(crate) const QUOTE_QTY: Qty = Qty(ONE / 10);
+pub(crate) const QUOTE_QTY: Qty = Qty::from_mantissa(ONE / 10);
 
 pub(crate) const BID: i64 = 99 * ONE;
 pub(crate) const ASK: i64 = 101 * ONE;
@@ -76,7 +78,7 @@ impl Strategy for TwoSidedQuoter {
 
 pub(crate) fn row_with_ceiling(ceiling_quote: i64) -> InstrumentRow {
     InstrumentRow {
-        max_exposure_quote: ceiling_quote,
+        max_exposure_quote: Notional::from_mantissa(ceiling_quote),
         ..instrument_row(0, TrackerSpec::default(), 64)
     }
 }
@@ -89,13 +91,13 @@ pub(crate) fn exec_settings() -> ExecSettings {
             requote_threshold_ticks: 1,
             max_quote_distance_centi_bps: 100_000_000,
             max_book_age: DurationUs::from_secs(3_600),
-            max_order_notional_quote: 1_000_000 * ONE,
+            max_order_notional_quote: Notional::from_mantissa(1_000_000 * ONE),
         },
         max_orders_per_side: 1,
-        min_base_balance: 0,
-        min_quote_balance: 0,
+        min_base_balance: Qty::from_mantissa(0),
+        min_quote_balance: Notional::from_mantissa(0),
         max_consecutive_rejects: 5,
-        max_session_loss_quote: 1_000_000 * ONE,
+        max_session_loss_quote: Notional::from_mantissa(1_000_000 * ONE),
         inflight_timeout: DurationUs::from_secs(3_600),
         // No silence sweep: a reconciliation request in the command stream would be noise to filter
         // rather than a behaviour these tests are about.
@@ -199,23 +201,26 @@ pub(crate) fn make_ready(engine: &mut HotEngine, when: i64) {
 /// undetectable.
 pub(crate) fn stream_and_balances(engine: &mut HotEngine, when: i64) {
     engine.dispatch(&stream_ready(INSTRUMENT, when));
-    engine.dispatch(&InboundMessage::Account(account_chunk(
-        &[(BASE_ASSET, 10 * ONE), (QUOTE_ASSET, 1_000_000 * ONE)],
-        when,
-    )));
+    engine.dispatch(&InboundMessage::new(
+        ts(when),
+        MessageBody::Account(account_chunk(
+            &[(BASE_ASSET, 10 * ONE), (QUOTE_ASSET, 1_000_000 * ONE)],
+            when,
+        )),
+    ));
 }
 
 /// The third leg, built by the SAME constructor the Binance actor sends it with. A hand-built marker
 /// would let every readiness-dependent test stay green while production sent none.
 pub(crate) fn open_orders_snapshot(engine: &mut HotEngine, when: i64) {
-    engine.dispatch(&InboundMessage::Exec(open_orders_snapshot_end(
-        INSTRUMENT,
+    engine.dispatch(&InboundMessage::new(
         ts(when),
-    )));
+        MessageBody::Exec(open_orders_snapshot_end(INSTRUMENT, ts(when))),
+    ));
 }
 
 pub(crate) fn spin_at(engine: &mut HotEngine, seq: u64, when: i64) {
-    engine.dispatch(&InboundMessage::SpinTick(spin(seq, when)));
+    engine.dispatch(&spin(seq, when));
 }
 
 pub(crate) fn drain_commands(commands: &mut Consumer<ExecLaneItem>) -> Vec<ExecCommand> {
@@ -249,4 +254,29 @@ pub(crate) fn has_halted(commands: &mut Consumer<ExecLaneItem>) -> bool {
             }
         )
     })
+}
+
+/// The events that a session hands to its venue's queue, in order. A session test reads each
+/// event and none of the received stamps, so the stamps stay behind.
+#[derive(Debug, Default)]
+pub(crate) struct SentEvents(Vec<ExecEvent>);
+
+impl EventSink for SentEvents {
+    fn send_exec(&mut self, _received_ts_us: LocalTs, event: ExecEvent) {
+        self.0.push(event);
+    }
+}
+
+impl Deref for SentEvents {
+    type Target = Vec<ExecEvent>;
+
+    fn deref(&self) -> &Vec<ExecEvent> {
+        &self.0
+    }
+}
+
+impl DerefMut for SentEvents {
+    fn deref_mut(&mut self) -> &mut Vec<ExecEvent> {
+        &mut self.0
+    }
 }

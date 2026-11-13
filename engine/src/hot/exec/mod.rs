@@ -1,10 +1,9 @@
-//! Engine-owned execution state: what orders exist, what they have filled, and what money is
-//! committed to them. Single-writer on the hot thread, fixed capacity, no allocation after
-//! construction.
+//! The engine's own execution state: which orders exist, what they have filled, and what money
+//! is committed to them. Only the hot thread writes it, and it never grows or allocates once built.
 //!
-//! The venue is not the authority here — this table is. The venue speaks in events that duplicate,
-//! reorder and arrive after the order they describe has been reaped, so every one of them folds
-//! through a transition table rather than being read as truth.
+//! The venue is not the authority here: this table is. The venue sends events that repeat, arrive
+//! out of order, and arrive after their order was reaped, so each one folds through a transition
+//! table and is never read as truth.
 
 mod account;
 mod audit;
@@ -27,6 +26,7 @@ pub use crate::runtime::config::MAX_QUOTE_LEVELS;
 pub use account::{AccountTable, AccountWatermark, Balance, ReleaseOutcome};
 pub use budget::{MAX_ORDER_BUDGET_WINDOWS, OrderBudget, OrderBudgetWindow};
 pub use desired::{DesiredBook, DesiredQuote, QuoteLevel};
+pub(crate) use engine::FoldStamps;
 pub use engine::{ExecEngine, ExecEngineSetup, ExecSettings};
 pub use flatten::{FeeModel, FlattenInput, FlattenOutcome, plan_flatten};
 pub use gates::{

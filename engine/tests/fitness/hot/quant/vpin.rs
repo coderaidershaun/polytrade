@@ -1,15 +1,14 @@
-//! VPIN over completed volume bars. The estimator is a pure ratio: a wrong denominator or an
-//! ungated zero-target window produces a plausible-looking toxicity number (or a NaN) that lands in
-//! the research tape unremarked.
+//! VPIN over completed volume bars: a wrong denominator, or a window with no target, gives a
+//! toxicity number that looks right, or a NaN, in the research tape.
 
 use engine::hot::quant::toxicity::VolumeBar;
 use engine::hot::quant::toxicity::vpin;
-use engine::msg::time::TsUs;
+use engine::msg::time::VenueTs;
 
 fn bar(buy: i64, sell: i64, target: i64) -> VolumeBar {
     VolumeBar {
-        open_ts_us: TsUs::from_micros(0),
-        close_ts_us: TsUs::from_micros(0),
+        open_ts_us: VenueTs::from_micros(0),
+        close_ts_us: VenueTs::from_micros(0),
         buy_notional: buy,
         sell_notional: sell,
         target,

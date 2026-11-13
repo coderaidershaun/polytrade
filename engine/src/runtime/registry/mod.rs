@@ -1,14 +1,12 @@
-//! Frozen identity: turns a `Config` into a `Registry` — dense instrument ids, producer
-//! grouping, input queues. Submodules are stages of that one build (`rows`, `assets`,
-//! `grouping`, `validate`), so the `Registry` and the vocabulary it answers in stay here
-//! and callers never name a stage.
+//! Turns a config into a frozen registry of dense instrument ids, producer groups and input queues.
+//! Its submodules are stages of that one build, so callers never name a stage.
 
 mod assets;
 mod grouping;
 mod rows;
 mod validate;
 
-use crate::msg::ids::{AssetId, InstrumentId, MAX_INPUT_QUEUES, Price, Qty, QueueId};
+use crate::msg::ids::{AssetId, InstrumentId, Notional, Price, Qty, QueueId};
 use crate::runtime::config::{
     BinanceEnv, Config, ConfigError, KlineInterval, Subscriptions, TrackerSpec, VenueMarket,
 };
@@ -32,8 +30,8 @@ pub struct InstrumentRow {
     pub tick_size: Option<Price>,
     pub lot_size: Option<Qty>,
     pub min_qty: Option<Qty>,
-    /// The minimum order value, as a 1e-8 quote mantissa.
-    pub min_notional: Option<i64>,
+    /// The minimum order value.
+    pub min_notional: Option<Notional>,
     pub max_num_orders: Option<u32>,
     /// `None` on futures, where no amend-count filter is published.
     pub max_num_order_amends: Option<u32>,
@@ -45,9 +43,9 @@ pub struct InstrumentRow {
     pub subscriptions: Subscriptions,
     pub kline_intervals: Vec<KlineInterval>,
     pub book_capacity: usize,
-    /// The exposure ceiling, as a 1e-8 mantissa. A configured risk budget, validated
-    /// positive and finite at build time.
-    pub max_exposure_quote: i64,
+    /// The exposure ceiling: a configured risk budget, validated positive and finite at build
+    /// time.
+    pub max_exposure_quote: Notional,
     pub tracker: TrackerSpec,
 }
 
@@ -55,7 +53,7 @@ pub struct InstrumentRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BinanceLimits {
     pub min_qty: Qty,
-    pub min_notional: i64,
+    pub min_notional: Notional,
     pub max_num_orders: u32,
     pub max_num_order_amends: Option<u32>,
 }
@@ -130,24 +128,24 @@ pub struct Registry {
 
 impl Registry {
     /// # Errors
-    /// A strategy instrument that names no row, or a tracker block the source cannot serve.
+    /// A strategy instrument that names no row, a tracker block the source cannot serve, or more
+    /// input queues than one hot thread reads.
     pub fn build<P>(config: &Config<P>) -> Result<Registry, ConfigError> {
         let (instruments, assets) = build_instrument_rows(&config.source)?;
         check_strategy_instruments(&config.strategy.instruments, &instruments)?;
 
-        let producer_groups = group_producers(&instruments);
-        let timer_queue_id = QueueId(producer_groups.len() as u8);
-        let link_queue_id = config.link.is_some().then(|| QueueId(timer_queue_id.0 + 1));
+        let producer_groups = group_producers(&instruments)?;
+        let timer_queue_id = queue_id_at(producer_groups.len())?;
+        let link_queue_id = config
+            .link
+            .as_ref()
+            .map(|_| queue_id_at(timer_queue_id.index() + 1))
+            .transpose()?;
         // Exec is appended last: queue ids are recorded on messages, and shifting one
         // would re-attribute an entire recorded tape.
-        let exec_queue_id = execution_queue_id(config, link_queue_id.unwrap_or(timer_queue_id));
+        let exec_queue_id = execution_queue_id(config, link_queue_id.unwrap_or(timer_queue_id))?;
         let last_queue_id = exec_queue_id.or(link_queue_id).unwrap_or(timer_queue_id);
-        let input_queue_count = usize::from(last_queue_id.0) + 1;
-        // Config alone cannot reach this ceiling; only a bug in the grouping logic could.
-        debug_assert!(
-            input_queue_count <= MAX_INPUT_QUEUES,
-            "{input_queue_count} input queues from one source, max {MAX_INPUT_QUEUES}"
-        );
+        let input_queue_count = last_queue_id.index() + 1;
 
         Ok(Registry {
             instruments,
@@ -199,9 +197,12 @@ impl Registry {
     pub(crate) fn set_order_rate_limits(&mut self, limits: Vec<OrderRateLimit>) {
         // One source means one stamped market; a second stamp would silently keep only the
         // last budget.
-        debug_assert!(
+        assert!(
             self.order_rate_limits.is_empty(),
-            "order rate limits stamped twice — a second binance market would overwrite the first"
+            "order rate limits stamped twice: {:?} held, {:?} offered — a second binance market \
+             would overwrite the first",
+            self.order_rate_limits,
+            limits
         );
         self.order_rate_limits = limits;
     }
@@ -244,7 +245,24 @@ impl Registry {
 // An armed mode owns an input queue exactly when its venue has an edge to feed one. Config
 // validation refuses the other combinations first; this stays the structural answer, so a queue is
 // never allocated for an edge that will not exist.
-fn execution_queue_id<P>(config: &Config<P>, previous: QueueId) -> Option<QueueId> {
-    let mode = config.execution.as_ref()?.mode;
-    (mode.is_enabled() && config.source.supports_execution(mode)).then(|| QueueId(previous.0 + 1))
+fn execution_queue_id<P>(
+    config: &Config<P>,
+    previous: QueueId,
+) -> Result<Option<QueueId>, ConfigError> {
+    let Some(execution) = config.execution.as_ref() else {
+        return Ok(None);
+    };
+    let is_fed = execution.mode.is_enabled() && config.source.supports_execution(execution.mode);
+    is_fed
+        .then(|| queue_id_at(previous.index() + 1))
+        .transpose()
+}
+
+/// The one way the registry turns a position in the queue order into a queue id, so each build
+/// refuses a config that needs more queues than one hot thread reads.
+fn queue_id_at(index: usize) -> Result<QueueId, ConfigError> {
+    QueueId::new(index).map_err(|refused| ConfigError::TooManyInputQueues {
+        count: refused.index + 1,
+        max: refused.max,
+    })
 }

@@ -29,6 +29,7 @@ CVE-2026-96642
 CVE-2026-96643
 CVE-2026-96644
 CVE-2026-96778
+CVE-2026-128067
 GHSA-78g4-xqwv-q3g8
 
 # tornado 6.5.7 in strategies/uv.lock: the Jupyter kernel server of the notebooks, never part of an engine.

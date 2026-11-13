@@ -13,8 +13,8 @@ use tokio::runtime::Handle;
 use engine::msg::exec::{ExecCommand, ExecLaneItem, OrderStyle, StampedExecCommand};
 use engine::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, QueueId, Side};
 use engine::msg::time::DurationUs;
-use engine::runtime::PinnedSenders;
 use engine::runtime::config::SenderPlacement;
+use engine::runtime::{PinnedSenders, pin_to_core};
 use engine::venues::edge::sender::{CommandTransport, Handover, SendWait, Sender, SenderSetup};
 use engine::venues::exec::SessionOutcome;
 
@@ -103,7 +103,7 @@ impl SenderRun {
                 commands,
                 stamper: sender_stamper,
                 wires,
-                queue: QueueId(0),
+                queue: QueueId::new(0).expect("queue 0 is below the cap of input queues"),
                 wait: SendWait::new(placement, tokio::time::interval(tick)),
             };
             drive_sender(setup, wire, &sending).await;
@@ -171,7 +171,7 @@ impl SenderHome {
                 .build()
                 .map(SenderHome::Shared)
                 .context("the harness cannot build a shared runtime"),
-            SenderPlacement::Pinned => PinnedSenders::spawn(core)
+            SenderPlacement::Pinned => PinnedSenders::spawn(core, pin_to_core)
                 .map(SenderHome::Pinned)
                 .context("the harness cannot start the pinned sender thread"),
         }
@@ -222,8 +222,8 @@ fn place(index: usize) -> ExecCommand {
         instrument: InstrumentId(0),
         client_id: ClientOrderId(index as u64 + 1),
         side: if index.is_multiple_of(2) { Side::Buy } else { Side::Sell },
-        price: Price(65_000 * FIXED_SCALE),
-        qty: Qty(1_000),
+        price: Price::from_mantissa(65_000 * FIXED_SCALE),
+        qty: Qty::from_mantissa(1_000),
         style: OrderStyle::PostOnly,
     }
 }

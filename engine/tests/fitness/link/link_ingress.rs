@@ -1,5 +1,5 @@
-//! The link's engine seam: a peer frame crossing the edge into `on_link`, the tape dispatch tees on
-//! the way past, and a payload a strategy banks on its way out.
+//! A peer frame on its way into `on_link`, the tape row that the fold writes for it, and a payload
+//! that a strategy banks on its way out.
 //!
 //! The edge pipeline is exercised without a socket, which is deliberate: the wire format and the
 //! gate LOGIC belong in this suite, while socket behaviour belongs to contract-seam and
@@ -8,19 +8,18 @@
 
 use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
 use engine::link::{
-    Envelope, FrameGuard, InboundLink, LINK_MAX_DATAGRAM, LINK_MAX_FIELDS, LinkBody, LinkDatagram,
-    LinkFrame, LinkHash, LinkIdentity, LinkOrigin, LinkPayload, SequenceGate, TopicId,
-    schema_hash_of_fields,
+    Envelope, FrameGuard, LINK_MAX_DATAGRAM, LINK_MAX_FIELDS, LinkBody, LinkDatagram, LinkFrame,
+    LinkHash, LinkIdentity, LinkOrigin, LinkPayload, SequenceGate, TopicId, schema_hash_of_fields,
 };
 use engine::msg::ids::InstrumentId;
-use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::persist::{FeatureId, LinkFrameRow, LinkRowKind, PersistRecord};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, VenueTs};
 use engine::runtime::config::{RecordedTables, TableKind};
 
 use crate::engine_support::{
     LinkedEngine, LinkedSetup, drain_persist, engine_with_link, idle_at, instrument_row,
-    run_control, spin, tracker_spec_all, ts,
+    run_control, spin, tracker_spec_all, ts, venue_ts,
 };
 
 const FIELDS: [&str; 2] = ["peer_mid", "peer_confidence"];
@@ -82,7 +81,7 @@ fn identity() -> LinkIdentity {
         token_hash: LinkHash::of_name(""),
         strategy_hash: LinkHash::of_name("strat"),
         sender_te_hash: SENDER,
-        boot_ts_us: ts(1_000),
+        boot_ts_us: venue_ts(1_000),
     }
 }
 
@@ -111,7 +110,11 @@ impl Edge {
     }
 
     fn admit(&mut self, seq: u64, values: &[f64], received: i64) -> Option<InboundMessage> {
-        let payload = LinkPayload::new(schema_hash_of_fields(&FIELDS), ts(received - 1), values);
+        let payload = LinkPayload::new(
+            schema_hash_of_fields(&FIELDS),
+            venue_ts(received - 1),
+            values,
+        );
         let datagram = LinkDatagram {
             envelope: Envelope::new(identity(), TopicId::FIRST_STRATEGY, seq),
             body: LinkBody::Payload(payload),
@@ -128,14 +131,11 @@ impl Edge {
         let LinkBody::Payload(payload) = decoded.body else {
             panic!("a strategy topic decodes to a payload");
         };
-        Some(InboundMessage::Link(InboundLink {
-            frame: LinkFrame {
-                origin: LinkOrigin::from(&decoded.envelope),
-                payload,
-            },
-            received_ts_us: ts(received),
-            queued_ts_us: ts(received),
-        }))
+        let frame = LinkFrame {
+            origin: LinkOrigin::from(&decoded.envelope),
+            payload,
+        };
+        Some(InboundMessage::new(ts(received), MessageBody::Link(frame)))
     }
 }
 
@@ -246,7 +246,7 @@ fn a_peer_frame_reaches_the_strategy_and_the_tape_under_independent_gates() {
                     && row.seq == 1
                     && row.count == case.values.len() as u16
                     && row.received_ts_us == ts(100)
-                    && row.event_ts_us == ts(99)),
+                    && row.event_ts_us == venue_ts(99)),
                 "case {}: every row carries the frame's identity and BOTH clocks, {rows:?}",
                 case.name
             );
@@ -309,9 +309,7 @@ fn the_sequence_gate_keeps_duplicates_and_reorders_off_the_hot_thread() {
 #[test]
 fn link_send_banks_the_declared_schema_on_a_registered_topic() {
     let mut linked = linked(&[TableKind::Features]);
-    linked
-        .engine
-        .dispatch(&InboundMessage::SpinTick(spin(4, 200)));
+    linked.engine.dispatch(&spin(4, 200));
 
     let outbound = linked.outbound.pop().expect("the spin banked one payload");
     assert_eq!(
@@ -327,7 +325,7 @@ fn link_send_banks_the_declared_schema_on_a_registered_topic() {
     assert_eq!(outbound.payload.values(), &[4.0, 0.5]);
     assert_eq!(
         outbound.payload.event_ts_us,
-        TsUs::from_micros(200),
+        VenueTs::from_micros(200),
         "stamped with the event's own time rather than a clock read, so a replayed callback banks \
          a byte-identical frame"
     );
@@ -344,7 +342,7 @@ fn link_send_banks_the_declared_schema_on_a_registered_topic() {
 fn an_overlong_payload_panics_rather_than_truncating() {
     LinkPayload::new(
         LinkHash::of_name("x"),
-        ts(1),
+        venue_ts(1),
         &vec![0.0; LINK_MAX_FIELDS + 1],
     );
 }
@@ -387,7 +385,5 @@ fn dispatch_one_spin(strategy: Box<dyn Strategy>) {
         tables: RecordedTables::default(),
         warmup: DurationUs::ZERO,
     });
-    linked
-        .engine
-        .dispatch(&InboundMessage::SpinTick(spin(1, 1)));
+    linked.engine.dispatch(&spin(1, 1));
 }

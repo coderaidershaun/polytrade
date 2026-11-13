@@ -8,6 +8,7 @@ use rtrb::Producer;
 
 use crate::link::OutboundLink;
 use crate::log::HotRecord;
+use crate::msg::failure::FailureClass;
 use crate::msg::ui::{UiBookSnapshot, UiEvent};
 
 pub struct DropCountingSink<T> {
@@ -16,6 +17,9 @@ pub struct DropCountingSink<T> {
 }
 
 impl<T> DropCountingSink<T> {
+    /// A full ring drops the message and counts it.
+    pub const WHEN_FULL: FailureClass = FailureClass::Reject;
+
     pub fn new(producer: Producer<T>) -> Self {
         Self {
             producer,
@@ -67,6 +71,9 @@ pub struct StrategyLogSink {
 }
 
 impl StrategyLogSink {
+    /// A full ring drops the record and counts it.
+    pub const WHEN_FULL: FailureClass = FailureClass::Reject;
+
     pub fn new(producer: Producer<HotRecord>) -> Self {
         Self {
             producer,
@@ -102,6 +109,9 @@ pub struct SampleSink<T> {
 }
 
 impl<T> SampleSink<T> {
+    /// A full ring drops the sample and counts it.
+    pub const WHEN_FULL: FailureClass = FailureClass::Reject;
+
     pub(crate) fn new(producer: Producer<T>) -> Self {
         Self {
             producer,

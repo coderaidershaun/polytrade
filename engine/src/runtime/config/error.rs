@@ -3,6 +3,8 @@
 
 use std::path::PathBuf;
 
+use crate::msg::failure::{FailureClass, Halt};
+
 #[derive(thiserror::Error, Debug)]
 pub enum ConfigError {
     #[error("config file unreadable at {}", .path.display())]
@@ -75,4 +77,31 @@ pub enum ConfigError {
         "execution.mode is sim but source.subscriptions disables {missing} — the simulated venue matches against the market data it is given, so a missing stream is a venue that reports itself armed and fills nothing"
     )]
     SimulatedExecutionSubscriptions { missing: Box<str> },
+    #[error(
+        "the config needs at least {count} input queues, and one hot thread reads at most {max}"
+    )]
+    TooManyInputQueues { count: usize, max: usize },
+}
+
+impl ConfigError {
+    pub const fn failure_class(&self) -> FailureClass {
+        match self {
+            ConfigError::Read { .. }
+            | ConfigError::Parse { .. }
+            | ConfigError::Identifier { .. }
+            | ConfigError::SpinWithoutHotCore
+            | ConfigError::LogDeadline { .. }
+            | ConfigError::TablesWithoutPersistence { .. }
+            | ConfigError::PublicLinkBind { .. }
+            | ConfigError::TooManyLinkPeers { .. }
+            | ConfigError::UnknownLinkTopic { .. }
+            | ConfigError::TooManyPeerTopics { .. }
+            | ConfigError::Invalid { .. }
+            | ConfigError::UnknownStrategyInstrument { .. }
+            | ConfigError::ExecutionModeUnsupported { .. }
+            | ConfigError::SimulatedExecutionMarket { .. }
+            | ConfigError::SimulatedExecutionSubscriptions { .. }
+            | ConfigError::TooManyInputQueues { .. } => FailureClass::Halt(Halt::Start),
+        }
+    }
 }

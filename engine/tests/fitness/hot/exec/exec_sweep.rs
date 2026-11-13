@@ -1,22 +1,22 @@
-//! FITNESS: reconciliation may retire only orders that predate its question, and conservative side
-//! occupancy must halt rather than admit a quote beyond the configured cap.
+//! Reconciliation may retire only orders older than its question, and a cautious count of the
+//! orders on a side must halt rather than admit a quote past the configured cap.
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
-    ClientIdLayout, ExecHalt, ExecSettings, HaltReason, OrderClaim, OrderState, OrderTable,
-    QuoteLevel, ReconcilePass, apply_exec_event, side_base,
+    ClientIdLayout, ExecSettings, HaltReason, OrderClaim, OrderState, OrderTable, QuoteLevel,
+    ReconcilePass, apply_exec_event, side_base,
 };
 use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, OrderStyle, RejectClass, VenueOrderStatus,
 };
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
-use engine::msg::inbound::InboundMessage;
-use engine::msg::time::TsUs;
-use engine::msg::ui::UiEvent;
+use engine::msg::inbound::{InboundMessage, MessageBody};
+use engine::msg::time::LocalTs;
+use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::{RecordedTables, TableKind};
 use rtrb::Consumer;
 
-use crate::engine_support::{ONE, exec_event};
+use crate::engine_support::{ONE, exec_event, ts};
 use crate::exec_support::{
     BID, CEILING, INSTRUMENT, QuotingEngine, QuotingSetup, TwoSidedQuoter, built_quoting_engine,
     drain_commands, exec_settings, make_ready, reseat_book, row_with_ceiling, spin_at,
@@ -44,10 +44,10 @@ fn claim_at(
             instrument,
             side: Side::Buy,
             level,
-            price: Price(100),
-            qty: Qty(1),
+            price: Price::from_mantissa(100),
+            qty: Qty::from_mantissa(1),
             style: OrderStyle::PostOnly,
-            claimed_ts_us: TsUs::from_micros(0),
+            claimed_ts_us: LocalTs::from_micros(0),
             recon_seq,
         })
         .expect("the keyed level has a generation slot");
@@ -60,7 +60,7 @@ fn sweep(orders: &mut OrderTable, instrument: InstrumentId, recon_seq: u64) -> u
         ReconcilePass {
             instrument,
             recon_seq,
-            recon_ts_us: TsUs::from_micros(1_000),
+            recon_ts_us: LocalTs::from_micros(1_000),
         },
         &mut |_, _| closed += 1,
     );
@@ -90,7 +90,7 @@ fn resurrected_slot(orders: &mut OrderTable, recon_seq: u64) -> usize {
     let index = claim_at(orders, INSTRUMENT, QuoteLevel::ZERO, recon_seq);
     let client_id = orders.slot(index).client_id;
     let base = ExecEvent {
-        qty: Qty(1),
+        qty: Qty::from_mantissa(1),
         ..exec_event(INSTRUMENT, client_id, Side::Buy, 100, 10)
     };
     apply_exec_event(
@@ -100,6 +100,7 @@ fn resurrected_slot(orders: &mut OrderTable, recon_seq: u64) -> usize {
             status: Some(VenueOrderStatus::Canceled),
             ..base
         },
+        ts(10),
     );
     apply_exec_event(
         orders.slot_mut(index),
@@ -109,6 +110,7 @@ fn resurrected_slot(orders: &mut OrderTable, recon_seq: u64) -> usize {
             recon_seq,
             ..base
         },
+        ts(10),
     );
     index
 }
@@ -144,6 +146,7 @@ fn a_probe_refused_at_the_gateway_leaves_the_doubt_standing() {
             reject_code: -1003,
             ..exec_event(INSTRUMENT, client_id, Side::Buy, 100, 20)
         },
+        ts(20),
     );
     assert_eq!(orders.slot(index).state, OrderState::Unknown);
 
@@ -168,6 +171,7 @@ fn a_probe_refused_at_the_gateway_leaves_the_doubt_standing() {
                 reject_code: -1003,
                 ..exec_event(INSTRUMENT, id, Side::Buy, 100, 20)
             },
+            ts(20),
         );
         assert_eq!(orders.slot(other).state, OrderState::Live);
     }
@@ -176,15 +180,18 @@ fn a_probe_refused_at_the_gateway_leaves_the_doubt_standing() {
 fn adopt_live(engine: &mut HotEngine, generation_offset: usize, side: Side, when: i64) {
     let slot = side_base(INSTRUMENT, side) + generation_offset;
     let client_id = ClientIdLayout { run_nonce: 0 }.encode(slot, 1);
-    engine.dispatch(&InboundMessage::Exec(ExecEvent {
-        kind: ExecKind::SnapshotOrder,
-        status: Some(VenueOrderStatus::New),
-        qty: Qty(ONE / 10),
-        ..exec_event(INSTRUMENT, client_id, side, BID, when)
-    }));
+    engine.dispatch(&InboundMessage::new(
+        ts(when),
+        MessageBody::Exec(ExecEvent {
+            kind: ExecKind::SnapshotOrder,
+            status: Some(VenueOrderStatus::New),
+            qty: Qty::from_mantissa(ONE / 10),
+            ..exec_event(INSTRUMENT, client_id, side, BID, when)
+        }),
+    ));
 }
 
-fn halt_of(events: &mut Consumer<UiEvent>) -> Option<ExecHalt> {
+fn halt_of(events: &mut Consumer<UiEvent>) -> Option<UiHalt> {
     std::iter::from_fn(|| events.pop().ok())
         .filter_map(|event| match event {
             UiEvent::Execution { halt, .. } => Some(halt),
@@ -210,7 +217,7 @@ fn conservative_occupancy_above_the_cap_halts_and_sweeps() {
     spin_at(&mut engine, 1, 30);
     assert!(!matches!(
         halt_of(&mut ui_events),
-        Some(ExecHalt::Halted { .. })
+        Some(UiHalt::Halted { .. })
     ));
     drain_commands(&mut commands);
 
@@ -218,7 +225,7 @@ fn conservative_occupancy_above_the_cap_halts_and_sweeps() {
     spin_at(&mut engine, 2, 50);
     assert!(matches!(
         halt_of(&mut ui_events),
-        Some(ExecHalt::Halted {
+        Some(UiHalt::Halted {
             reason: HaltReason::DuplicateResting,
             ..
         })

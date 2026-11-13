@@ -1,5 +1,5 @@
-//! Zero-allocation fitness: after construction, the hot loop's own driver and the quant fit never
-//! touch the allocator. The falsifiable proof of the steady-state no-alloc rule, green forever.
+//! Checks that the hot loop's driver and the quant fit never allocate once built. The rule that the
+//! hot thread allocates nothing in steady state rests on this test, not on trust.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,17 +15,16 @@ use engine::hot::spawn::{HotDriver, Step};
 use engine::hot::strategy::{Strategy, StrategyConfig};
 use engine::hot::tracker::MicroTracker;
 use engine::link::{
-    InboundLink, LinkFrame, LinkHash, LinkOrigin, LinkPayload, OutboundLink, TopicId,
-    schema_hash_of_fields,
+    LinkFrame, LinkHash, LinkOrigin, LinkPayload, OutboundLink, TopicId, schema_hash_of_fields,
 };
 use engine::log::{HotRecord, LaneReader, TextRecord, open_hot_lane, open_text_lane};
-use engine::msg::exec::{
-    AccountChunk, ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus,
+use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus};
+use engine::msg::ids::{
+    AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
 };
-use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use engine::msg::inbound::InboundMessage;
+use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::persist::{FeatureId, PersistRecord};
-use engine::msg::time::{DurationUs, Stamper, TsUs};
+use engine::msg::time::{DurationUs, LocalTs, Stamper, VenueTs};
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
 use engine::runtime::config::{
     BinanceMarket, Instruments, IntensitySpec, KlineInterval, PolySeries, RecordedTables,
@@ -79,20 +78,17 @@ fn intensity_spec() -> TrackerSpec {
 #[test]
 fn intensity_accumulator_and_fit_do_not_allocate() {
     let tick = ONE / 100;
-    let mut tracker = MicroTracker::new(&intensity_spec(), &[], Some(Price(tick)));
+    let mut tracker = MicroTracker::new(&intensity_spec(), &[], Some(Price::from_mantissa(tick)));
     let book = seeded_book();
     tracker.on_book(&book);
 
     // Buy aggressors 0..3 ticks above the ask populate the ask histogram; distinct timestamps make
     // each its own group, so every step also advances the decay clock.
     let feed = |tracker: &mut MicroTracker, i: i64| {
-        tracker.on_trade(&trade(
-            0,
-            101 * ONE + (i % 4) * tick,
-            ONE,
-            Side::Buy,
-            i * 1_000,
-        ));
+        tracker.on_trade(
+            &trade(0, 101 * ONE + (i % 4) * tick, ONE, Side::Buy, i * 1_000),
+            ts(i * 1_000),
+        );
     };
     let mut fit = IntensityFit::default();
     for i in 0..1_000i64 {
@@ -101,7 +97,7 @@ fn intensity_accumulator_and_fit_do_not_allocate() {
     // Prime the warm-start cache before the counted window so the in-window fits refit warm.
     fit.fit(
         tracker.intensity().expect("configured"),
-        TsUs::from_micros(1_000_000),
+        LocalTs::from_micros(1_000_000),
     );
 
     let mut estimates = 0u64;
@@ -109,7 +105,7 @@ fn intensity_accumulator_and_fit_do_not_allocate() {
     for i in 1_000..101_000i64 {
         feed(&mut tracker, i);
         if i % 1_000 == 0 {
-            let now = TsUs::from_micros(i * 1_000);
+            let now = LocalTs::from_micros(i * 1_000);
             if fit
                 .fit(tracker.intensity().expect("configured"), now)
                 .ask
@@ -461,17 +457,17 @@ const KINDS: [&str; 10] = [
 /// No arm catches the rest, so a new kind of message stops this file compiling until the mix sends
 /// it.
 fn kind_of(message: &InboundMessage) -> usize {
-    match message {
-        InboundMessage::Trade(_) => 0,
-        InboundMessage::Book(_) => 1,
-        InboundMessage::BookReset(_) => 2,
-        InboundMessage::MarketRotation(_) => 3,
-        InboundMessage::Kline(_) => 4,
-        InboundMessage::SpinTick(_) => 5,
-        InboundMessage::Link(_) => 6,
-        InboundMessage::RunControl(_) => 7,
-        InboundMessage::Exec(_) => 8,
-        InboundMessage::Account(_) => 9,
+    match &message.body {
+        MessageBody::Trade(_) => 0,
+        MessageBody::Book(_) => 1,
+        MessageBody::BookReset(_) => 2,
+        MessageBody::MarketRotation(_) => 3,
+        MessageBody::Kline(_) => 4,
+        MessageBody::SpinTick(_) => 5,
+        MessageBody::Link(_) => 6,
+        MessageBody::RunControl(_) => 7,
+        MessageBody::Exec(_) => 8,
+        MessageBody::Account(_) => 9,
     }
 }
 
@@ -525,13 +521,16 @@ fn recorder_message(i: i64) -> (Queue, InboundMessage) {
         // where re-anchoring A from touch to mid overflows and the Guéant block gates off.
         0 => (
             Queue::Market,
-            InboundMessage::Trade(trade(
-                0,
-                101 * ONE + (i % 4) * MICRO_TICK,
-                1_000_000,
-                Side::Buy,
-                when,
-            )),
+            InboundMessage::new(
+                ts(when),
+                MessageBody::Trade(trade(
+                    0,
+                    101 * ONE + (i % 4) * MICRO_TICK,
+                    1_000_000,
+                    Side::Buy,
+                    when,
+                )),
+            ),
         ),
         // Whole-unit bid qty against the seeded 1-unit ask: a real top-of-book imbalance that
         // clears the resilience dust floor (≥5% TOB imbalance) so a rate is produced. The
@@ -540,33 +539,42 @@ fn recorder_message(i: i64) -> (Queue, InboundMessage) {
         // is unaffected.
         1 => (
             Queue::Market,
-            InboundMessage::Book(delta_chunk(
-                0,
-                Side::Buy,
-                &[(100 * ONE, (1 + i % 5) * ONE)],
-                when,
-            )),
+            InboundMessage::new(
+                ts(when),
+                MessageBody::Book(delta_chunk(
+                    0,
+                    Side::Buy,
+                    &[(100 * ONE, (1 + i % 5) * ONE)],
+                    when,
+                )),
+            ),
         ),
         // Churn on the second level of each side. Deliberately off the touch: the arm above tunes a
         // TOB interaction the resilience gate depends on, and moving the touch here would perturb
         // it while proving nothing extra about allocation.
         2 => (
             Queue::Market,
-            InboundMessage::Book(delta_chunk(
-                0,
-                Side::Buy,
-                &[(99 * ONE, (1 + i % 5) * ONE)],
-                when,
-            )),
+            InboundMessage::new(
+                ts(when),
+                MessageBody::Book(delta_chunk(
+                    0,
+                    Side::Buy,
+                    &[(99 * ONE, (1 + i % 5) * ONE)],
+                    when,
+                )),
+            ),
         ),
         3 => (
             Queue::Market,
-            InboundMessage::Book(delta_chunk(
-                0,
-                Side::Sell,
-                &[(102 * ONE, (1 + i % 5) * ONE)],
-                when,
-            )),
+            InboundMessage::new(
+                ts(when),
+                MessageBody::Book(delta_chunk(
+                    0,
+                    Side::Sell,
+                    &[(102 * ONE, (1 + i % 5) * ONE)],
+                    when,
+                )),
+            ),
         ),
         4 => {
             let step = i / 6;
@@ -579,9 +587,12 @@ fn recorder_message(i: i64) -> (Queue, InboundMessage) {
                 is_closed,
                 when,
             );
-            (Queue::Market, InboundMessage::Kline(candle))
+            (
+                Queue::Market,
+                InboundMessage::new(ts(when), MessageBody::Kline(candle)),
+            )
         }
-        _ => (Queue::Timer, InboundMessage::SpinTick(spin(i as u64, when))),
+        _ => (Queue::Timer, spin(i as u64, when)),
     }
 }
 
@@ -593,19 +604,31 @@ fn publisher_message(i: i64) -> (Queue, InboundMessage) {
     match i % 6 {
         0 => (
             Queue::Market,
-            InboundMessage::Trade(trade(0, POLY_ASK, POLY_SHARES, side, when)),
+            InboundMessage::new(
+                ts(when),
+                MessageBody::Trade(trade(0, POLY_ASK, POLY_SHARES, side, when)),
+            ),
         ),
         1 => (
             Queue::Market,
-            InboundMessage::Book(delta_chunk(0, Side::Buy, &[(POLY_BID, depth)], when)),
+            InboundMessage::new(
+                ts(when),
+                MessageBody::Book(delta_chunk(0, Side::Buy, &[(POLY_BID, depth)], when)),
+            ),
         ),
         2 => (
             Queue::Market,
-            InboundMessage::Book(delta_chunk(2, Side::Sell, &[(POLY_ASK, depth)], when)),
+            InboundMessage::new(
+                ts(when),
+                MessageBody::Book(delta_chunk(2, Side::Sell, &[(POLY_ASK, depth)], when)),
+            ),
         ),
         3 => (
             Queue::Market,
-            InboundMessage::Trade(trade(2, POLY_BID, POLY_SHARES, side, when)),
+            InboundMessage::new(
+                ts(when),
+                MessageBody::Trade(trade(2, POLY_BID, POLY_SHARES, side, when)),
+            ),
         ),
         4 => {
             let candle = kline(
@@ -615,9 +638,12 @@ fn publisher_message(i: i64) -> (Queue, InboundMessage) {
                 i % 12 == 4,
                 when,
             );
-            (Queue::Market, InboundMessage::Kline(candle))
+            (
+                Queue::Market,
+                InboundMessage::new(ts(when), MessageBody::Kline(candle)),
+            )
         }
-        _ => (Queue::Timer, InboundMessage::SpinTick(spin(i as u64, when))),
+        _ => (Queue::Timer, spin(i as u64, when)),
     }
 }
 
@@ -641,8 +667,14 @@ fn touch_levels(shipped: Shipped) -> (Levels, Levels) {
 fn push_snapshot(inputs: &mut Inputs, shipped: Shipped, instrument: u16, when: i64) {
     let (bids, asks) = touch_levels(shipped);
     let (bids, asks) = snapshot_pair(instrument, &bids, &asks, when);
-    inputs.push(Queue::Market, InboundMessage::Book(bids));
-    inputs.push(Queue::Market, InboundMessage::Book(asks));
+    inputs.push(
+        Queue::Market,
+        InboundMessage::new(ts(when), MessageBody::Book(bids)),
+    );
+    inputs.push(
+        Queue::Market,
+        InboundMessage::new(ts(when), MessageBody::Book(asks)),
+    );
 }
 
 /// The open window of the `a` legs runs past the whole tape, and the `b` legs host the next one.
@@ -656,7 +688,7 @@ fn push_windows(inputs: &mut Inputs, when: i64) {
         (3, (close, close + 300 * SECOND_US)),
     ] {
         let window = rotation(instrument, open, close, when);
-        inputs.push(Queue::Market, InboundMessage::MarketRotation(window));
+        inputs.push(Queue::Market, window);
     }
 }
 
@@ -675,23 +707,20 @@ impl PeerFrames {
     }
 
     fn frame(&self, seq: u64, when: i64) -> InboundMessage {
-        InboundMessage::Link(InboundLink {
-            frame: LinkFrame {
-                origin: LinkOrigin {
-                    sender_te_hash: LinkHash::of_name("peer-te"),
-                    boot_ts_us: TsUs::from_micros(1),
-                    topic: TopicId::FIRST_STRATEGY,
-                    seq,
-                },
-                payload: LinkPayload::new(
-                    self.schema_hash,
-                    TsUs::from_micros(when - 1),
-                    &self.values,
-                ),
+        let frame = LinkFrame {
+            origin: LinkOrigin {
+                sender_te_hash: LinkHash::of_name("peer-te"),
+                boot_ts_us: VenueTs::from_micros(1),
+                topic: TopicId::FIRST_STRATEGY,
+                seq,
             },
-            received_ts_us: TsUs::from_micros(when),
-            queued_ts_us: TsUs::from_micros(when),
-        })
+            payload: LinkPayload::new(
+                self.schema_hash,
+                VenueTs::from_micros(when - 1),
+                &self.values,
+            ),
+        };
+        InboundMessage::new(LocalTs::from_micros(when), MessageBody::Link(frame))
     }
 }
 
@@ -700,24 +729,26 @@ fn push_extras(inputs: &mut Inputs, shipped: Shipped, peers: &PeerFrames, i: i64
     let when = when_of(i);
     match i % EXTRAS_EVERY {
         7 => {
-            inputs.push(
-                Queue::Market,
-                InboundMessage::BookReset(book_reset(SPARE, when)),
-            );
+            inputs.push(Queue::Market, book_reset(SPARE, when));
             push_snapshot(inputs, shipped, SPARE, when);
         }
         17 => {
             let window = rotation(SPARE, when, when + 300 * SECOND_US, when);
-            inputs.push(Queue::Market, InboundMessage::MarketRotation(window));
+            inputs.push(Queue::Market, window);
         }
         27 => {
             let balances = [(AssetId(0), 1_000 * ONE), (AssetId(1), 1_000_000 * ONE)];
             // Each report carries its own venue time, or the engine sets it aside as stale.
-            let report = AccountChunk {
-                venue_update_ts_ms: u64::try_from(when / 1_000).expect("message time is positive"),
-                ..account_chunk(&balances, when)
+            let report = {
+                let mut chunk = account_chunk(&balances, when);
+                chunk.venue_update_ts_ms =
+                    u64::try_from(when / 1_000).expect("message time is positive");
+                chunk
             };
-            inputs.push(Queue::Venue, InboundMessage::Account(report));
+            inputs.push(
+                Queue::Venue,
+                InboundMessage::new(ts(when), MessageBody::Account(report)),
+            );
         }
         37 => inputs.push(Queue::Link, peers.frame(i as u64, when)),
         _ => {}
@@ -767,7 +798,7 @@ impl Venue {
                     kind: ExecKind::AckPlaced,
                     status: Some(VenueOrderStatus::New),
                     qty,
-                    ..exec_event(instrument, client_id, side, price.0, when)
+                    ..exec_event(instrument, client_id, side, price.mantissa(), when)
                 }
             }
             ExecCommand::Cancel {
@@ -812,7 +843,10 @@ impl Venue {
             },
             ExecCommand::CancelOurs { .. } | ExecCommand::CancelPriorRun { .. } => return,
         };
-        inputs.push(Queue::Venue, InboundMessage::Exec(answer));
+        inputs.push(
+            Queue::Venue,
+            InboundMessage::new(ts(when), MessageBody::Exec(answer)),
+        );
     }
 
     /// The market trades through each resting order in full.
@@ -830,11 +864,14 @@ impl Venue {
                     order.instrument,
                     order.client_id,
                     order.side,
-                    order.price.0,
+                    order.price.mantissa(),
                     when,
                 )
             };
-            inputs.push(Queue::Venue, InboundMessage::Exec(fill));
+            inputs.push(
+                Queue::Venue,
+                InboundMessage::new(ts(when), MessageBody::Exec(fill)),
+            );
         }
     }
 }
@@ -843,10 +880,10 @@ fn recorder_row_at(id: u16) -> InstrumentRow {
     let mut row = instrument_row(id, tracker_spec_all(100), 128);
     row.market = VenueMarket::Binance(BinanceMarket::Spot);
     row.venue_symbol = format!("btcusdt-{id}").into();
-    row.tick_size = Some(Price(MICRO_TICK));
-    row.lot_size = Some(Qty(1_000));
-    row.min_qty = Some(Qty(1_000));
-    row.min_notional = Some(5 * ONE);
+    row.tick_size = Some(Price::from_mantissa(MICRO_TICK));
+    row.lot_size = Some(Qty::from_mantissa(1_000));
+    row.min_qty = Some(Qty::from_mantissa(1_000));
+    row.min_notional = Some(Notional::from_mantissa(5 * ONE));
     if id == 0 {
         row.tracker.intensity = intensity_spec().intensity;
         // The long VPIN window is 250 buckets, but tracker_spec_all retains only 64 closed bars — a
@@ -877,17 +914,17 @@ fn publisher_row_at(id: u16) -> InstrumentRow {
         display: format!("btc-updown-5m-{leg}").into(),
         base: "BTC".into(),
         quote: "USDC".into(),
-        tick_size: Some(Price(POLY_TICK)),
-        lot_size: Some(Qty(FIXED_SCALE / 100)),
-        min_qty: Some(Qty(POLY_SHARES)),
-        max_price: Some(Price(FIXED_SCALE * 99 / 100)),
+        tick_size: Some(Price::from_mantissa(POLY_TICK)),
+        lot_size: Some(Qty::from_mantissa(FIXED_SCALE / 100)),
+        min_qty: Some(Qty::from_mantissa(POLY_SHARES)),
+        max_price: Some(Price::from_mantissa(FIXED_SCALE * 99 / 100)),
         max_num_orders: Some(32),
         subscriptions: Subscriptions {
             klines: false,
             ..Subscriptions::default()
         },
         kline_intervals: Vec::new(),
-        max_exposure_quote: 500 * FIXED_SCALE,
+        max_exposure_quote: Notional::from_mantissa(500 * FIXED_SCALE),
         tracker: TrackerSpec {
             intensity: Some(IntensitySpec {
                 max_depth_ticks: 32,
@@ -1158,7 +1195,7 @@ fn drive_on_this_thread(shipped: Shipped) -> Window {
             Shipped::Recorder => recorder_message(i),
             Shipped::Publisher => publisher_message(i),
         };
-        if let (true, InboundMessage::Kline(candle)) = (is_measured, &message) {
+        if let (true, MessageBody::Kline(candle)) = (is_measured, &message.body) {
             if candle.is_closed {
                 window.closed_klines += 1;
             } else {

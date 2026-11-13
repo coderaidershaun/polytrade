@@ -1,6 +1,7 @@
 //! Spin/volume-clock field samplers: same SpinField set from committed inputs (latest/trade/agg).
 
 use super::{BACKING_MULTIPLE, Latest};
+use crate::hot::digest::digest_fields;
 use crate::hot::series::FastQueue;
 use crate::msg::ids::{FIXED_SCALE, Price, Qty, Side};
 use crate::msg::inbound::TradeEvent;
@@ -16,10 +17,12 @@ pub(super) struct TradeAggregates {
     sell_count: u64,
 }
 
+digest_fields! { TradeAggregates { qty, notional, count, buy_count, sell_count } }
+
 impl TradeAggregates {
     #[inline]
     pub(super) fn add(&mut self, event: &TradeEvent) {
-        self.qty += i128::from(event.qty.0);
+        self.qty += i128::from(event.qty.mantissa());
         self.notional += notional_i128(event.price, event.qty);
         self.count += 1;
         match event.side {
@@ -47,6 +50,8 @@ impl TradeAggregates {
 pub(super) struct FieldSeries {
     series: Vec<(SpinField, FastQueue<f64>)>,
 }
+
+digest_fields! { FieldSeries { series } }
 
 impl FieldSeries {
     pub(super) fn new(fields: &[SpinField], window: usize) -> Self {
@@ -107,6 +112,8 @@ pub(super) struct SpinSampler {
     pub(super) trades: TradeAggregates,
 }
 
+digest_fields! { SpinSampler { series, trades } }
+
 impl SpinSampler {
     pub(super) fn new(fields: &[SpinField], window: usize) -> Self {
         Self {
@@ -124,7 +131,7 @@ impl SpinSampler {
 /// Notional (1e-8 mantissa) in i128 (never overflow on volume-clock accumulation).
 #[inline]
 pub(super) fn notional_i128(price: Price, qty: Qty) -> i128 {
-    i128::from(price.0) * i128::from(qty.0) / i128::from(FIXED_SCALE)
+    i128::from(price.mantissa()) * i128::from(qty.mantissa()) / i128::from(FIXED_SCALE)
 }
 
 /// Stats-only mantissa→f64 (series values, never key/money).

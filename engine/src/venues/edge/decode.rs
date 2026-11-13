@@ -1,6 +1,5 @@
-//! Every venue's JSON meets the same three hazards: a frame serde cannot read, a decimal too large
-//! for an `i64` at eight decimal places, and a spelling this engine does not know. They share one
-//! fault type so that whether a fault is fatal or dropped cannot drift between venues.
+//! The three faults of each venue's JSON: an unreadable frame, a decimal too large for the
+//! mantissa, and an unknown spelling. One type, so a fatal fault is fatal for each venue.
 
 use serde::Deserialize;
 
@@ -77,7 +76,7 @@ pub(crate) fn qty_field(field: &'static str, text: &str) -> Result<Qty, DecimalF
 }
 
 pub(crate) fn mantissa_field(field: &'static str, text: &str) -> Result<i64, DecimalFault> {
-    qty_field(field, text).map(|qty| qty.0)
+    qty_field(field, text).map(|qty| qty.mantissa())
 }
 
 pub(crate) fn levels<'a>(

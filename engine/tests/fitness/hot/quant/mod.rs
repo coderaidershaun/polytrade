@@ -2,7 +2,7 @@
 //! One module per calculator, each named for the concept rather than the source path.
 
 use engine::hot::quant::hawkes::{HawkesEvents, HawkesParams};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs};
 
 mod egarch;
 mod gueant;
@@ -52,14 +52,14 @@ impl Lcg {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct ExpSimulation {
     pub(crate) params: HawkesParams,
-    pub(crate) start_ts: TsUs,
+    pub(crate) start_ts: LocalTs,
     pub(crate) horizon: DurationUs,
     pub(crate) seed: u64,
     pub(crate) max_events: usize,
 }
 
 impl ExpSimulation {
-    pub(crate) fn run(&self) -> Vec<TsUs> {
+    pub(crate) fn run(&self) -> Vec<LocalTs> {
         let HawkesParams { mu, alpha, beta } = self.params;
         let horizon = self.horizon.to_secs();
         let mut generator = Lcg(self.seed);
@@ -85,20 +85,20 @@ impl ExpSimulation {
 
 /// Time runs in f64 seconds and rounds to microseconds only here, so the rounding never feeds
 /// back into the simulated intensity.
-fn stamps(start: TsUs, seconds: &[f64]) -> Vec<TsUs> {
+fn stamps(start: LocalTs, seconds: &[f64]) -> Vec<LocalTs> {
     seconds
         .iter()
         .map(|secs| start + DurationUs::from_micros((secs * 1e6).round() as i64))
         .collect()
 }
 
-fn ts(secs: f64) -> TsUs {
-    TsUs::from_micros((secs * 1e6).round() as i64)
+fn ts(secs: f64) -> LocalTs {
+    LocalTs::from_micros((secs * 1e6).round() as i64)
 }
 
-const START: TsUs = TsUs::from_micros(0);
+const START: LocalTs = LocalTs::from_micros(0);
 
-fn window(stamps: &[TsUs]) -> HawkesEvents {
+fn window(stamps: &[LocalTs]) -> HawkesEvents {
     let mut events = HawkesEvents::new(32_768);
     for &stamp in stamps {
         events.push(stamp);
@@ -107,7 +107,7 @@ fn window(stamps: &[TsUs]) -> HawkesEvents {
 }
 
 /// The exponential path the fitter is scored on: truth, its event window, and the fit time.
-fn exponential_fixture() -> (HawkesParams, HawkesEvents, TsUs) {
+fn exponential_fixture() -> (HawkesParams, HawkesEvents, LocalTs) {
     let truth = HawkesParams::new(0.5, 0.8, 2.0);
     let horizon = DurationUs::from_secs(6000);
     let path = ExpSimulation {

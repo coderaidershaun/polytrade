@@ -1,12 +1,8 @@
-//! Risk-chart projection fitness: the map from the ordered event lane to the rolling exposure/PnL
-//! series, and the quote-unit window over it. The lower chart is stacked ON the mid chart and reads
-//! under one shared crosshair, so its failure mode is not a crash but a value shown against the wrong
-//! spin — or an axis whose labels imply a position nobody holds. Three properties carry that weight:
-//! both series bucket one event time identically, the window is never derived here, and a wire value
-//! becomes the exact quote mantissa the engine's ledger held.
+//! The risk chart under the mid chart: both bucket one event time alike, and a wire value becomes
+//! the exact quote amount of the ledger, so no value shows against the wrong spin.
 
 use engine::msg::ids::{FIXED_SCALE, InstrumentId};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, VenueTs};
 use engine::msg::ui::UiEvent;
 use engine::operator::workstation::chart::model::ChartModel;
 use engine::operator::workstation::chart::position_model::{PositionBucket, PositionModel};
@@ -250,7 +246,7 @@ fn frames_the_ledger_could_not_have_produced_are_dropped_and_counted() {
             UiEvent::Position {
                 instrument: InstrumentId(0),
                 seq: 0,
-                event_ts_us: TsUs::from_micros(-1),
+                event_ts_us: VenueTs::from_micros(-1),
                 exposure_quote: 2.5,
                 pnl_quote: 1.0,
             },
@@ -331,7 +327,7 @@ proptest! {
         chart.configure(&[Some(TICK)], spin);
         let mut positions = PositionModel::with_capacity(1, spin);
 
-        let stamp = TsUs::from_micros(micros);
+        let stamp = VenueTs::from_micros(micros);
         commit_at(&mut chart, 0, stamp);
         positions.apply_event(&UiEvent::Position {
             instrument: InstrumentId(0),

@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use engine::msg::time::{EngineClock, Stamper, Tick, TickAnchor, TickScale, TsUs};
+use engine::msg::time::{EngineClock, LocalTs, Stamper, Tick, TickAnchor, TickScale};
 
 /// The two anchors of the first scale sit this far apart.
 const FIRST_ANCHOR_GAP: Duration = Duration::from_millis(2);
@@ -73,7 +73,7 @@ pub fn start_engine_clock() -> EngineClock {
     clippy::disallowed_methods,
     reason = "the harness stamps each message and command it sends, as an edge of the engine does"
 )]
-pub fn now(clock: &EngineClock) -> TsUs {
+pub fn now(clock: &EngineClock) -> LocalTs {
     clock.now()
 }
 
@@ -112,7 +112,7 @@ pub fn first_scale(stamper: &Stamper, clock: &EngineClock) -> TickScale {
 }
 
 /// Spins until the engine clock reaches `due`, so the sender of the harness keeps a fixed rate.
-pub fn spin_until(clock: &EngineClock, due: TsUs) {
+pub fn spin_until(clock: &EngineClock, due: LocalTs) {
     while now(clock) < due {
         std::hint::spin_loop();
     }

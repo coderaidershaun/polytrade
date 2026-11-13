@@ -1,7 +1,7 @@
 //! Where everything goes: the bars, the panes and the top bar's slots for one canvas, as plain
 //! numbers. A painter never computes geometry of its own.
 
-use crate::hot::exec::ExecHalt;
+use crate::msg::ui::UiHalt;
 
 use super::navigation::{Navigation, Selection, SizeClass, View};
 
@@ -107,11 +107,11 @@ pub struct TopBar {
 }
 
 impl TopBar {
-    fn of(area: Area, class: SizeClass, halt: Option<ExecHalt>) -> Self {
+    fn of(area: Area, class: SizeClass, halt: Option<UiHalt>) -> Self {
         let mut room = area;
         let mode = room.cut_right(MODE_WIDTH);
         let halt = halt
-            .is_some_and(ExecHalt::is_halted)
+            .is_some_and(UiHalt::is_halted)
             .then(|| room.cut_right(HALT_WIDTH));
         let switcher_width = (class != SizeClass::Compact).then(|| SWITCHER_WIDTH.min(room.width));
         let reserved = switcher_width.unwrap_or(0.0);
@@ -150,7 +150,7 @@ pub struct Arrangement {
 impl Arrangement {
     /// `halt` is the engine's latch, once it has reported one. The top bar opens a halt slot only
     /// while the latch is set.
-    pub fn new(canvas: Area, navigation: &Navigation, halt: Option<ExecHalt>) -> Self {
+    pub fn new(canvas: Area, navigation: &Navigation, halt: Option<UiHalt>) -> Self {
         let class = SizeClass::of_width(canvas.width);
         let shown = navigation.shown(class);
 

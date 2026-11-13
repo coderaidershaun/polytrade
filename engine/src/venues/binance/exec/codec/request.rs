@@ -1,6 +1,5 @@
-//! Turns an engine request into a WebSocket API method and its parameters. The hot side names what
-//! it wants and this picks the method. Only the signer adds `apiKey`, `recvWindow`, `timestamp` and
-//! `signature`, so nothing here sets them.
+//! Turns an engine request into a method of the WebSocket API with its parameters. Only the signer
+//! adds the key, the receive window, the timestamp and the signature.
 
 use crate::msg::exec::OrderStyle;
 use crate::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId};
@@ -36,8 +35,8 @@ pub fn encode_request(
                 RequestParams::new()
                     .set("symbol", symbol(instrument, context)?)
                     .set("side", side.wire_name())
-                    .set("price", decimal(price.0))
-                    .set("quantity", decimal(qty.0))
+                    .set("price", decimal(price.mantissa()))
+                    .set("quantity", decimal(qty.mantissa()))
                     .set("newClientOrderId", client_order_id(client_id, context)),
                 style,
             ),
@@ -65,7 +64,7 @@ pub fn encode_request(
                 // to the venue by a name no slot holds — every later cancel by client id would
                 // answer -2011, which reads identically to "it filled".
                 .set("newClientOrderId", client_order_id(client_id, context))
-                .set("newQty", decimal(qty.0)),
+                .set("newQty", decimal(qty.mantissa())),
         },
         ExecRequest::OrderStatus {
             instrument,

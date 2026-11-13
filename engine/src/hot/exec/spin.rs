@@ -1,22 +1,19 @@
-//! Main spin loop: expire stale orders, timeout unanswered requests, reconcile, decide quotes,
-//! and drain the action bank. Split from engine.rs so venue-event folding and engine-cadence scheduling
-//! stay separately readable. All deadlines derive from message timestamps for replay determinism.
-//! No clock reads (enforced by fitness scan). Window and flatten passes live in separate files; their
-//! order is load-bearing. Committing a decision to a command lives in mint.rs, which the flatten
-//! pass reaches too — deciding and committing have different callers.
+//! The execution pass of each spin, in an order that each step relies on: expire, chase timeouts,
+//! sweep closing windows, flatten, then quote. Each deadline reads message time, never a clock.
 
 use crate::hot::book::{Book, BookState};
+use crate::hot::dispatch::StrategyGate;
 use crate::hot::ledger::PositionLedger;
 use crate::hot::strategy::{Actions, WindowInfo};
 use crate::msg::exec::ExecCommand;
 use crate::msg::ids::{InstrumentId, Price, Side};
 use crate::msg::inbound::SpinTick;
 use crate::msg::persist::OrderTransition;
-use crate::msg::time::TsUs;
+use crate::msg::time::{FoldTime, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 
 use super::desired::{DesiredBook, DesiredQuote, QuoteLevel};
-use super::engine::{ExecEngine, resting_of};
+use super::engine::{ExecEngine, FoldStamps, resting_of};
 use super::gates::{ExposureCheck, HaltReason, QuotePermission, assess_exposure};
 use super::order::{MAX_ORDER_SLOTS, OrderState};
 use super::reconcile::{
@@ -28,10 +25,10 @@ impl ExecEngine {
         if self.sink.is_none() {
             return;
         }
-        let now = input.tick.received_ts_us;
+        let now = input.now.as_local();
         self.budget.observe_spin(now);
         self.orders.reap(now, self.settings.order_reap_window);
-        self.sweep_timeouts(now, input.bank);
+        self.sweep_timeouts(input.stamps(), input.bank);
         self.detect_silence(now);
         self.observe_pnl_baseline(input.ledger);
         self.enforce_resting_limit(now);
@@ -48,13 +45,13 @@ impl ExecEngine {
         }
     }
 
-    fn sweep_timeouts(&mut self, now: TsUs, bank: &mut Actions) {
+    fn sweep_timeouts(&mut self, stamps: FoldStamps, bank: &mut Actions) {
         for index in 0..MAX_ORDER_SLOTS {
             if self
                 .orders
-                .is_timed_out(index, now, self.settings.inflight_timeout)
+                .is_timed_out(index, stamps.fold, self.settings.inflight_timeout)
             {
-                self.chase_timed_out(index, now, bank);
+                self.chase_timed_out(index, stamps, bank);
             }
         }
     }
@@ -62,12 +59,13 @@ impl ExecEngine {
     /// The venue never answered this order's request, so its state is unknown until the venue is
     /// asked about the order directly.
     #[cold]
-    fn chase_timed_out(&mut self, index: usize, now: TsUs, bank: &mut Actions) {
+    fn chase_timed_out(&mut self, index: usize, stamps: FoldStamps, bank: &mut Actions) {
+        let now = stamps.fold;
         let slot = self.orders.slot_mut(index);
         slot.last_event_ts_us = now;
         let (instrument, client_id) = (slot.instrument, slot.client_id);
         let next = OrderState::Unknown;
-        self.move_slot(index, next, OrderTransition::Timeout, now, bank);
+        self.move_slot(index, next, OrderTransition::Timeout, stamps.received, bank);
         self.recon_seq += 1;
         let command = ExecCommand::ReconcileOrder {
             instrument,
@@ -77,7 +75,7 @@ impl ExecEngine {
         self.bank_or_halt(command, now);
     }
 
-    fn detect_silence(&mut self, now: TsUs) {
+    fn detect_silence(&mut self, now: LocalTs) {
         self.spins_since_exec_event += 1;
         let is_silent = self.spins_since_exec_event >= self.settings.exec_silence_spins;
         let has_working =
@@ -88,7 +86,7 @@ impl ExecEngine {
     }
 
     #[cold]
-    fn request_open_orders(&mut self, now: TsUs) {
+    fn request_open_orders(&mut self, now: LocalTs) {
         self.spins_since_exec_event = 0;
         for index in 0..self.instruments.len() {
             self.recon_seq += 1;
@@ -103,7 +101,7 @@ impl ExecEngine {
     fn quote_pass(&mut self, input: &mut SpinInput<'_>) {
         let session = self.session_permission(input.ledger);
         if session == QuotePermission::Neither && !self.halt.is_halted() {
-            self.halt(HaltReason::RealisedLoss, input.tick.received_ts_us);
+            self.halt(HaltReason::RealisedLoss, input.now.as_local());
         }
         for index in 0..self.instruments.len() {
             let instrument = InstrumentId(index as u16);
@@ -136,7 +134,10 @@ impl ExecEngine {
             .quote(instrument, side, level, input.tick.seq)
             .ok_or(RejectReason::NoQuoteDeclared)?;
         // Checked against the declaration, not ahead of it: an instrument with no quote
-        // declared at all reports NoQuoteDeclared, not a calendar refusal.
+        // declared at all reports NoQuoteDeclared, not a warmup or calendar refusal.
+        if !input.gates[usize::from(instrument.0)].is_live() {
+            return Err(RejectReason::Warming);
+        }
         if !self.admits_window(instrument, input) {
             return Err(RejectReason::OutsideWindow);
         }
@@ -285,8 +286,8 @@ impl ExecEngine {
     pub(super) fn funds_view(&self, instrument: InstrumentId, side: Side) -> FundsView {
         let asset = self.instruments[usize::from(instrument.0)].spend_asset(side);
         let floor = match side {
-            Side::Buy => self.settings.min_quote_balance,
-            Side::Sell => self.settings.min_base_balance,
+            Side::Buy => self.settings.min_quote_balance.mantissa(),
+            Side::Sell => self.settings.min_base_balance.mantissa(),
         };
         FundsView {
             spendable: self.account.balance(asset).spendable(),
@@ -298,8 +299,10 @@ impl ExecEngine {
         let book = &input.books[usize::from(instrument.0)];
         let (bid, ask) = (book.best_bid(), book.best_ask());
         let mid = match (bid, ask) {
-            (Some(bid), Some(ask)) => Price(bid.price.0 + (ask.price.0 - bid.price.0) / 2),
-            _ => Price(0),
+            (Some(bid), Some(ask)) => Price::from_mantissa(
+                bid.price.mantissa() + (ask.price.mantissa() - bid.price.mantissa()) / 2,
+            ),
+            _ => Price::from_mantissa(0),
         };
         BookTop {
             best_bid: bid.map(|level| level.price),
@@ -307,7 +310,7 @@ impl ExecEngine {
             mid,
             is_valid: book.state() == BookState::Valid,
             last_commit_ts_us: self.instruments[usize::from(instrument.0)].last_commit_ts_us,
-            now_ts_us: input.tick.received_ts_us,
+            now_ts_us: input.now.as_local(),
         }
     }
 }
@@ -337,11 +340,27 @@ impl DesiredLadder {
 
 pub struct SpinInput<'a> {
     pub tick: &'a SpinTick,
+    /// The time that each deadline of the pass reads.
+    pub now: FoldTime,
+    /// The received stamp of the tick: the stamp of each row that the pass writes.
+    pub(crate) received: LocalTs,
     pub books: &'a [Book],
     pub desired: &'a DesiredBook,
     /// Per instrument, the window the venue last rotated it into. `None` where the venue does not
     /// rotate, which is what makes the quote-window gate inert everywhere it does not belong.
     pub windows: &'a [Option<WindowInfo>],
+    /// Per instrument, whether its market is live. A market that warms has the quote permission
+    /// `Neither`, joined after the session permission, so a warming market never halts the session.
+    pub(crate) gates: &'a [StrategyGate],
     pub(crate) ledger: &'a PositionLedger,
     pub(crate) bank: &'a mut Actions,
+}
+
+impl SpinInput<'_> {
+    pub(crate) fn stamps(&self) -> FoldStamps {
+        FoldStamps {
+            fold: self.now.as_local(),
+            received: self.received,
+        }
+    }
 }

@@ -1,10 +1,9 @@
-//! REST cross-validation: independently fetch a live window's CLOB `/book` snapshot and compare its
-//! touch to the streamed book the observer reconstructed. The window's token is resolved via Gamma
-//! (the same public path the adapter uses), so the check shares no state with the adapter under test.
+//! Compares the touch of the streamed book with a live REST snapshot of the same window, resolved
+//! by a path that shares no state with the actor under test.
 
 use std::collections::BTreeSet;
 
-use engine::msg::time::TsUs;
+use engine::msg::time::VenueTs;
 use engine::venues::polymarket::rest::{PolyRest, book_url};
 use serde::Deserialize;
 
@@ -83,7 +82,7 @@ pub async fn maybe_cross_validate(
     validated.insert(window_start_s);
 
     let market = match rest
-        .resolve_slug(TsUs::from_micros(window_start_s * 1_000_000))
+        .resolve_slug(VenueTs::from_micros(window_start_s * 1_000_000))
         .await
     {
         Ok(market) => market,

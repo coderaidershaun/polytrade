@@ -26,8 +26,8 @@ use engine::hot::exec::{DesiredQuote, ExecSettings, QuoteLevel};
 use engine::hot::sink::{ExecSink, ExposureSink};
 use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle};
-use engine::msg::ids::{ClientOrderId, InstrumentId, Qty, Side};
-use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::ids::{ClientOrderId, InstrumentId, Notional, Qty, Side};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::Stamper;
 use engine::runtime::config::TrackerSpec;
 use engine::runtime::exposure::{
@@ -38,7 +38,7 @@ use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
     FillPen, ONE, book_reset, detached_setup, exec_event, exposure_ring, instrument_row,
-    persist_ring, snapshot_pair,
+    persist_ring, snapshot_pair, ts,
 };
 use crate::exec_support::{drain_commands, exec_settings, make_ready, spin_at};
 use crate::parquet_readback::TempDir;
@@ -67,7 +67,7 @@ impl Strategy for TwoSidedQuoter {
         let (Some(bid), Some(ask)) = (book.best_bid(), book.best_ask()) else {
             return;
         };
-        let qty = Qty(ONE / 100);
+        let qty = Qty::from_mantissa(ONE / 100);
         ctx.quote(
             INSTRUMENT,
             Side::Buy,
@@ -114,7 +114,7 @@ fn engine_with_exposure(
             // Wide band and a long book age: these tests are about the LOSS gate, and a quote
             // refused by the price band or a stale book would read the same as one the gate pulled.
             settings: ExecSettings {
-                max_session_loss_quote: MAX_SESSION_LOSS,
+                max_session_loss_quote: Notional::from_mantissa(MAX_SESSION_LOSS),
                 ..exec_settings()
             },
             run_nonce: 0,
@@ -132,9 +132,15 @@ fn dispatch(engine: &mut HotEngine, message: &InboundMessage) {
 /// Restate the whole book so the mark moves with no transient crossed top to reason about.
 fn reseat_book(engine: &mut HotEngine, bid: i64, ask: i64, when: i64) {
     let (bids, asks) = snapshot_pair(0, &[(bid, ONE)], &[(ask, ONE)], when);
-    dispatch(engine, &InboundMessage::BookReset(book_reset(0, when)));
-    dispatch(engine, &InboundMessage::Book(bids));
-    dispatch(engine, &InboundMessage::Book(asks));
+    dispatch(engine, &book_reset(0, when));
+    dispatch(
+        engine,
+        &InboundMessage::new(ts(when), MessageBody::Book(bids)),
+    );
+    dispatch(
+        engine,
+        &InboundMessage::new(ts(when), MessageBody::Book(asks)),
+    );
 }
 
 fn placed(commands: &[ExecCommand], wanted: Side) -> Option<ClientOrderId> {
@@ -155,28 +161,34 @@ fn is_cancelled(commands: &[ExecCommand], wanted: ClientOrderId) -> bool {
 fn ack_placed(engine: &mut HotEngine, client_id: ClientOrderId, side: Side, price: i64, when: i64) {
     dispatch(
         engine,
-        &InboundMessage::Exec(ExecEvent {
-            kind: ExecKind::AckPlaced,
-            qty: Qty(ONE / 100),
-            ..exec_event(INSTRUMENT, client_id, side, price, when)
-        }),
+        &InboundMessage::new(
+            ts(when),
+            MessageBody::Exec(ExecEvent {
+                kind: ExecKind::AckPlaced,
+                qty: Qty::from_mantissa(ONE / 100),
+                ..exec_event(INSTRUMENT, client_id, side, price, when)
+            }),
+        ),
     );
 }
 
 fn ack_canceled(engine: &mut HotEngine, client_id: ClientOrderId, side: Side, when: i64) {
     dispatch(
         engine,
-        &InboundMessage::Exec(ExecEvent {
-            kind: ExecKind::AckCanceled,
-            ..exec_event(INSTRUMENT, client_id, side, 0, when)
-        }),
+        &InboundMessage::new(
+            ts(when),
+            MessageBody::Exec(ExecEvent {
+                kind: ExecKind::AckCanceled,
+                ..exec_event(INSTRUMENT, client_id, side, 0, when)
+            }),
+        ),
     );
 }
 
 fn restored_long() -> [InstrumentExposure; 1] {
     [InstrumentExposure {
         instrument: INSTRUMENT,
-        position_base: Qty(RESTORED_POSITION),
+        position_base: Qty::from_mantissa(RESTORED_POSITION),
         cash_quote: RESTORED_COST,
         basis_quote: -RESTORED_COST,
     }]
@@ -268,7 +280,7 @@ fn a_restored_position_without_a_mark_is_not_flat() {
     let readings = last_readings();
     assert_eq!(
         readings.position_base,
-        Qty(RESTORED_POSITION),
+        Qty::from_mantissa(RESTORED_POSITION),
         "the restored position is there from the first message"
     );
     assert!(
@@ -329,7 +341,7 @@ fn a_fill_reaches_the_file_the_next_boot_reads() {
         state.instruments(),
         [InstrumentExposure {
             instrument: INSTRUMENT,
-            position_base: Qty(ONE / 200),
+            position_base: Qty::from_mantissa(ONE / 200),
             cash_quote: -290 * ONE,
             basis_quote: 300 * ONE,
         }],
@@ -382,7 +394,7 @@ fn the_last_snapshot_leaves_the_sink_when_its_owner_does() {
         seen[1].active(),
         [InstrumentExposure {
             instrument: INSTRUMENT,
-            position_base: Qty(2 * ONE),
+            position_base: Qty::from_mantissa(2 * ONE),
             cash_quote: 0,
             basis_quote: 0,
         }],
@@ -391,7 +403,7 @@ fn the_last_snapshot_leaves_the_sink_when_its_owner_does() {
 }
 
 /// FITNESS: a writer that dies never reports success. `drain()` answering `Ok` over a dead writer
-/// is the worst shape this subsystem has — `decide_exit` reads that as a graceful shutdown and the
+/// is the worst shape this subsystem has — `Exit::decide` reads that as a graceful shutdown and the
 /// run exits 0, while the file on disk still holds whatever the boot seeded. The position that was
 /// never written is the one the next boot restores and trades against.
 #[test]
@@ -418,7 +430,7 @@ fn final_position(seq: u64, position_base: i64) -> ExposureSnapshot {
     let mut snapshot = ExposureSnapshot::EMPTY;
     snapshot.instruments[0] = InstrumentExposure {
         instrument: INSTRUMENT,
-        position_base: Qty(position_base),
+        position_base: Qty::from_mantissa(position_base),
         cash_quote: 0,
         basis_quote: 0,
     };
@@ -445,8 +457,8 @@ fn record_readings(ctx: &StrategyCtx<'_>) {
         cell.set(Some(Readings {
             position_base: ctx.position_base(INSTRUMENT),
             has_mark: ctx.has_mark(INSTRUMENT),
-            exposure_quote: ctx.exposure_quote(INSTRUMENT),
-            pnl_quote: ctx.pnl_quote(INSTRUMENT),
+            exposure_quote: ctx.exposure_quote(INSTRUMENT).mantissa(),
+            pnl_quote: ctx.pnl_quote(INSTRUMENT).mantissa(),
         }));
     });
 }

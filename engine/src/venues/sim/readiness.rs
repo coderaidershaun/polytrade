@@ -1,7 +1,7 @@
 //! Readiness proofs for starting and recovering simulated execution.
 
 use super::lanes::SimLane;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 const PROOF_COUNT: usize = 5;
 
@@ -27,14 +27,14 @@ impl ReadinessProof {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SimReadiness {
     held: [bool; PROOF_COUNT],
-    armed_at: [TsUs; SimLane::ALL.len()],
-    latest_lane: [TsUs; SimLane::ALL.len()],
+    armed_at: [LocalTs; SimLane::ALL.len()],
+    latest_lane: [LocalTs; SimLane::ALL.len()],
     has_announced: bool,
 }
 
 impl SimReadiness {
     pub fn unseeded() -> Self {
-        let unseeded = TsUs::from_micros(i64::MIN);
+        let unseeded = LocalTs::from_micros(i64::MIN);
         Self {
             held: [false; PROOF_COUNT],
             armed_at: [unseeded; SimLane::ALL.len()],
@@ -47,7 +47,7 @@ impl SimReadiness {
         self.held[proof as usize] = true;
     }
 
-    pub fn observe_lane(&mut self, lane: SimLane, watermark: TsUs) {
+    pub fn observe_lane(&mut self, lane: SimLane, watermark: LocalTs) {
         let latest = &mut self.latest_lane[lane as usize];
         *latest = (*latest).max(watermark);
         if watermark > self.armed_at[lane as usize] {

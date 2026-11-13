@@ -1,11 +1,9 @@
-//! Shell fitness: what the operator sees must follow from the canvas and the selection alone, and
-//! never from the painters. A pane that lands outside its size envelope, two panes that overlap, or
-//! a safety badge that is squeezed out of the top bar fails silently on a screen the author never
-//! opened, so the arrangement is pinned as pure geometry. The navigation half pins what the URL and
-//! the keys can say.
+//! What the operator sees follows from the canvas and the selection alone: no pane leaves its size,
+//! no two panes overlap, and no safety badge is squeezed out of the top bar.
 
-use engine::hot::exec::{ExecHalt, HaltReason};
-use engine::msg::time::TsUs;
+use engine::hot::exec::HaltReason;
+use engine::msg::time::VenueTs;
+use engine::msg::ui::UiHalt;
 use engine::operator::workstation::shell::{
     Area, Arrangement, Navigation, Pane, Selection, SizeClass, View, zoom_to_fit,
 };
@@ -22,10 +20,10 @@ fn canvas(width: f32, height: f32) -> Area {
     }
 }
 
-fn latched() -> Option<ExecHalt> {
-    Some(ExecHalt::Halted {
+fn latched() -> Option<UiHalt> {
+    Some(UiHalt::Halted {
         reason: HaltReason::RejectStreak,
-        halted_ts_us: TsUs::from_micros(1),
+        halted_ts_us: VenueTs::from_micros(1),
     })
 }
 

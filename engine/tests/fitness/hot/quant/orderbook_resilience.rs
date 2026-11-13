@@ -1,13 +1,12 @@
-//! Order-book resilience: the OU relaxation rate of mid toward equilibrium. Every gate here exists
-//! to keep a NaN or a nonsense negative rate out of the research tape when the book is locked,
-//! crossed, or the deviation is discretisation dust.
+//! The rate at which the mid returns to its equilibrium. Each gate keeps a NaN or a negative rate
+//! out of the research tape when the book is locked, crossed, or barely moves.
 
 use engine::hot::quant::micro::{OrderbookResilience, ResilienceSample};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 
 fn sample(ts_us: i64, mid: f64, equilibrium: f64, half_spread: f64) -> ResilienceSample {
     ResilienceSample {
-        event_ts_us: TsUs::from_micros(ts_us),
+        event_ts_us: LocalTs::from_micros(ts_us),
         mid,
         equilibrium,
         half_spread,

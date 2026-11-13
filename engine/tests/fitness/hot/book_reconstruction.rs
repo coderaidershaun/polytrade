@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use engine::hot::book::{Book, BookState, SnapshotOutcome};
 use engine::msg::ids::{InstrumentId, Side};
-use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, InboundMessage, Level};
-use engine::msg::time::TsUs;
+use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, Level, MessageBody};
+use engine::msg::time::{LocalTs, VenueTs};
 use engine::venues::polymarket::book::BookNormaliser;
 use engine::venues::polymarket::parse::PolyBook;
 use proptest::prelude::*;
@@ -90,7 +90,7 @@ impl BookModel {
 fn book_side(levels: &[Level]) -> Vec<(i64, i64)> {
     levels
         .iter()
-        .map(|level| (level.price.0, level.qty.0))
+        .map(|level| (level.price.mantissa(), level.qty.mantissa()))
         .collect()
 }
 
@@ -116,7 +116,7 @@ proptest! {
 
         for chunk in &snapshot_chunks {
             for &level in chunk.active_levels() {
-                model.apply(chunk.side, capacity, level.price.0, level.qty.0);
+                model.apply(chunk.side, capacity, level.price.mantissa(), level.qty.mantissa());
             }
             let outcome = book.apply_snapshot_chunk(chunk);
             prop_assert_eq!(outcome, SnapshotOutcome::Clean);
@@ -132,7 +132,7 @@ proptest! {
 
         for chunk in &delta_chunks {
             for &level in chunk.active_levels() {
-                model.apply(chunk.side, capacity, level.price.0, level.qty.0);
+                model.apply(chunk.side, capacity, level.price.mantissa(), level.qty.mantissa());
             }
             book.apply_delta_chunk(chunk);
         }
@@ -193,13 +193,13 @@ fn an_empty_snapshot_still_carries_the_terminator() {
         asset_id: "token".into(),
         bids: Vec::new(),
         asks: Vec::new(),
-        exchange_ts_us: TsUs::from_micros(1),
-        received_ts_us: TsUs::from_micros(2),
+        exchange_ts_us: VenueTs::from_micros(1),
+        received_ts_us: LocalTs::from_micros(2),
     };
 
     let mut chunks = Vec::new();
     normaliser.emit_snapshot(&empty, &mut |message| {
-        if let InboundMessage::Book(chunk) = message {
+        if let MessageBody::Book(chunk) = message.body {
             chunks.push(chunk);
         }
     });

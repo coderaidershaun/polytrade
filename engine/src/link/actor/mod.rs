@@ -1,7 +1,5 @@
-//! The link actor: one tokio task that owns the UDP socket, the subscriber table and the sequence
-//! gate. Inbound frames are validated and pushed to the engine like any other input, and outbound
-//! frames are drained from the hot thread's UI rings, which nothing else reads, each time the wait
-//! of the senders' placement wakes it.
+//! The link actor: one task that owns the UDP socket, the subscriber table and the sequence gate.
+//! It pushes checked frames to the engine and sends the hot thread's UI rings.
 
 mod outbound;
 
@@ -15,9 +13,9 @@ use tokio::net::UdpSocket;
 use tokio::runtime::Handle;
 
 use crate::hot::spawn::LinkQueueProducer;
-use crate::msg::inbound::{InboundMessage, RunControl};
+use crate::msg::inbound::{InboundMessage, MessageBody, MessageHeader, RunControl};
 use crate::msg::run_state::RunAssertion;
-use crate::msg::time::{DurationUs, EngineClock, TsUs};
+use crate::msg::time::{DurationUs, EngineClock, LocalTs};
 use crate::msg::ui::LatencyReport;
 use crate::msg::ui::channel::UiChannels;
 use crate::runtime::config::{
@@ -29,9 +27,7 @@ use crate::{info, warn, warn_repeating};
 
 use super::control::{LINK_MAX_TOPICS, RunPhase, Subscribe, TopicSet};
 use super::envelope::{FrameGuard, LINK_MAX_DATAGRAM, LinkDecodeError, LinkIdentity, TopicId};
-use super::frame::{
-    InboundLink, LinkBody, LinkDatagram, LinkFrame, LinkOrigin, LinkPayload, OutboundLink,
-};
+use super::frame::{LinkBody, LinkDatagram, LinkFrame, LinkOrigin, LinkPayload, OutboundLink};
 use super::subscribers::{
     LINK_MAX_SUBSCRIBERS, LINK_SUBSCRIPTION_TTL, RefreshOutcome, SequenceGate, SubscriberTable,
 };
@@ -141,7 +137,7 @@ enum Wake {
 
 struct PeerState {
     feed: PeerFeed,
-    last_seen_ts_us: Option<TsUs>,
+    last_seen_ts_us: Option<LocalTs>,
     is_silent: bool,
 }
 
@@ -181,7 +177,7 @@ struct Actor {
     outbound_seq_by_topic: Vec<u64>,
     recipients: Vec<SocketAddr>,
     buffer: Box<[u8; LINK_MAX_DATAGRAM]>,
-    last_control_ts_us: Option<TsUs>,
+    last_control_ts_us: Option<LocalTs>,
     is_controller_lost: bool,
     announce_ticks: u64,
     counts: RejectCounts,
@@ -256,7 +252,7 @@ impl Actor {
         }
     }
 
-    fn on_datagram(&mut self, bytes: &[u8], from: SocketAddr, now: TsUs) {
+    fn on_datagram(&mut self, bytes: &[u8], from: SocketAddr, now: LocalTs) {
         let datagram = match LinkDatagram::decode(bytes, &self.guard) {
             Ok(datagram) => datagram,
             Err(error) => return self.on_decode_error(&error),
@@ -281,15 +277,17 @@ impl Actor {
         clippy::disallowed_methods,
         reason = "the link actor stamps each peer frame and marker with message time before the tape records it"
     )]
-    fn on_payload(&mut self, origin: LinkOrigin, payload: LinkPayload, received_ts_us: TsUs) {
-        self.inbound.push(InboundMessage::Link(InboundLink {
-            frame: LinkFrame { origin, payload },
-            received_ts_us,
-            queued_ts_us: self.clock.now(),
-        }));
+    fn on_payload(&mut self, origin: LinkOrigin, payload: LinkPayload, received_ts_us: LocalTs) {
+        self.inbound.push(InboundMessage {
+            header: MessageHeader {
+                received_ts_us,
+                queued_ts_us: self.clock.now(),
+            },
+            body: MessageBody::Link(LinkFrame { origin, payload }),
+        });
     }
 
-    fn on_subscribe(&mut self, from: SocketAddr, subscribe: Subscribe, now: TsUs) {
+    fn on_subscribe(&mut self, from: SocketAddr, subscribe: Subscribe, now: LocalTs) {
         if self.subscribers.refresh(from, subscribe.topics, now) == RefreshOutcome::Rejected {
             self.on_table_full(from);
         }
@@ -313,18 +311,17 @@ impl Actor {
     }
 
     /// Level-triggered: drop+count queue means edge-triggered push alone leaves adapters down on full slot. Dups harmless (dedup on epoch).
-    fn push_marker_if_needed(&mut self, now: TsUs) {
+    fn push_marker_if_needed(&mut self, now: LocalTs) {
         let Some(desired) = self.control.pending() else {
             return;
         };
-        self.inbound.push(InboundMessage::RunControl(RunControl {
-            desired,
-            received_ts_us: now,
-            queued_ts_us: now,
-        }));
+        self.inbound.push(InboundMessage::new(
+            now,
+            MessageBody::RunControl(RunControl { desired }),
+        ));
     }
 
-    fn note_peer_seen(&mut self, from: SocketAddr, now: TsUs) {
+    fn note_peer_seen(&mut self, from: SocketAddr, now: LocalTs) {
         let Some(peer) = self.peers.iter_mut().find(|peer| peer.feed.address == from) else {
             return;
         };
@@ -337,7 +334,7 @@ impl Actor {
 
     // SMELL: a silent peer only gets a warning line and a count, and the strategy is never told, so
     // it keeps acting on the last frame of that peer. Reconnects of a venue edge also have no cap.
-    fn check_peer_silence(&mut self, now: TsUs) {
+    fn check_peer_silence(&mut self, now: LocalTs) {
         for peer in &mut self.peers {
             let is_silent = peer
                 .last_seen_ts_us
@@ -356,7 +353,7 @@ impl Actor {
     }
 
     /// Dead controller must not decide fate; holding default, dead-man opt-in.
-    fn check_controller(&mut self, now: TsUs) {
+    fn check_controller(&mut self, now: LocalTs) {
         let Some(last) = self.last_control_ts_us else {
             return;
         };

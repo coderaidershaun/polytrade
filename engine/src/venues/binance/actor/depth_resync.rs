@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::{InboundMessage, TappedMessage, VenueMeta};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::runtime::config::BinanceMarket;
 use crate::venues::binance::depth::{ChainRule, DepthSequencer, DiffOutcome};
 use crate::venues::binance::parse::{
@@ -75,7 +75,7 @@ impl Actor {
     }
 
     /// Apply held snapshot, else fetch (throttled). received_ts_us doubles as the queue floor.
-    async fn advance_depth_sync(&mut self, instrument: InstrumentId, received_ts_us: TsUs) {
+    async fn advance_depth_sync(&mut self, instrument: InstrumentId, received_ts_us: LocalTs) {
         let Some(snapshot) = self.take_applicable_snapshot(instrument) else {
             return self.fetch_depth_snapshot(instrument).await;
         };

@@ -1,9 +1,10 @@
-//! Slot transitions -> orders/fills rows. Banks all transitions incl. engine-driven (send/timeout/recon). Gate + drop counter via strategy bank.
+//! Slot transitions -> orders/fills rows. Banks all transitions incl. engine-driven
+//! (send/timeout/recon). Gate + drop counter via strategy bank.
 
 use crate::hot::strategy::Actions;
 use crate::msg::exec::{ExecEvent, ExecKind, Provenance, RejectClass};
 use crate::msg::persist::{FillRow, OrderLifecycle, OrderRow, OrderTransition, PersistRecord};
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 
 use super::order::{FillDelta, OrderSlot};
 
@@ -15,8 +16,8 @@ struct OrderAudit<'a> {
     reject: Option<RejectClass>,
     reject_code: i32,
     /// 0 on engine-driven (venue never heard of it).
-    exchange_ts_us: TsUs,
-    received_ts_us: TsUs,
+    exchange_ts_us: VenueTs,
+    received_ts_us: LocalTs,
 }
 
 /// A transition the engine made on its own, so there is no venue answer, no reject and no exchange
@@ -26,7 +27,7 @@ pub(super) fn bank_engine_driven(
     slot: &OrderSlot,
     transition: OrderTransition,
     previous_state: OrderLifecycle,
-    at: TsUs,
+    at: LocalTs,
 ) {
     bank_order(
         bank,
@@ -37,7 +38,7 @@ pub(super) fn bank_engine_driven(
             provenance: Provenance::Mine,
             reject: None,
             reject_code: 0,
-            exchange_ts_us: TsUs::from_micros(0),
+            exchange_ts_us: VenueTs::from_micros(0),
             received_ts_us: at,
         },
     );
@@ -60,7 +61,7 @@ fn bank_order(bank: &mut Actions, audit: OrderAudit<'_>) {
         price: slot.price,
         qty: slot.qty,
         filled_qty: slot.filled_base,
-        filled_quote: slot.filled_quote,
+        filled_quote: slot.filled_quote.mantissa(),
         reject: audit.reject,
         reject_code: audit.reject_code,
         exchange_ts_us: audit.exchange_ts_us,
@@ -69,7 +70,13 @@ fn bank_order(bank: &mut Actions, audit: OrderAudit<'_>) {
 }
 
 /// Delta = booked cumulative (diverges from event on lost report).
-pub(super) fn bank_fill(bank: &mut Actions, slot: &OrderSlot, event: &ExecEvent, delta: FillDelta) {
+pub(super) fn bank_fill(
+    bank: &mut Actions,
+    slot: &OrderSlot,
+    event: &ExecEvent,
+    delta: FillDelta,
+    received_ts_us: LocalTs,
+) {
     bank.push_persist(PersistRecord::Fill(FillRow {
         instrument: slot.instrument,
         trade_id: event.trade_id,
@@ -82,11 +89,11 @@ pub(super) fn bank_fill(bank: &mut Actions, slot: &OrderSlot, event: &ExecEvent,
         last_price: event.last_price,
         last_qty: event.last_qty,
         booked_qty: delta.base,
-        booked_quote: delta.quote,
+        booked_quote: delta.quote.mantissa(),
         commission: delta.commission,
         commission_asset: event.commission_asset,
         exchange_ts_us: event.exchange_ts_us,
-        received_ts_us: event.received_ts_us,
+        received_ts_us,
     }));
 }
 
@@ -97,6 +104,7 @@ pub(super) fn bank_event_rows(
     event: &ExecEvent,
     previous_state: OrderLifecycle,
     fill: FillDelta,
+    received_ts_us: LocalTs,
 ) {
     let Some(transition) = transition_of(event.kind) else {
         return;
@@ -114,11 +122,11 @@ pub(super) fn bank_event_rows(
             reject: event.reject,
             reject_code: event.reject_code,
             exchange_ts_us: event.exchange_ts_us,
-            received_ts_us: event.received_ts_us,
+            received_ts_us,
         },
     );
     if !fill.is_empty() {
-        bank_fill(bank, slot, event, fill);
+        bank_fill(bank, slot, event, fill, received_ts_us);
     }
 }
 

@@ -4,18 +4,36 @@
 pub(crate) mod channel;
 mod latency;
 
-use crate::hot::exec::{ExecHalt, OrderState, QuoteLevel, RejectOrigin};
+use crate::hot::exec::{HaltReason, OrderState, QuoteLevel, RejectOrigin};
 use crate::msg::exec::Liquidity;
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use crate::msg::inbound::Level;
 use crate::msg::persist::FeatureId;
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 use crate::runtime::config::{ExecutionMode, StrategyId};
 use crate::runtime::registry::Registry;
 
 pub use latency::{
     LATENCY_REPORT_CELLS, LatencyCell, LatencyFlow, LatencyReading, LatencyReport, Percentile,
 };
+
+/// The kill switch as a workstation reads it. The halt stamp is a `VenueTs` there, because the
+/// workstation did not read it from its own clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UiHalt {
+    Armed,
+    Halted {
+        reason: HaltReason,
+        halted_ts_us: VenueTs,
+    },
+}
+
+impl UiHalt {
+    #[inline]
+    pub fn is_halted(self) -> bool {
+        matches!(self, UiHalt::Halted { .. })
+    }
+}
 
 /// Book levels per side. The ladder shows 12 rows a side, but a grouped row sums several ticks, so
 /// a 16-level feed would leave a grouped ladder half empty.
@@ -129,7 +147,7 @@ pub enum UiBookState {
 pub struct UiBookSnapshot {
     pub instrument: InstrumentId,
     pub seq: u64,
-    pub event_ts_us: TsUs,
+    pub event_ts_us: VenueTs,
     pub state: UiBookState,
     pub bid_len: u16,
     pub ask_len: u16,
@@ -176,9 +194,9 @@ impl UiWorkingOrder {
         client_id: ClientOrderId(0),
         quote_level: None,
         state: OrderState::Free,
-        price: Price(0),
-        qty: Qty(0),
-        filled: Qty(0),
+        price: Price::from_mantissa(0),
+        qty: Qty::from_mantissa(0),
+        filled: Qty::from_mantissa(0),
     };
 }
 
@@ -190,14 +208,14 @@ pub enum UiEvent {
     Quote {
         instrument: InstrumentId,
         seq: u64,
-        event_ts_us: TsUs,
+        event_ts_us: VenueTs,
         quote: DomQuote,
     },
     /// A public trade. It is copied out ahead of the warmup gate, so trades show during warmup too.
     Trade {
         instrument: InstrumentId,
         seq: u64,
-        event_ts_us: TsUs,
+        event_ts_us: VenueTs,
         aggressor: Side,
         price: Price,
         qty: Qty,
@@ -207,7 +225,7 @@ pub enum UiEvent {
     OrderUpdate {
         instrument: InstrumentId,
         seq: u64,
-        event_ts_us: TsUs,
+        event_ts_us: VenueTs,
         client_id: ClientOrderId,
         /// The strategy's stable ladder level. `None` for an order inherited from an earlier run.
         quote_level: Option<QuoteLevel>,
@@ -223,7 +241,7 @@ pub enum UiEvent {
     OrderSnapshot {
         instrument: InstrumentId,
         seq: u64,
-        event_ts_us: TsUs,
+        event_ts_us: VenueTs,
         side: Side,
         detail_len: u8,
         total_working: u16,
@@ -234,7 +252,7 @@ pub enum UiEvent {
     Feature {
         instrument: InstrumentId,
         seq: u64,
-        event_ts_us: TsUs,
+        event_ts_us: VenueTs,
         feature: FeatureId,
         value: f64,
     },
@@ -243,7 +261,7 @@ pub enum UiEvent {
     Fill {
         instrument: InstrumentId,
         seq: u64,
-        event_ts_us: TsUs,
+        event_ts_us: VenueTs,
         /// The strategy's stable ladder level. `None` when the filled order was inherited from an
         /// earlier run.
         quote_level: Option<QuoteLevel>,
@@ -260,7 +278,7 @@ pub enum UiEvent {
     Balance {
         asset: AssetId,
         seq: u64,
-        event_ts_us: TsUs,
+        event_ts_us: VenueTs,
         free: i64,
         locked: i64,
     },
@@ -269,7 +287,7 @@ pub enum UiEvent {
     Reject {
         instrument: InstrumentId,
         seq: u64,
-        event_ts_us: TsUs,
+        event_ts_us: VenueTs,
         side: Side,
         origin: RejectOrigin,
     },
@@ -277,14 +295,14 @@ pub enum UiEvent {
     /// so a dropped frame heals on the next spin.
     Execution {
         seq: u64,
-        event_ts_us: TsUs,
-        halt: ExecHalt,
+        event_ts_us: VenueTs,
+        halt: UiHalt,
     },
     /// An instrument's window rotated; the monitor's System channel records the handover.
     Rotation {
         instrument: InstrumentId,
         seq: u64,
-        event_ts_us: TsUs,
+        event_ts_us: VenueTs,
     },
     /// An instrument's marked position, sent every spin. It is ABSOLUTE, not an increment, so a
     /// dropped frame is as if never sent. The `f64` values are for display only; the exact amounts
@@ -292,7 +310,7 @@ pub enum UiEvent {
     Position {
         instrument: InstrumentId,
         seq: u64,
-        event_ts_us: TsUs,
+        event_ts_us: VenueTs,
         exposure_quote: f64,
         pnl_quote: f64,
     },
@@ -336,7 +354,7 @@ impl UiEvent {
 
     /// Event time for any kind, read to stamp a note when the sequence jumps.
     #[inline]
-    pub fn event_ts_us(&self) -> TsUs {
+    pub fn event_ts_us(&self) -> VenueTs {
         match self {
             every_ui_event!(event_ts_us) => *event_ts_us,
         }

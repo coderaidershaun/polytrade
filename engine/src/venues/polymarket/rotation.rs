@@ -1,7 +1,5 @@
-//! Per-slot lifecycle FSM: `Idle → Prefetched → Subscribed → Active → Grace →
-//! TornDown → Idle`. Consumes ticks, gamma assignments, frame liveness, collapse signals and `/book`
-//! probe results; emits subscribe/unsubscribe ops, the rotation + reset messages, probe requests and
-//! force-teardown facts. Pure: every input carries `now`, the machine never reads a clock.
+//! The life of one window slot as a state machine, from prefetch to teardown. Each input carries
+//! its time, so the machine never reads a clock.
 //!
 //! A slot hosts BOTH outcome instruments (up + down) of one window — the registry registers
 //! `{a,b}×{up,down}` and `MarketRotation`/`BookReset` are per-instrument (msg.rs), so every handover
@@ -14,7 +12,7 @@
 use std::sync::Arc;
 
 use crate::msg::ids::InstrumentId;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs, VenueTs};
 
 use super::discovery::PolySchedule;
 
@@ -61,8 +59,8 @@ pub struct OutcomeLeg {
 pub struct WindowAssignment {
     pub up: OutcomeLeg,
     pub down: OutcomeLeg,
-    pub window_open_ts_us: TsUs,
-    pub window_close_ts_us: TsUs,
+    pub window_open_ts_us: VenueTs,
+    pub window_close_ts_us: VenueTs,
     pub condition_id: Arc<str>,
 }
 
@@ -96,8 +94,8 @@ pub enum SlotInput {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RotationFacts {
     pub instrument: InstrumentId,
-    pub window_open_ts_us: TsUs,
-    pub window_close_ts_us: TsUs,
+    pub window_open_ts_us: VenueTs,
+    pub window_close_ts_us: VenueTs,
     pub tokens: WindowTokens,
     pub condition_id: Arc<str>,
 }
@@ -106,7 +104,7 @@ pub struct RotationFacts {
 pub struct ForceTeardownFacts {
     pub up_instrument: InstrumentId,
     pub down_instrument: InstrumentId,
-    pub window_open_ts_us: TsUs,
+    pub window_open_ts_us: VenueTs,
     pub grace_age: DurationUs,
     pub tokens: WindowTokens,
 }
@@ -135,8 +133,8 @@ pub enum SlotState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LiveWindow {
     assignment: WindowAssignment,
-    last_frame_ts_us: TsUs,
-    next_probe_ts_us: TsUs,
+    last_frame_ts_us: VenueTs,
+    next_probe_ts_us: VenueTs,
     collapse_seen: bool,
 }
 
@@ -211,7 +209,9 @@ impl SlotMachine {
         self.phase.state()
     }
 
-    pub fn on_input(&mut self, now: TsUs, input: SlotInput, emit: &mut impl FnMut(SlotAction)) {
+    /// The window grid is the venue's calendar, so the host time is read on it once, here.
+    pub fn on_input(&mut self, now: LocalTs, input: SlotInput, emit: &mut impl FnMut(SlotAction)) {
+        let now = now.as_venue_calendar();
         if self.phase == Phase::TornDown {
             self.phase = Phase::Idle;
         }
@@ -227,7 +227,7 @@ impl SlotMachine {
 
     fn on_assign(
         &mut self,
-        now: TsUs,
+        now: VenueTs,
         assignment: WindowAssignment,
         emit: &mut impl FnMut(SlotAction),
     ) {
@@ -243,7 +243,7 @@ impl SlotMachine {
     }
 
     /// Frame → book alive; disproves collapse (collapse = silence).
-    fn on_frame(&mut self, now: TsUs) {
+    fn on_frame(&mut self, now: VenueTs) {
         if let Some(window) = self.phase.window_mut() {
             window.last_frame_ts_us = now;
             window.collapse_seen = false;
@@ -274,7 +274,7 @@ impl SlotMachine {
         }
     }
 
-    fn advance(&mut self, now: TsUs, emit: &mut impl FnMut(SlotAction)) {
+    fn advance(&mut self, now: VenueTs, emit: &mut impl FnMut(SlotAction)) {
         while self.step(now, emit) {}
         if matches!(self.phase, Phase::Grace(_)) {
             self.service_grace(now, emit);
@@ -282,7 +282,7 @@ impl SlotMachine {
     }
 
     /// One phase transition, or `false` when the schedule says this phase is not due to move.
-    fn step(&mut self, now: TsUs, emit: &mut impl FnMut(SlotAction)) -> bool {
+    fn step(&mut self, now: VenueTs, emit: &mut impl FnMut(SlotAction)) -> bool {
         let schedule = self.schedule;
         let is_due = match &self.phase {
             Phase::Prefetched(window) => {
@@ -311,7 +311,7 @@ impl SlotMachine {
         true
     }
 
-    fn service_grace(&mut self, now: TsUs, emit: &mut impl FnMut(SlotAction)) {
+    fn service_grace(&mut self, now: VenueTs, emit: &mut impl FnMut(SlotAction)) {
         let schedule = self.schedule;
         let decision = match &mut self.phase {
             Phase::Grace(window) => grace_decision(window, now, schedule),
@@ -336,7 +336,7 @@ impl SlotMachine {
         self.phase = Phase::TornDown;
     }
 
-    fn force_teardown(&mut self, now: TsUs, emit: &mut impl FnMut(SlotAction)) {
+    fn force_teardown(&mut self, now: VenueTs, emit: &mut impl FnMut(SlotAction)) {
         let Some(window) = self.phase.window() else {
             return;
         };
@@ -374,7 +374,7 @@ fn emit_subscribe(assignment: &WindowAssignment, emit: &mut impl FnMut(SlotActio
     }
 }
 
-fn grace_decision(window: &mut LiveWindow, now: TsUs, schedule: PolySchedule) -> GraceAction {
+fn grace_decision(window: &mut LiveWindow, now: VenueTs, schedule: PolySchedule) -> GraceAction {
     let silent = now.diff(window.last_frame_ts_us) > schedule.silence_threshold;
     if window.collapse_seen && silent {
         return GraceAction::Teardown;

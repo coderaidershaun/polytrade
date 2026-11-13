@@ -52,25 +52,28 @@ impl PriceQueue {
     }
 
     pub fn known_public_qty(&self) -> Qty {
-        Qty(self
-            .nodes
-            .iter()
-            .map(|node| match node {
-                QueueNode::Public(QueueAhead::Known(qty)) => qty.0,
-                _ => 0,
-            })
-            .sum())
+        Qty::from_mantissa(
+            self.nodes
+                .iter()
+                .map(|node| match node {
+                    QueueNode::Public(QueueAhead::Known(qty)) => qty.mantissa(),
+                    _ => 0,
+                })
+                .sum(),
+        )
     }
 
     pub fn public_ahead_of(&self, index: SimOrderIndex) -> Option<QueueAhead> {
-        let mut ahead = Qty(0);
+        let mut ahead = Qty::from_mantissa(0);
         for node in &self.nodes {
             match node {
                 QueueNode::Own(owner) if *owner == index => return Some(QueueAhead::Known(ahead)),
                 QueueNode::Public(QueueAhead::Unobservable) => {
                     return Some(QueueAhead::Unobservable);
                 }
-                QueueNode::Public(QueueAhead::Known(qty)) => ahead = Qty(ahead.0 + qty.0),
+                QueueNode::Public(QueueAhead::Known(qty)) => {
+                    ahead = Qty::from_mantissa(ahead.mantissa() + qty.mantissa())
+                }
                 _ => {}
             }
         }
@@ -90,22 +93,26 @@ impl PriceQueue {
             return;
         }
         let known = self.known_public_qty();
-        if known.0 < visible.0 {
-            self.push_public(QueueAhead::Known(Qty(visible.0 - known.0)));
+        if known.mantissa() < visible.mantissa() {
+            self.push_public(QueueAhead::Known(Qty::from_mantissa(
+                visible.mantissa() - known.mantissa(),
+            )));
             return;
         }
-        self.shrink_known_public_from_tail(Qty(known.0 - visible.0));
+        self.shrink_known_public_from_tail(Qty::from_mantissa(
+            known.mantissa() - visible.mantissa(),
+        ));
     }
 
     fn shrink_known_public_from_tail(&mut self, mut excess: Qty) {
         let mut at = self.nodes.len();
-        while at > 0 && excess.0 > 0 {
+        while at > 0 && excess.mantissa() > 0 {
             at -= 1;
             let QueueNode::Public(QueueAhead::Known(qty)) = self.nodes[at] else {
                 continue;
             };
             let remaining = remaining_after(&mut excess, qty);
-            match remaining.0 {
+            match remaining.mantissa() {
                 0 => {
                     self.nodes.remove(at);
                 }
@@ -113,9 +120,10 @@ impl PriceQueue {
             }
         }
         debug_assert_eq!(
-            excess.0, 0,
+            excess.mantissa(),
+            0,
             "tail-first shrink left {} unexplained",
-            excess.0
+            excess.mantissa()
         );
     }
 
@@ -145,7 +153,7 @@ impl PriceQueue {
         take: &mut dyn FnMut(SimOrderIndex, Qty) -> OwnFill,
     ) {
         let mut at = 0;
-        while at < self.nodes.len() && budget.0 > 0 {
+        while at < self.nodes.len() && budget.mantissa() > 0 {
             let is_consumed = match self.nodes[at] {
                 QueueNode::Public(QueueAhead::Unobservable) => {
                     if public == PublicPolicy::Consume {
@@ -156,18 +164,18 @@ impl PriceQueue {
                 QueueNode::Public(QueueAhead::Known(qty)) if public == PublicPolicy::Consume => {
                     let remaining = remaining_after(budget, qty);
                     self.nodes[at] = QueueNode::Public(QueueAhead::Known(remaining));
-                    remaining.0 == 0
+                    remaining.mantissa() == 0
                 }
                 QueueNode::Public(QueueAhead::Known(_)) => false,
                 QueueNode::Own(index) => {
                     let fill = take(index, *budget);
                     assert!(
-                        (0..=budget.0).contains(&fill.taken.0),
+                        (0..=budget.mantissa()).contains(&fill.taken.mantissa()),
                         "own fill {} is outside the aggressor budget 0..={}",
-                        fill.taken.0,
-                        budget.0
+                        fill.taken.mantissa(),
+                        budget.mantissa()
                     );
-                    *budget = Qty(budget.0 - fill.taken.0);
+                    *budget = Qty::from_mantissa(budget.mantissa() - fill.taken.mantissa());
                     fill.is_complete
                 }
             };
@@ -184,9 +192,9 @@ impl PriceQueue {
 /// Spends what it can of `budget` against `available`, answering with the part of `available` the
 /// budget could not reach — the two are not interchangeable, and the name says which comes back.
 fn remaining_after(budget: &mut Qty, available: Qty) -> Qty {
-    let taken = Qty(available.0.min(budget.0));
-    *budget = Qty(budget.0 - taken.0);
-    Qty(available.0 - taken.0)
+    let taken = Qty::from_mantissa(available.mantissa().min(budget.mantissa()));
+    *budget = Qty::from_mantissa(budget.mantissa() - taken.mantissa());
+    Qty::from_mantissa(available.mantissa() - taken.mantissa())
 }
 
 #[derive(Debug, Clone)]
@@ -249,14 +257,14 @@ impl PriceLadder {
 
 fn is_crossed_by(side: Side, resting: Price, price: Price) -> bool {
     match side {
-        Side::Buy => resting.0 >= price.0,
-        Side::Sell => resting.0 <= price.0,
+        Side::Buy => resting.mantissa() >= price.mantissa(),
+        Side::Sell => resting.mantissa() <= price.mantissa(),
     }
 }
 
 fn rank(side: Side, price: Price) -> i64 {
     match side {
-        Side::Buy => -price.0,
-        Side::Sell => price.0,
+        Side::Buy => -price.mantissa(),
+        Side::Sell => price.mantissa(),
     }
 }

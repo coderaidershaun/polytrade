@@ -8,15 +8,17 @@ use rtrb::{Consumer, RingBuffer};
 use super::lanes::SimLane;
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::info;
-use crate::msg::inbound::{BookChunkKind, InboundMessage, MarketTapItem, TappedMessage, VenueMeta};
-use crate::msg::time::TsUs;
+use crate::msg::inbound::{
+    BookChunkKind, InboundMessage, MarketTapItem, MessageBody, TappedMessage, VenueMeta,
+};
+use crate::msg::time::LocalTs;
 use crate::runtime::config::{BinanceMarket, VenueMarket};
 use crate::runtime::registry::{ConnectionCategory, Registry};
 
 pub struct MarketTapLane {
     consumer: Consumer<MarketTapItem>,
     drained: Vec<TappedMessage>,
-    watermark_ts_us: TsUs,
+    watermark_ts_us: LocalTs,
     lane: SimLane,
 }
 
@@ -25,7 +27,7 @@ impl MarketTapLane {
         Self {
             consumer,
             drained: Vec::new(),
-            watermark_ts_us: TsUs::from_micros(i64::MIN),
+            watermark_ts_us: LocalTs::from_micros(i64::MIN),
             lane,
         }
     }
@@ -49,7 +51,7 @@ impl MarketTapLane {
                         self.lane
                     );
                     self.drained.push(tapped);
-                    message.received_ts_us()
+                    message.header.received_ts_us
                 }
             };
             assert!(
@@ -64,8 +66,8 @@ impl MarketTapLane {
         visit(&self.drained);
     }
 
-    pub fn proven_watermark_ts_us(&self) -> Option<TsUs> {
-        (self.watermark_ts_us != TsUs::from_micros(i64::MIN)).then_some(self.watermark_ts_us)
+    pub fn proven_watermark_ts_us(&self) -> Option<LocalTs> {
+        (self.watermark_ts_us != LocalTs::from_micros(i64::MIN)).then_some(self.watermark_ts_us)
     }
 
     pub fn is_producer_gone(&self) -> bool {
@@ -74,10 +76,10 @@ impl MarketTapLane {
 }
 
 fn has_required_evidence(message: &InboundMessage, venue_meta: VenueMeta) -> bool {
-    match message {
-        InboundMessage::Trade(_) => matches!(venue_meta, VenueMeta::Trade { .. }),
-        InboundMessage::BookReset(_) => matches!(venue_meta, VenueMeta::DepthReset { .. }),
-        InboundMessage::Book(chunk) => match chunk.kind {
+    match &message.body {
+        MessageBody::Trade(_) => matches!(venue_meta, VenueMeta::Trade { .. }),
+        MessageBody::BookReset(_) => matches!(venue_meta, VenueMeta::DepthReset { .. }),
+        MessageBody::Book(chunk) => match chunk.kind {
             BookChunkKind::Delta => matches!(venue_meta, VenueMeta::DepthDelta { .. }),
             BookChunkKind::Snapshot => venue_meta == VenueMeta::None,
         },
@@ -116,7 +118,7 @@ pub(super) fn attach_market_taps(
         let (tap_producer, tap_consumer) = RingBuffer::<MarketTapItem>::new(capacity);
         info!(
             "market tap for input queue {} ({}) allocated {} slots of {} bytes",
-            group.queue_id.0,
+            group.queue_id.index(),
             group.category.as_str(),
             capacity,
             size_of::<MarketTapItem>()
@@ -125,6 +127,9 @@ pub(super) fn attach_market_taps(
         tapped.push(producer.with_tap(tap_producer, Arc::clone(&gate)));
     }
 
+    // SMELL: these two expects repeat a config check as a panic at the start, after threads run.
+    // Config validation already refuses a simulated run off Binance spot, so the check belongs
+    // in preflight, as a typed refusal of the start.
     let taps = MarketTaps {
         trades: trades.expect("simulator requires a binance spot trades producer group"),
         depth: depth.expect("simulator requires a binance spot depth producer group"),

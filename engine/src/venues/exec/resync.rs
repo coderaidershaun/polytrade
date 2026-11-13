@@ -1,8 +1,7 @@
-//! Resync policy: read orders + balances before quoting (mirror + hot-side need them). Fails are
-//! state transitions (retry + converge or give up connection). Pure + clock-free: caller provides
-//! now + retry deadline (testable without socket).
+//! The reads of orders and balances that each edge does before it quotes. A failed read retries or
+//! gives up the connection, and the caller passes each time in, so no clock is read.
 
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 /// Total passes a connection gets to answer quoting's question. One hiccup is expected; a
 /// connection that cannot answer in four is not going to.
@@ -22,7 +21,7 @@ pub struct ResyncPass {
     seq: u64,
     outstanding: usize,
     attempts: u32,
-    retry_at: Option<TsUs>,
+    retry_at: Option<LocalTs>,
 }
 
 impl ResyncPass {
@@ -51,7 +50,7 @@ impl ResyncPass {
     }
 
     /// Failed (indistinguishable read/queue). One PASS = one attempt (outage hits all). Scheduled instant is flag.
-    pub fn on_failure(&mut self, seq: u64, retry_at: TsUs) {
+    pub fn on_failure(&mut self, seq: u64, retry_at: LocalTs) {
         if seq != self.seq || self.retry_at.is_some() {
             return;
         }
@@ -59,7 +58,7 @@ impl ResyncPass {
         self.retry_at = Some(retry_at);
     }
 
-    pub fn due(&self, now: TsUs) -> ResyncStep {
+    pub fn due(&self, now: LocalTs) -> ResyncStep {
         let Some(retry_at) = self.retry_at else {
             return ResyncStep::Wait;
         };

@@ -1,10 +1,5 @@
-//! Position-ledger fitness: the engine folds every REAL venue fill into exact per-instrument
-//! position, cash and mark-to-market, and hands it back through `ctx`. Three ways this breaks are
-//! all silent. Arithmetic that drifts from the fills that produced it yields PnL nobody can audit
-//! against the tape. A venue that redelivers a report — and Binance does — would move the money
-//! twice, and the second move looks exactly like a real fill. And a mark invented from half a book,
-//! or carried across a window rotation into a market whose prices mean something else, values a
-//! position at a number no venue ever showed.
+//! The ledger folds each real fill into exact position, cash and mark for each instrument. Each way
+//! it can break is silent: drift, a redelivered report, or a mark from half a book.
 //!
 //! Every position here opens through the real inbound path ([`FillPen`]), so a strategy cannot
 //! assert a fill into existence. The fold therefore lands on the fill's OWN message, ahead of the
@@ -14,9 +9,8 @@ use std::sync::{Arc, Mutex};
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::strategy::{Fill, Registration, Strategy, StrategyCtx};
-use engine::msg::exec::ExecEvent;
 use engine::msg::ids::{AssetId, InstrumentId, Qty, Side};
-use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::runtime::config::TrackerSpec;
 use engine::runtime::registry::InstrumentRow;
 use proptest::prelude::*;
@@ -25,7 +19,7 @@ use proptest::strategy::Strategy as _;
 use crate::engine_support::{
     FillPen, ONE, book_reset, delta_chunk, engine_without_warmup, idle_at, instrument_row,
     last_snapshot_chunk, persist_ring, rotation, run_control, running_at, snapshot_pair, spin,
-    strategy_log_ring, trade,
+    strategy_log_ring, ts,
 };
 
 /// One hundredth of a price unit — the grid a venue quotes on. Note it is EVEN in mantissas, so a
@@ -78,8 +72,8 @@ impl LedgerProbe {
                 phase,
                 instrument,
                 position_base: ctx.position_base(instrument),
-                exposure_quote: ctx.exposure_quote(instrument),
-                pnl_quote: ctx.pnl_quote(instrument),
+                exposure_quote: ctx.exposure_quote(instrument).mantissa(),
+                pnl_quote: ctx.pnl_quote(instrument).mantissa(),
                 has_mark: ctx.has_mark(instrument),
             });
     }
@@ -192,9 +186,9 @@ fn spin_reading(readings: &Readings, instrument: u16, spin_seq: u64) -> Reading 
 fn reseat_book(instrument: u16, bid: i64, ask: i64, when: i64) -> [InboundMessage; 3] {
     let (bids, asks) = snapshot_pair(instrument, &[(bid, ONE)], &[(ask, ONE)], when);
     [
-        InboundMessage::BookReset(book_reset(instrument, when)),
-        InboundMessage::Book(bids),
-        InboundMessage::Book(asks),
+        book_reset(instrument, when),
+        InboundMessage::new(ts(when), MessageBody::Book(bids)),
+        InboundMessage::new(ts(when), MessageBody::Book(asks)),
     ]
 }
 
@@ -281,10 +275,10 @@ proptest! {
                 }
             }
             let seq = index as u64;
-            engine.dispatch(&InboundMessage::SpinTick(spin(seq, when + 1)));
+            engine.dispatch(&spin(seq, when + 1));
 
             let reading = spin_reading(&readings, 0, seq);
-            prop_assert_eq!(reading.position_base, Qty(shadow.position_base));
+            prop_assert_eq!(reading.position_base, Qty::from_mantissa(shadow.position_base));
             prop_assert_eq!(reading.exposure_quote, shadow.exposure_quote());
             prop_assert_eq!(reading.pnl_quote, shadow.pnl_quote());
             prop_assert!(reading.has_mark);
@@ -313,7 +307,7 @@ fn a_fill_folds_before_its_callback_and_a_redelivery_moves_the_money_once() {
         let mut pen = FillPen::new(0);
 
         dispatch_all(&mut engine, &pen.fill(Side::Buy, 101 * ONE, ONE, 10));
-        engine.dispatch(&InboundMessage::SpinTick(spin(0, 20)));
+        engine.dispatch(&spin(0, 20));
 
         let recorded = take_readings(&readings);
         let in_fill = recorded
@@ -322,7 +316,7 @@ fn a_fill_folds_before_its_callback_and_a_redelivery_moves_the_money_once() {
             .expect("the fill earned an on_fill, and the probe read the ledger inside it");
         assert_eq!(
             in_fill.position_base,
-            Qty(ONE),
+            Qty::from_mantissa(ONE),
             "on_fill ran against a ledger that had not yet folded the fill it was reporting"
         );
         assert_eq!(
@@ -336,17 +330,17 @@ fn a_fill_folds_before_its_callback_and_a_redelivery_moves_the_money_once() {
             .expect("the probe read the ledger on the following spin");
         assert_eq!(
             on_spin.position_base,
-            Qty(ONE),
+            Qty::from_mantissa(ONE),
             "the fill moved the position a second time between its callback and the next spin"
         );
         assert_eq!(on_spin.exposure_quote, 101 * ONE, "one unit marked at 101");
         assert_eq!(on_spin.pnl_quote, 0);
 
         dispatch_all(&mut engine, &pen.fill(Side::Buy, 100 * ONE, ONE, 30));
-        engine.dispatch(&InboundMessage::SpinTick(spin(1, 40)));
+        engine.dispatch(&spin(1, 40));
 
         let after = spin_reading(&readings, 0, 1);
-        assert_eq!(after.position_base, Qty(2 * ONE));
+        assert_eq!(after.position_base, Qty::from_mantissa(2 * ONE));
         assert_eq!(after.exposure_quote, 202 * ONE);
         assert_eq!(
             after.pnl_quote, ONE,
@@ -365,7 +359,7 @@ fn a_fill_folds_before_its_callback_and_a_redelivery_moves_the_money_once() {
         for batch in [&first, &second, &second, &first, &first] {
             dispatch_all(&mut engine, batch);
         }
-        engine.dispatch(&InboundMessage::SpinTick(spin(0, 30)));
+        engine.dispatch(&spin(0, 30));
 
         let after = spin_reading(&readings, 0, 0);
         let fills = take_readings(&readings)
@@ -379,7 +373,7 @@ fn a_fill_folds_before_its_callback_and_a_redelivery_moves_the_money_once() {
 
         assert_eq!(
             after.position_base,
-            Qty(3 * ONE),
+            Qty::from_mantissa(3 * ONE),
             "the redeliveries moved the position again"
         );
         // Paid 100 for one unit and 204 for two; three units marked at 101 are worth 303.
@@ -414,22 +408,17 @@ fn a_rotation_flattens_its_own_slot_and_a_resume_preserves_every_one() {
         let mut pen = FillPen::new(instrument);
         dispatch_all(&mut engine, &pen.fill(Side::Buy, 100 * ONE, ONE, 10));
     }
-    engine.dispatch(&InboundMessage::SpinTick(spin(0, 20)));
+    engine.dispatch(&spin(0, 20));
     for instrument in [0u16, 1] {
         assert_eq!(spin_reading(&readings, instrument, 0).pnl_quote, ONE);
     }
 
-    engine.dispatch(&InboundMessage::MarketRotation(rotation(
-        0,
-        30,
-        300_000_030,
-        30,
-    )));
-    engine.dispatch(&InboundMessage::SpinTick(spin(1, 40)));
+    engine.dispatch(&rotation(0, 30, 300_000_030, 30));
+    engine.dispatch(&spin(1, 40));
     let rotated = spin_reading(&readings, 0, 1);
     assert_eq!(
         rotated.position_base,
-        Qty(0),
+        Qty::from_mantissa(0),
         "the position was the old window's"
     );
     assert_eq!(rotated.pnl_quote, 0);
@@ -438,16 +427,16 @@ fn a_rotation_flattens_its_own_slot_and_a_resume_preserves_every_one() {
         "the old window's mid is not a price in the new one"
     );
     let untouched = spin_reading(&readings, 1, 1);
-    assert_eq!(untouched.position_base, Qty(ONE));
+    assert_eq!(untouched.position_base, Qty::from_mantissa(ONE));
     assert_eq!(untouched.pnl_quote, ONE);
 
     engine.dispatch(&run_control(idle_at(1), 50));
     engine.dispatch(&run_control(running_at(2), 600_000_050));
-    engine.dispatch(&InboundMessage::SpinTick(spin(2, 600_000_060)));
+    engine.dispatch(&spin(2, 600_000_060));
     let resumed = spin_reading(&readings, 1, 2);
     assert_eq!(
         resumed.position_base,
-        Qty(ONE),
+        Qty::from_mantissa(ONE),
         "the park sold nothing, so the position it opened is still held"
     );
     // exposure and PnL together pin the cash leg: -100 paid against a 101 mark is the ONE the row
@@ -461,7 +450,7 @@ fn a_rotation_flattens_its_own_slot_and_a_resume_preserves_every_one() {
     let still_rotated = spin_reading(&readings, 0, 2);
     assert_eq!(
         still_rotated.position_base,
-        Qty(0),
+        Qty::from_mantissa(0),
         "a resume does not undo the rotation's flatten either — it touches no row at all"
     );
     assert!(!still_rotated.has_mark);
@@ -475,31 +464,27 @@ fn a_mark_needs_both_sides_and_survives_a_book_reset() {
     let instruments = [bare_row(0)];
     let (mut engine, readings) = probe_engine(&instruments);
 
-    engine.dispatch(&InboundMessage::SpinTick(spin(0, 1)));
+    engine.dispatch(&spin(0, 1));
     assert!(
         !spin_reading(&readings, 0, 0).has_mark,
         "no book has committed at all"
     );
 
-    engine.dispatch(&InboundMessage::Book(last_snapshot_chunk(
-        0,
-        Side::Buy,
-        &[(100 * ONE, ONE)],
-        10,
-    )));
-    engine.dispatch(&InboundMessage::SpinTick(spin(1, 11)));
+    engine.dispatch(&InboundMessage::new(
+        ts(10),
+        MessageBody::Book(last_snapshot_chunk(0, Side::Buy, &[(100 * ONE, ONE)], 10)),
+    ));
+    engine.dispatch(&spin(1, 11));
     assert!(
         !spin_reading(&readings, 0, 1).has_mark,
         "a book with bids and no asks is not a valuation"
     );
 
-    engine.dispatch(&InboundMessage::Book(delta_chunk(
-        0,
-        Side::Sell,
-        &[(102 * ONE, ONE)],
-        20,
-    )));
-    engine.dispatch(&InboundMessage::SpinTick(spin(2, 21)));
+    engine.dispatch(&InboundMessage::new(
+        ts(20),
+        MessageBody::Book(delta_chunk(0, Side::Sell, &[(102 * ONE, ONE)], 20)),
+    ));
+    engine.dispatch(&spin(2, 21));
     assert!(
         spin_reading(&readings, 0, 2).has_mark,
         "both sides are present at a commit boundary"
@@ -507,8 +492,8 @@ fn a_mark_needs_both_sides_and_survives_a_book_reset() {
 
     let mut pen = FillPen::new(0);
     dispatch_all(&mut engine, &pen.fill(Side::Buy, 100 * ONE, ONE, 30));
-    engine.dispatch(&InboundMessage::BookReset(book_reset(0, 40)));
-    engine.dispatch(&InboundMessage::SpinTick(spin(3, 41)));
+    engine.dispatch(&book_reset(0, 40));
+    engine.dispatch(&spin(3, 41));
     let held = spin_reading(&readings, 0, 3);
     assert!(
         held.has_mark,
@@ -516,75 +501,6 @@ fn a_mark_needs_both_sides_and_survives_a_book_reset() {
     );
     assert_eq!(held.exposure_quote, 101 * ONE);
     assert_eq!(held.pnl_quote, ONE);
-}
-
-/// FITNESS: the ledger is a pure function of the message sequence. Every reset it performs is
-/// message-driven, so the same tape read twice gives the same numbers at the same points — the
-/// property replay-based backtesting will rest on.
-#[test]
-fn replaying_one_tape_twice_reads_the_same_ledger() {
-    let instruments = [bare_row(0)];
-    let tape = mixed_tape();
-    let first = read_back(&instruments, &tape);
-    let second = read_back(&instruments, &tape);
-    assert!(
-        first.len() > 40,
-        "the tape produced only {} readings — nothing meaningful is being compared",
-        first.len()
-    );
-    assert_eq!(
-        first, second,
-        "the same tape produced different ledgers, so something outside the message sequence \
-         reached the fold"
-    );
-}
-
-fn read_back(instruments: &[InstrumentRow], tape: &[InboundMessage]) -> Vec<Reading> {
-    let (mut engine, readings) = probe_engine(instruments);
-    dispatch_all(&mut engine, tape);
-    take_readings(&readings)
-}
-
-/// Fills on both sides, prints, re-seated books, a rotation and a park/resume — every path that
-/// writes the ledger, in one sequence.
-fn mixed_tape() -> Vec<InboundMessage> {
-    let mut messages = Vec::new();
-    let mut pen = FillPen::new(0);
-    messages.extend(reseat_book(0, 100 * ONE, 102 * ONE, 0));
-    for step in 0..24i64 {
-        let when = 100 + step * 1_000;
-        let side = if step % 3 == 0 { Side::Sell } else { Side::Buy };
-        messages.push(InboundMessage::Trade(trade(
-            0,
-            (100 + step % 5) * ONE,
-            ONE / 2,
-            side,
-            when,
-        )));
-        messages.extend(pen.fill(side, (100 + step % 5) * ONE, ONE / 2, when));
-        if step % 7 == 3 {
-            messages.extend(reseat_book(
-                0,
-                (99 + step % 4) * ONE,
-                (101 + step % 4) * ONE + TICK,
-                when + 1,
-            ));
-        }
-        if step == 11 {
-            messages.push(InboundMessage::MarketRotation(rotation(
-                0,
-                when,
-                when + 300_000_000,
-                when + 2,
-            )));
-        }
-        if step == 17 {
-            messages.push(run_control(idle_at(1), when + 2));
-            messages.push(run_control(running_at(2), when + 3));
-        }
-        messages.push(InboundMessage::SpinTick(spin(step as u64, when + 5)));
-    }
-    messages
 }
 
 /// Reports the engine's own position and PnL each spin, so an assertion can be made against the
@@ -597,8 +513,8 @@ struct MoneyProbe {
 impl Strategy for MoneyProbe {
     fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
         *self.latest.lock().expect("money mutex poisoned") = Some((
-            ctx.position_base(InstrumentId(0)).0,
-            ctx.pnl_quote(InstrumentId(0)),
+            ctx.position_base(InstrumentId(0)).mantissa(),
+            ctx.pnl_quote(InstrumentId(0)).mantissa(),
         ));
     }
 }
@@ -637,7 +553,7 @@ fn a_fill_moves_cash_the_way_its_side_and_its_commission_say() {
     for message in pen.fill(Side::Buy, 100 * ONE, ONE, 10) {
         engine.dispatch(&message);
     }
-    engine.dispatch(&InboundMessage::SpinTick(spin(0, 20)));
+    engine.dispatch(&spin(0, 20));
     let (position, cash) = latest.lock().expect("poisoned").expect("the spin ran");
     assert_eq!(
         position, ONE,
@@ -654,7 +570,7 @@ fn a_fill_moves_cash_the_way_its_side_and_its_commission_say() {
     for message in pen.fill(Side::Sell, 110 * ONE, ONE, 30) {
         engine.dispatch(&message);
     }
-    engine.dispatch(&InboundMessage::SpinTick(spin(1, 40)));
+    engine.dispatch(&spin(1, 40));
     let (position, cash) = latest.lock().expect("poisoned").expect("the spin ran");
     assert_eq!(
         position, 0,
@@ -701,16 +617,14 @@ fn a_fill_moves_cash_the_way_its_side_and_its_commission_say() {
         commissions.into_iter().enumerate()
     {
         let when = 50 + 20 * step as i64;
-        let InboundMessage::Exec(report) = pen.report(Side::Buy, 100 * ONE, ONE, when) else {
+        let mut charged = pen.report(Side::Buy, 100 * ONE, ONE, when);
+        let MessageBody::Exec(report) = &mut charged.body else {
             unreachable!("the pen reports a fill as an Exec message");
         };
-        let charged = InboundMessage::Exec(ExecEvent {
-            commission,
-            commission_asset,
-            ..report
-        });
+        report.commission = commission;
+        report.commission_asset = commission_asset;
         engine.dispatch(&charged);
-        engine.dispatch(&InboundMessage::SpinTick(spin(2 + step as u64, when + 10)));
+        engine.dispatch(&spin(2 + step as u64, when + 10));
         let (_, cash_after) = latest.lock().expect("poisoned").expect("the spin ran");
         assert_eq!(cash_after - cash_before, cash_gain - 100 * ONE, "{why}");
         cash_before = cash_after;

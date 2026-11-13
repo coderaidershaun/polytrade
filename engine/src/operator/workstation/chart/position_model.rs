@@ -1,10 +1,9 @@
-//! One rolling five-minute exposure and PnL series per instrument, bucketed by the mid chart's own
-//! spin arithmetic. The link carries these values as `f64`. They become exact quote amounts once,
-//! here, so the mid chart's integer helpers serve this chart unchanged.
+//! A rolling five-minute series of exposure and PnL for each instrument, on the buckets of the mid
+//! chart. The link carries floats, and they become exact quote amounts here, one time.
 
 use super::model::{bucket_capacity, bucket_index};
 use crate::msg::ids::{InstrumentId, fixed_mantissa};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, VenueTs};
 use crate::msg::ui::UiEvent;
 use crate::operator::workstation::history::{BoundedHistory, grow_to};
 
@@ -87,7 +86,7 @@ impl PositionModel {
     fn bank_position(
         &mut self,
         instrument: InstrumentId,
-        at: TsUs,
+        at: VenueTs,
         exposure_quote: f64,
         pnl_quote: f64,
     ) {

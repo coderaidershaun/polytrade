@@ -2,17 +2,18 @@
 //! into fixed-size records, so nothing here allocates, and the link sends them on from the rings.
 
 use crate::hot::book::{Book, BookState};
+use crate::hot::digest::digest_fields;
 use crate::hot::exec::{Balance, ExecHalt, Fill, OrderReject, OrderUpdate, WorkingOrderView};
 use crate::hot::ledger::LedgerRow;
 use crate::hot::sink::{UiBookSink, UiEventSink};
 #[cfg(debug_assertions)]
 use crate::msg::ids::ClientOrderId;
-use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use crate::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use crate::msg::inbound::{Level, MarketRotation, TradeEvent};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::msg::ui::{
     DomQuote, UI_BOOK_LEVELS, UI_ORDER_SNAPSHOT_CAPACITY, UI_ORDER_SNAPSHOT_MAX_TOTAL,
-    UiBookSnapshot, UiBookState, UiEvent, UiWorkingOrder,
+    UiBookSnapshot, UiBookState, UiEvent, UiHalt, UiWorkingOrder,
 };
 
 pub(crate) struct UiEmitter {
@@ -33,7 +34,12 @@ impl UiEmitter {
     }
 
     /// `seq` bumped always; ring-drop shows as gap.
-    pub(crate) fn emit_book(&mut self, instrument: InstrumentId, books: &[Book], event_ts: TsUs) {
+    pub(crate) fn emit_book(
+        &mut self,
+        instrument: InstrumentId,
+        books: &[Book],
+        event_ts: LocalTs,
+    ) {
         let index = usize::from(instrument.0);
         let book = &books[index];
         let state = match book.state() {
@@ -49,7 +55,7 @@ impl UiEmitter {
         self.book_sink.push(UiBookSnapshot {
             instrument,
             seq,
-            event_ts_us: event_ts,
+            event_ts_us: event_ts.to_peer(),
             state,
             bid_len,
             ask_len,
@@ -58,12 +64,12 @@ impl UiEmitter {
         });
     }
 
-    pub(crate) fn emit_trade(&mut self, event: &TradeEvent) {
+    pub(crate) fn emit_trade(&mut self, event: &TradeEvent, received_ts_us: LocalTs) {
         self.event_sink
             .push_stamped(&mut self.event_seq, |seq| UiEvent::Trade {
                 instrument: event.instrument,
                 seq,
-                event_ts_us: event.received_ts_us,
+                event_ts_us: received_ts_us.to_peer(),
                 aggressor: event.side,
                 price: event.price,
                 qty: event.qty,
@@ -74,15 +80,15 @@ impl UiEmitter {
         &mut self,
         instrument: InstrumentId,
         row: &LedgerRow,
-        event_ts: TsUs,
+        event_ts: LocalTs,
     ) {
-        let exposure_quote_units = to_quote_units(row.exposure_quote());
-        let pnl_quote_units = to_quote_units(row.pnl_quote());
+        let exposure_quote_units = row.exposure_quote().to_f64();
+        let pnl_quote_units = row.pnl_quote().to_f64();
         self.event_sink
             .push_stamped(&mut self.event_seq, |seq| UiEvent::Position {
                 instrument,
                 seq,
-                event_ts_us: event_ts,
+                event_ts_us: event_ts.to_peer(),
                 exposure_quote: exposure_quote_units,
                 pnl_quote: pnl_quote_units,
             });
@@ -93,7 +99,7 @@ impl UiEmitter {
             .push_stamped(&mut self.event_seq, |seq| UiEvent::Fill {
                 instrument: fill.instrument,
                 seq,
-                event_ts_us: fill.event_ts_us,
+                event_ts_us: fill.event_ts_us.to_peer(),
                 quote_level: Some(fill.level),
                 side: fill.side,
                 price: fill.price,
@@ -109,7 +115,7 @@ impl UiEmitter {
             .push_stamped(&mut self.event_seq, |seq| UiEvent::OrderUpdate {
                 instrument: update.instrument,
                 seq,
-                event_ts_us: update.event_ts_us,
+                event_ts_us: update.event_ts_us.to_peer(),
                 client_id: update.client_id,
                 quote_level: Some(update.level),
                 side: update.side,
@@ -125,7 +131,7 @@ impl UiEmitter {
         instrument: InstrumentId,
         side: Side,
         working: impl Iterator<Item = WorkingOrderView>,
-        event_ts: TsUs,
+        event_ts: LocalTs,
     ) {
         let mut orders = [UiWorkingOrder::EMPTY; UI_ORDER_SNAPSHOT_CAPACITY];
         // The duplicate check costs 2.3 KB of stack zeroed on entry and this runs twice per
@@ -168,7 +174,7 @@ impl UiEmitter {
             .push_stamped(&mut self.event_seq, |seq| UiEvent::OrderSnapshot {
                 instrument,
                 seq,
-                event_ts_us: event_ts,
+                event_ts_us: event_ts.to_peer(),
                 side,
                 detail_len,
                 total_working,
@@ -181,7 +187,7 @@ impl UiEmitter {
             .push_stamped(&mut self.event_seq, |seq| UiEvent::Reject {
                 instrument: reject.instrument,
                 seq,
-                event_ts_us: reject.event_ts_us,
+                event_ts_us: reject.event_ts_us.to_peer(),
                 side: reject.side,
                 origin: reject.origin,
             });
@@ -191,25 +197,35 @@ impl UiEmitter {
     pub(crate) fn emit_balances(
         &mut self,
         balances: impl Iterator<Item = (AssetId, Balance)>,
-        event_ts: TsUs,
+        event_ts: LocalTs,
     ) {
         for (asset, balance) in balances {
             self.event_sink
                 .push_stamped(&mut self.event_seq, |seq| UiEvent::Balance {
                     asset,
                     seq,
-                    event_ts_us: event_ts,
+                    event_ts_us: event_ts.to_peer(),
                     free: balance.free,
                     locked: balance.locked,
                 });
         }
     }
 
-    pub(crate) fn emit_execution(&mut self, halt: ExecHalt, event_ts: TsUs) {
+    pub(crate) fn emit_execution(&mut self, halt: ExecHalt, event_ts: LocalTs) {
+        let halt = match halt {
+            ExecHalt::Armed => UiHalt::Armed,
+            ExecHalt::Halted {
+                reason,
+                halted_ts_us,
+            } => UiHalt::Halted {
+                reason,
+                halted_ts_us: halted_ts_us.to_peer(),
+            },
+        };
         self.event_sink
             .push_stamped(&mut self.event_seq, |seq| UiEvent::Execution {
                 seq,
-                event_ts_us: event_ts,
+                event_ts_us: event_ts.to_peer(),
                 halt,
             });
     }
@@ -218,23 +234,23 @@ impl UiEmitter {
         &mut self,
         instrument: InstrumentId,
         quote: DomQuote,
-        event_ts: TsUs,
+        event_ts: LocalTs,
     ) {
         self.event_sink
             .push_stamped(&mut self.event_seq, |seq| UiEvent::Quote {
                 instrument,
                 seq,
-                event_ts_us: event_ts,
+                event_ts_us: event_ts.to_peer(),
                 quote,
             });
     }
 
-    pub(crate) fn emit_rotation(&mut self, rotation: &MarketRotation) {
+    pub(crate) fn emit_rotation(&mut self, rotation: &MarketRotation, received_ts_us: LocalTs) {
         self.event_sink
             .push_stamped(&mut self.event_seq, |seq| UiEvent::Rotation {
                 instrument: rotation.instrument,
                 seq,
-                event_ts_us: rotation.received_ts_us,
+                event_ts_us: received_ts_us.to_peer(),
             });
     }
 
@@ -247,14 +263,19 @@ impl UiEmitter {
     }
 }
 
-#[inline]
-fn to_quote_units(mantissa: i64) -> f64 {
-    mantissa as f64 / FIXED_SCALE as f64
+digest_fields! {
+    UiEmitter { event_seq, book_seqs }
+    not_state {
+        // Output rings: whether a record fits depends on how fast the reader drains them. A drop
+        // still advances its sequence, so the sequences above are state.
+        event_sink,
+        book_sink,
+    }
 }
 
 const EMPTY_LEVEL: Level = Level {
-    price: Price(0),
-    qty: Qty(0),
+    price: Price::from_mantissa(0),
+    qty: Qty::from_mantissa(0),
 };
 
 fn copy_top_levels(levels: &[Level], out: &mut [Level; UI_BOOK_LEVELS]) -> u16 {

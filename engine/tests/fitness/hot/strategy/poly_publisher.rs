@@ -1,6 +1,5 @@
-//! The polymarket publisher trading engine: one frame per spin carrying both up legs, each written
-//! into the block named for the ROLE it plays — `cur` hosts the open window, `next` the one not yet
-//! open.
+//! The Polymarket publisher: one frame for each spin with both up legs, each in the block of the
+//! role it plays: the open window, or the next one.
 //!
 //! Worth pinning because every way of getting it wrong is SILENT. Window N's close IS window N+1's
 //! open, so an inclusive comparison puts two legs in the current block for one microsecond; a `>`
@@ -22,14 +21,16 @@ use engine::hot::exec::{
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{Strategy, StrategyConfig};
 use engine::link::{
-    Envelope, FrameGuard, InboundLink, LINK_MAX_DATAGRAM, LinkBody, LinkDatagram, LinkFrame,
-    LinkHash, LinkIdentity, LinkOrigin, OutboundLink, schema_hash_of_fields,
+    Envelope, FrameGuard, LINK_MAX_DATAGRAM, LinkBody, LinkDatagram, LinkFrame, LinkHash,
+    LinkIdentity, LinkOrigin, OutboundLink, schema_hash_of_fields,
 };
 use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use engine::msg::inbound::{BookChunk, InboundMessage};
+use engine::msg::ids::{
+    AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
+};
+use engine::msg::inbound::{BookChunk, InboundMessage, MessageBody};
 use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::time::{DurationUs, Stamper};
 use engine::msg::ui::{DomQuote, UiEvent};
@@ -45,7 +46,7 @@ use rtrb::{Consumer, RingBuffer};
 use crate::engine_support::{
     FillPen, LinkedSetup, account_chunk, detached_setup, engine_view, engine_with_link, exec_event,
     instrument_row, persist_ring, recorder_spec, rotation, snapshot_pair, spin, stream_ready,
-    tracker_spec_all, trade, ts, ui_event_ring,
+    tracker_spec_all, trade, ts, ui_event_ring, venue_ts,
 };
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
 /// The publisher's own copy of the shared schema — the same file the peer includes, so the frame
@@ -148,7 +149,7 @@ fn poly_rows() -> Vec<InstrumentRow> {
             quote_asset: AssetId(1),
             // Stamped by the poly preflight on the live path; the reach histogram buckets by it, and
             // `MicroTracker::new` refuses to build one without it.
-            tick_size: Some(Price(TICK)),
+            tick_size: Some(Price::from_mantissa(TICK)),
             lot_size: None,
             min_qty: None,
             min_notional: None,
@@ -162,7 +163,7 @@ fn poly_rows() -> Vec<InstrumentRow> {
             },
             kline_intervals: Vec::new(),
             book_capacity: 128,
-            max_exposure_quote: 500 * FIXED_SCALE,
+            max_exposure_quote: Notional::from_mantissa(500 * FIXED_SCALE),
             tracker: poly_tracker(),
         })
         .collect()
@@ -192,12 +193,7 @@ fn publisher_at_the_first_two_windows() -> crate::engine_support::LinkedEngine {
     for (instrument, open) in TILING {
         dispatch(
             &mut linked,
-            InboundMessage::MarketRotation(rotation(
-                instrument,
-                open,
-                open + WINDOW,
-                FIRST_OPEN - 1_000,
-            )),
+            rotation(instrument, open, open + WINDOW, FIRST_OPEN - 1_000),
         );
     }
     price_every_slot(&mut linked, FIRST_OPEN - 500);
@@ -213,8 +209,14 @@ fn price_every_slot(linked: &mut crate::engine_support::LinkedEngine, when: i64)
 fn price_slot(linked: &mut crate::engine_support::LinkedEngine, slot: u16, when: i64) {
     let (bid, ask) = QUOTES[usize::from(slot)];
     let (bids, asks) = snapshot_chunks(slot, bid, ask, when);
-    dispatch(linked, InboundMessage::Book(bids));
-    dispatch(linked, InboundMessage::Book(asks));
+    dispatch(
+        linked,
+        InboundMessage::new(ts(when), MessageBody::Book(bids)),
+    );
+    dispatch(
+        linked,
+        InboundMessage::new(ts(when), MessageBody::Book(asks)),
+    );
 }
 
 /// A venue snapshot arrives bids-then-asks and only the second chunk completes it; a fresh one over a
@@ -235,7 +237,7 @@ fn spin_and_take_frame(
     now: i64,
 ) -> Option<OutboundLink> {
     while linked.outbound.pop().is_ok() {}
-    dispatch(linked, InboundMessage::SpinTick(spin(1, now)));
+    dispatch(linked, spin(1, now));
     linked.outbound.pop().ok()
 }
 
@@ -243,7 +245,7 @@ fn spin_and_take_frame(
 /// distinct from a frame whose every slot reads absent.
 fn spin_and_collect(linked: &mut crate::engine_support::LinkedEngine, now: i64) -> Wire {
     while linked.outbound.pop().is_ok() {}
-    dispatch(linked, InboundMessage::SpinTick(spin(1, now)));
+    dispatch(linked, spin(1, now));
     let mut sent = Vec::new();
     while let Ok(outbound) = linked.outbound.pop() {
         sent.extend(as_wire(outbound.payload.values()));
@@ -281,10 +283,10 @@ fn an_untouched_frame_is_absent_in_every_slot() {
 fn quoted_block(block: &mut link_schema::UpRole, slot: usize) {
     let (bid, ask) = QUOTES[slot];
     let (bid_qty, ask_qty) = DEPTHS[slot];
-    block.bid = Price(bid).to_f64();
-    block.ask = Price(ask).to_f64();
-    block.bid_qty = Qty(bid_qty).to_f64();
-    block.ask_qty = Qty(ask_qty).to_f64();
+    block.bid = Price::from_mantissa(bid).to_f64();
+    block.ask = Price::from_mantissa(ask).to_f64();
+    block.bid_qty = Qty::from_mantissa(bid_qty).to_f64();
+    block.ask_qty = Qty::from_mantissa(ask_qty).to_f64();
     block.buy_vol = 0.0;
     block.sell_vol = 0.0;
 }
@@ -370,7 +372,7 @@ fn book_slots_read_absent_until_the_snapshot_is_whole() {
     let mut linked = publisher();
     dispatch(
         &mut linked,
-        InboundMessage::MarketRotation(rotation(A_UP, FIRST_OPEN, FIRST_OPEN + WINDOW, FIRST_OPEN)),
+        rotation(A_UP, FIRST_OPEN, FIRST_OPEN + WINDOW, FIRST_OPEN),
     );
 
     let mut unpriced = link_schema::UpFrame::ABSENT;
@@ -393,18 +395,24 @@ fn book_slots_read_absent_until_the_snapshot_is_whole() {
 
     // Distinct from this slot's standing quotes, so a leak names which book it came from.
     let (bids, asks) = snapshot_chunks(A_UP, cents(37), cents(39), FIRST_OPEN + 4);
-    dispatch(&mut linked, InboundMessage::Book(bids));
+    dispatch(
+        &mut linked,
+        InboundMessage::new(ts(FIRST_OPEN + 4), MessageBody::Book(bids)),
+    );
     assert_eq!(
         spin_and_collect(&mut linked, FIRST_OPEN + 5),
         unpriced,
         "the resnapshot's bids have landed but its asks have not"
     );
 
-    dispatch(&mut linked, InboundMessage::Book(asks));
+    dispatch(
+        &mut linked,
+        InboundMessage::new(ts(FIRST_OPEN + 4), MessageBody::Book(asks)),
+    );
     let mut resnapshotted = link_schema::UpFrame::ABSENT;
     quoted_block(&mut resnapshotted.cur, A_UP as usize);
-    resnapshotted.cur.bid = Price(cents(37)).to_f64();
-    resnapshotted.cur.ask = Price(cents(39)).to_f64();
+    resnapshotted.cur.bid = Price::from_mantissa(cents(37)).to_f64();
+    resnapshotted.cur.ask = Price::from_mantissa(cents(39)).to_f64();
     assert_eq!(
         spin_and_collect(&mut linked, FIRST_OPEN + 6),
         wire_of(resnapshotted)
@@ -429,7 +437,10 @@ fn each_priced_slot_carries_the_side_and_the_quantity_its_name_claims() {
     ] {
         dispatch(
             &mut linked,
-            InboundMessage::Trade(trade(A_UP, price, qty, side, FIRST_OPEN)),
+            InboundMessage::new(
+                ts(FIRST_OPEN),
+                MessageBody::Trade(trade(A_UP, price, qty, side, FIRST_OPEN)),
+            ),
         );
     }
     let sent = spin_and_collect(&mut linked, FIRST_OPEN + 1);
@@ -438,16 +449,34 @@ fn each_priced_slot_carries_the_side_and_the_quantity_its_name_claims() {
     let (next_bid, next_ask) = QUOTES[B_UP as usize];
     let (next_bid_qty, next_ask_qty) = DEPTHS[B_UP as usize];
     for (field, expected) in [
-        ("poly_cur_up_bid", Price(cur_bid).to_f64()),
-        ("poly_cur_up_ask", Price(cur_ask).to_f64()),
-        ("poly_cur_up_bid_qty", Qty(cur_bid_qty).to_f64()),
-        ("poly_cur_up_ask_qty", Qty(cur_ask_qty).to_f64()),
-        ("poly_cur_up_buy_vol", Qty(shares(3)).to_f64()),
-        ("poly_cur_up_sell_vol", Qty(shares(1)).to_f64()),
-        ("poly_next_up_bid", Price(next_bid).to_f64()),
-        ("poly_next_up_ask", Price(next_ask).to_f64()),
-        ("poly_next_up_bid_qty", Qty(next_bid_qty).to_f64()),
-        ("poly_next_up_ask_qty", Qty(next_ask_qty).to_f64()),
+        ("poly_cur_up_bid", Price::from_mantissa(cur_bid).to_f64()),
+        ("poly_cur_up_ask", Price::from_mantissa(cur_ask).to_f64()),
+        (
+            "poly_cur_up_bid_qty",
+            Qty::from_mantissa(cur_bid_qty).to_f64(),
+        ),
+        (
+            "poly_cur_up_ask_qty",
+            Qty::from_mantissa(cur_ask_qty).to_f64(),
+        ),
+        (
+            "poly_cur_up_buy_vol",
+            Qty::from_mantissa(shares(3)).to_f64(),
+        ),
+        (
+            "poly_cur_up_sell_vol",
+            Qty::from_mantissa(shares(1)).to_f64(),
+        ),
+        ("poly_next_up_bid", Price::from_mantissa(next_bid).to_f64()),
+        ("poly_next_up_ask", Price::from_mantissa(next_ask).to_f64()),
+        (
+            "poly_next_up_bid_qty",
+            Qty::from_mantissa(next_bid_qty).to_f64(),
+        ),
+        (
+            "poly_next_up_ask_qty",
+            Qty::from_mantissa(next_ask_qty).to_f64(),
+        ),
     ] {
         assert_eq!(sent[slot_of(field)], Some(expected), "{field}");
     }
@@ -473,13 +502,16 @@ fn traded_volume_is_cumulative_since_rotation_not_per_spin() {
     {
         dispatch(
             &mut linked,
-            InboundMessage::Trade(trade(
-                B_UP,
-                price,
-                shares(2),
-                side,
-                FIRST_OPEN + 10 + index as i64,
-            )),
+            InboundMessage::new(
+                ts(FIRST_OPEN + 10 + index as i64),
+                MessageBody::Trade(trade(
+                    B_UP,
+                    price,
+                    shares(2),
+                    side,
+                    FIRST_OPEN + 10 + index as i64,
+                )),
+            ),
         );
     }
 
@@ -496,12 +528,12 @@ fn traded_volume_is_cumulative_since_rotation_not_per_spin() {
 
     dispatch(
         &mut linked,
-        InboundMessage::MarketRotation(rotation(
+        rotation(
             B_UP,
             FIRST_OPEN + 3 * WINDOW,
             FIRST_OPEN + 4 * WINDOW,
             FIRST_OPEN + 300,
-        )),
+        ),
     );
     let rotated = spin_and_collect(&mut linked, FIRST_OPEN + 400);
     assert_eq!(
@@ -586,12 +618,12 @@ fn a_published_fit_never_outlives_the_prints_behind_it() {
     // real event — and it keeps this leg current, so the reset is read from the block it was fitted in.
     dispatch(
         &mut rotated,
-        InboundMessage::MarketRotation(rotation(
+        rotation(
             A_UP,
             FIRST_OPEN,
             FIRST_OPEN + WINDOW,
             FIRST_OPEN + REFIT_INTERVAL + 2,
-        )),
+        ),
     );
     let wiped = spin_and_collect(&mut rotated, FIRST_OPEN + REFIT_INTERVAL + 3);
     assert_eq!(
@@ -620,7 +652,10 @@ fn drive_prints(
     for index in 0..touches {
         dispatch(
             linked,
-            InboundMessage::Trade(trade(slot, price, shares(1), side, FIRST_OPEN + 10 + index)),
+            InboundMessage::new(
+                ts(FIRST_OPEN + 10 + index),
+                MessageBody::Trade(trade(slot, price, shares(1), side, FIRST_OPEN + 10 + index)),
+            ),
         );
     }
 }
@@ -703,7 +738,7 @@ fn over_the_wire(published: OutboundLink, guard: &FrameGuard, when: i64) -> Inbo
         token_hash: LinkHash::of_name(TOKEN),
         strategy_hash: LinkHash::of_name(STRATEGY_ID),
         sender_te_hash: LinkHash::of_name(PUBLISHER_TE_ID),
-        boot_ts_us: ts(FIRST_OPEN),
+        boot_ts_us: venue_ts(FIRST_OPEN),
     };
     let datagram = LinkDatagram {
         envelope: Envelope::new(identity, published.topic, 1),
@@ -719,14 +754,11 @@ fn over_the_wire(published: OutboundLink, guard: &FrameGuard, when: i64) -> Inbo
             decoded.body
         );
     };
-    InboundMessage::Link(InboundLink {
-        frame: LinkFrame {
-            origin: LinkOrigin::from(&decoded.envelope),
-            payload,
-        },
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
-    })
+    let frame = LinkFrame {
+        origin: LinkOrigin::from(&decoded.envelope),
+        payload,
+    };
+    InboundMessage::new(ts(when), MessageBody::Link(frame))
 }
 
 /// Resolved by NAME: ids are assigned in declaration order, so this also pins that the peer's columns
@@ -787,9 +819,9 @@ fn maker_rows() -> Vec<InstrumentRow> {
     poly_rows()
         .into_iter()
         .map(|row| InstrumentRow {
-            lot_size: Some(Qty(SHARE_STEP)),
-            min_qty: Some(Qty(MIN_ORDER_SHARES)),
-            max_price: Some(Price(MAX_PRICE)),
+            lot_size: Some(Qty::from_mantissa(SHARE_STEP)),
+            min_qty: Some(Qty::from_mantissa(MIN_ORDER_SHARES)),
+            max_price: Some(Price::from_mantissa(MAX_PRICE)),
             max_num_orders: Some(32),
             ..row
         })
@@ -805,16 +837,16 @@ fn maker_settings() -> ExecSettings {
             requote_threshold_ticks: 1,
             max_quote_distance_centi_bps: 100_000_000,
             max_book_age: DurationUs::from_secs(3_600),
-            max_order_notional_quote: 1_000 * FIXED_SCALE,
+            max_order_notional_quote: Notional::from_mantissa(1_000 * FIXED_SCALE),
         },
         max_orders_per_side: 1,
         // Zero, as the shipped config states it: the base asset IS the position here, so any
         // reserve at all is taken out of what may be sold and a holding of exactly the venue
         // minimum stops being sellable by either route.
-        min_base_balance: 0,
-        min_quote_balance: 0,
+        min_base_balance: Qty::from_mantissa(0),
+        min_quote_balance: Notional::from_mantissa(0),
         max_consecutive_rejects: 5,
-        max_session_loss_quote: 1_000 * FIXED_SCALE,
+        max_session_loss_quote: Notional::from_mantissa(1_000 * FIXED_SCALE),
         inflight_timeout: DurationUs::from_secs(3_600),
         // No silence sweep: a reconciliation request in the command stream is noise these tests
         // would have to filter rather than a behaviour they are about.
@@ -948,7 +980,7 @@ impl Maker {
         while self.events.pop().is_ok() {}
         while self.commands.pop().is_ok() {}
         self.spin_seq += 1;
-        self.dispatch(InboundMessage::SpinTick(spin(self.spin_seq, now)));
+        self.dispatch(spin(self.spin_seq, now));
 
         let mut report = SpinReport {
             declared: Vec::new(),
@@ -979,18 +1011,21 @@ impl Maker {
     /// every order-level assertion below would pass for the wrong reason.
     fn make_ready(&mut self, when: i64) {
         self.dispatch(stream_ready(InstrumentId(A_UP), when));
-        self.dispatch(InboundMessage::Exec(open_orders_snapshot_end(
-            InstrumentId(A_UP),
+        self.dispatch(InboundMessage::new(
             ts(when),
-        )));
+            MessageBody::Exec(open_orders_snapshot_end(InstrumentId(A_UP), ts(when))),
+        ));
         // One base and one quote asset across all four slots, as `poly_rows` declares them.
-        self.dispatch(InboundMessage::Account(account_chunk(
-            &[
-                (AssetId(0), 1_000 * FIXED_SCALE),
-                (AssetId(1), 1_000 * FIXED_SCALE),
-            ],
-            when,
-        )));
+        self.dispatch(InboundMessage::new(
+            ts(when),
+            MessageBody::Account(account_chunk(
+                &[
+                    (AssetId(0), 1_000 * FIXED_SCALE),
+                    (AssetId(1), 1_000 * FIXED_SCALE),
+                ],
+                when,
+            )),
+        ));
     }
 
     /// The venue's half of a placement, so the order the engine banked becomes one it believes is
@@ -1007,11 +1042,14 @@ impl Maker {
             else {
                 continue;
             };
-            self.dispatch(InboundMessage::Exec(ExecEvent {
-                kind: ExecKind::AckPlaced,
-                status: Some(VenueOrderStatus::New),
-                ..exec_event(*instrument, *client_id, *side, price.0, when)
-            }));
+            self.dispatch(InboundMessage::new(
+                ts(when),
+                MessageBody::Exec(ExecEvent {
+                    kind: ExecKind::AckPlaced,
+                    status: Some(VenueOrderStatus::New),
+                    ..exec_event(*instrument, *client_id, *side, price.mantissa(), when)
+                }),
+            ));
         }
     }
 
@@ -1024,11 +1062,14 @@ impl Maker {
             else {
                 continue;
             };
-            self.dispatch(InboundMessage::Exec(ExecEvent {
-                kind: ExecKind::ReportCanceled,
-                status: Some(VenueOrderStatus::Canceled),
-                ..exec_event(*instrument, *client_id, Side::Sell, 0, when)
-            }));
+            self.dispatch(InboundMessage::new(
+                ts(when),
+                MessageBody::Exec(ExecEvent {
+                    kind: ExecKind::ReportCanceled,
+                    status: Some(VenueOrderStatus::Canceled),
+                    ..exec_event(*instrument, *client_id, Side::Sell, 0, when)
+                }),
+            ));
         }
     }
 }
@@ -1038,17 +1079,23 @@ impl Maker {
 fn armed_maker() -> Maker {
     let mut maker = Maker::new(maker_params());
     for (instrument, open) in TILING {
-        maker.dispatch(InboundMessage::MarketRotation(rotation(
+        maker.dispatch(rotation(
             instrument,
             open,
             open + WINDOW,
             FIRST_OPEN - 1_000,
-        )));
+        ));
     }
     for (slot, &(bid, ask)) in QUOTES.iter().enumerate() {
         let (bids, asks) = snapshot_chunks(slot as u16, bid, ask, FIRST_OPEN - 500);
-        maker.dispatch(InboundMessage::Book(bids));
-        maker.dispatch(InboundMessage::Book(asks));
+        maker.dispatch(InboundMessage::new(
+            ts(FIRST_OPEN - 500),
+            MessageBody::Book(bids),
+        ));
+        maker.dispatch(InboundMessage::new(
+            ts(FIRST_OPEN - 500),
+            MessageBody::Book(asks),
+        ));
     }
     maker.make_ready(FIRST_OPEN - 400);
     maker
@@ -1116,15 +1163,15 @@ fn the_open_leg_is_bid_for_behind_the_touch_and_that_bid_is_what_gets_placed() {
     let report = maker.spin(FIRST_OPEN + 1);
 
     let wanted = (
-        Price(QUOTES[A_UP as usize].0 - i64::from(EDGE_TICKS) * TICK),
-        Qty((ORDER_SHARES * FIXED_SCALE as f64) as i64),
+        Price::from_mantissa(QUOTES[A_UP as usize].0 - i64::from(EDGE_TICKS) * TICK),
+        Qty::from_mantissa((ORDER_SHARES * FIXED_SCALE as f64) as i64),
     );
     assert_eq!(
         report.ladder(A_UP),
         (Some(wanted), None),
         "one bid, {EDGE_TICKS} ticks behind the {} touch, and no offer against a position it does \
          not hold",
-        Price(QUOTES[A_UP as usize].0).to_f64()
+        Price::from_mantissa(QUOTES[A_UP as usize].0).to_f64()
     );
     assert_eq!(
         report.places(),
@@ -1192,8 +1239,8 @@ fn a_position_is_offered_back_and_never_added_to() {
         (
             None,
             Some((
-                Price(QUOTES[A_UP as usize].1 + i64::from(EDGE_TICKS) * TICK),
-                Qty(HELD_SHARES)
+                Price::from_mantissa(QUOTES[A_UP as usize].1 + i64::from(EDGE_TICKS) * TICK),
+                Qty::from_mantissa(HELD_SHARES)
             ))
         ),
         "the offer is sized to what is actually held, and the bid is gone"
@@ -1268,8 +1315,8 @@ fn the_offer_comes_down_before_the_flatten_goes_out() {
             Side::Sell,
             // Through the bid by the configured slack, which is what a venue holding marketable
             // orders for 250ms before matching them needs.
-            Price(QUOTES[A_UP as usize].0 - 2 * TICK),
-            Qty(HELD_SHARES),
+            Price::from_mantissa(QUOTES[A_UP as usize].0 - 2 * TICK),
+            Qty::from_mantissa(HELD_SHARES),
             OrderStyle::Immediate
         )],
         "the side is free, so the position goes out at market"
@@ -1308,8 +1355,8 @@ fn the_market_moves_to_whichever_leg_hosts_the_next_window() {
     assert_eq!(
         second.ladder(B_UP).0,
         Some((
-            Price(QUOTES[B_UP as usize].0 - i64::from(EDGE_TICKS) * TICK),
-            Qty((ORDER_SHARES * FIXED_SCALE as f64) as i64)
+            Price::from_mantissa(QUOTES[B_UP as usize].0 - i64::from(EDGE_TICKS) * TICK),
+            Qty::from_mantissa((ORDER_SHARES * FIXED_SCALE as f64) as i64)
         )),
         "and the bid has moved to the leg that now hosts the open window, at ITS touch"
     );

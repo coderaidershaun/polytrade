@@ -17,7 +17,7 @@ use engine::hot::exec::{
 };
 use engine::msg::exec::{ExecKind, OrderStyle};
 use engine::msg::ids::{Price, Qty, Side};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::msg::ui::UiEvent;
 use engine::venues::exec::{MAX_RESYNC_ATTEMPTS, ResyncPass, ResyncStep, open_orders_snapshot_end};
 
@@ -34,7 +34,7 @@ const RETRY_DELAY: i64 = 250_000;
 
 /// Later than any instant a test schedules, so `due` at this reads as "is anything scheduled at
 /// all" rather than "is it due yet".
-const FOREVER: TsUs = TsUs::from_micros(i64::MAX / 2);
+const FOREVER: LocalTs = LocalTs::from_micros(i64::MAX / 2);
 
 /// FITNESS: the undecodable-open-order policy carried all the way to completion, and retries bounded
 /// to a finite count.
@@ -131,9 +131,10 @@ fn a_cold_start_quotes_only_once_the_resync_marker_lands() {
 /// orders it just read back.
 #[test]
 fn the_resync_marker_can_retire_no_slot() {
-    let marker = open_orders_snapshot_end(INSTRUMENT, TsUs::from_micros(1_000));
+    let marked_at = LocalTs::from_micros(1_000);
+    let marker = open_orders_snapshot_end(INSTRUMENT, marked_at);
     assert_eq!(marker.kind, ExecKind::SnapshotEnd);
-    assert_eq!(marker.instrument, INSTRUMENT);
+    assert_eq!(marker.instrument, Some(INSTRUMENT));
 
     let mut orders = OrderTable::new(0);
     let (index, _) = orders
@@ -141,10 +142,10 @@ fn the_resync_marker_can_retire_no_slot() {
             instrument: INSTRUMENT,
             side: Side::Buy,
             level: QuoteLevel::ZERO,
-            price: Price(100),
-            qty: Qty(1),
+            price: Price::from_mantissa(100),
+            qty: Qty::from_mantissa(1),
             style: OrderStyle::PostOnly,
-            claimed_ts_us: TsUs::from_micros(0),
+            claimed_ts_us: LocalTs::from_micros(0),
             recon_seq: 0,
         })
         .expect("a fresh table has a free slot");
@@ -152,9 +153,11 @@ fn the_resync_marker_can_retire_no_slot() {
     let mut closed = 0;
     orders.sweep_unseen(
         ReconcilePass {
-            instrument: marker.instrument,
+            instrument: marker
+                .instrument
+                .expect("a snapshot end names its instrument"),
             recon_seq: marker.recon_seq,
-            recon_ts_us: marker.received_ts_us,
+            recon_ts_us: marked_at,
         },
         &mut |_, _| closed += 1,
     );

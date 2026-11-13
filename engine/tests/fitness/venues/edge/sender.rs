@@ -8,13 +8,11 @@ use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{DesiredQuote, QuoteLevel};
 use engine::hot::sink::{ExecSink, SampleSink};
 use engine::hot::strategy::{Strategy, StrategyCtx};
-use engine::msg::exec::{
-    ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, StampedExecCommand,
-};
+use engine::msg::exec::{ExecCommand, ExecKind, ExecLaneItem, OrderStyle, StampedExecCommand};
 use engine::msg::ids::{ClientOrderId, Price, QueueId, Side};
 use engine::msg::inbound::SpinTick;
 use engine::msg::latency::{Category, Stage, WireSample};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::runtime::config::SenderPlacement;
 use engine::runtime::metrics::{Metrics, SampleProducers};
 use engine::runtime::shutdown::FatalSignal;
@@ -30,17 +28,20 @@ use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::engine_support::detached_setup;
 use crate::exec_support::{
-    ASK, BID, CEILING, INSTRUMENT, QUOTE_QTY, exec_settings, make_ready, reseat_book,
+    ASK, BID, CEILING, INSTRUMENT, QUOTE_QTY, SentEvents, exec_settings, make_ready, reseat_book,
     row_with_ceiling, spin_at,
 };
 use crate::runtime::metrics::{Counter, Harness, Rows};
 
-type Session = ExecSession<Vec<ExecEvent>>;
+type Session = ExecSession<SentEvents>;
 
-const NOW: TsUs = TsUs::from_micros(1_785_000_000_000_000);
+const NOW: LocalTs = LocalTs::from_micros(1_785_000_000_000_000);
 const INTERVAL_US: i64 = 60_000_000;
 const LANE_CAPACITY: usize = 8;
-const EXEC_QUEUE: QueueId = QueueId(3);
+const EXEC_QUEUE: QueueId = match QueueId::new(3) {
+    Ok(queue_id) => queue_id,
+    Err(_) => panic!("queue 3 is below the cap"),
+};
 
 const ISSUE: u64 = 100;
 const POP: u64 = 150;
@@ -98,7 +99,7 @@ fn quoting_session() -> Session {
         venue: "test-venue",
         core: ExecCore::with_limits(8, 32),
         instruments: vec![INSTRUMENT],
-        events: Vec::new(),
+        events: SentEvents::default(),
         fatal: FatalSignal::new(),
     });
     for Outgoing { effect, recon_seq } in session.connect() {
@@ -422,7 +423,7 @@ fn lane_item(counter: &Counter, command: ExecCommand) -> ExecLaneItem {
 fn lane_item_at(counter: &Counter, command: ExecCommand, issue: u64) -> ExecLaneItem {
     ExecLaneItem::Command(StampedExecCommand {
         command,
-        issued_ts_us: TsUs::from_micros(10),
+        issued_ts_us: LocalTs::from_micros(10),
         issue_tick: counter.at(issue),
     })
 }
@@ -432,7 +433,7 @@ fn place(client: u64) -> ExecCommand {
         instrument: INSTRUMENT,
         client_id: ClientOrderId(client),
         side: Side::Buy,
-        price: Price(BID),
+        price: Price::from_mantissa(BID),
         qty: QUOTE_QTY,
         style: OrderStyle::PostOnly,
     }
@@ -455,7 +456,7 @@ fn lane_of_a_b_watermark(counter: &Counter) -> (Producer<ExecLaneItem>, Consumer
     for item in [
         lane_item(counter, place_a()),
         lane_item(counter, cancel_b()),
-        ExecLaneItem::Watermark(TsUs::from_micros(10)),
+        ExecLaneItem::Watermark(LocalTs::from_micros(10)),
     ] {
         producer.push(item).expect("room on the lane");
     }
@@ -523,7 +524,7 @@ fn one_placement_through<V: Venue>(make_venue: impl FnOnce(Arc<quanta::Mock>) ->
 }
 
 fn pass_interval(metrics: &mut Metrics, rows: &mut Rows) {
-    metrics.pass(TsUs::from_micros(INTERVAL_US), rows);
+    metrics.pass(LocalTs::from_micros(INTERVAL_US), rows);
 }
 
 #[test]

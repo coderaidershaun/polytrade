@@ -1,4 +1,5 @@
-//! Per-instrument state hub: preallocate config-declared series, handlers only push (zero steady alloc).
+//! Per-instrument state hub: preallocate config-declared series, handlers only push (zero steady
+//! alloc).
 
 mod candles;
 mod sampling;
@@ -9,12 +10,14 @@ use sampling::SpinSampler;
 use volume::VolumeClock;
 
 use crate::hot::book::Book;
+use crate::hot::digest::digest_fields;
 use crate::hot::quant::intensity::IntensityCounts;
 use crate::hot::quant::micro;
 use crate::hot::series::FastQueue;
 use crate::log::hot_warn;
 use crate::msg::ids::{Price, Side};
 use crate::msg::inbound::{KlineEvent, TradeEvent};
+use crate::msg::time::LocalTs;
 use crate::runtime::config::{KlineInterval, SpinField, TrackerSpec};
 
 pub use candles::{Candle, CandleSeries};
@@ -63,11 +66,15 @@ impl Windows {
     }
 }
 
+digest_fields! { Windows { series } }
+
 #[derive(Debug, Clone, PartialEq)]
 struct ImbalanceStream {
     top_n: usize,
     series: Windows,
 }
+
+digest_fields! { ImbalanceStream { top_n, series } }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 struct Latest {
@@ -87,6 +94,8 @@ impl Latest {
     }
 }
 
+digest_fields! { Latest { microprice, spread, imbalance, best_bid, best_ask } }
+
 /// Per-instrument tracker (series optional when unconfigured).
 #[derive(Debug, Clone, PartialEq)]
 pub struct MicroTracker {
@@ -102,6 +111,13 @@ pub struct MicroTracker {
     latest: Latest,
     last_trade: Option<TradeEvent>,
     unconfigured_klines: u64,
+}
+
+digest_fields! {
+    MicroTracker {
+        trades_all, trades_buy, trades_sell, microprice, imbalance, candles, spin, volume,
+        intensity, latest, last_trade, unconfigured_klines,
+    }
 }
 
 impl MicroTracker {
@@ -144,7 +160,7 @@ impl MicroTracker {
 
     /// Returns how many volume bars this trade closed — 0 unless a volume clock is configured and
     /// armed. Closed bars land oldest-first in [`Self::volume_bars`]; dispatch fans them out.
-    pub fn on_trade(&mut self, event: &TradeEvent) -> usize {
+    pub fn on_trade(&mut self, event: &TradeEvent, received_ts_us: LocalTs) -> usize {
         self.last_trade = Some(*event);
         if let Some(sampler) = self.spin.as_mut() {
             sampler.trades.add(event);
@@ -155,7 +171,7 @@ impl MicroTracker {
         // reach histogram anchors against.
         let (best_bid, best_ask) = (self.latest.best_bid, self.latest.best_ask);
         if let Some(intensity) = self.intensity.as_mut() {
-            intensity.on_trade(event, best_bid, best_ask);
+            intensity.on_trade(event, received_ts_us, best_bid, best_ask);
         }
         closed
     }

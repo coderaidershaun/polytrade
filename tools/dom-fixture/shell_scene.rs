@@ -1,13 +1,12 @@
-//! The fixture's share of the shell: the catalog the top bar reads, the halt latch, the view on
-//! show and the HUD switch. The query string sets each and a key flips it, so every size class and
-//! every badge can be seen on fixed scenes.
+//! The fixture's share of the shell: the catalog, the halt latch, the view, and the HUD switch,
+//! each set by the query string, so each size and badge shows on fixed scenes.
 
 use eframe::egui;
 
-use engine::hot::exec::{ExecHalt, HaltReason};
+use engine::hot::exec::HaltReason;
 use engine::msg::ids::{AssetId, InstrumentId};
-use engine::msg::time::TsUs;
-use engine::msg::ui::{UiCatalog, UiInstrument};
+use engine::msg::time::VenueTs;
+use engine::msg::ui::{UiCatalog, UiHalt, UiInstrument};
 use engine::operator::workstation::browser::chrome::{ChromeAction, TopBarFrame};
 use engine::operator::workstation::shell::{self, Arrangement, Navigation, Selection, SizeClass};
 use engine::runtime::config::ExecutionMode;
@@ -23,7 +22,7 @@ const EXECUTION_MODES: [ExecutionMode; 3] =
 pub struct ShellScene {
     catalog: UiCatalog,
     selected: InstrumentId,
-    halt: Option<ExecHalt>,
+    halt: Option<UiHalt>,
     navigation: Navigation,
     is_hud_shown: bool,
 }
@@ -138,10 +137,10 @@ pub fn fit_zoom(ctx: &egui::Context) {
     }
 }
 
-fn halted() -> ExecHalt {
-    ExecHalt::Halted {
+fn halted() -> UiHalt {
+    UiHalt::Halted {
         reason: HaltReason::RejectStreak,
-        halted_ts_us: TsUs::from_micros(0),
+        halted_ts_us: VenueTs::from_micros(0),
     }
 }
 

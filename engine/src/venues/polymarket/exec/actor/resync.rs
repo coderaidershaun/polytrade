@@ -1,6 +1,5 @@
-//! The quoting admission gate, and the only thing that rebuilds state after a disconnect: this
-//! venue's stream replays nothing, so what is resting and what is held is re-read rather than
-//! resumed.
+//! The quoting admission gate, and the one place that rebuilds state after a disconnect: the stream
+//! of this venue replays nothing, so what rests is read again.
 //!
 //! The hard question this file answers is what to do with an open order the run cannot name. At
 //! BOOT every such order predates the process and is swept, which is the binance cold-start rule.
@@ -11,7 +10,9 @@
 
 use crate::msg::exec::{ExecCommand, ExecEvent, ExecKind, Provenance};
 use crate::msg::ids::{ClientOrderId, InstrumentId};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
+use crate::runtime::shutdown::FatalReason;
+use crate::venues::edge::EdgeDriver;
 use crate::venues::exec::{MirroredOrder, Outgoing, ResyncPoll, SessionOutcome, blank};
 use crate::{error, info, warn};
 
@@ -92,7 +93,9 @@ impl Actor {
             instrument: read.instrument().unwrap_or(InstrumentId(0)),
             recon_seq,
         };
-        let decoded = decode_orders_page(response.answer(), orders_read, &self.decode_context());
+        let context = self.decode_context();
+        let received_ts_us = context.received_ts_us;
+        let decoded = decode_orders_page(response.answer(), orders_read, &context);
         let decoded = match decoded {
             Ok(VenueAnswer::Answered(decoded)) => decoded,
             Ok(VenueAnswer::Unavailable(availability)) => {
@@ -116,7 +119,9 @@ impl Actor {
             .filter(|event| event.kind != ExecKind::SnapshotEnd)
             .collect();
         for event in &events {
-            let mut mirrored = MirroredOrder::observed(event);
+            let Some(mut mirrored) = MirroredOrder::observed(event) else {
+                continue;
+            };
             if !self.session.core.has_opened_quoting() {
                 mirrored.provenance = Provenance::PriorRun;
             }
@@ -126,9 +131,9 @@ impl Actor {
                     "polymarket execution cannot retain venue order {:016x} in its possibly-live set ({error:?}) — quoting is disabled",
                     mirrored.client_id.0
                 );
-                self.control.fatal.trip(format!(
-                    "polymarket execution possibly-live mirror failed: {error:?}"
-                ));
+                self.control.fatal.trip(FatalReason::MirrorRetainFailed {
+                    venue: self.venue(),
+                });
                 self.fail_orders_read(read);
                 return None;
             }
@@ -146,7 +151,7 @@ impl Actor {
         }
         for event in events {
             self.session.fold(&event, recon_seq, &mut outgoing);
-            self.forward_exec(event);
+            self.forward_exec(received_ts_us, event);
         }
         if self.next_orders_page(read, page, &seen, decoded.next_cursor.as_deref())
             == PageWalk::Complete
@@ -249,8 +254,8 @@ impl Actor {
                     "polymarket execution left an unmapped order alone on instrument {}: {:?} {} @ {} (venue id {}) — nothing this run placed matches it",
                     unmapped.instrument.0,
                     unmapped.side,
-                    unmapped.qty.0,
-                    unmapped.price.0,
+                    unmapped.qty.mantissa(),
+                    unmapped.price.mantissa(),
                     unmapped.venue_order_id
                 );
                 return;
@@ -274,9 +279,9 @@ impl Actor {
             );
             return;
         }
-        let event = self.adopted_event(unmapped, client_id);
+        let (received_ts_us, event) = self.adopted_event(unmapped, client_id);
         self.session.fold(&event, 0, outgoing);
-        self.forward_exec(event);
+        self.forward_exec(received_ts_us, event);
         self.drain_pending(outgoing);
     }
 
@@ -313,9 +318,13 @@ impl Actor {
         clippy::disallowed_methods,
         reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
     )]
-    fn adopted_event(&self, unmapped: &UnmappedOrder, client_id: ClientOrderId) -> ExecEvent {
+    fn adopted_event(
+        &self,
+        unmapped: &UnmappedOrder,
+        client_id: ClientOrderId,
+    ) -> (LocalTs, ExecEvent) {
         let now = self.control.clock.now();
-        ExecEvent {
+        let event = ExecEvent {
             venue_order_id: Some(venue_order_id_digest(&unmapped.venue_order_id)),
             status: Some(unmapped.status),
             side: unmapped.side,
@@ -324,8 +333,14 @@ impl Actor {
             cumulative_qty: unmapped.filled,
             cumulative_quote: unmapped.price.notional(unmapped.filled),
             amends_remaining: ExecEvent::AMENDS_EXHAUSTED,
-            ..blank(ExecKind::SnapshotOrder, unmapped.instrument, client_id, now)
-        }
+            ..blank(
+                ExecKind::SnapshotOrder,
+                Some(unmapped.instrument),
+                client_id,
+                now,
+            )
+        };
+        (now, event)
     }
 
     /// Absence from the read could mean fill or lag, so each mirrored order the read never named is
@@ -370,7 +385,7 @@ impl Actor {
 
     /// Checks whether the pass has stalled. A stalled pass always ends by retrying or by
     /// dropping the connection, never by hanging.
-    pub(super) fn poll_resync(&mut self, now: TsUs) -> Option<SessionOutcome> {
+    pub(super) fn poll_resync(&mut self, now: LocalTs) -> Option<SessionOutcome> {
         if self.control.exit.is_some() {
             return None;
         }

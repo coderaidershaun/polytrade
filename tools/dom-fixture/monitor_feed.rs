@@ -1,14 +1,14 @@
 //! Builds the monitor scenes by feeding ordered events through the real model, as the link would.
 
-use engine::hot::exec::{CloseReason, ExecHalt, OrderState, RejectOrigin};
+use engine::hot::exec::{CloseReason, OrderState, RejectOrigin};
 use engine::msg::exec::Liquidity;
 use engine::msg::ids::{AssetId, ClientOrderId};
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::Level;
 use engine::msg::persist::FeatureId;
 use engine::msg::time::DurationUs;
-use engine::msg::time::TsUs;
-use engine::msg::ui::{DomQuote, UiBookState, UiCatalog, UiEvent};
+use engine::msg::time::VenueTs;
+use engine::msg::ui::{DomQuote, UiBookState, UiCatalog, UiEvent, UiHalt};
 use engine::operator::workstation::model::UiModel;
 use engine::operator::workstation::monitor::model::SystemNote;
 use engine::operator::workstation::monitor::view::MonitorUiState;
@@ -72,7 +72,7 @@ impl Feed {
     }
 
     fn price(&self, tick_index: i64) -> Price {
-        Price(tick_index * self.tick.0)
+        Price::from_mantissa(tick_index * self.tick.mantissa())
     }
 
     fn levels(&self, rows: &[(i64, i64)]) -> Vec<Level> {
@@ -137,7 +137,7 @@ impl Feed {
         let filled = if matches!(state, OrderState::Closed(CloseReason::Filled)) {
             qm(QUOTE_QTY_MILLI)
         } else {
-            Qty(0)
+            Qty::from_mantissa(0)
         };
         self.send_order(OrderStep {
             ts,
@@ -211,7 +211,7 @@ impl Feed {
         });
     }
 
-    pub fn execution(&mut self, ts: i64, halt: ExecHalt) {
+    pub fn execution(&mut self, ts: i64, halt: UiHalt) {
         self.apply(UiEvent::Execution {
             seq: 0,
             event_ts_us: ts_at(ts),
@@ -268,8 +268,8 @@ impl Feed {
     }
 }
 
-const TICK: Price = Price(FIXED_SCALE);
+const TICK: Price = Price::from_mantissa(FIXED_SCALE);
 
-fn ts_at(relative: i64) -> TsUs {
-    TsUs::from_micros(BASE_TS + relative)
+fn ts_at(relative: i64) -> VenueTs {
+    VenueTs::from_micros(BASE_TS + relative)
 }

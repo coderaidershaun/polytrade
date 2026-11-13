@@ -1,8 +1,5 @@
-//! MicroTracker fitness: the volume clock samples its configured field once per closed bar; a fixed
-//! event replay produces byte-identical tracker state across runs against hand-computed
-//! microprice/imbalance/candle/sample values; and `on_rotation` wipes the tracker back to fresh.
-//! Also pins `realised_vol_per_sec`, which reads those candle closes — its 1/sqrt(Δt) scaling is
-//! what makes venues sampled on different bucket sizes comparable.
+//! The tracker replays to the same state against hand-computed values, the volume clock samples
+//! once for each closed bar, a rotation resets the tracker, and realised volatility scales by time.
 
 use engine::hot::book::{Book, SnapshotOutcome};
 use engine::hot::quant::volatility::{Returns, realised_vol_per_sec};
@@ -15,7 +12,7 @@ use engine::runtime::config::{
 };
 use proptest::prelude::*;
 
-use crate::engine_support::{ONE, kline, snapshot_pair, trade};
+use crate::engine_support::{ONE, kline, snapshot_pair, trade, ts};
 
 fn book_with(bids: &[(i64, i64)], asks: &[(i64, i64)]) -> Book {
     let (bid_chunk, ask_chunk) = snapshot_pair(0, bids, asks, 0);
@@ -70,7 +67,7 @@ proptest! {
         let mut cumulative: i128 = 0;
         for (i, &(price, qty, side)) in trades.iter().enumerate() {
             cumulative += i128::from(price) * i128::from(qty) / i128::from(ONE);
-            tracker.on_trade(&trade(0, price, qty, side, i as i64));
+            tracker.on_trade(&trade(0, price, qty, side, i as i64), ts(i as i64));
         }
 
         let expected = (cumulative / target_mantissa) as usize;
@@ -116,11 +113,14 @@ fn replay(spec: &TrackerSpec) -> MicroTracker {
         &[(100 * ONE, 2 * ONE), (99 * ONE, ONE)],
         &[(101 * ONE, ONE)],
     );
-    tracker.on_trade(&trade(0, 100 * ONE, ONE, Side::Buy, 1));
-    tracker.on_trade(&trade(0, 100 * ONE + ONE / 2, 3 * ONE, Side::Sell, 2));
+    tracker.on_trade(&trade(0, 100 * ONE, ONE, Side::Buy, 1), ts(1));
+    tracker.on_trade(
+        &trade(0, 100 * ONE + ONE / 2, 3 * ONE, Side::Sell, 2),
+        ts(2),
+    );
     tracker.on_book(&book);
     // A bar-closing trade after the book samples the current microprice onto the volume clock.
-    tracker.on_trade(&trade(0, 100 * ONE, 1_000_000, Side::Buy, 3));
+    tracker.on_trade(&trade(0, 100 * ONE, 1_000_000, Side::Buy, 3), ts(3));
     tracker.on_kline(&kline(
         0,
         KlineInterval::OneMinute,
@@ -176,8 +176,8 @@ fn replay_is_deterministic_with_hand_values() {
         .expect("candles configured");
     assert_eq!(candles.open, None, "open slot cleared on close");
     let last = candles.closed.last().expect("one closed candle");
-    assert_eq!(last.close, Price(100 * ONE + ONE / 2));
-    assert_eq!(last.high, Price(103 * ONE));
+    assert_eq!(last.close, Price::from_mantissa(100 * ONE + ONE / 2));
+    assert_eq!(last.high, Price::from_mantissa(103 * ONE));
 
     let best_bid_sample = first
         .spin_sampled(SpinField::BestBid)
@@ -260,7 +260,7 @@ fn on_rotation_clears_tracker_to_fresh() {
     tracker.on_book(&book);
     for i in 0..6i64 {
         let side = if i % 2 == 0 { Side::Buy } else { Side::Sell };
-        tracker.on_trade(&trade(0, 100 * ONE, 2_000_000, side, i));
+        tracker.on_trade(&trade(0, 100 * ONE, 2_000_000, side, i), ts(i));
     }
     tracker.on_kline(&kline(
         0,

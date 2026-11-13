@@ -1,5 +1,5 @@
-//! Kyle's lambda — rolling OLS slope of mid-price change on signed order flow (depth/price-impact).
-//! One observation per bar (bar clock + flow sum from feeder). λ = price per flow unit (feeder's units).
+//! Kyle's lambda: the rolling least-squares slope of the change of the mid on signed order flow,
+//! with one observation for each bar, as the price impact of one unit of flow.
 
 use crate::hot::series::FastQueue;
 use crate::msg::ids::Price;
@@ -68,9 +68,9 @@ impl KylesLambda {
             spec.min_sign_fraction
         );
         assert!(
-            tick.0 > 0,
+            tick.mantissa() > 0,
             "kyles lambda tick must be positive, got {}",
-            tick.0
+            tick.mantissa()
         );
         Self {
             min_observations: spec.min_observations,

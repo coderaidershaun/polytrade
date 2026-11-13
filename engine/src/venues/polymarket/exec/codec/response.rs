@@ -6,7 +6,7 @@
 //! repeats at every settlement step, so it is never itself accumulated.
 
 use crate::msg::exec::{ExecEvent, ExecKind, VenueOrderStatus};
-use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
+use crate::msg::ids::{ClientOrderId, InstrumentId, Notional, Price, Qty, Side};
 use crate::venues::edge::decode::unknown_enum;
 use crate::venues::exec::blank;
 
@@ -52,7 +52,7 @@ pub fn decode_place(
         return Ok(failure.map(|event| PlaceOutcome {
             event: ExecEvent {
                 client_id: request.client_id,
-                instrument: request.instrument,
+                instrument: Some(request.instrument),
                 side: request.side,
                 price: request.price,
                 qty: request.qty,
@@ -84,8 +84,8 @@ pub fn decode_place(
     let making = optional_venue_amount("makingAmount", &response.making_amount)?;
     let taking = optional_venue_amount("takingAmount", &response.taking_amount)?;
     let (filled_qty, filled_quote) = match request.side {
-        Side::Buy => (Qty(taking), making),
-        Side::Sell => (Qty(making), taking),
+        Side::Buy => (Qty::from_mantissa(taking), Notional::from_mantissa(making)),
+        Side::Sell => (Qty::from_mantissa(making), Notional::from_mantissa(taking)),
     };
 
     let venue_status = match status {
@@ -105,7 +105,7 @@ pub fn decode_place(
         cumulative_quote: filled_quote,
         ..blank_event(
             ExecKind::AckPlaced,
-            request.instrument,
+            Some(request.instrument),
             request.client_id,
             context,
         )
@@ -151,7 +151,7 @@ pub fn decode_cancel(
             status: Some(VenueOrderStatus::Canceled),
             ..blank_event(
                 ExecKind::AckCanceled,
-                known.instrument,
+                Some(known.instrument),
                 known.client_id,
                 context,
             )
@@ -167,7 +167,7 @@ pub fn decode_cancel(
             reject: Some(cancel_refusal(reason)),
             ..blank_event(
                 ExecKind::AckFailed,
-                known.instrument,
+                Some(known.instrument),
                 known.client_id,
                 context,
             )
@@ -207,12 +207,7 @@ pub(super) fn decode_failure(
         RejectVerdict::Venue(availability) => VenueAnswer::Unavailable(availability),
         RejectVerdict::Order(class) => VenueAnswer::Answered(ExecEvent {
             reject: Some(class),
-            ..blank_event(
-                ExecKind::AckFailed,
-                InstrumentId::NOT_APPLICABLE,
-                ClientOrderId(0),
-                context,
-            )
+            ..blank_event(ExecKind::AckFailed, None, ClientOrderId(0), context)
         }),
     }))
 }
@@ -231,7 +226,7 @@ fn reject_answer(
             qty: request.qty,
             ..blank_event(
                 ExecKind::AckFailed,
-                request.instrument,
+                Some(request.instrument),
                 request.client_id,
                 context,
             )
@@ -242,7 +237,7 @@ fn reject_answer(
 /// This venue has no amend, so every event it raises says the amend budget is spent.
 pub(super) fn blank_event(
     kind: ExecKind,
-    instrument: InstrumentId,
+    instrument: Option<InstrumentId>,
     client_id: ClientOrderId,
     context: &DecodeContext<'_>,
 ) -> ExecEvent {

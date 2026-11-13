@@ -1,13 +1,12 @@
-//! The Polymarket quarantine boundary: venue JSON dies here, leaving via `i64@1e-8` mantissas
-//! (overflow fatal). Structs stay permissive (the venue may append fields). The venue delivers each
-//! book side best-last (inverse of Binance); `parse_book` normalises to engine best-first.
+//! Where Polymarket JSON stops: it leaves as exact mantissas, and an overflow is fatal. The venue
+//! sends each book side best last, so the book is turned to best first here.
 
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::msg::ids::{Price, Qty, Side};
 use crate::msg::inbound::Level;
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 use crate::venues::edge::decode::{DecimalFault, JsonFrame, levels, price_field, qty_field};
 use crate::venues::edge::venue_clock::clamp_exchange_ts;
 
@@ -28,15 +27,15 @@ pub struct PolyBook {
     pub asset_id: Box<str>,
     pub bids: Vec<Level>,
     pub asks: Vec<Level>,
-    pub exchange_ts_us: TsUs,
-    pub received_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
+    pub received_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolyPriceChange {
     pub changes: Vec<PolyDelta>,
-    pub exchange_ts_us: TsUs,
-    pub received_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
+    pub received_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,8 +53,8 @@ pub struct PolyTrade {
     pub price: Price,
     pub qty: Qty,
     pub side: Side,
-    pub exchange_ts_us: TsUs,
-    pub received_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
+    pub received_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,8 +62,8 @@ pub struct PolyTickSizeChange {
     pub asset_id: Option<Box<str>>,
     pub old_tick_size: Option<Box<str>>,
     pub new_tick_size: Option<Box<str>>,
-    pub exchange_ts_us: TsUs,
-    pub received_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
+    pub received_ts_us: LocalTs,
 }
 
 /// Text this socket carries that holds no frame: the venue's answer to our keepalive, and the blank
@@ -80,11 +79,11 @@ pub fn is_frameless(text: &str) -> bool {
 ///
 /// # Errors
 /// [`DecimalFault::MantissaOverflow`] is fatal; others are counted and dropped.
-pub fn parse_market_frame(text: &str, received_ts_us: TsUs) -> Result<PolyFrame, ParseError> {
+pub fn parse_market_frame(text: &str, received_ts_us: LocalTs) -> Result<PolyFrame, ParseError> {
     parse_market_value(FRAME.decode(text)?, received_ts_us)
 }
 
-fn parse_market_value(value: Value, received_ts_us: TsUs) -> Result<PolyFrame, ParseError> {
+fn parse_market_value(value: Value, received_ts_us: LocalTs) -> Result<PolyFrame, ParseError> {
     let Value::Array(elements) = value else {
         return frame_from(FRAME.decode_value(value)?, received_ts_us);
     };
@@ -95,7 +94,7 @@ fn parse_market_value(value: Value, received_ts_us: TsUs) -> Result<PolyFrame, P
     Ok(PolyFrame::Batch(frames))
 }
 
-fn frame_from(raw: RawFrame, received_ts_us: TsUs) -> Result<PolyFrame, ParseError> {
+fn frame_from(raw: RawFrame, received_ts_us: LocalTs) -> Result<PolyFrame, ParseError> {
     Ok(match raw {
         RawFrame::Book(book) => PolyFrame::Book(parse_book(&book, received_ts_us)?),
         RawFrame::PriceChange(change) => {
@@ -109,7 +108,7 @@ fn frame_from(raw: RawFrame, received_ts_us: TsUs) -> Result<PolyFrame, ParseErr
     })
 }
 
-fn parse_book(raw: &RawBook, received_ts_us: TsUs) -> Result<PolyBook, ParseError> {
+fn parse_book(raw: &RawBook, received_ts_us: LocalTs) -> Result<PolyBook, ParseError> {
     let side = |entries: &[RawLevel]| {
         let texts = entries
             .iter()
@@ -132,7 +131,7 @@ fn parse_book(raw: &RawBook, received_ts_us: TsUs) -> Result<PolyBook, ParseErro
 
 fn parse_price_change(
     raw: &RawPriceChange,
-    received_ts_us: TsUs,
+    received_ts_us: LocalTs,
 ) -> Result<PolyPriceChange, ParseError> {
     let exchange_ts_us = parse_stamp(&raw.timestamp, received_ts_us)?;
     let mut changes = Vec::with_capacity(raw.price_changes.len());
@@ -155,7 +154,7 @@ fn parse_price_change(
     })
 }
 
-fn parse_trade(raw: &RawTrade, received_ts_us: TsUs) -> Result<PolyTrade, ParseError> {
+fn parse_trade(raw: &RawTrade, received_ts_us: LocalTs) -> Result<PolyTrade, ParseError> {
     Ok(PolyTrade {
         asset_id: raw.asset_id.as_str().into(),
         price: price_field("price", &raw.price)?,
@@ -168,7 +167,7 @@ fn parse_trade(raw: &RawTrade, received_ts_us: TsUs) -> Result<PolyTrade, ParseE
 
 fn parse_tick_size(
     raw: RawTickSize,
-    received_ts_us: TsUs,
+    received_ts_us: LocalTs,
 ) -> Result<PolyTickSizeChange, ParseError> {
     Ok(PolyTickSizeChange {
         asset_id: raw.asset_id.map(Into::into),
@@ -177,12 +176,14 @@ fn parse_tick_size(
         exchange_ts_us: raw
             .timestamp
             .as_deref()
-            .map_or(Ok(received_ts_us), |ts| parse_stamp(ts, received_ts_us))?,
+            .map_or(Ok(received_ts_us.as_venue_calendar()), |ts| {
+                parse_stamp(ts, received_ts_us)
+            })?,
         received_ts_us,
     })
 }
 
-fn parse_stamp(s: &str, now: TsUs) -> Result<TsUs, DecimalFault> {
+fn parse_stamp(s: &str, now: LocalTs) -> Result<VenueTs, DecimalFault> {
     let venue_ms: i64 = s.parse().map_err(|_| DecimalFault::Decimal {
         field: "timestamp",
         value: s.into(),

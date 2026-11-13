@@ -85,7 +85,7 @@ impl Strategy for RecorderStrategy {
                 qty: event.qty,
                 side: event.side,
                 exchange_ts_us: event.exchange_ts_us,
-                received_ts_us: event.received_ts_us,
+                received_ts_us: ctx.event_ts(),
             });
         }
     }
@@ -103,7 +103,7 @@ impl Strategy for RecorderStrategy {
                     price: level.price,
                     qty: level.qty,
                     update_id: chunk.update_id,
-                    received_ts_us: chunk.received_ts_us,
+                    received_ts_us: ctx.event_ts(),
                 });
             }
         }
@@ -125,8 +125,8 @@ impl Strategy for RecorderStrategy {
                 instrument,
                 kind: BookEventKind::Reset,
                 side: None,
-                price: Price(0),
-                qty: Qty(0),
+                price: Price::from_mantissa(0),
+                qty: Qty::from_mantissa(0),
                 update_id: 0,
                 received_ts_us: event_ts,
             });
@@ -151,7 +151,7 @@ impl Strategy for RecorderStrategy {
                 trade_count: event.trade_count,
                 is_closed: event.is_closed,
                 exchange_ts_us: event.exchange_ts_us,
-                received_ts_us: event.received_ts_us,
+                received_ts_us: ctx.event_ts(),
             });
         }
     }

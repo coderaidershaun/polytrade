@@ -195,7 +195,7 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 114] = [
         "engine_time",
         &[
             "engine::msg::time::EngineClock::now",
-            "engine::msg::time::boot_stamp_us",
+            "engine::msg::time::wall_clock_now",
         ],
     ),
     (
@@ -211,13 +211,13 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 114] = [
     ("engine/src/msg/time.rs", "stamp", &["quanta::Clock::raw"]),
     (
         "engine/src/msg/time.rs",
-        "boot_stamp_us",
+        "wall_clock_now",
         &["std::time::SystemTime::now"],
     ),
     (
         "engine/src/operator/fleet/child.rs",
         "running",
-        &["engine::msg::time::boot_stamp_us"],
+        &["engine::msg::time::wall_clock_now"],
     ),
     (
         "engine/src/operator/fleet/supervisor.rs",
@@ -257,7 +257,7 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 114] = [
     (
         "engine/src/runtime/assembly/link.rs",
         "link_bring_up",
-        &["engine::msg::time::boot_stamp_us"],
+        &["engine::msg::time::wall_clock_now"],
     ),
     (
         "engine/src/runtime/assembly/metrics/mod.rs",
@@ -318,19 +318,18 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 114] = [
         &[
             "engine::msg::time::EngineClock::now",
             "engine::msg::time::EngineClock::now",
-            "tokio::time::Instant::elapsed",
-            "tokio::time::Instant::now",
+            "engine::msg::time::EngineClock::now",
         ],
     ),
     (
         "engine/src/runtime/exposure/writer.rs",
         "document",
-        &["engine::msg::time::boot_stamp_us"],
+        &["engine::msg::time::wall_clock_now"],
     ),
     (
         "engine/src/tape/drain.rs",
         "spawn",
-        &["engine::msg::time::boot_stamp_us"],
+        &["engine::msg::time::wall_clock_now"],
     ),
     (
         "engine/src/tape/drain.rs",
@@ -985,7 +984,7 @@ impl Site {
 
 /// The one banned free function. It counts as a word wherever it stands, also passed by name, but
 /// never in its own `fn` line.
-const FREE_CALL: &str = "boot_stamp_us";
+const FREE_CALL: &str = "wall_clock_now";
 
 fn is_free_call(body: &str, at: usize, name: &str) -> bool {
     let before = body[..at].chars().next_back();

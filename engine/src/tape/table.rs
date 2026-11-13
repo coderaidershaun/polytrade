@@ -1,5 +1,5 @@
-//! One table's Parquet files: sealed and rolled as rows arrive, so a reader never waits for shutdown. Seals on row cap, parent interval, record hour, or drain.
-//! Names carry boot stamp + per-writer sequence -> no overwrites within an hour.
+//! The Parquet files of one table, sealed and rolled as rows arrive, so a reader never waits for
+//! shutdown. Each name carries the boot stamp and a sequence, so no file is overwritten.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use parquet::file::properties::WriterProperties;
 use arrow_schema::SchemaRef;
 
 use crate::info;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 use super::PersistError;
 use super::schema::TableRow;
@@ -181,7 +181,7 @@ impl<R: TableRow> TableWriter<R> {
 
     /// Zero-padded sequence -> path sort = seal order.
     fn file_path(&self, hour_bucket: i64, sequence: u32) -> PathBuf {
-        let at = TsUs::from_micros(hour_bucket * US_PER_HOUR).civil();
+        let at = LocalTs::from_micros(hour_bucket * US_PER_HOUR).civil();
         let mut path = self.run_dir.clone();
         path.push(R::NAME);
         path.push(format!(
@@ -196,6 +196,6 @@ impl<R: TableRow> TableWriter<R> {
     }
 }
 
-fn hour_bucket(ts: TsUs) -> i64 {
+fn hour_bucket(ts: LocalTs) -> i64 {
     ts.micros().div_euclid(US_PER_HOUR)
 }

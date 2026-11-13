@@ -1,6 +1,6 @@
 //! Effective-time ordering for buffered simulator inputs.
 
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Phase {
@@ -12,11 +12,11 @@ pub enum Phase {
     Reconcile,
 }
 
-pub(super) type EventKey = (TsUs, Phase, u64);
+pub(super) type EventKey = (LocalTs, Phase, u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct Sequenced<T> {
-    pub at_ts_us: TsUs,
+    pub at_ts_us: LocalTs,
     phase: Phase,
     sequence: u64,
     pub item: T,
@@ -37,7 +37,7 @@ pub(super) struct SequencedByKey<T> {
 }
 
 impl<T> SequencedByKey<T> {
-    pub fn push(&mut self, at_ts_us: TsUs, phase: Phase, item: T) {
+    pub fn push(&mut self, at_ts_us: LocalTs, phase: Phase, item: T) {
         let entry = Sequenced {
             at_ts_us,
             phase,

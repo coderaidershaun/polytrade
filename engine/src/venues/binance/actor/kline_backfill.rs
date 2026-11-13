@@ -4,7 +4,7 @@
 use std::time::Instant;
 
 use crate::msg::inbound::KlineEvent;
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 use crate::venues::binance::kline::{KlineOutcome, KlineSequencer};
 use crate::venues::binance::parse::{ParseContext, RestKlineTail, parse_kline, parse_rest_klines};
 use crate::venues::binance::rest::{KlineQuery, RestRequest};
@@ -27,7 +27,7 @@ impl Actor {
                     event.instrument.0
                 ));
             };
-            sequencer.on_live(event, &mut |message| out.push(message))
+            sequencer.on_live(event, ctx.received_ts_us, &mut |message| out.push(message))
         };
         self.flush(out);
 
@@ -36,7 +36,8 @@ impl Actor {
             next_open_ts_us,
         } = outcome
         {
-            self.fill_kline_gap(missing_from_open_ts_us, next_open_ts_us, event)
+            let live = (event, ctx.received_ts_us);
+            self.fill_kline_gap(missing_from_open_ts_us, next_open_ts_us, live)
                 .await;
         }
     }
@@ -47,9 +48,9 @@ impl Actor {
     )]
     async fn fill_kline_gap(
         &mut self,
-        missing_from_open_ts_us: TsUs,
-        next_open_ts_us: TsUs,
-        live: KlineEvent,
+        missing_from_open_ts_us: VenueTs,
+        next_open_ts_us: VenueTs,
+        (live, live_received_ts_us): (KlineEvent, LocalTs),
     ) {
         if self.rest_quiet.is_active(Instant::now()) {
             return;
@@ -72,8 +73,10 @@ impl Actor {
 
         let mut out = Vec::new();
         if let Some(sequencer) = self.kline_states.get_mut(&(instrument, interval)) {
-            sequencer.on_backfill(&events, &mut |message| out.push(message));
-            sequencer.on_live(live, &mut |message| out.push(message));
+            sequencer.on_backfill(&events, ctx.received_ts_us, &mut |message| {
+                out.push(message)
+            });
+            sequencer.on_live(live, live_received_ts_us, &mut |message| out.push(message));
         }
         self.flush(out);
     }
@@ -111,7 +114,9 @@ impl Actor {
             let Some(events) = self.parsed(rows) else { continue };
             let mut out = Vec::new();
             if let Some(sequencer) = self.kline_states.get_mut(&key) {
-                sequencer.on_backfill(&events, &mut |message| out.push(message));
+                sequencer.on_backfill(&events, ctx.received_ts_us, &mut |message| {
+                    out.push(message)
+                });
             }
             self.flush(out);
         }

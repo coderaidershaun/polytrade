@@ -1,4 +1,5 @@
-//! Writer thread: drain ring to newest snapshot, write to disk on change. Dedicated thread (blocks on fsync).
+//! Writer thread: drain ring to newest snapshot, write to disk on change. Dedicated thread (blocks
+//! on fsync).
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,7 +9,7 @@ use rtrb::{Consumer, RingBuffer};
 
 use crate::hot::sink::ExposureSink;
 use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId};
-use crate::msg::time::boot_stamp_us;
+use crate::msg::time::wall_clock_now;
 use crate::runtime::config::{ExecutionMode, RunIdentity};
 use crate::runtime::registry::Registry;
 use crate::runtime::shutdown::WriterThread;
@@ -183,7 +184,7 @@ impl WriterState {
             version: FORMAT_VERSION,
             strategy_id: self.config.identity.strategy_id.as_str().to_owned(),
             te_id: self.config.identity.te_id.as_str().to_owned(),
-            written_ts_us: boot_stamp_us().micros(),
+            written_ts_us: wall_clock_now().micros(),
             seq: self.latest.seq,
             fixed_scale: FIXED_SCALE,
             instruments: self.instrument_entries(),
@@ -201,7 +202,7 @@ impl WriterState {
                 let facts = self.facts(exposure.instrument)?;
                 Some(InstrumentEntry {
                     symbol: facts.symbol.as_ref().to_owned(),
-                    position_base: exposure.position_base.0,
+                    position_base: exposure.position_base.mantissa(),
                     cash_quote: exposure.cash_quote,
                     basis_quote: exposure.basis_quote,
                 })
@@ -215,7 +216,11 @@ impl WriterState {
             let Some(facts) = self.facts(exposure.instrument) else {
                 continue;
             };
-            add_amount(&mut amounts, facts.base_asset, exposure.position_base.0);
+            add_amount(
+                &mut amounts,
+                facts.base_asset,
+                exposure.position_base.mantissa(),
+            );
             add_amount(&mut amounts, facts.quote_asset, exposure.cash_quote);
         }
         // Same fold as load path; human section can never disagree with recomputed.

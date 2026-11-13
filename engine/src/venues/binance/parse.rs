@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use crate::msg::ids::{AggregateTradeId, InstrumentId, RawTradeId, Side};
 use crate::msg::inbound::{KlineEvent, Level, TradeEvent};
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 use crate::runtime::config::KlineInterval;
 use crate::venues::edge::decode::{
     DecimalFault, JsonFrame, levels, mantissa_field, price_field, qty_field,
@@ -17,7 +17,7 @@ const FRAME: JsonFrame = JsonFrame("binance");
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParseContext {
     pub instrument: InstrumentId,
-    pub received_ts_us: TsUs,
+    pub received_ts_us: LocalTs,
 }
 
 /// Depth delta, seq ids (spot U==prev_u+1, perp pu==prev_u), absolute levels, qty==0=removal.
@@ -29,8 +29,8 @@ pub struct DepthDiff {
     pub prev_final_update_id: Option<u64>,
     pub bids: Vec<Level>,
     pub asks: Vec<Level>,
-    pub exchange_ts_us: TsUs,
-    pub received_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
+    pub received_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,7 +39,7 @@ pub struct DepthSnapshot {
     pub last_update_id: u64,
     pub bids: Vec<Level>,
     pub asks: Vec<Level>,
-    pub received_ts_us: TsUs,
+    pub received_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,8 +80,6 @@ pub fn parse_agg_trade(json: &str, ctx: ParseContext) -> Result<AggTradeEvent, P
             exchange_sent_ts_us: raw
                 .event_ts_ms
                 .map(|ms| clamp_exchange_ts(ms, ctx.received_ts_us)),
-            received_ts_us: ctx.received_ts_us,
-            queued_ts_us: ctx.received_ts_us,
         },
         aggregate_id: AggregateTradeId(aggregate_id),
         first_trade_id: RawTradeId(first_trade_id),
@@ -113,8 +111,6 @@ pub fn parse_kline(json: &str, ctx: ParseContext) -> Result<KlineEvent, ParseErr
         is_closed: k.is_closed,
         exchange_ts_us: event_ts_us,
         exchange_sent_ts_us: Some(event_ts_us),
-        received_ts_us: ctx.received_ts_us,
-        queued_ts_us: ctx.received_ts_us,
     })
 }
 
@@ -153,8 +149,6 @@ pub fn parse_rest_klines(
             is_closed,
             exchange_ts_us: clamp_exchange_ts(row.close_ts_ms, ctx.received_ts_us),
             exchange_sent_ts_us: None,
-            received_ts_us: ctx.received_ts_us,
-            queued_ts_us: ctx.received_ts_us,
         });
     }
     Ok(events)

@@ -1,15 +1,13 @@
-//! Per-message instruction buffer: callbacks bank into fixed-capacity lanes (features, persist,
-//! logs, link), drained after callback. One message fans out to multiple callbacks all banking to
-//! same buffer before any drain. No resize, pure function of message sequence → replay-exact.
-//! Order load-bearing: UI tee + engine tees need consistent sequence.
-//! No ORDER/QUOTE lane: strategy declares desired quote into engine-owned level-triggered state.
+//! What the callbacks of one message bank, in lanes of a fixed size, drained after the callbacks in
+//! a fixed order. A strategy declares quotes into engine state, so no lane carries an order.
 
+use crate::hot::digest::digest_fields;
 use crate::hot::sink::{LinkSink, PersistSink, StrategyLogSink, UiEventSink};
 use crate::link::{LinkHash, LinkPayload, OutboundLink, TopicId};
 use crate::log::HotRecord;
 use crate::msg::latency::LaneDrops;
 use crate::msg::persist::{FeatureRow, PersistRecord};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::msg::ui::UiEvent;
 use crate::runtime::config::{RecordedTables, TableKind};
 
@@ -55,6 +53,9 @@ pub(crate) struct Actions {
     link_schema_hash: LinkHash,
     dropped: LaneDrops,
 }
+
+// The lanes hold what the execution pass banked after the last drain, until the next message.
+digest_fields! { Actions { features, persist, logs, link, tables, link_schema_hash, dropped } }
 
 impl Actions {
     pub(crate) fn new(setup: ActionsSetup) -> Self {
@@ -107,14 +108,14 @@ impl Actions {
     /// # Panics
     /// >LINK_MAX_FIELDS values (see StrategyCtx::link_send).
     #[inline]
-    pub(crate) fn push_link(&mut self, topic: TopicId, values: &[f64], event_ts: TsUs) {
+    pub(crate) fn push_link(&mut self, topic: TopicId, values: &[f64], event_ts: LocalTs) {
         if self.link.len() == LINK_LANE_CAPACITY {
             self.dropped.link += 1;
             return;
         }
         self.link.push(OutboundLink {
             topic,
-            payload: LinkPayload::new(self.link_schema_hash, event_ts, values),
+            payload: LinkPayload::new(self.link_schema_hash, event_ts.to_peer(), values),
         });
     }
 
@@ -146,7 +147,7 @@ impl Actions {
             event_sink.push_stamped(event_seq, |seq| UiEvent::Feature {
                 instrument: row.instrument,
                 seq,
-                event_ts_us: row.event_ts_us,
+                event_ts_us: row.event_ts_us.to_peer(),
                 feature: row.feature,
                 value: row.value,
             });

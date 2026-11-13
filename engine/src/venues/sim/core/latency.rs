@@ -1,6 +1,6 @@
 //! Deterministic simulator latency arithmetic.
 
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LatencyBudget {
@@ -10,11 +10,11 @@ pub struct LatencyBudget {
 }
 
 impl LatencyBudget {
-    pub fn arrival(&self, issued_ts_us: TsUs) -> TsUs {
+    pub fn arrival(&self, issued_ts_us: LocalTs) -> LocalTs {
         shifted(issued_ts_us, [self.order_entry])
     }
 
-    pub fn market_effective(&self, received_ts_us: TsUs) -> TsUs {
+    pub fn market_effective(&self, received_ts_us: LocalTs) -> LocalTs {
         rewound(received_ts_us, self.max_market_data_delay)
     }
 }
@@ -75,7 +75,7 @@ pub enum LatencyBudgetError {
     TimeoutTooTight { worst_us: i64, timeout_us: i64 },
 }
 
-pub(crate) fn shifted<const N: usize>(base: TsUs, spans: [DurationUs; N]) -> TsUs {
+pub(crate) fn shifted<const N: usize>(base: LocalTs, spans: [DurationUs; N]) -> LocalTs {
     let total = spans
         .into_iter()
         .fold(i128::from(base.micros()), |sum, span| {
@@ -84,12 +84,12 @@ pub(crate) fn shifted<const N: usize>(base: TsUs, spans: [DurationUs; N]) -> TsU
     stamp(total)
 }
 
-pub(crate) fn rewound(base: TsUs, span: DurationUs) -> TsUs {
+pub(crate) fn rewound(base: LocalTs, span: DurationUs) -> LocalTs {
     stamp(i128::from(base.micros()) - i128::from(span.micros()))
 }
 
-fn stamp(micros: i128) -> TsUs {
-    TsUs::from_micros(
+fn stamp(micros: i128) -> LocalTs {
+    LocalTs::from_micros(
         i64::try_from(micros)
             .unwrap_or_else(|_| panic!("simulated latency stamp {micros}µs does not fit i64")),
     )

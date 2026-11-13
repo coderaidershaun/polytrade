@@ -1,21 +1,14 @@
-//! Monitor projection fitness: the pure map from the ordered UI event lane to the center
-//! panel's state. The quote summary reads unsigned tick distances from the book mid at both mid
-//! parities and blanks each cell independently; the feature store folds latest-per-(instrument,
-//! feature) in catalog order, separating a genuine value change from a re-emission and a stale feed
-//! from a legitimate zero; the bounded channel histories evict oldest-first and iterate newest-first
-//! with a monotonic appended total behind the unseen count; the System channel synthesizes rows from
-//! book-state transitions, rotations, gap counts and lifecycle notes. All of it is event-time
-//! only, so replay reproduces the state exactly. The formatters render the time, delta and
-//! feature-value conventions the panel paints.
+//! The monitor folds the UI event lane into its panel state in event time alone, so a replay gives
+//! the same state, and a real change is told apart from a repeat or a stale feed.
 
 use proptest::prelude::*;
 
-use engine::hot::exec::{CloseReason, ExecHalt, HaltReason, OrderState, RejectOrigin};
+use engine::hot::exec::{CloseReason, HaltReason, OrderState, RejectOrigin};
 use engine::msg::exec::RejectClass;
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, VenueTs};
 use engine::msg::ui::{
-    DomQuote, UI_ORDER_SNAPSHOT_CAPACITY, UiBookSnapshot, UiBookState, UiCatalog, UiEvent,
+    DomQuote, UI_ORDER_SNAPSHOT_CAPACITY, UiBookSnapshot, UiBookState, UiCatalog, UiEvent, UiHalt,
     UiInstrument, UiWorkingOrder,
 };
 use engine::operator::workstation::format::{MISSING, write_bps_delta, write_opt_bps_delta};
@@ -29,7 +22,7 @@ use engine::runtime::config::ExecutionMode;
 use crate::operator::workstation::workstation_support::{BookFixture, NamedCase, book_snapshot};
 
 /// One-mantissa tick, so a price reads directly as its tick index in the assertions.
-const TICK: Price = Price(1);
+const TICK: Price = Price::from_mantissa(1);
 
 /// 100 ms spin: the DOM liveness threshold is 2.5 spins = 250 ms, the changed window 2 spins =
 /// 200 ms, the stale threshold 5 spins = 500 ms.
@@ -57,11 +50,13 @@ fn quote_event(
     bid: Option<(i64, i64)>,
     ask: Option<(i64, i64)>,
 ) -> UiEvent {
-    let leg = |value: Option<(i64, i64)>| value.map(|(p, q)| (Price(p), Qty(q)));
+    let leg = |value: Option<(i64, i64)>| {
+        value.map(|(p, q)| (Price::from_mantissa(p), Qty::from_mantissa(q)))
+    };
     UiEvent::Quote {
         instrument: InstrumentId(instrument),
         seq,
-        event_ts_us: TsUs::from_micros(event_ts),
+        event_ts_us: VenueTs::from_micros(event_ts),
         quote: DomQuote::top(leg(bid), leg(ask)),
     }
 }
@@ -70,7 +65,7 @@ fn feature_event(instrument: u16, seq: u64, event_ts: i64, feature: u16, value: 
     UiEvent::Feature {
         instrument: InstrumentId(instrument),
         seq,
-        event_ts_us: TsUs::from_micros(event_ts),
+        event_ts_us: VenueTs::from_micros(event_ts),
         feature: engine::msg::persist::FeatureId(feature),
         value,
     }
@@ -80,10 +75,10 @@ fn trade_event(instrument: u16, seq: u64, event_ts: i64, qty: i64) -> UiEvent {
     UiEvent::Trade {
         instrument: InstrumentId(instrument),
         seq,
-        event_ts_us: TsUs::from_micros(event_ts),
+        event_ts_us: VenueTs::from_micros(event_ts),
         aggressor: Side::Buy,
-        price: Price(100),
-        qty: Qty(qty),
+        price: Price::from_mantissa(100),
+        qty: Qty::from_mantissa(qty),
     }
 }
 
@@ -165,12 +160,12 @@ fn feature_fold_distinguishes_change_from_reemission() {
     assert_eq!(cell.value, 2.0, "value change: the later value wins");
     assert_eq!(
         cell.last_update_ts,
-        TsUs::from_micros(2_000),
+        VenueTs::from_micros(2_000),
         "value change: update ts"
     );
     assert_eq!(
         cell.last_changed_ts,
-        TsUs::from_micros(2_000),
+        VenueTs::from_micros(2_000),
         "value change: changed ts"
     );
 
@@ -178,12 +173,12 @@ fn feature_fold_distinguishes_change_from_reemission() {
     let cell = feature(&model, 0, 0).expect("reemission: feature seen");
     assert_eq!(
         cell.last_update_ts,
-        TsUs::from_micros(3_000),
+        VenueTs::from_micros(3_000),
         "reemission: a re-emission still refreshes the update time"
     );
     assert_eq!(
         cell.last_changed_ts,
-        TsUs::from_micros(2_000),
+        VenueTs::from_micros(2_000),
         "reemission: but the change time holds — the value did not differ"
     );
 
@@ -199,12 +194,12 @@ fn feature_fold_distinguishes_change_from_reemission() {
     );
     assert_eq!(
         cell.last_update_ts,
-        TsUs::from_micros(2_000),
+        VenueTs::from_micros(2_000),
         "nan reemission: a re-emitted NaN still refreshes the update time"
     );
     assert_eq!(
         cell.last_changed_ts,
-        TsUs::from_micros(1_000),
+        VenueTs::from_micros(1_000),
         "nan reemission: bit-equal NaN re-emission is not a change — the change time holds"
     );
 }
@@ -261,10 +256,14 @@ fn channel_projections_cases() {
             256,
             "{name}: the tape retains its bounded capacity"
         );
-        assert_eq!(tape[0].qty, Qty(299), "{name}: newest print is first");
+        assert_eq!(
+            tape[0].qty,
+            Qty::from_mantissa(299),
+            "{name}: newest print is first"
+        );
         assert_eq!(
             tape[255].qty,
-            Qty(44),
+            Qty::from_mantissa(44),
             "{name}: the oldest 44 prints evicted; 44 is the oldest retained"
         );
     }
@@ -274,19 +273,19 @@ fn channel_projections_cases() {
         model.apply_event(UiEvent::OrderUpdate {
             instrument: InstrumentId(0),
             seq: 0,
-            event_ts_us: TsUs::from_micros(5),
+            event_ts_us: VenueTs::from_micros(5),
             client_id: ClientOrderId(41),
             quote_level: None,
             side: Side::Buy,
             state: OrderState::Closed(CloseReason::Canceled),
-            price: Price(100),
-            qty: Qty(5),
-            filled: Qty(0),
+            price: Price::from_mantissa(100),
+            qty: Qty::from_mantissa(5),
+            filled: Qty::from_mantissa(0),
         });
         model.apply_event(UiEvent::Reject {
             instrument: InstrumentId(0),
             seq: 1,
-            event_ts_us: TsUs::from_micros(10),
+            event_ts_us: VenueTs::from_micros(10),
             side: Side::Sell,
             origin: RejectOrigin::Venue {
                 class: RejectClass::Gone,
@@ -326,7 +325,7 @@ fn channel_projections_cases() {
         model.apply_event(UiEvent::Rotation {
             instrument: InstrumentId(0),
             seq: 0,
-            event_ts_us: TsUs::from_micros(500),
+            event_ts_us: VenueTs::from_micros(500),
         });
         // An event-lane gap: the sequence jumps from 0 to 2, dropping one.
         model.apply_event(trade_event(0, 2, 900, 1));
@@ -450,8 +449,8 @@ fn catalog_with_assets(base_asset: AssetId, quote_asset: AssetId) -> UiCatalog {
             quote: "USDT".into(),
             base_asset,
             quote_asset,
-            tick_size: Some(Price(1)),
-            lot_size: Some(Qty(1)),
+            tick_size: Some(Price::from_mantissa(1)),
+            lot_size: Some(Qty::from_mantissa(1)),
             qty_scale: 100_000_000,
         }],
         feature_names: Vec::new(),
@@ -462,7 +461,7 @@ fn balance_event(seq: u64, asset: AssetId, free: i64, locked: i64) -> UiEvent {
     UiEvent::Balance {
         asset,
         seq,
-        event_ts_us: TsUs::from_micros(seq as i64),
+        event_ts_us: VenueTs::from_micros(seq as i64),
         free,
         locked,
     }
@@ -472,14 +471,14 @@ fn order_event(seq: u64, id: u64, side: Side, state: OrderState) -> UiEvent {
     UiEvent::OrderUpdate {
         instrument: InstrumentId(0),
         seq,
-        event_ts_us: TsUs::from_micros(seq as i64),
+        event_ts_us: VenueTs::from_micros(seq as i64),
         client_id: ClientOrderId(id),
         quote_level: None,
         side,
         state,
-        price: Price(100),
-        qty: Qty(5),
-        filled: Qty(0),
+        price: Price::from_mantissa(100),
+        qty: Qty::from_mantissa(5),
+        filled: Qty::from_mantissa(0),
     }
 }
 
@@ -488,9 +487,9 @@ fn working_order(id: u64, state: OrderState) -> UiWorkingOrder {
         client_id: ClientOrderId(id),
         quote_level: None,
         state,
-        price: Price(100 + id as i64),
-        qty: Qty(5),
-        filled: Qty(0),
+        price: Price::from_mantissa(100 + id as i64),
+        qty: Qty::from_mantissa(5),
+        filled: Qty::from_mantissa(0),
     }
 }
 
@@ -500,7 +499,7 @@ fn order_snapshot(seq: u64, side: Side, total_working: u16, details: &[UiWorking
     UiEvent::OrderSnapshot {
         instrument: InstrumentId(0),
         seq,
-        event_ts_us: TsUs::from_micros(seq as i64),
+        event_ts_us: VenueTs::from_micros(seq as i64),
         side,
         detail_len: details.len() as u8,
         total_working,
@@ -510,7 +509,7 @@ fn order_snapshot(seq: u64, side: Side, total_working: u16, details: &[UiWorking
 
 /// A 0.01 tick, so the fixtures below read as venue prices on a 118000 book rather than as tick
 /// counts, and the valuation arithmetic is exercised at a real scale.
-const CENT_TICK: Price = Price(1_000_000);
+const CENT_TICK: Price = Price::from_mantissa(1_000_000);
 
 /// Best 117999.99 / 118000.01, a mid of exactly 118000.00.
 fn btc_book(seq: u64, event_ts: i64) -> UiBookSnapshot {
@@ -633,22 +632,22 @@ fn account_view_cases() {
         model.set_catalog(catalog_with_assets(AssetId(3), AssetId(7)));
         model.apply_event(UiEvent::Execution {
             seq: 0,
-            event_ts_us: TsUs::from_micros(10),
-            halt: ExecHalt::Armed,
+            event_ts_us: VenueTs::from_micros(10),
+            halt: UiHalt::Armed,
         });
         assert_eq!(
             account(&model, InstrumentId(0), TICK).halt,
-            Some(ExecHalt::Armed),
+            Some(UiHalt::Armed),
             "{name}: armed"
         );
 
-        let halted = ExecHalt::Halted {
+        let halted = UiHalt::Halted {
             reason: HaltReason::RealisedLoss,
-            halted_ts_us: TsUs::from_micros(20),
+            halted_ts_us: VenueTs::from_micros(20),
         };
         model.apply_event(UiEvent::Execution {
             seq: 1,
-            event_ts_us: TsUs::from_micros(20),
+            event_ts_us: VenueTs::from_micros(20),
             halt: halted,
         });
         assert_eq!(

@@ -1,13 +1,9 @@
-//! Chart projection fitness: the pure map from the ordered book and event lanes to the
-//! rolling five-minute mid series, and the screen transform over it. Buckets are folded in event time
-//! alone, so a spin carrying no trustworthy mid stays a real hole the line splits across rather
-//! than an invented sample, and replay reproduces the series exactly. Prices never leave exact
-//! half-tick integers until the final `0..=1` fraction. The domain grows from left to right before it
-//! slides; the bounds cover fills as well as mids, so an off-mid marker can never be invisible.
+//! The mid chart: event time alone places each bucket, so a spin with no mid stays a hole, a replay
+//! gives the same series, and prices stay exact integers until the screen.
 
 use engine::msg::exec::Liquidity;
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, VenueTs};
 use engine::msg::ui::{UiBookSnapshot, UiBookState, UiEvent};
 use engine::operator::workstation::chart::model::{
     BookContinuity, ChartBucket, ChartFill, ChartModel, bucket_open_ts,
@@ -38,11 +34,11 @@ fn fill_event(instrument: u16, bucket: u64, side: Side, price: i64) -> UiEvent {
     UiEvent::Fill {
         instrument: InstrumentId(instrument),
         seq: 0,
-        event_ts_us: TsUs::from_micros(bucket as i64 * SPIN.micros()),
+        event_ts_us: VenueTs::from_micros(bucket as i64 * SPIN.micros()),
         quote_level: None,
         side,
-        price: Price(price),
-        qty: Qty(1),
+        price: Price::from_mantissa(price),
+        qty: Qty::from_mantissa(1),
         commission: 0,
         commission_asset: AssetId(0),
         liquidity: Some(Liquidity::Maker),
@@ -124,7 +120,7 @@ fn bucket_folding_and_boundary_invariants() {
     // Still inside spin 1: 1_999_999 µs floors to bucket 1, not 2.
     chart.apply_book(
         &UiBookSnapshot {
-            event_ts_us: TsUs::from_micros(1_999_999),
+            event_ts_us: VenueTs::from_micros(1_999_999),
             ..valid_book(0, 1, 124, 126)
         },
         BookContinuity::Continuous,
@@ -328,7 +324,7 @@ fn domain_retention_rotation_grid_and_replay_determinism() {
     );
 
     // A ten-mantissa grid: 105 is not a multiple of the tick, so the mid does not exist.
-    let mut off_grid = chart_with_ticks(&[Some(Price(10))]);
+    let mut off_grid = chart_with_ticks(&[Some(Price::from_mantissa(10))]);
     commit(&mut off_grid, 0, 1, 100, 105);
     assert!(
         buckets(&off_grid, 0).is_empty(),
@@ -455,7 +451,7 @@ fn chart_view_fills_bounds_and_fractions() {
     const FAST_SPIN: DurationUs = DurationUs::from_micros(100_000);
     let mut fast = ChartModel::with_capacity(1, FAST_SPIN);
     fast.configure(&[Some(TICK)], FAST_SPIN);
-    let at = |bucket: u64| TsUs::from_micros(bucket as i64 * FAST_SPIN.micros());
+    let at = |bucket: u64| VenueTs::from_micros(bucket as i64 * FAST_SPIN.micros());
     // Two fills per bucket is the run's real ceiling: the recorder arms one quote per side per spin
     // and a markout side disarms itself on fill.
     let window = fast.capacity() as u64;
@@ -474,8 +470,8 @@ fn chart_view_fills_bounds_and_fractions() {
                 event_ts_us: at(bucket),
                 quote_level: None,
                 side,
-                price: Price(101),
-                qty: Qty(1),
+                price: Price::from_mantissa(101),
+                qty: Qty::from_mantissa(1),
                 commission: 0,
                 commission_asset: AssetId(0),
                 liquidity: Some(Liquidity::Maker),

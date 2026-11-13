@@ -1,4 +1,4 @@
-//! FITNESS: on a venue whose markets EXPIRE, an order must never be resting when one does.
+//! On a venue whose markets EXPIRE, no order may rest when one does.
 //!
 //! Every other gate in the engine protects against a price or a size. This one protects against a
 //! clock, and it is the only gate whose failure cannot be traded out of afterwards: a fill taken in
@@ -6,31 +6,31 @@
 //! at everything, with no book left to place an order into. The strategy is expected to withdraw
 //! first; this is what holds when it does not.
 //!
-//! Both halves are pinned, and the second is why the first is not enough. Refusing new declarations
-//! stops the ladder GROWING, and the reconciler then withdraws what is already there — one order per
-//! side per spin, so a full ladder comes down over eight of them. The sweep takes the whole thing in
-//! one pass.
+//! Both halves are checked, and the second is why the first is not enough. Refusing new
+//! declarations stops the ladder GROWING, and the reconciler then withdraws what is already there,
+//! one order per side per spin, so a full ladder comes down over eight spins. The sweep takes it
+//! all in one pass.
 //!
 //! The gate is driven entirely by message stamps: the window comes from a `MarketRotation` and the
 //! instant from the spin tick, so a replay refuses and sweeps at exactly the same points.
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
-    DesiredQuote, ExecHalt, ExecSettings, HaltReason, MAX_ORDER_SLOTS, OrderSlot, OrderState,
-    QuoteLevel, RejectReason,
+    DesiredQuote, ExecSettings, HaltReason, MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS, OrderSlot,
+    OrderState, QuoteLevel, RejectReason,
 };
 use engine::hot::strategy::{Strategy, StrategyCtx, WindowInfo};
 use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, VenueOrderStatus,
 };
 use engine::msg::ids::{Price, Side};
-use engine::msg::inbound::{InboundMessage, SpinTick};
-use engine::msg::time::{DurationUs, TsUs};
-use engine::msg::ui::UiEvent;
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
+use engine::msg::time::{DurationUs, LocalTs, VenueTs};
+use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::RecordedTables;
 use rtrb::Consumer;
 
-use crate::engine_support::{ALL_TABLES, ONE, exec_event, local_refusals, rotation};
+use crate::engine_support::{ALL_TABLES, ONE, exec_event, local_refusals, rotation, ts};
 use crate::exec_support::{
     ASK, BID, CEILING, INSTRUMENT, QUOTE_QTY, QuotingSetup, TwoSidedQuoter, built_quoting_engine,
     drain_commands, exec_settings, make_ready, reseat_book, row_with_ceiling, spin_at,
@@ -79,10 +79,10 @@ fn cancels(commands: &[ExecCommand]) -> usize {
 #[test]
 fn the_quote_window_opens_at_the_open_and_shuts_a_margin_before_the_close() {
     let window = WindowInfo {
-        open_ts_us: TsUs::from_micros(OPEN),
-        close_ts_us: TsUs::from_micros(CLOSE),
+        open_ts_us: VenueTs::from_micros(OPEN),
+        close_ts_us: VenueTs::from_micros(CLOSE),
     };
-    let at = |micros: i64| TsUs::from_micros(micros);
+    let at = |micros: i64| LocalTs::from_micros(micros);
 
     assert!(
         !window.admits_quote_at(at(OPEN - 1), MARGIN),
@@ -127,7 +127,7 @@ impl Strategy for LadderQuoter {
                 Side::Buy,
                 QuoteLevel::new(level as u8).expect("within the fixed ladder"),
                 Some(DesiredQuote {
-                    price: Price(BID - level as i64 * ONE),
+                    price: Price::from_mantissa(BID - level as i64 * ONE),
                     qty: QUOTE_QTY,
                     style: OrderStyle::PostOnly,
                 }),
@@ -165,9 +165,7 @@ fn the_quote_stop_pulls_the_whole_ladder_and_an_unwindowed_instrument_never_stop
     let (mut engine, mut commands, mut ui_events) =
         quoting_engine(Box::new(LadderQuoter), LADDER_DEPTH);
     make_ready(&mut engine, OPEN);
-    engine.dispatch(&InboundMessage::MarketRotation(rotation(
-        0, OPEN, CLOSE, OPEN,
-    )));
+    engine.dispatch(&rotation(0, OPEN, CLOSE, OPEN));
     for message in reseat_book(BID, ASK, OPEN) {
         engine.dispatch(&message);
     }
@@ -191,9 +189,7 @@ fn the_quote_stop_pulls_the_whole_ladder_and_an_unwindowed_instrument_never_stop
     ack_cancelled(&mut engine, &swept, stop + 2_000_000);
     let next_open = CLOSE;
     let next_close = next_open + WINDOW.micros();
-    engine.dispatch(&InboundMessage::MarketRotation(rotation(
-        0, next_open, next_close, next_open,
-    )));
+    engine.dispatch(&rotation(0, next_open, next_close, next_open));
     for message in reseat_book(BID, ASK, next_open + 1_000_000) {
         engine.dispatch(&message);
     }
@@ -256,21 +252,21 @@ fn a_sweep_pulls_resting_quotes_and_never_a_marketable_order() {
 /// outlasts both.
 const JAM_SPINS: i64 = 2 * MAX_ORDER_SLOTS as i64;
 
-/// FITNESS: a full command bank halts the engine, and a cancel it refuses leaves the order `Live`.
-///
-/// The bank fills only when the edge has stopped draining, and the halt that follows is exactly when
-/// the reconciler and the closing window both try to pull every resting quote, so those cancels are
-/// refused too. A slot marked cancel-in-flight is one the engine waits on rather than retries, so a
-/// cancel that never left would leave the quote resting on the venue with nothing asking again.
+/// The bank holds the order table and six commands for each instrument it can quote.
+const COMMAND_BANK_CAPACITY: usize = MAX_ORDER_SLOTS + 6 * MAX_ORDER_INSTRUMENTS;
+
+/// CONTRACT: a bank that holds its whole capacity refuses the next command and halts quoting, and a
+/// cancel that it refuses never reaches the lane, so the order it would have pulled stays `Live`,
+/// also when the window closes after the halt. A cancel marked as sent but never banked would leave
+/// a quote resting with nothing asking again.
 #[test]
-fn a_full_command_bank_halts_and_leaves_the_order_it_could_not_cancel_live() {
+fn full_command_bank_halts_and_leaves_the_order_live() {
     let built = built_quoting_engine(QuotingSetup {
         row: row_with_ceiling(CEILING),
         strategy: Box::new(TwoSidedQuoter),
         restored: &[],
         settings: ExecSettings {
             quote_stop_margin: MARGIN,
-            // A reconciliation request every spin, into a lane this test never drains.
             exec_silence_spins: 1,
             ..exec_settings()
         },
@@ -279,9 +275,7 @@ fn a_full_command_bank_halts_and_leaves_the_order_it_could_not_cancel_live() {
     });
     let (mut engine, mut commands, mut ui_events) = (built.engine, built.commands, built.ui_events);
     make_ready(&mut engine, OPEN);
-    engine.dispatch(&InboundMessage::MarketRotation(rotation(
-        0, OPEN, CLOSE, OPEN,
-    )));
+    engine.dispatch(&rotation(0, OPEN, CLOSE, OPEN));
     for message in reseat_book(BID, ASK, OPEN) {
         engine.dispatch(&message);
     }
@@ -290,7 +284,7 @@ fn a_full_command_bank_halts_and_leaves_the_order_it_could_not_cancel_live() {
     assert_eq!(
         places(&placed),
         2,
-        "both sides must be resting before the lane jams: {placed:?}"
+        "both sides rest before the lane jams: {placed:?}"
     );
     ack_placed(&mut engine, &placed, OPEN + 1_100_000);
 
@@ -299,7 +293,7 @@ fn a_full_command_bank_halts_and_leaves_the_order_it_could_not_cancel_live() {
     for step in 0..JAM_SPINS {
         spin_at(&mut engine, 2 + step as u64, jammed_from + step * 10_000);
         screen = read_screen(&mut ui_events);
-        if screen.0.is_some_and(ExecHalt::is_halted) {
+        if screen.0.is_some_and(UiHalt::is_halted) {
             break;
         }
     }
@@ -307,18 +301,17 @@ fn a_full_command_bank_halts_and_leaves_the_order_it_could_not_cancel_live() {
     assert!(
         matches!(
             halt,
-            Some(ExecHalt::Halted {
+            Some(UiHalt::Halted {
                 reason: HaltReason::CommandBankOverflow,
                 ..
             })
         ),
-        "{JAM_SPINS} spins into an undrained lane must halt on the full bank: {halt:?}"
+        "the bank refuses a command and quoting halts: {halt:?}"
     );
     assert_eq!(
         working,
         [OrderState::Live; 2],
-        "the halted reconciler tried to pull both quotes and the bank refused, so neither may read \
-         as cancel-in-flight"
+        "the refused cancels leave both orders live"
     );
 
     spin_at(&mut engine, 2 + JAM_SPINS as u64, CLOSE - MARGIN.micros());
@@ -328,11 +321,26 @@ fn a_full_command_bank_halts_and_leaves_the_order_it_could_not_cancel_live() {
         [OrderState::Live; 2],
         "the closing window's cancels were refused too, so both quotes still read as resting"
     );
+
+    let lane = drain_commands(&mut commands);
+    assert!(
+        !lane.iter().any(|command| matches!(
+            command,
+            ExecCommand::Cancel { .. } | ExecCommand::CancelOurs { .. }
+        )),
+        "no cancel reached the lane: {lane:?}"
+    );
+    let banked = engine.counters().orders_submitted as usize;
+    assert_eq!(
+        banked - placed.len() - lane.len(),
+        COMMAND_BANK_CAPACITY,
+        "the bank refused only once it held its whole capacity"
+    );
 }
 
 /// What the workstation was told since the last read: the newest kill-switch frame, and the state of
 /// every working order the order snapshots listed.
-fn read_screen(ui_events: &mut Consumer<UiEvent>) -> (Option<ExecHalt>, Vec<OrderState>) {
+fn read_screen(ui_events: &mut Consumer<UiEvent>) -> (Option<UiHalt>, Vec<OrderState>) {
     let mut halt = None;
     let mut working = Vec::new();
     while let Ok(event) = ui_events.pop() {
@@ -362,11 +370,14 @@ fn ack_placed(engine: &mut HotEngine, commands: &[ExecCommand], when: i64) {
         else {
             continue;
         };
-        engine.dispatch(&InboundMessage::Exec(ExecEvent {
-            kind: ExecKind::AckPlaced,
-            status: Some(VenueOrderStatus::New),
-            ..exec_event(INSTRUMENT, *client_id, *side, price.0, when)
-        }));
+        engine.dispatch(&InboundMessage::new(
+            ts(when),
+            MessageBody::Exec(ExecEvent {
+                kind: ExecKind::AckPlaced,
+                status: Some(VenueOrderStatus::New),
+                ..exec_event(INSTRUMENT, *client_id, *side, price.mantissa(), when)
+            }),
+        ));
     }
 }
 
@@ -375,10 +386,13 @@ fn ack_cancelled(engine: &mut HotEngine, commands: &[ExecCommand], when: i64) {
         let ExecCommand::Cancel { client_id, .. } = command else {
             continue;
         };
-        engine.dispatch(&InboundMessage::Exec(ExecEvent {
-            kind: ExecKind::ReportCanceled,
-            status: Some(VenueOrderStatus::Canceled),
-            ..exec_event(INSTRUMENT, *client_id, Side::Buy, BID, when)
-        }));
+        engine.dispatch(&InboundMessage::new(
+            ts(when),
+            MessageBody::Exec(ExecEvent {
+                kind: ExecKind::ReportCanceled,
+                status: Some(VenueOrderStatus::Canceled),
+                ..exec_event(INSTRUMENT, *client_id, Side::Buy, BID, when)
+            }),
+        ));
     }
 }

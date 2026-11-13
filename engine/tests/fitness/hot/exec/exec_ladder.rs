@@ -1,7 +1,5 @@
-//! FITNESS: the keyed ladder's two safety rules at the real HOT boundary — whole-side single
-//! flight, and cancel-confirm-place replacement — and the reservation-release policy that rides the
-//! same boundary, in both directions, on a venue that locks an order's funds and on one that
-//! does not.
+//! The two safety rules of the keyed ladder, one request in flight for each side and cancel before
+//! place, with the release of reservations on venues that lock funds and that do not.
 
 use engine::runtime::config::TrackerSpec;
 use std::sync::{Arc, Mutex};
@@ -14,15 +12,15 @@ use engine::msg::exec::{
     AccountChunk, AccountChunkKind, AssetBalance, ExecCommand, ExecEvent, ExecKind, ExecLaneItem,
     OrderStyle, VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
-use engine::msg::inbound::{InboundMessage, SpinTick};
-use engine::msg::time::{Stamper, TsUs};
+use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
+use engine::msg::time::{LocalTs, Stamper, VenueTs};
 use engine::venues::polymarket::exec::codec::{
     AccountStamps, SettlementWatermark, account_snapshot,
 };
 use rtrb::{Consumer, RingBuffer};
 
-use crate::engine_support::{ONE, account_chunk, detached_setup, exec_event, instrument_row};
+use crate::engine_support::{ONE, account_chunk, detached_setup, exec_event, instrument_row, ts};
 use crate::exec_support::{
     ASK, BID, drain_commands, exec_settings, make_ready, reseat_book, spin_at,
 };
@@ -46,8 +44,8 @@ impl Strategy for KeyedLadder {
                 Side::Buy,
                 level,
                 Some(DesiredQuote {
-                    price: Price(price),
-                    qty: Qty(ONE / 10),
+                    price: Price::from_mantissa(price),
+                    qty: Qty::from_mantissa(ONE / 10),
                     style: OrderStyle::PostOnly,
                 }),
             );
@@ -74,9 +72,9 @@ fn engine_with_settings(
     settings: ExecSettings,
 ) -> (HotEngine, Consumer<ExecLaneItem>) {
     let mut row = instrument_row(0, TrackerSpec::default(), 64);
-    row.tick_size = Some(Price(ONE));
-    row.lot_size = Some(Qty(1));
-    row.max_exposure_quote = 1_000_000 * ONE;
+    row.tick_size = Some(Price::from_mantissa(ONE));
+    row.lot_size = Some(Qty::from_mantissa(1));
+    row.max_exposure_quote = Notional::from_mantissa(1_000_000 * ONE);
     let instruments = [row];
     let (producer, commands) = RingBuffer::new(256);
     let engine = HotEngine::new(HotEngineSetup {
@@ -105,8 +103,8 @@ impl Strategy for ReservationQuoter {
             Side::Buy,
             QuoteLevel::ZERO,
             Some(DesiredQuote {
-                price: Price(BID),
-                qty: Qty(ONE / 10),
+                price: Price::from_mantissa(BID),
+                qty: Qty::from_mantissa(ONE / 10),
                 style: OrderStyle::PostOnly,
             }),
         );
@@ -126,35 +124,51 @@ fn acknowledge(
         ExecCommand::Cancel { client_id, .. } => (client_id, Side::Buy),
         other => panic!("fixture cannot acknowledge {other:?}"),
     };
-    engine.dispatch(&InboundMessage::Exec(ExecEvent {
-        kind,
-        status: Some(match kind {
-            ExecKind::AckPlaced => VenueOrderStatus::New,
-            ExecKind::AckCanceled => VenueOrderStatus::Canceled,
-            _ => panic!("unsupported acknowledgement {kind:?}"),
+    engine.dispatch(&InboundMessage::new(
+        ts(when),
+        MessageBody::Exec(ExecEvent {
+            kind,
+            status: Some(match kind {
+                ExecKind::AckPlaced => VenueOrderStatus::New,
+                ExecKind::AckCanceled => VenueOrderStatus::Canceled,
+                _ => panic!("unsupported acknowledgement {kind:?}"),
+            }),
+            ..exec_event(INSTRUMENT, client_id, side, 0, when)
         }),
-        ..exec_event(INSTRUMENT, client_id, side, 0, when)
-    }));
+    ));
     client_id
 }
 
 fn place_and_ack(engine: &mut HotEngine, commands: &mut Consumer<ExecLaneItem>) -> ExecCommand {
-    make_ready(engine, 0);
-    for message in reseat_book(BID, ASK, 1) {
+    place_and_ack_at(engine, commands, 0)
+}
+
+/// [`place_and_ack`] with each stamp `start` later.
+fn place_and_ack_at(
+    engine: &mut HotEngine,
+    commands: &mut Consumer<ExecLaneItem>,
+    start: i64,
+) -> ExecCommand {
+    make_ready(engine, start);
+    for message in reseat_book(BID, ASK, start + 1) {
         engine.dispatch(&message);
     }
-    spin_at(engine, 1, 10);
+    spin_at(engine, 1, start + 10);
     let place = only(commands);
-    acknowledge(engine, place, ExecKind::AckPlaced, 11);
+    acknowledge(engine, place, ExecKind::AckPlaced, start + 11);
     place
 }
 
 fn restate_free_balance(engine: &mut HotEngine, venue_update_ts_ms: u64, when: i64) {
-    engine.dispatch(&InboundMessage::Account(AccountChunk {
-        kind: AccountChunkKind::Update,
-        venue_update_ts_ms,
-        ..account_chunk(&[(AssetId(1), 1_000_000 * ONE)], when)
-    }));
+    engine.dispatch(&InboundMessage::new(
+        ts(when),
+        MessageBody::Account({
+            let mut chunk = account_chunk(&[(AssetId(1), 1_000_000 * ONE)], when);
+            chunk.kind = AccountChunkKind::Update;
+            chunk.venue_update_ts_ms = venue_update_ts_ms;
+            chunk
+        }),
+    ));
 }
 
 fn only(commands: &mut Consumer<ExecLaneItem>) -> ExecCommand {
@@ -207,10 +221,7 @@ fn ladder_serialises_and_requotes_only_after_terminal_confirmation() {
     let replacement = only(&mut commands);
     assert!(matches!(
         replacement,
-        ExecCommand::Place {
-            price: Price(MOVED_LEVEL_ZERO_PRICE),
-            ..
-        }
+        ExecCommand::Place { price, .. } if price == Price::from_mantissa(MOVED_LEVEL_ZERO_PRICE)
     ));
     assert_eq!(level_of(replacement), QuoteLevel::ZERO);
     acknowledge(&mut engine, replacement, ExecKind::AckPlaced, 51);
@@ -314,11 +325,14 @@ fn a_non_locking_zero_fill_cancel_frees_its_reservation_ungated() {
 
     // The venue cancels the resting quote with nothing filled, and no account restatement follows —
     // an open order never moved a balance to restate.
-    engine.dispatch(&InboundMessage::Exec(ExecEvent {
-        kind: ExecKind::AckCanceled,
-        status: Some(VenueOrderStatus::Canceled),
-        ..exec_event(INSTRUMENT, client_id, Side::Buy, 0, 25)
-    }));
+    engine.dispatch(&InboundMessage::new(
+        ts(25),
+        MessageBody::Exec(ExecEvent {
+            kind: ExecKind::AckCanceled,
+            status: Some(VenueOrderStatus::Canceled),
+            ..exec_event(INSTRUMENT, client_id, Side::Buy, 0, 25)
+        }),
+    ));
     spin_at(&mut engine, 3, 30);
     assert_eq!(
         observed.lock().expect("reservation probe")[2],
@@ -329,11 +343,11 @@ fn a_non_locking_zero_fill_cancel_frees_its_reservation_ungated() {
 
 /// A real wall-clock reading, because that is what the edge stamps a balance answer with and the
 /// engine's own tick counter is far too small to tell a millisecond stamp from zero.
-const RECEIVED_AT: TsUs = TsUs::from_micros(1_786_046_895_000_000);
+const RECEIVED_AT: LocalTs = LocalTs::from_micros(1_786_046_895_000_000);
 
 /// The venue's own stamp on the trade that carried the fill below, seconds resolution as this venue
 /// reports it, and later than the readiness chunk the reservation was taken against.
-const SETTLED_AT: TsUs = TsUs::from_micros(1_786_046_890_000_000);
+const SETTLED_AT: VenueTs = VenueTs::from_micros(1_786_046_890_000_000);
 
 /// One balance sweep as the Polymarket edge builds it, at whatever it has watched settle so far.
 fn balance_sweep(settled_through: SettlementWatermark) -> Vec<AccountChunk> {
@@ -351,9 +365,9 @@ fn balance_sweep(settled_through: SettlementWatermark) -> Vec<AccountChunk> {
     )
 }
 
-fn feed(engine: &mut HotEngine, chunks: Vec<AccountChunk>) {
+fn feed(engine: &mut HotEngine, chunks: Vec<AccountChunk>, at: LocalTs) {
     for chunk in chunks {
-        engine.dispatch(&InboundMessage::Account(chunk));
+        engine.dispatch(&InboundMessage::new(at, MessageBody::Account(chunk)));
     }
 }
 
@@ -366,28 +380,38 @@ fn feed(engine: &mut HotEngine, chunks: Vec<AccountChunk>) {
 fn a_filled_reservation_waits_for_the_venues_own_settlement() {
     let observed = Arc::new(Mutex::new(Vec::new()));
     let (mut engine, mut commands) = non_locking_reservation_engine(Arc::clone(&observed));
-    let client_id = client_id_of(place_and_ack(&mut engine, &mut commands));
+    // The order rests a minute before the balance reads, so each message arrives in stamp order.
+    let start = RECEIVED_AT.micros() - 60_000_000;
+    let after_read = |micros: i64| RECEIVED_AT.micros() + micros;
+    let client_id = client_id_of(place_and_ack_at(&mut engine, &mut commands, start));
 
-    spin_at(&mut engine, 2, 20);
+    spin_at(&mut engine, 2, start + 20);
     let one_order = observed.lock().expect("reservation probe")[1];
     assert!(one_order > 0, "a placed order reserves its funds");
 
-    let size = Qty(ONE / 10);
-    engine.dispatch(&InboundMessage::Exec(ExecEvent {
-        kind: ExecKind::ReportTrade,
-        status: Some(VenueOrderStatus::Filled),
-        qty: size,
-        last_price: Price(BID),
-        last_qty: size,
-        cumulative_qty: size,
-        cumulative_quote: Price(BID).notional(size),
-        ..exec_event(INSTRUMENT, client_id, Side::Buy, BID, 25)
-    }));
+    let size = Qty::from_mantissa(ONE / 10);
+    engine.dispatch(&InboundMessage::new(
+        ts(start + 25),
+        MessageBody::Exec(ExecEvent {
+            kind: ExecKind::ReportTrade,
+            status: Some(VenueOrderStatus::Filled),
+            qty: size,
+            last_price: Price::from_mantissa(BID),
+            last_qty: size,
+            cumulative_qty: size,
+            cumulative_quote: Price::from_mantissa(BID).notional(size),
+            ..exec_event(INSTRUMENT, client_id, Side::Buy, BID, start + 25)
+        }),
+    ));
     // The edge re-reads balances the moment it reports the fill. Nothing has settled yet, so the
     // chunk it builds carries no evidence of moved money and must free nothing.
-    feed(&mut engine, balance_sweep(SettlementWatermark::NONE));
+    feed(
+        &mut engine,
+        balance_sweep(SettlementWatermark::NONE),
+        RECEIVED_AT,
+    );
 
-    spin_at(&mut engine, 3, 30);
+    spin_at(&mut engine, 3, after_read(30));
     assert_eq!(
         observed.lock().expect("reservation probe")[2],
         one_order,
@@ -403,9 +427,9 @@ fn a_filled_reservation_waits_for_the_venues_own_settlement() {
     // carrying money the venue has actually moved.
     let mut settled = SettlementWatermark::NONE;
     assert!(settled.advance_to(SETTLED_AT));
-    feed(&mut engine, balance_sweep(settled));
+    feed(&mut engine, balance_sweep(settled), ts(after_read(35)));
 
-    spin_at(&mut engine, 4, 40);
+    spin_at(&mut engine, 4, after_read(40));
     assert_eq!(
         observed.lock().expect("reservation probe")[3],
         one_order,

@@ -1,8 +1,8 @@
-//! The workstation's model of the engine feed: the catalog and each instrument's latest book and
-//! quote, plus the panels' own models. It folds events in event time and never reads the wall clock.
+//! The workstation's model of the engine feed: the catalog, each instrument's latest book and
+//! quote, and the models of the panels, folded in event time with no wall clock.
 
 use crate::msg::ids::{FIXED_SCALE, InstrumentId, Price, Side};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, VenueTs};
 use crate::msg::ui::{DomQuote, LatencyReport, UiBookSnapshot, UiCatalog, UiEvent, UiInstrument};
 
 use super::chart::model::{BookContinuity, ChartModel};
@@ -45,7 +45,7 @@ const LATENCY_REPORT_STALE_AFTER: DurationUs = DurationUs::from_millis(3_000);
 pub struct UiModel {
     catalog: Option<UiCatalog>,
     latest_book: Vec<Option<UiBookSnapshot>>,
-    latest_quote: Vec<Option<(DomQuote, TsUs)>>,
+    latest_quote: Vec<Option<(DomQuote, VenueTs)>>,
     latest_latency_report: Option<LatencyReport>,
     book_last_seq: Vec<Option<u64>>,
     selected: InstrumentId,
@@ -60,7 +60,7 @@ pub struct UiModel {
     /// Newest engine stamp seen on a book or an event. Both carry the engine's own clock, so an age
     /// measured against this needs no agreement with the workstation's clock, which may be on
     /// another machine.
-    freshest_feed_ts: Option<TsUs>,
+    freshest_feed_ts: Option<VenueTs>,
     event_last_seq: Option<u64>,
     book_gaps: u64,
     event_gaps: u64,
@@ -193,7 +193,7 @@ impl UiModel {
         self.latest_book.get(instrument.0 as usize)?.as_ref()
     }
 
-    pub fn quote(&self, instrument: InstrumentId) -> Option<(DomQuote, TsUs)> {
+    pub fn quote(&self, instrument: InstrumentId) -> Option<(DomQuote, VenueTs)> {
         *self.latest_quote.get(instrument.0 as usize)?
     }
 
@@ -276,18 +276,18 @@ impl UiModel {
         self.selected = instrument;
     }
 
-    /// The selected instrument's grid, as every panel that renders a number needs it. `Price(0)` and
+    /// The selected instrument's grid, as every panel that renders a number needs it. `Price::from_mantissa(0)` and
     /// the default scale are the reading before a catalog lands, not a venue's real grid.
     pub(crate) fn instrument_scales(&self) -> InstrumentScales {
         let Some(instrument) = self.selected_instrument() else {
             return InstrumentScales {
-                tick: Price(0),
+                tick: Price::from_mantissa(0),
                 qty_scale: FIXED_SCALE,
                 qty_decimals: qty_decimals(None),
             };
         };
         InstrumentScales {
-            tick: instrument.tick_size.unwrap_or(Price(0)),
+            tick: instrument.tick_size.unwrap_or(Price::from_mantissa(0)),
             qty_scale: instrument.qty_scale,
             qty_decimals: qty_decimals(instrument.lot_size),
         }
@@ -391,7 +391,7 @@ impl UiModel {
         self.monitor.note_lifecycle(note);
     }
 
-    fn note_feed_stamp(&mut self, at: TsUs) {
+    fn note_feed_stamp(&mut self, at: VenueTs) {
         self.freshest_feed_ts = self.freshest_feed_ts.max(Some(at));
     }
 

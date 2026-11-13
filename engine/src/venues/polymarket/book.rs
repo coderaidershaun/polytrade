@@ -3,16 +3,16 @@
 use std::borrow::Borrow;
 
 use crate::msg::ids::{InstrumentId, Side};
-use crate::msg::inbound::{BookChunkKind, InboundMessage, Level};
-use crate::msg::time::TsUs;
+use crate::msg::inbound::{BookChunkKind, InboundMessage, Level, MessageBody};
+use crate::msg::time::{LocalTs, VenueTs};
 use crate::venues::edge::chunk::{ChunkEmitter, ChunkPlan};
 
 use super::parse::{PolyBook, PolyDelta};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChunkStamps {
-    pub exchange_ts_us: TsUs,
-    pub received_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
+    pub received_ts_us: LocalTs,
 }
 
 /// Per-instrument chunk emitter; `update_id = 0` (no venue seq nums), continuity via snapshots.
@@ -28,7 +28,7 @@ impl BookNormaliser {
         }
     }
 
-    pub fn note_emit_floor(&mut self, floor: TsUs) {
+    pub fn note_emit_floor(&mut self, floor: LocalTs) {
         self.chunks.note_emit_floor(floor);
     }
 
@@ -88,7 +88,10 @@ impl BookNormaliser {
             received_ts_us: self.chunks.clamp_emit_ts(stamps.received_ts_us),
         };
         self.chunks.emit_book(plan, bids, asks, &mut |chunk| {
-            emit(InboundMessage::Book(chunk));
+            emit(InboundMessage::new(
+                plan.received_ts_us,
+                MessageBody::Book(chunk),
+            ));
         });
     }
 }

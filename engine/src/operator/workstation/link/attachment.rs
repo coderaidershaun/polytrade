@@ -2,7 +2,7 @@
 //! screen, model, and the rule that a new session starts them over.
 
 use crate::msg::run_state::RunState;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::msg::ui::UiCatalog;
 
 use super::super::dom_view::FeedStatus;
@@ -28,7 +28,7 @@ pub(crate) struct Attachment {
 }
 
 impl Attachment {
-    pub(crate) fn new(session: LinkSession, now: TsUs) -> Self {
+    pub(crate) fn new(session: LinkSession, now: LocalTs) -> Self {
         let status = session.status(now);
         Self {
             session,
@@ -40,7 +40,7 @@ impl Attachment {
     }
 
     /// Folds one datagram. Returns true when the screen has something new to show.
-    pub(crate) fn on_datagram(&mut self, bytes: &[u8], now: TsUs) -> bool {
+    pub(crate) fn on_datagram(&mut self, bytes: &[u8], now: LocalTs) -> bool {
         let delivery = self.session.on_datagram(bytes, now);
         // A frame can raise the session without yielding a delivery, so the status is read
         // first and the delivery lands in the model that is already starting over.
@@ -60,7 +60,7 @@ impl Attachment {
     /// Reads the session's status afresh, because silence moves it with no datagram to say so.
     /// Returns true when it changed. A status that names a different session starts everything
     /// this attachment holds over.
-    pub(crate) fn refresh(&mut self, now: TsUs) -> bool {
+    pub(crate) fn refresh(&mut self, now: LocalTs) -> bool {
         let status = self.session.status(now);
         if status == self.status {
             return false;
@@ -74,13 +74,13 @@ impl Attachment {
         true
     }
 
-    pub(crate) fn assert_run_state(&mut self, state: RunState, now: TsUs) {
+    pub(crate) fn assert_run_state(&mut self, state: RunState, now: LocalTs) {
         self.session.assert_run_state(state);
         self.refresh(now);
     }
 
     /// `false`, with nothing changed, when there is no other engine to move to.
-    pub(crate) fn attach_to_next_peer(&mut self, now: TsUs) -> bool {
+    pub(crate) fn attach_to_next_peer(&mut self, now: LocalTs) -> bool {
         let has_moved = self.session.attach_to_next_peer();
         self.refresh(now);
         has_moved
@@ -88,7 +88,7 @@ impl Attachment {
 
     /// The datagram to send to the active engine, when one is due. Call it only while the socket
     /// can carry it, because a due subscribe is spent when returned.
-    pub(crate) fn subscribe_due(&mut self, now: TsUs) -> Option<&[u8]> {
+    pub(crate) fn subscribe_due(&mut self, now: LocalTs) -> Option<&[u8]> {
         self.session.subscribe_due(now)
     }
 

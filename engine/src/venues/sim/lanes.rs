@@ -5,7 +5,7 @@ use std::fmt;
 
 use super::core::latency::{LatencyBudget, rewound, shifted};
 use crate::msg::labelled_enum::labelled_enum;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 labelled_enum! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -34,7 +34,7 @@ pub struct LaneBufferFull {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SimHorizon {
     latency: LatencyBudget,
-    watermarks: [TsUs; SimLane::ALL.len()],
+    watermarks: [LocalTs; SimLane::ALL.len()],
     observed: [bool; SimLane::ALL.len()],
 }
 
@@ -42,18 +42,18 @@ impl SimHorizon {
     pub fn unseeded(latency: LatencyBudget) -> Self {
         Self {
             latency,
-            watermarks: [TsUs::from_micros(i64::MIN); SimLane::ALL.len()],
+            watermarks: [LocalTs::from_micros(i64::MIN); SimLane::ALL.len()],
             observed: [false; SimLane::ALL.len()],
         }
     }
 
-    pub fn observe(&mut self, lane: SimLane, watermark: TsUs) {
+    pub fn observe(&mut self, lane: SimLane, watermark: LocalTs) {
         let held = &mut self.watermarks[lane as usize];
         *held = (*held).max(watermark);
         self.observed[lane as usize] = true;
     }
 
-    pub fn watermark(&self, lane: SimLane) -> TsUs {
+    pub fn watermark(&self, lane: SimLane) -> LocalTs {
         self.watermarks[lane as usize]
     }
 
@@ -61,7 +61,7 @@ impl SimHorizon {
         self.observed.iter().all(|observed| *observed)
     }
 
-    pub fn safe_venue_horizon(&self) -> TsUs {
+    pub fn safe_venue_horizon(&self) -> LocalTs {
         let command = shifted(self.watermark(SimLane::Command), [self.latency.order_entry]);
         let market = |lane| rewound(self.watermark(lane), self.latency.max_market_data_delay);
         command
@@ -74,8 +74,8 @@ impl SimHorizon {
 pub struct LaneBuffer<T> {
     lane: SimLane,
     capacity: usize,
-    items: VecDeque<(TsUs, T)>,
-    latest_ts_us: Option<TsUs>,
+    items: VecDeque<(LocalTs, T)>,
+    latest_ts_us: Option<LocalTs>,
 }
 
 impl<T> LaneBuffer<T> {
@@ -88,7 +88,7 @@ impl<T> LaneBuffer<T> {
         }
     }
 
-    pub fn peek_ts_us(&self) -> Option<TsUs> {
+    pub fn peek_ts_us(&self) -> Option<LocalTs> {
         self.items.front().map(|(at, _)| *at)
     }
 
@@ -96,7 +96,7 @@ impl<T> LaneBuffer<T> {
     /// [`LaneBufferFull`] when the fixed-capacity lane has no free slot.
     /// # Panics
     /// If timestamps move backwards.
-    pub fn try_push(&mut self, at_ts_us: TsUs, item: T) -> Result<(), LaneBufferFull> {
+    pub fn try_push(&mut self, at_ts_us: LocalTs, item: T) -> Result<(), LaneBufferFull> {
         if self.items.len() == self.capacity {
             return Err(LaneBufferFull {
                 lane: self.lane,
@@ -117,7 +117,7 @@ impl<T> LaneBuffer<T> {
         Ok(())
     }
 
-    pub fn next_due(&mut self, horizon: TsUs) -> Option<T> {
+    pub fn next_due(&mut self, horizon: LocalTs) -> Option<T> {
         match self.peek_ts_us() {
             Some(at) if at <= horizon => self.items.pop_front().map(|(_, item)| item),
             _ => None,

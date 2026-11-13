@@ -1,7 +1,5 @@
-//! The ladder as a pure projection, in exact integer tick maths around the mid, with N ticks to a
-//! row. One bucket ladder places the public levels, the desired quote and the real orders, so they
-//! agree on rows, and the desired quote and the real orders never merge. How many rows fit is
-//! projection too, so [`fit_rows`] lives here and takes its row floor as an argument.
+//! The ladder as a pure projection in exact integer ticks around the mid, so the public levels, the
+//! desired quote and the real orders agree on their rows and never merge.
 
 use super::exec_model::{OrderCell, OrderStatus};
 use super::format::BASIS_POINTS_PER_UNIT;
@@ -181,15 +179,17 @@ impl DomView {
 
 #[inline]
 pub fn tick_index(price: Price, tick: Price) -> Option<i64> {
-    if tick.0 <= 0 || price.0.rem_euclid(tick.0) != 0 {
+    if tick.mantissa() <= 0 || price.mantissa().rem_euclid(tick.mantissa()) != 0 {
         return None;
     }
-    Some(price.0.div_euclid(tick.0))
+    Some(price.mantissa().div_euclid(tick.mantissa()))
 }
 
 #[inline]
 pub fn price_for_row(tick: Price, tick_index: i64) -> Option<Price> {
-    tick.0.checked_mul(tick_index).map(Price)
+    tick.mantissa()
+        .checked_mul(tick_index)
+        .map(Price::from_mantissa)
 }
 
 #[inline]
@@ -434,7 +434,9 @@ fn place_public(rows: &mut [DomRow], levels: &[Level], tick: Price, ladder: &Buc
 }
 
 fn add_qty(slot: &mut Option<Qty>, qty: Qty) {
-    *slot = Some(slot.map_or(qty, |seen| Qty(seen.0.saturating_add(qty.0))));
+    *slot = Some(slot.map_or(qty, |seen| {
+        Qty::from_mantissa(seen.mantissa().saturating_add(qty.mantissa()))
+    }));
 }
 
 fn place_quote(

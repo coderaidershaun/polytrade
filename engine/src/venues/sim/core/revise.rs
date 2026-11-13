@@ -5,7 +5,7 @@ use super::request::{AdmitPlan, RequestFold, TimedAction};
 use super::resting::{ClosedReason, OrderPhase, OrderSnapshot, RefusalReason, RestingOrder};
 use super::{SimVenue, VenueEvent};
 use crate::msg::ids::{ClientOrderId, Qty};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ForcedOrderExit {
@@ -16,7 +16,7 @@ pub struct ForcedOrderExit {
 impl SimVenue {
     pub fn force_exit_open_orders(
         &mut self,
-        at_ts_us: TsUs,
+        at_ts_us: LocalTs,
         cancelling: &[ClientOrderId],
     ) -> Vec<ForcedOrderExit> {
         let open: Vec<(SimOrderIndex, bool)> = self
@@ -42,7 +42,7 @@ impl RequestFold<'_> {
     pub(super) fn admit_cancel(
         &mut self,
         client_id: ClientOrderId,
-        effective_ts_us: TsUs,
+        effective_ts_us: LocalTs,
     ) -> AdmitPlan {
         let refused = VenueEvent::CancelRefused {
             client_id,
@@ -56,7 +56,7 @@ impl RequestFold<'_> {
         &mut self,
         client_id: ClientOrderId,
         total_qty: Qty,
-        effective_ts_us: TsUs,
+        effective_ts_us: LocalTs,
     ) -> AdmitPlan {
         let refused = VenueEvent::AmendRefused {
             client_id,
@@ -69,7 +69,7 @@ impl RequestFold<'_> {
     fn find_or_refuse(
         &mut self,
         client_id: ClientOrderId,
-        at_ts_us: TsUs,
+        at_ts_us: LocalTs,
         refused: VenueEvent,
     ) -> Option<SimOrderIndex> {
         let index = self.orders.find(client_id);
@@ -79,7 +79,7 @@ impl RequestFold<'_> {
         index
     }
 
-    pub(super) fn cancel(&mut self, index: SimOrderIndex, at_ts_us: TsUs) {
+    pub(super) fn cancel(&mut self, index: SimOrderIndex, at_ts_us: LocalTs) {
         let Some(record) = self.orders.get(index) else {
             return;
         };
@@ -100,7 +100,7 @@ impl RequestFold<'_> {
             .push(at_ts_us, VenueEvent::Canceled { snapshot });
     }
 
-    pub(super) fn amend(&mut self, index: SimOrderIndex, total_qty: Qty, at_ts_us: TsUs) {
+    pub(super) fn amend(&mut self, index: SimOrderIndex, total_qty: Qty, at_ts_us: LocalTs) {
         let Some(record) = self.orders.get(index) else {
             return;
         };
@@ -139,10 +139,10 @@ impl RequestFold<'_> {
         if record.amends_used >= self.limits.max_amends {
             return Some(RefusalReason::AmendBudgetSpent);
         }
-        if total_qty.0 >= record.order.qty.0 {
+        if total_qty.mantissa() >= record.order.qty.mantissa() {
             return Some(RefusalReason::AmendQuantityIncrease);
         }
-        if total_qty.0 <= record.order.filled.0 {
+        if total_qty.mantissa() <= record.order.filled.mantissa() {
             return Some(RefusalReason::AmendFilterFailure);
         }
         self.limits.refuse(record.order.price, total_qty)

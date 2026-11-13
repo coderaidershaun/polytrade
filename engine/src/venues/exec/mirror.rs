@@ -24,9 +24,10 @@ pub struct MirroredOrder {
 }
 
 impl MirroredOrder {
-    pub(crate) fn observed(event: &ExecEvent) -> Self {
-        Self {
-            instrument: event.instrument,
+    /// `None` for an event that names no instrument, which is no order.
+    pub(crate) fn observed(event: &ExecEvent) -> Option<Self> {
+        Some(Self {
+            instrument: event.instrument?,
             client_id: event.client_id,
             side: event.side,
             price: event.price,
@@ -34,7 +35,7 @@ impl MirroredOrder {
             provenance: event.provenance,
             has_sent_cancel: false,
             is_ambiguous: false,
-        }
+        })
     }
 }
 

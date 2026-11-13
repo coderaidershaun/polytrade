@@ -1,12 +1,9 @@
-//! Correlation of engine orders to venue order ids. Polymarket mints the order id in the placement
-//! answer, so between request and answer, the order exists at the venue under an unknown name.
-//! Stream frames naming unknown orders are held (not dropped) pending the mapping. Cancels are
-//! withheld during the delayed hold window (venue + wire latency) to avoid refusals. Held frames
-//! with no mapping eventually trigger a loud alert (fill not yet seen in the ledger).
+//! Matches engine orders to venue order ids, which the venue names only in its answer. Stream
+//! frames for an order not yet named wait here, and an alert fires when one waits too long.
 
 use crate::msg::exec::{ExecEvent, ExecKind, Provenance};
 use crate::msg::ids::ClientOrderId;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 use crate::venues::exec::{ExecEffect, ExecRequest, MirroredOrder, RequestId};
 
 use super::codec::UnmappedOrder;
@@ -24,7 +21,7 @@ pub const DELAYED_HOLD: DurationUs = DurationUs::from_micros(300_000);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeldFrame {
     pub text: String,
-    pub held_since: TsUs,
+    pub held_since: LocalTs,
 }
 
 /// Frames held for a mapping, oldest first.
@@ -67,7 +64,7 @@ impl PendingFrames {
     }
 
     // Evicts oldest frame when full (newer frames describe more recent state; oldest is least likely to map).
-    pub fn hold(&mut self, text: String, now: TsUs) {
+    pub fn hold(&mut self, text: String, now: LocalTs) {
         self.re_hold(HeldFrame {
             text,
             held_since: now,
@@ -80,7 +77,7 @@ impl PendingFrames {
         std::mem::take(&mut self.frames)
     }
 
-    pub fn expired(&mut self, now: TsUs) -> Vec<HeldFrame> {
+    pub fn expired(&mut self, now: LocalTs) -> Vec<HeldFrame> {
         let mut expired = Vec::new();
         self.frames.retain(|frame| {
             let is_live = now.diff(frame.held_since) < PENDING_TTL;
@@ -114,7 +111,7 @@ pub struct DelayedOrders {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DelayedHold {
     client_id: ClientOrderId,
-    release_at: TsUs,
+    release_at: LocalTs,
 }
 
 /// A cancel the core already decided on and the venue would refuse. The whole effect is kept, not
@@ -125,7 +122,7 @@ pub struct WithheldCancel {
     pub request_id: RequestId,
     pub request: ExecRequest,
     pub recon_seq: u64,
-    pub release_at: TsUs,
+    pub release_at: LocalTs,
 }
 
 impl WithheldCancel {
@@ -145,7 +142,7 @@ impl DelayedOrders {
 
     /// The venue accepted a placement it will not match for another 250 ms and will not cancel
     /// during.
-    pub fn on_delayed(&mut self, client_id: ClientOrderId, answered_at: TsUs) {
+    pub fn on_delayed(&mut self, client_id: ClientOrderId, answered_at: LocalTs) {
         let release_at = answered_at + DELAYED_HOLD;
         match self
             .holds
@@ -165,7 +162,7 @@ impl DelayedOrders {
     }
 
     /// When this order may be cancelled, if it may not be cancelled yet.
-    pub fn held_until(&self, client_id: ClientOrderId, now: TsUs) -> Option<TsUs> {
+    pub fn held_until(&self, client_id: ClientOrderId, now: LocalTs) -> Option<LocalTs> {
         self.holds
             .iter()
             .find(|hold| hold.client_id == client_id)
@@ -179,7 +176,7 @@ impl DelayedOrders {
     }
 
     /// Cancels whose hold has lapsed, in the order they were decided.
-    pub fn released(&mut self, now: TsUs) -> Vec<WithheldCancel> {
+    pub fn released(&mut self, now: LocalTs) -> Vec<WithheldCancel> {
         let mut released = Vec::new();
         self.withheld.retain(|cancel| {
             let is_waiting = now < cancel.release_at;
@@ -206,7 +203,7 @@ pub fn restates_balances(event: &ExecEvent) -> bool {
         // A maker fill: the venue's order update is the only report of it that exists.
         ExecKind::ReportTrade => true,
         // A taker fill: the placement answer reports it once and never again.
-        ExecKind::AckPlaced => event.last_qty.0 > 0,
+        ExecKind::AckPlaced => event.last_qty.mantissa() > 0,
         _ => false,
     }
 }

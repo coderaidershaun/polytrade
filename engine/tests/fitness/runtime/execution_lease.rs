@@ -1,12 +1,12 @@
-//! The execution lease's host lock and on-disk nonce history must be keyed correctly. A wrong key
-//! lets a second process arm the same account, or re-mint client order ids a venue has already seen.
+//! The host lock and the nonce history of the execution lease must have the right keys, or a second
+//! process arms the same account, or client ids repeat at the venue.
 
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use engine::runtime::config::{BinanceEnv, RunIdentity};
-use engine::runtime::{EngineError, ExecutionLease};
+use engine::runtime::{ExecutionLease, StartError};
 use engine::venues::binance::exec as binance_exec;
 use engine::venues::exec::TeTag;
 use engine::venues::polymarket::exec as polymarket_exec;
@@ -167,7 +167,7 @@ fn the_host_lock_and_nonce_history_are_scoped_by_credential_and_venue_never_by_d
     .expect("a second credential under one TE identity is still a second armed process");
     assert!(matches!(
         contended,
-        EngineError::ExecutionIdentityInUse { .. }
+        StartError::ExecutionIdentityInUse { .. }
     ));
 
     drop(account_a);
@@ -202,7 +202,7 @@ fn the_host_lock_and_nonce_history_are_scoped_by_credential_and_venue_never_by_d
     .expect("one TE identity is one armed process per host, whichever venue it trades");
     assert!(matches!(
         contended,
-        EngineError::ExecutionIdentityInUse { .. }
+        StartError::ExecutionIdentityInUse { .. }
     ));
 
     drop(binance);
@@ -238,6 +238,6 @@ fn the_host_lock_and_nonce_history_are_scoped_by_credential_and_venue_never_by_d
     let second = ExecutionLease::acquire(&second_directory, evasion_tag, &namespace)
         .err()
         .expect("a different state directory cannot evade the host lock");
-    assert!(matches!(second, EngineError::ExecutionIdentityInUse { .. }));
+    assert!(matches!(second, StartError::ExecutionIdentityInUse { .. }));
     drop(first);
 }

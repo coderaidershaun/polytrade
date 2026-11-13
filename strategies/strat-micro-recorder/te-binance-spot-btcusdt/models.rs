@@ -1,5 +1,5 @@
-//! Per-instrument state + emission plumbing: volatility, model feeds (EGARCH, intensity, Guéant, markouts, Kyle, Hawkes),
-//! per-side emit helpers. Strategy owns callbacks; this module owns folded state.
+//! The recorder's state for each instrument and the helpers that emit it: volatility and the feeds
+//! of each model. The strategy owns the callbacks, and this module owns the folded state.
 
 use engine::hot::quant::hawkes::{HawkesChoice, HawkesSide};
 use engine::hot::quant::intensity::{PacedIntensity, SideEstimate};
@@ -14,7 +14,7 @@ use engine::hot::series::{FastQueue, MedianScratch};
 use engine::hot::strategy::{InstrumentRow, StrategyCtx};
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::Level;
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs};
 use engine::runtime::config::KlineInterval;
 
 use super::features::{
@@ -61,7 +61,7 @@ pub(crate) struct BinanceVol {
     /// Guéant tick-space grid. None if startup preflight left unstamped.
     pub(crate) tick: Option<Price>,
     pub(crate) markouts: MarkoutTracker,
-    last_mid_ts_us: Option<TsUs>,
+    last_mid_ts_us: Option<LocalTs>,
     /// None if no volume clock (on_volume never fires) or no tick (λ has no grid).
     pub(crate) kyle: Option<KyleFeed>,
     pub(crate) hawkes_bid: HawkesSide,
@@ -175,7 +175,7 @@ impl BinanceVol {
 
     /// The markout mid entry point. Spins and chunks arrive on different queues, so a late stamp is
     /// clamped forward rather than allowed to disorder the series.
-    pub(crate) fn feed_markout_mid(&mut self, ts_us: TsUs, mid: Option<f64>) {
+    pub(crate) fn feed_markout_mid(&mut self, ts_us: LocalTs, mid: Option<f64>) {
         let Some(mid) = mid else { return };
         let ts_us = self.last_mid_ts_us.map_or(ts_us, |last| last.max(ts_us));
         self.last_mid_ts_us = Some(ts_us);
@@ -221,7 +221,7 @@ impl RiskBudget {
 /// # Panics
 /// On a zero price, which is a caller bug: armed and quoted levels are guaranteed positive.
 pub(crate) fn qty_at(notional: i64, price: Price) -> Qty {
-    Qty((notional as i128 * FIXED_SCALE as i128 / price.0 as i128) as i64)
+    Qty::from_mantissa((notional as i128 * FIXED_SCALE as i128 / price.mantissa() as i128) as i64)
 }
 
 /// The quantity resting at this price on this side, which is the queue a quote would join. Zero
@@ -230,7 +230,7 @@ pub(crate) fn level_qty_at(levels: &[Level], price: Price) -> Qty {
     levels
         .iter()
         .find(|level| level.price == price)
-        .map_or(Qty(0), |level| level.qty)
+        .map_or(Qty::from_mantissa(0), |level| level.qty)
 }
 
 /// Per-instrument recorder state: model bundle, quote ceiling, recorded flag. Position lives in engine.
@@ -246,17 +246,17 @@ impl InstrumentState {
     /// Fill notional exceeds budget: no side could quote. Prevented at startup, not gated every spin.
     pub(crate) fn new(row: &InstrumentRow, is_recorded: bool, setup: InstrumentSetup) -> Self {
         assert!(
-            setup.order_notional <= row.max_exposure_quote,
+            setup.order_notional <= row.max_exposure_quote.mantissa(),
             "order_notional mantissa {} exceeds max_exposure_quote {} on {} — one fill \
              could never fit the budget, so no side would ever quote; lower the order or raise the budget",
             setup.order_notional,
-            row.max_exposure_quote,
+            row.max_exposure_quote.mantissa(),
             row.venue_symbol
         );
         Self {
             is_recorded,
             binance: BinanceVol::new(row, setup),
-            max_exposure_quote: row.max_exposure_quote,
+            max_exposure_quote: row.max_exposure_quote.mantissa(),
         }
     }
 }
@@ -407,10 +407,10 @@ impl GueantScale {
         // A half-spread wider than the whole price would put the bid through zero, which is
         // invalid. Both conditions here gate negative and wrapped prices.
         if tick_index > 0
-            && let Some(mantissa) = tick_index.checked_mul(self.tick.0)
+            && let Some(mantissa) = tick_index.checked_mul(self.tick.mantissa())
         {
-            ctx.emit(price, instrument, Price(mantissa).to_f64());
-            return Some(Price(mantissa));
+            ctx.emit(price, instrument, Price::from_mantissa(mantissa).to_f64());
+            return Some(Price::from_mantissa(mantissa));
         }
         None
     }
@@ -440,7 +440,7 @@ pub(crate) fn emit_side_hawkes(
     instrument: InstrumentId,
     side: QuoteSide,
     hawkes: &mut HawkesSide,
-    now: TsUs,
+    now: LocalTs,
 ) {
     let HawkesColumns {
         lambda,
@@ -480,8 +480,16 @@ pub(crate) fn emit_side_markouts(
         reverse_5s,
         fills,
     } = features.markout(side);
-    let forward = |horizon| markouts.forward(horizon).ema(MARKOUT_EMA_HALFLIFE);
-    let reverse = |horizon| markouts.reverse(horizon).ema(MARKOUT_EMA_HALFLIFE);
+    let forward = |horizon| {
+        markouts
+            .forward(horizon)
+            .ema_over_window(MARKOUT_EMA_HALFLIFE)
+    };
+    let reverse = |horizon| {
+        markouts
+            .reverse(horizon)
+            .ema_over_window(MARKOUT_EMA_HALFLIFE)
+    };
     ctx.emit_present(forward_1s, instrument, forward(ForwardHorizon::Secs1));
     ctx.emit_present(forward_3s, instrument, forward(ForwardHorizon::Secs3));
     ctx.emit_present(forward_5s, instrument, forward(ForwardHorizon::Secs5));

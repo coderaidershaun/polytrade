@@ -1,11 +1,13 @@
-//! Inbound traffic arrives on two correlation paths: a request answer echoes the request's `id`,
-//! while an account event correlates by CLIENT ORDER ID. The two are routed apart before parsing,
-//! because a stream event that answered a request would be an unasked-for state change.
+//! Routes what the venue sends: a request's answer by its id, an account event by its client order
+//! id. They part before parsing, so a stream event can never answer a request.
 
 use tokio_tungstenite::tungstenite::{Error as ProtocolError, Message};
 
 use crate::msg::exec::ExecEvent;
+use crate::msg::time::LocalTs;
+use crate::runtime::shutdown::{AnswerPart, FatalReason};
 use crate::venues::binance::ws;
+use crate::venues::edge::EdgeDriver;
 use crate::venues::exec::{
     EventSink, ExecRequest, InFlightRequest, RequestId, SessionOutcome, TimeoutFallout,
 };
@@ -84,13 +86,14 @@ impl Actor {
             recon_seq: entry.recon_seq,
         };
         match decode_response(text, &context) {
-            Ok(decoded) => self.on_decoded(decoded, entry, writer).await,
+            Ok(decoded) => self.on_decoded(decoded, entry, now, writer).await,
             Err(error) if error.is_fatal() => {
                 error!("binance execution fatal decode: {error}");
                 self.session.mark_in_doubt(entry.request, now);
-                self.control
-                    .fatal
-                    .trip(format!("binance execution: {error}"));
+                self.control.fatal.trip(FatalReason::UndecodableAnswer {
+                    venue: self.venue(),
+                    part: AnswerPart::Response,
+                });
                 Some(SessionOutcome::Reconnect)
             }
             Err(error) => {
@@ -118,10 +121,11 @@ impl Actor {
         &mut self,
         decoded: DecodedResponse,
         entry: InFlightRequest,
+        received_ts_us: LocalTs,
         writer: &mut Writer,
     ) -> Option<SessionOutcome> {
         if matches!(entry.request, ExecRequest::SubscribeUserStream) {
-            return self.on_subscribe_answer(&decoded);
+            return self.on_subscribe_answer(&decoded, received_ts_us);
         }
         let mut outgoing = Vec::new();
         for event in &decoded.events {
@@ -139,14 +143,18 @@ impl Actor {
             {
                 self.session.core.re_arm_cancel(event.client_id);
             }
-            self.session.events.send_exec(event);
+            self.session.events.send_exec(received_ts_us, event);
         }
         let ended = self.dispatch(outgoing, Some(writer)).await;
         self.session.arm_readiness(self.control.clock.now());
         ended
     }
 
-    fn on_subscribe_answer(&mut self, decoded: &DecodedResponse) -> Option<SessionOutcome> {
+    fn on_subscribe_answer(
+        &mut self,
+        decoded: &DecodedResponse,
+        received_ts_us: LocalTs,
+    ) -> Option<SessionOutcome> {
         if decoded.events.is_empty() {
             self.subscribe_failures += 1;
             if self.subscribe_failures >= MAX_SUBSCRIBE_FAILURES {
@@ -154,9 +162,10 @@ impl Actor {
                     "binance execution could not subscribe to the account stream {} times — refusing to quote without one",
                     self.subscribe_failures
                 );
-                self.control
-                    .fatal
-                    .trip("binance execution: userDataStream.subscribe rejected repeatedly");
+                self.control.fatal.trip(FatalReason::SubscribeRefused {
+                    venue: self.venue(),
+                    failures: self.subscribe_failures,
+                });
             } else {
                 warn!("binance execution subscribe rejected — reconnecting");
             }
@@ -164,7 +173,7 @@ impl Actor {
         }
         self.subscribe_failures = 0;
         for event in &decoded.events {
-            self.session.events.send_exec(*event);
+            self.session.events.send_exec(received_ts_us, *event);
         }
         self.start_resync();
         None
@@ -181,13 +190,13 @@ impl Actor {
                 let mut outgoing = Vec::new();
                 self.note_event(&event);
                 self.session.fold(&event, 0, &mut outgoing);
-                self.session.events.send_exec(event);
+                self.session.events.send_exec(now, event);
                 let ended = self.dispatch(outgoing, Some(writer)).await;
                 self.session.arm_readiness(self.control.clock.now());
                 ended
             }
             Ok(StreamEvent::Account(chunks)) => {
-                self.session.events.send_account(chunks);
+                self.session.events.send_account(now, chunks);
                 None
             }
             // A lost delta is resynced by taking a fresh snapshot.
@@ -204,9 +213,10 @@ impl Actor {
             }
             Err(error) if error.is_fatal() => {
                 error!("binance execution fatal stream decode: {error}");
-                self.control
-                    .fatal
-                    .trip(format!("binance execution: {error}"));
+                self.control.fatal.trip(FatalReason::UndecodableAnswer {
+                    venue: self.venue(),
+                    part: AnswerPart::Stream,
+                });
                 Some(SessionOutcome::Reconnect)
             }
             Err(error) => {

@@ -1,25 +1,48 @@
-//! Compact typed identity + exact fixed-point numerics: dense indices, prices/quantities as i64 1e-8 mantissas (never float).
+//! Typed identity and exact money: dense indices for lookups, and prices, quantities and quote
+//! money as i64 mantissas at one fixed scale, never floats.
 
 use crate::msg::labelled_enum::labelled_enum;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstrumentId(pub u16);
 
-impl InstrumentId {
-    /// For messages that name no instrument. Ids are issued from zero, so this is NOT a reserved
-    /// value — it aliases the first configured instrument, and only a consumer that branches on
-    /// message kind before reading the field may use it.
-    pub const NOT_APPLICABLE: Self = Self(0);
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceId(pub u16);
 
+/// One input queue of the hot thread. Its index is below [`MAX_INPUT_QUEUES`] by construction, so a
+/// table of queues never meets an id past its end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct QueueId(pub u8);
+pub struct QueueId(u8);
 
 /// The most input queues the hot thread reads.
 pub(crate) const MAX_INPUT_QUEUES: usize = 20;
+
+impl QueueId {
+    /// # Errors
+    /// [`QueueIdError`] when `index` is not below the cap of input queues.
+    pub const fn new(index: usize) -> Result<QueueId, QueueIdError> {
+        if index < MAX_INPUT_QUEUES {
+            Ok(QueueId(index as u8))
+        } else {
+            Err(QueueIdError {
+                index,
+                max: MAX_INPUT_QUEUES,
+            })
+        }
+    }
+
+    #[inline]
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+#[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[error("input queue {index} is past the {max} input queues that one hot thread reads")]
+pub struct QueueIdError {
+    pub index: usize,
+    pub max: usize,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AssetId(pub u16);
@@ -73,10 +96,14 @@ labelled_enum! {
 }
 
 impl Side {
-    /// Snap PASSIVE direction: buy DOWN, sell UP. Rounding opposite = aggression + crossing risk. Method (not match) catches inversions at compile time.
+    /// Rounds onto the passive side of the grid: a buy rounds down and a sell rounds up. Rounding
+    /// the other way makes the order aggressive, so it can cross the book.
+    ///
+    /// # Panics
+    /// When `increment` is not positive.
     #[inline]
     pub fn snap_passive(self, price: Price, increment: i64) -> Price {
-        debug_assert!(
+        assert!(
             increment > 0,
             "snapping onto a non-positive grid increment {increment}"
         );
@@ -102,15 +129,13 @@ impl Side {
         }
     }
 
-    /// A buy commits quote notional and a sell commits base quantity.
-    ///
     /// # Panics
     /// If a buy's notional does not fit an i64 mantissa, exactly as [`Price::notional`] does.
     #[inline]
-    pub fn spend(self, price: Price, qty: Qty) -> i64 {
+    pub fn spend(self, price: Price, qty: Qty) -> Spend {
         match self {
-            Side::Buy => price.notional(qty),
-            Side::Sell => qty.0,
+            Side::Buy => Spend::Quote(price.notional(qty)),
+            Side::Sell => Spend::Base(qty),
         }
     }
 
@@ -138,16 +163,52 @@ pub(crate) fn fixed_mantissa(units: f64) -> Option<i64> {
     (scaled >= i64::MIN as f64 && scaled < i64::MAX as f64).then_some(scaled as i64)
 }
 
-/// Adapter parse fatal on magnitude > i64::MAX / 1e8 (≈9.2e10); never truncates.
+/// A mantissa at [`FIXED_SCALE`]. A venue's parser refuses a magnitude above `i64::MAX / 1e8`
+/// (about 9.2e10) and never truncates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Price(pub i64);
+pub struct Price(i64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Qty(pub i64);
+/// A base quantity, as a mantissa at [`FIXED_SCALE`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Qty(i64);
+
+/// Quote money, as a mantissa at [`FIXED_SCALE`]. No conversion leads to it from a [`Qty`] or a
+/// [`Price`], so a base quantity can never be booked as cash. [`Price::notional`] makes one from a
+/// trade.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Notional(i64);
+
+/// What an order reserves: quote money for a buy, base quantity for a sell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Spend {
+    Quote(Notional),
+    Base(Qty),
+}
+
+impl Spend {
+    /// The amount in the unit of the asset that it reserves.
+    #[inline]
+    pub fn mantissa(self) -> i64 {
+        match self {
+            Spend::Quote(notional) => notional.mantissa(),
+            Spend::Base(qty) => qty.mantissa(),
+        }
+    }
+}
 
 impl Price {
+    #[inline]
+    pub const fn from_mantissa(mantissa: i64) -> Self {
+        Self(mantissa)
+    }
+
+    #[inline]
+    pub const fn mantissa(self) -> i64 {
+        self.0
+    }
+
     pub fn parse_decimal(s: &str) -> Result<Self, DecimalError> {
-        parse_fixed_mantissa(s).map(Price)
+        parse_fixed_mantissa(s).map(Price::from_mantissa)
     }
 
     /// Display and statistics only; never book key or accumulator.
@@ -156,24 +217,105 @@ impl Price {
         self.0 as f64 / FIXED_SCALE as f64
     }
 
+    /// The exact product, truncated toward zero.
+    ///
     /// # Panics
-    /// Notional > i64@1e-8 (≳9.2e10); wrapping cast -> silent research corruption.
+    /// When the notional does not fit an i64 mantissa (about 9.2e10), because a wrapped one would
+    /// book the wrong cash with no error.
     #[inline]
-    pub fn notional(self, qty: Qty) -> i64 {
+    pub fn notional(self, qty: Qty) -> Notional {
         let product = self.0 as i128 * qty.0 as i128;
         let mantissa = product / FIXED_SCALE as i128;
-        i64::try_from(mantissa).unwrap_or_else(|_| {
+        let mantissa = i64::try_from(mantissa).unwrap_or_else(|_| {
             panic!(
                 "notional overflows i64 mantissa: price {} qty {}",
                 self.0, qty.0
             )
-        })
+        });
+        Notional(mantissa)
+    }
+}
+
+impl Notional {
+    pub const ZERO: Notional = Notional(0);
+
+    pub fn parse_decimal(s: &str) -> Result<Self, DecimalError> {
+        parse_fixed_mantissa(s).map(Notional)
+    }
+
+    #[inline]
+    pub const fn from_mantissa(mantissa: i64) -> Self {
+        Self(mantissa)
+    }
+
+    #[inline]
+    pub const fn mantissa(self) -> i64 {
+        self.0
+    }
+
+    /// Display and statistics only, never an accumulator.
+    #[inline]
+    pub fn to_f64(self) -> f64 {
+        self.0 as f64 / FIXED_SCALE as f64
+    }
+
+    #[inline]
+    pub fn abs(self) -> Self {
+        Self(self.0.abs())
+    }
+}
+
+impl std::ops::Add for Notional {
+    type Output = Notional;
+    #[inline]
+    fn add(self, other: Notional) -> Notional {
+        Notional(self.0 + other.0)
+    }
+}
+
+impl std::ops::Sub for Notional {
+    type Output = Notional;
+    #[inline]
+    fn sub(self, other: Notional) -> Notional {
+        Notional(self.0 - other.0)
+    }
+}
+
+impl std::ops::Neg for Notional {
+    type Output = Notional;
+    #[inline]
+    fn neg(self) -> Notional {
+        Notional(-self.0)
+    }
+}
+
+impl std::ops::AddAssign for Notional {
+    #[inline]
+    fn add_assign(&mut self, other: Notional) {
+        self.0 += other.0;
+    }
+}
+
+impl std::ops::SubAssign for Notional {
+    #[inline]
+    fn sub_assign(&mut self, other: Notional) {
+        self.0 -= other.0;
     }
 }
 
 impl Qty {
+    #[inline]
+    pub const fn from_mantissa(mantissa: i64) -> Self {
+        Self(mantissa)
+    }
+
+    #[inline]
+    pub const fn mantissa(self) -> i64 {
+        self.0
+    }
+
     pub fn parse_decimal(s: &str) -> Result<Self, DecimalError> {
-        parse_fixed_mantissa(s).map(Qty)
+        parse_fixed_mantissa(s).map(Qty::from_mantissa)
     }
 
     /// Statistics only; never money math.

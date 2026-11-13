@@ -5,7 +5,7 @@ use core::mem::offset_of;
 
 use crate::msg::ids::{ClientOrderId, MAX_INPUT_QUEUES, QueueId};
 use crate::msg::labelled_enum::labelled_enum;
-use crate::msg::time::{Tick, TsUs};
+use crate::msg::time::{LocalTs, Tick, VenueTs};
 
 labelled_enum! {
     /// What a sample times.
@@ -78,14 +78,14 @@ pub struct StageSample {
     pub pop_tick: Tick,
     /// Taken after the whole fold of the message, the execution pass and the emits included.
     pub done_tick: Tick,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
-    /// [`StageSample::ABSENT`] when the venue sends no send stamp.
-    pub exchange_sent_ts_us: TsUs,
-    /// [`StageSample::ABSENT`] when the venue gives no event stamp, or the stamp is our own.
-    pub exchange_ts_us: TsUs,
+    pub received_ts_us: LocalTs,
+    pub queued_ts_us: LocalTs,
+    /// [`StageSample::ABSENT_VENUE`] when the venue sends no send stamp.
+    pub exchange_sent_ts_us: VenueTs,
+    /// [`StageSample::ABSENT_VENUE`] when the venue gives no event stamp, or the stamp is our own.
+    pub exchange_ts_us: VenueTs,
     /// [`StageSample::ABSENT`] unless the message answers a request that we timed.
-    pub request_sent_ts_us: TsUs,
+    pub request_sent_ts_us: LocalTs,
     pub category: Category,
     pub queue: QueueId,
     /// The driver's count of pops. It wraps.
@@ -95,7 +95,8 @@ pub struct StageSample {
 impl StageSample {
     /// Stands in for a stamp that the message does not carry. An `Option` would double the size of
     /// the sample.
-    pub const ABSENT: TsUs = TsUs::from_micros(i64::MIN);
+    pub const ABSENT: LocalTs = LocalTs::from_micros(i64::MIN);
+    pub const ABSENT_VENUE: VenueTs = VenueTs::from_micros(i64::MIN);
 }
 
 const _: () = {
@@ -123,7 +124,7 @@ pub struct WireSample {
     /// Read when the transport took the bytes of the command.
     pub wire_tick: Tick,
     /// The message time of the spin that decided the command.
-    pub issued_ts_us: TsUs,
+    pub issued_ts_us: LocalTs,
     pub client_id: ClientOrderId,
     pub kind: CommandKind,
     /// The input queue of the execution edge that sent the command, which names its venue.
@@ -147,7 +148,7 @@ const _: () = {
 #[repr(C, align(64))]
 pub struct CounterSample {
     /// The message time of the spin.
-    pub spin_ts_us: TsUs,
+    pub spin_ts_us: LocalTs,
     pub spin_seq: u64,
     /// Messages that wait in each input queue, by queue id, once the spin itself is popped.
     pub backlog: [u32; MAX_INPUT_QUEUES],

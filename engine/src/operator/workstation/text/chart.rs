@@ -35,7 +35,7 @@ pub(crate) fn mid_note(
     domain: Option<ChartDomain>,
     bounds: Option<ChartBounds>,
 ) -> Option<&'static str> {
-    if tick.0 <= 0 {
+    if tick.mantissa() <= 0 {
         return Some("no tick grid for this instrument");
     }
     if domain.is_none() || bounds.is_none() {

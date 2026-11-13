@@ -16,14 +16,14 @@ use std::time::Duration;
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::msg::time::{
-    ClockSource, DurationUs, EngineClock, Stamper, Tick, TickAnchor, TickScale, TsUs,
+    ClockSource, DurationUs, EngineClock, LocalTs, Stamper, Tick, TickAnchor, TickScale,
 };
 use crate::msg::ui::LatencyReport;
 use crate::runtime::config::LatencyConfig;
-use crate::runtime::pin::spawn_pinned;
+use crate::runtime::pin::{PinCall, spawn_pinned};
 use crate::{warn, warn_repeating};
 
-use super::EngineError;
+use super::StartError;
 
 pub use error::MetricsError;
 pub use ring::{SampleProducers, SampleRing};
@@ -55,7 +55,7 @@ pub struct MetricsSetup {
     pub clock_source: ClockSource,
     pub queue_count: usize,
     pub scale: TickScale,
-    pub start_ts_us: TsUs,
+    pub start_ts_us: LocalTs,
 }
 
 pub struct MetricsParts {
@@ -71,7 +71,7 @@ pub struct Metrics {
     reports: Producer<LatencyReport>,
     reports_dropped: u64,
     display_period: DurationUs,
-    next_report_ts_us: TsUs,
+    next_report_ts_us: LocalTs,
 }
 
 impl Metrics {
@@ -105,7 +105,7 @@ impl Metrics {
 
     /// One wake at engine time `now`: drains each ring into the interval that is filling, closes
     /// each interval that has ended, and sends a report once the display period has passed.
-    pub fn pass(&mut self, now: TsUs, sink: &mut impl RollupSink) {
+    pub fn pass(&mut self, now: LocalTs, sink: &mut impl RollupSink) {
         self.rollup.note_time(now);
         self.consumers.drain_into(&mut self.rollup);
         self.rollup.advance(now, sink);
@@ -130,7 +130,12 @@ impl Metrics {
         clippy::disallowed_methods,
         reason = "the metrics thread anchors ticks to engine time and turns them into time, off the fold"
     )]
-    pub fn take_anchor(&mut self, before: Tick, at: TsUs, after: Tick) -> Result<(), MetricsError> {
+    pub fn take_anchor(
+        &mut self,
+        before: Tick,
+        at: LocalTs,
+        after: Tick,
+    ) -> Result<(), MetricsError> {
         let scale = self.rollup.scale();
         let spread_ns = scale.nanos(before, after).unwrap_or(u64::MAX);
         if spread_ns > ANCHOR_SPREAD_LIMIT_NS {
@@ -147,7 +152,7 @@ impl Metrics {
 
     /// The last wake, at the stop of the run: what the rings still hold goes into the interval
     /// that is filling, and that interval closes early.
-    pub fn finish(&mut self, now: TsUs, sink: &mut impl RollupSink) {
+    pub fn finish(&mut self, now: LocalTs, sink: &mut impl RollupSink) {
         self.rollup.note_time(now);
         self.consumers.drain_into(&mut self.rollup);
         self.rollup.advance(now, sink);
@@ -178,13 +183,14 @@ pub(super) struct MetricsBringUpSetup<'a> {
     pub queue_count: usize,
     /// The housekeeping core the thread pins itself to. Absent, the OS places it.
     pub core_id: Option<usize>,
+    pub pin: PinCall,
 }
 
 /// # Errors
-/// [`EngineError::HousekeepingPin`] when the thread cannot pin itself to its core on Linux.
+/// [`StartError::HousekeepingPin`] when the thread cannot pin itself to its core on Linux.
 pub(super) fn metrics_bring_up(
     setup: MetricsBringUpSetup<'_>,
-) -> Result<MetricsBringUp, EngineError> {
+) -> Result<MetricsBringUp, StartError> {
     let stamper = setup.stamper.clone();
     let first = read_anchor(setup.clock, &stamper).0;
     std::thread::sleep(FIRST_ANCHOR_GAP);
@@ -207,6 +213,7 @@ pub(super) fn metrics_bring_up(
         clock: setup.clock.clone(),
         stamper,
         core_id: setup.core_id,
+        pin: setup.pin,
     })?;
     Ok(MetricsBringUp {
         thread,
@@ -234,6 +241,7 @@ pub struct MetricsThreadSetup {
     pub stamper: Stamper,
     /// Absent, the OS places the thread.
     pub core_id: Option<usize>,
+    pub pin: PinCall,
 }
 
 pub struct MetricsThread {
@@ -245,20 +253,21 @@ impl MetricsThread {
     /// The thread pins itself to its core first, and runs nothing if the pin is refused.
     ///
     /// # Errors
-    /// [`EngineError::HousekeepingPin`] when the thread cannot pin itself to `core_id` on Linux.
-    pub fn spawn(setup: MetricsThreadSetup) -> Result<MetricsThread, EngineError> {
+    /// [`StartError::HousekeepingPin`] when the thread cannot pin itself to `core_id` on Linux.
+    pub fn spawn(setup: MetricsThreadSetup) -> Result<MetricsThread, StartError> {
         let MetricsThreadSetup {
             metrics,
             clock,
             stamper,
             core_id,
+            pin,
         } = setup;
         let stop = Arc::new(AtomicBool::new(false));
         let stop_flag = Arc::clone(&stop);
-        let join = spawn_pinned("polysim-metrics", core_id, move || {
+        let join = spawn_pinned("polysim-metrics", core_id, pin, move || {
             run(metrics, &clock, &stamper, &stop_flag);
         })
-        .map_err(|refused| EngineError::HousekeepingPin {
+        .map_err(|refused| StartError::HousekeepingPin {
             core_id: refused.core_id,
             thread: "metrics",
         })?;

@@ -22,8 +22,7 @@ pub use envelope::{
     LinkDecodeError, LinkHash, LinkIdentity, TopicId, WireName,
 };
 pub use frame::{
-    InboundLink, LINK_MAX_FIELDS, LinkBody, LinkDatagram, LinkFrame, LinkOrigin, LinkPayload,
-    OutboundLink,
+    LINK_MAX_FIELDS, LinkBody, LinkDatagram, LinkFrame, LinkOrigin, LinkPayload, OutboundLink,
 };
 pub use subscribers::{
     GateCounts, GateVerdict, LINK_MAX_GATE_KEYS, LINK_MAX_SUBSCRIBERS, LINK_SUBSCRIPTION_TTL,

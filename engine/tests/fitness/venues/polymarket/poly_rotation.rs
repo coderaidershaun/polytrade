@@ -1,7 +1,5 @@
-//! Rotation FSM replay: the slot lifecycle must fold a fixed input sequence into fixed actions and a
-//! fixed final state. These synthetic sequences pin the load-bearing behaviours —
-//! per-instrument rotation/reset fan-out, probe-fallback teardown that never needs the collapse
-//! burst, armed-cadence probing, and force-teardown on an occupied slot.
+//! The slot state machine folds a fixed input sequence into fixed actions and a fixed end state:
+//! fan-out, teardown by probe, probe cadence, and a forced teardown.
 
 use std::sync::Arc;
 
@@ -13,7 +11,7 @@ use engine::venues::polymarket::rotation::{
     SlotMachine, SlotState, TokenId, WindowAssignment, WindowTokens,
 };
 
-use crate::engine_support::ts_secs;
+use crate::engine_support::{ts_secs, venue_ts_secs};
 
 const SECOND_US: i64 = 1_000_000;
 const OPEN: i64 = 1_784_439_000;
@@ -38,8 +36,8 @@ fn window(open_secs: i64, tag: &str) -> WindowAssignment {
             instrument: DOWN,
             token: TokenId::from(format!("{tag}-down")),
         },
-        window_open_ts_us: ts_secs(open_secs),
-        window_close_ts_us: ts_secs(open_secs + 300),
+        window_open_ts_us: venue_ts_secs(open_secs),
+        window_close_ts_us: venue_ts_secs(open_secs + 300),
         condition_id: Arc::from(format!("cond-{tag}").as_str()),
     }
 }
@@ -221,7 +219,7 @@ fn force_teardown_when_next_subscribe_finds_slot_occupied() {
         SlotAction::ForceTeardown(ForceTeardownFacts {
             up_instrument: UP,
             down_instrument: DOWN,
-            window_open_ts_us: ts_secs(OPEN),
+            window_open_ts_us: venue_ts_secs(OPEN),
             grace_age: DurationUs::from_micros(240 * SECOND_US),
             tokens: tokens("n"),
         }),

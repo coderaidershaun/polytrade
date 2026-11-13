@@ -1,14 +1,11 @@
-//! Config/registry venue-generalisation shape: one trading engine carries exactly one source, and
-//! that source's fan-out to instruments, producer groups and input queues is asserted through the
-//! real `from_yaml`/`build` path — one binance source is three connections onto one instrument, one
-//! polymarket source is one connection onto the four fixed A/B-by-up/down slots. The shipped
-//! reference config is asserted here too, since `deny_unknown_fields` makes it brittle to any
-//! schema change.
+//! One trading engine carries one source, and its fan-out to instruments, producer groups and input
+//! queues is asserted through the real config path, with the shipped configs.
 
 use std::path::Path;
 
 use engine::hot::strategy::{EngineView, StrategyConfig};
-use engine::msg::ids::FIXED_SCALE;
+use engine::msg::failure::{FailureClass, Halt};
+use engine::msg::ids::{FIXED_SCALE, Notional, QueueId, QueueIdError};
 use engine::msg::time::DurationUs;
 use engine::runtime::config::{
     BinanceMarket, ConfigError, ExecutionMode, NoParams, PolySeries, TableKind, VenueMarket,
@@ -38,7 +35,7 @@ const POLY_SLOT_SYMBOLS: &[&str] = &[
     "btc-updown-5m-b-down",
 ];
 
-fn config_with_source(source_block: &str) -> String {
+pub(super) fn config_with_source(source_block: &str) -> String {
     config_with_strategy(source_block, "  instruments: all\n")
 }
 
@@ -73,7 +70,7 @@ source:
     )
 }
 
-fn link_block(bind: &str, extra: &str) -> String {
+pub(super) fn link_block(bind: &str, extra: &str) -> String {
     format!("link:\n  bind: \"{bind}\"\n{extra}")
 }
 
@@ -86,7 +83,7 @@ fn config_with_link(link_block: &str) -> String {
     )
 }
 
-const BINANCE_PERP_SOURCE: &str = "  exchange: binance
+pub(super) const BINANCE_PERP_SOURCE: &str = "  exchange: binance
   max_exposure_quote: 500
   market: perpetual
   base: BTC
@@ -167,7 +164,7 @@ fn a_source_fans_out_to_its_rows_connections_and_queues() {
             );
             assert_eq!(
                 row.max_exposure_quote,
-                500 * FIXED_SCALE,
+                Notional::from_mantissa(500 * FIXED_SCALE),
                 "{case}: every row the block expands to carries its 500 quote units, exactly"
             );
         }
@@ -235,148 +232,6 @@ fn persistence_is_optional_and_naming_tables_without_it_is_rejected() {
     );
 }
 
-/// Every document the config layer refuses, and the field each refusal has to name — an operator
-/// reads the field they must edit. A defaulted spin interval would silently disagree with whatever
-/// the strategy assumed, and an omitted exposure ceiling would adopt a risk budget nobody chose.
-/// Polymarket serves trades and the book on one combined channel, so a partial subscriptions block
-/// is a promise the venue arm can't honour — `trades: false` would still record trades. A klines
-/// volume-bar target promises a trailing 1m average, which holds only if the source keeps 1440
-/// closed 1m candles, and only on a venue that has candles at all.
-#[test]
-fn every_refused_document_names_the_field_that_refused_it() {
-    let missing_spin = "engine:
-  hot_core_id: 0
-queues:
-  input_capacity: 65536
-  persistence_capacity: 65536
-source:
-"
-    .to_owned()
-        + BINANCE_PERP_SOURCE
-        + "strategy:\n  instruments: all\npersistence:\n  dir: ./data\nlogging:\n  dir: ./logs\n";
-
-    type RejectionCase = (&'static str, String, fn(&ConfigError) -> bool);
-    let cases: [RejectionCase; 9] = [
-        (
-            "omitted spin_interval_us",
-            missing_spin,
-            |error: &ConfigError| matches!(error, ConfigError::Parse { detail } if detail.contains("spin_interval_us")),
-        ),
-        (
-            "spin_interval_us past the 60s ceiling",
-            config_with_source(BINANCE_PERP_SOURCE)
-                .replace("spin_interval_us: 100000", "spin_interval_us: 90000000"),
-            |error: &ConfigError| {
-                matches!(error, ConfigError::Invalid { field, value, .. }
-                    if *field == "engine.spin_interval_us" && value.as_ref() == "90000000")
-            },
-        ),
-        (
-            "omitted max_exposure_quote",
-            config_with_source(
-                "  exchange: binance
-  market: perpetual
-  base: BTC
-  quote: USDT
-  tracker: {}
-",
-            ),
-            |error: &ConfigError| {
-                matches!(error, ConfigError::Parse { detail }
-                    if detail.contains("max_exposure_quote"))
-            },
-        ),
-        (
-            "poly subscriptions with trades off",
-            config_with_source(
-                "  exchange: polymarket
-  max_exposure_quote: 500
-  series: btc-updown-5m
-  subscriptions:
-    trades: false
-  tracker: {}
-",
-            ),
-            |error: &ConfigError| {
-                matches!(error, ConfigError::Invalid { field, value, .. }
-                    if *field == "source.subscriptions" && value.as_ref() == "trades: false")
-            },
-        ),
-        (
-            "poly subscriptions with both book flags off",
-            config_with_source(
-                "  exchange: polymarket
-  max_exposure_quote: 500
-  series: btc-updown-5m
-  subscriptions:
-    book_updates: false
-    book_snapshots: false
-  tracker: {}
-",
-            ),
-            |error: &ConfigError| {
-                matches!(error, ConfigError::Invalid { field, value, .. }
-                    if *field == "source.subscriptions"
-                        && value.as_ref() == "book_updates: false, book_snapshots: false")
-            },
-        ),
-        (
-            "klines volume bars over too short a candle retention",
-            config_with_source(&BINANCE_KLINES_VOLUME_BARS.replace("keep: 1440 }", "keep: 720 }")),
-            |error: &ConfigError| {
-                matches!(error, ConfigError::Invalid { field, value, .. }
-                    if *field == "source.tracker.candles.keep" && value.as_ref() == "720")
-            },
-        ),
-        (
-            "klines volume bars on a venue with no candles",
-            config_with_source(
-                "  exchange: polymarket
-  max_exposure_quote: 500
-  series: btc-updown-5m
-  tracker:
-    volume_bars:
-      threshold: klines
-      keep: 64
-",
-            ),
-            |error: &ConfigError| {
-                matches!(error, ConfigError::Invalid { field, value, .. }
-                    if *field == "source.tracker.volume_bars.threshold"
-                        && value.as_ref() == "klines")
-            },
-        ),
-        (
-            "retention_hours of zero",
-            config_with_source(BINANCE_PERP_SOURCE)
-                .replace("  dir: ./data\n", "  dir: ./data\n  retention_hours: 0\n"),
-            |error: &ConfigError| {
-                matches!(error, ConfigError::Invalid { field, value, .. }
-                    if *field == "persistence.retention_hours" && value.as_ref() == "0")
-            },
-        ),
-        (
-            "retention_hours past ten years",
-            config_with_source(BINANCE_PERP_SOURCE).replace(
-                "  dir: ./data\n",
-                "  dir: ./data\n  retention_hours: 87601\n",
-            ),
-            |error: &ConfigError| {
-                matches!(error, ConfigError::Invalid { field, value, .. }
-                    if *field == "persistence.retention_hours" && value.as_ref() == "87601")
-            },
-        ),
-    ];
-
-    for (case, yaml, is_expected_refusal) in cases {
-        let error = refusal(&yaml);
-        assert!(
-            is_expected_refusal(&error),
-            "{case}: the refusal must name the field, got: {error}"
-        );
-    }
-}
-
 /// A Linux engine that spins with no hot core named would spin unpinned on a shared core without a
 /// word, so the config refuses it there and names both keys. A parking engine needs no core of its
 /// own, and macOS cannot pin a thread at all, so there both documents load.
@@ -417,7 +272,7 @@ fn spin_without_hot_core_refuses_start() {
     }
 }
 
-const BINANCE_KLINES_VOLUME_BARS: &str = "  exchange: binance
+pub(super) const BINANCE_KLINES_VOLUME_BARS: &str = "  exchange: binance
   max_exposure_quote: 500
   market: perpetual
   base: BTC
@@ -714,6 +569,75 @@ fn a_public_link_bind_is_a_startup_error_unless_allowed() {
     }
 }
 
+/// FITNESS: no queue id at or past the cap of 20 exists, and each registry numbers its input queues
+/// 0 to n - 1, with the timer, the link and the execution edge after the producer groups. The hot
+/// thread sizes its tables by that cap and a tape records each queue id, so an id past the cap, a
+/// gap or a shifted id would fold an order other than the one that the run recorded.
+#[test]
+fn twenty_one_input_queues_are_refused() {
+    for index in 0..=255_usize {
+        match QueueId::new(index) {
+            Ok(queue_id) if index < 20 => assert_eq!(queue_id.index(), index),
+            Err(refused) if index >= 20 => {
+                assert_eq!(refused, QueueIdError { index, max: 20 });
+            }
+            other => panic!("queue index {index} gave {other:?}"),
+        }
+    }
+
+    let refusal = ConfigError::TooManyInputQueues { count: 21, max: 20 };
+    assert_eq!(
+        refusal.failure_class(),
+        FailureClass::Halt(Halt::Start),
+        "a config over the cap refuses the start"
+    );
+    let text = refusal.to_string();
+    assert!(
+        text.contains("21") && text.contains("20"),
+        "the refusal names the count and the cap: {text}"
+    );
+
+    let mut registries = vec![
+        Registry::build(&load::<MicroRecorderParams>(
+            "../strategies/strat-micro-recorder/te-binance-spot-btcusdt/config.yaml",
+        ))
+        .expect("the shipped binance registry builds"),
+        Registry::build(&load::<PolyUpParams>(
+            "../strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/config.yaml",
+        ))
+        .expect("the shipped polymarket registry builds"),
+    ];
+    let modes = [
+        (BINANCE_PERP_SOURCE, "off", ""),
+        (BINANCE_PERP_SOURCE, "live", ""),
+        (BINANCE_SPOT_SOURCE, "sim", SIM_BLOCK),
+        (POLY_SOURCE, "off", ""),
+        (POLY_SOURCE, "live", ""),
+    ];
+    for (source, mode, extra) in modes {
+        let blocks = link_block("127.0.0.1:9310", "") + &execution_block_with(mode, extra);
+        registries.push(build_from(&config_with_execution_on(source, &blocks)));
+    }
+
+    for registry in &registries {
+        let mut ids: Vec<usize> = registry
+            .producer_groups()
+            .iter()
+            .map(|group| group.queue_id.index())
+            .collect();
+        ids.push(registry.timer_queue_id().index());
+        ids.extend(registry.link_queue_id().map(QueueId::index));
+        ids.extend(registry.exec_queue_id().map(QueueId::index));
+        let count = registry.input_queue_count();
+        assert!(count <= 20, "{count} input queues");
+        assert_eq!(
+            ids,
+            (0..count).collect::<Vec<usize>>(),
+            "the ids are dense, and the timer, the link and the execution edge follow the groups"
+        );
+    }
+}
+
 /// The link's input queue exists only when its actor does, and it lands after the timer — a queue id
 /// is a position in the ingress list, and `wire` zips producers back against exactly that order.
 #[test]
@@ -732,12 +656,12 @@ fn the_link_adds_one_input_queue_only_when_configured() {
 
     let with = build_from(&config_with_link(&link_block("127.0.0.1:9310", "")));
     assert_eq!(
-        with.timer_queue_id().0,
+        with.timer_queue_id().index(),
         3,
         "the timer still follows the three producer groups"
     );
     assert_eq!(
-        with.link_queue_id().map(|id| id.0),
+        with.link_queue_id().map(|id| id.index()),
         Some(4),
         "the link takes the queue after the timer"
     );
@@ -763,7 +687,7 @@ fn config_with_execution(block: &str) -> String {
     config_with_execution_on(BINANCE_PERP_SOURCE, block)
 }
 
-fn config_with_execution_on(source_block: &str, block: &str) -> String {
+pub(super) fn config_with_execution_on(source_block: &str, block: &str) -> String {
     with_link(
         source_block,
         "  instruments: all\n",
@@ -772,7 +696,7 @@ fn config_with_execution_on(source_block: &str, block: &str) -> String {
     )
 }
 
-const SIM_BLOCK: &str = "  sim:
+pub(super) const SIM_BLOCK: &str = "  sim:
     order_entry_latency_ms: 15
     ack_latency_ms: 15
     max_market_data_delay_ms: 1000
@@ -782,7 +706,7 @@ const SIM_BLOCK: &str = "  sim:
     maker_fee_bps: 10.0
 ";
 
-const BINANCE_SPOT_SOURCE: &str = "  exchange: binance
+pub(super) const BINANCE_SPOT_SOURCE: &str = "  exchange: binance
   max_exposure_quote: 500
   market: spot
   base: BTC
@@ -794,7 +718,7 @@ fn execution_block(mode: &str) -> String {
     execution_block_overriding(mode, "", "")
 }
 
-fn execution_block_with(mode: &str, extra: &str) -> String {
+pub(super) fn execution_block_with(mode: &str, extra: &str) -> String {
     format!("{}{extra}", execution_block(mode))
 }
 

@@ -1,7 +1,5 @@
-//! Zero-allocation fitness for the Kyle's lambda estimator: once the two rolling windows
-//! exist, pushing completed bars and refitting the OLS slope over the live window touches the
-//! allocator not at all — including across the `#[cold]` copy-back that fires every time the
-//! oversized backing fills, which the measured region crosses many times over.
+//! The Kyle's lambda estimator allocates nothing once its two windows exist, across many copy-backs
+//! of their oversized backing.
 //!
 //! A liveness counter rides alongside the allocation assertion: an estimator that quietly gated
 //! every call to `None` would satisfy "allocated nothing" perfectly.
@@ -10,7 +8,7 @@ use crate::hot::quant::Lcg;
 use engine::hot::quant::liquidity::{KylesLambda, KylesLambdaSpec};
 use engine::msg::ids::Price;
 
-const TICK: Price = Price(1_000_000); // $0.01 at the 1e-8 fixed-point scale.
+const TICK: Price = Price::from_mantissa(1_000_000); // $0.01 at the 1e-8 fixed-point scale.
 
 const WINDOW: usize = 256;
 

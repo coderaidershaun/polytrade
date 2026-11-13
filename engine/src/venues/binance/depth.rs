@@ -1,8 +1,9 @@
-//! State machine; Spot: u seq, Perp: pu seq. Broken -> BookReset. Timestamp clamped to high-water (prevent backward queue).
+//! State machine; Spot: u seq, Perp: pu seq. Broken -> BookReset. Timestamp clamped to high-water
+//! (prevent backward queue).
 
 use crate::msg::ids::InstrumentId;
-use crate::msg::inbound::{BookChunkKind, BookReset, InboundMessage, VenueMeta};
-use crate::msg::time::TsUs;
+use crate::msg::inbound::{BookChunkKind, BookReset, InboundMessage, MessageBody, VenueMeta};
+use crate::msg::time::LocalTs;
 use crate::venues::edge::chunk::{ChunkEmitter, ChunkPlan};
 use crate::warn;
 
@@ -69,7 +70,7 @@ impl DepthSequencer {
     }
 
     // Prevent resync undercut.
-    pub fn note_emit_floor(&mut self, floor_ts_us: TsUs) {
+    pub fn note_emit_floor(&mut self, floor_ts_us: LocalTs) {
         self.chunks.note_emit_floor(floor_ts_us);
     }
 
@@ -136,11 +137,12 @@ impl DepthSequencer {
     fn begin_resync(&mut self, diff: DepthDiff, emit: &mut impl FnMut(InboundMessage, VenueMeta)) {
         let received_ts_us = self.chunks.clamp_emit_ts(diff.received_ts_us);
         emit(
-            InboundMessage::BookReset(BookReset {
-                instrument: self.chunks.instrument(),
+            InboundMessage::new(
                 received_ts_us,
-                queued_ts_us: received_ts_us,
-            }),
+                MessageBody::BookReset(BookReset {
+                    instrument: self.chunks.instrument(),
+                }),
+            ),
             VenueMeta::DepthReset {
                 exchange_ts_us: diff.exchange_ts_us,
             },
@@ -183,7 +185,10 @@ impl DepthSequencer {
         // A snapshot replaces the book, so it chains onto nothing.
         self.chunks
             .emit_book(plan, &snapshot.bids, &snapshot.asks, &mut |chunk| {
-                emit(InboundMessage::Book(chunk), VenueMeta::None);
+                emit(
+                    InboundMessage::new(plan.received_ts_us, MessageBody::Book(chunk)),
+                    VenueMeta::None,
+                );
             });
         self.book_update_id = last_update_id;
         let buffered: Vec<DepthDiff> = self.buffer.drain(..).collect();
@@ -237,7 +242,10 @@ impl DepthSequencer {
         };
         self.chunks
             .emit_book(plan, &diff.bids, &diff.asks, &mut |chunk| {
-                emit(InboundMessage::Book(chunk), venue_meta);
+                emit(
+                    InboundMessage::new(plan.received_ts_us, MessageBody::Book(chunk)),
+                    venue_meta,
+                );
             });
     }
 }

@@ -18,7 +18,7 @@ const LINE_BUDGET: usize = crate::log::TEXT_CAPACITY;
 
 pub(super) fn build_report(rollup: &mut LatencyRollup) -> LatencyReport {
     let mut report = LatencyReport {
-        built_ts_us: rollup.now(),
+        built_ts_us: rollup.now().to_peer(),
         ages: LatencyFlow::ALL.map(|flow| rollup.flow_age(flow)),
         cells: [LatencyCell::EMPTY; LATENCY_REPORT_CELLS],
         backlog_ema: rollup.backlog_ema(),

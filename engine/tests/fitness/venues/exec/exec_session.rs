@@ -1,16 +1,12 @@
-//! Execution-session fitness: what every venue's edge does when a request cannot be sent, may have
-//! been sent, or never gets an answer, and when a connection drops or comes back. Each rule keeps a
-//! hot order slot from waiting forever or an order from being sent twice, and each one fails
-//! SILENTLY if broken: a swallowed refusal has the strategy quoting around an order nobody placed,
-//! a resent request can leave two live orders where one was meant, and an inherited order taken for
-//! this run's own is never cancelled.
+//! What each venue edge does when a request cannot be sent, may have been sent, or gets no answer,
+//! and when a connection drops or comes back, so no slot waits forever and nothing is sent twice.
 
 use engine::msg::exec::{
     CancelReason, ExecCommand, ExecEvent, ExecKind, OrderStyle, Provenance, RejectClass,
     VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side};
+use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::runtime::shutdown::FatalSignal;
 use engine::venues::exec::{
     ExecCore, ExecEffect, ExecRequest, ExecSession, InFlightRequest, MAX_RESYNC_ATTEMPTS,
@@ -18,13 +14,15 @@ use engine::venues::exec::{
     TimeoutFallout,
 };
 
-type Session = ExecSession<Vec<ExecEvent>>;
+use crate::exec_support::SentEvents;
+
+type Session = ExecSession<SentEvents>;
 
 const VENUE: &str = "test-venue";
 const INSTRUMENT: InstrumentId = InstrumentId(0);
 const OTHER_INSTRUMENT: InstrumentId = InstrumentId(1);
-const NOW: TsUs = TsUs::from_micros(1_785_000_000_000_000);
-const PRICE: Price = Price(11_800_000_000_000);
+const NOW: LocalTs = LocalTs::from_micros(1_785_000_000_000_000);
+const PRICE: Price = Price::from_mantissa(11_800_000_000_000);
 
 fn new_session() -> (Session, FatalSignal) {
     let fatal = FatalSignal::new();
@@ -32,7 +30,7 @@ fn new_session() -> (Session, FatalSignal) {
         venue: VENUE,
         core: ExecCore::with_limits(8, 32),
         instruments: vec![INSTRUMENT, OTHER_INSTRUMENT],
-        events: Vec::new(),
+        events: SentEvents::default(),
         fatal: fatal.clone(),
     });
     (session, fatal)
@@ -54,7 +52,7 @@ fn quoting_session() -> (Session, FatalSignal) {
 
 /// What a venue's dispatch does with the core's decision: every request it sends is recorded as in
 /// flight under the hot sequence it answers.
-fn send(session: &mut Session, command: ExecCommand, sent_at: TsUs) -> Vec<ExecRequest> {
+fn send(session: &mut Session, command: ExecCommand, sent_at: LocalTs) -> Vec<ExecRequest> {
     let mut outgoing = Vec::new();
     session.core.on_command(
         command,
@@ -63,7 +61,7 @@ fn send(session: &mut Session, command: ExecCommand, sent_at: TsUs) -> Vec<ExecR
     record(session, outgoing, sent_at)
 }
 
-fn record(session: &mut Session, outgoing: Vec<Outgoing>, sent_at: TsUs) -> Vec<ExecRequest> {
+fn record(session: &mut Session, outgoing: Vec<Outgoing>, sent_at: LocalTs) -> Vec<ExecRequest> {
     let mut sent = Vec::new();
     for Outgoing { effect, recon_seq } in outgoing {
         if let ExecEffect::Send {
@@ -89,7 +87,7 @@ fn place(client_id: u64, side: Side) -> ExecCommand {
         client_id: ClientOrderId(client_id),
         side,
         price: PRICE,
-        qty: Qty(8_000),
+        qty: Qty::from_mantissa(8_000),
         style: OrderStyle::PostOnly,
     }
 }
@@ -100,7 +98,7 @@ fn place_request(client_id: u64, side: Side) -> ExecRequest {
         client_id: ClientOrderId(client_id),
         side,
         price: PRICE,
-        qty: Qty(8_000),
+        qty: Qty::from_mantissa(8_000),
         style: OrderStyle::PostOnly,
     }
 }
@@ -118,7 +116,7 @@ fn prior_run_order(client_id: u64) -> MirroredOrder {
         client_id: ClientOrderId(client_id),
         side: Side::Buy,
         price: PRICE,
-        qty: Qty(8_000),
+        qty: Qty::from_mantissa(8_000),
         provenance: Provenance::PriorRun,
         has_sent_cancel: false,
         is_ambiguous: false,
@@ -128,7 +126,7 @@ fn prior_run_order(client_id: u64) -> MirroredOrder {
 /// A venue report of a resting order the codec attributed to this run by its client id.
 fn resting_report(client_id: u64) -> ExecEvent {
     ExecEvent {
-        instrument: INSTRUMENT,
+        instrument: Some(INSTRUMENT),
         client_id: ClientOrderId(client_id),
         venue_order_id: None,
         trade_id: None,
@@ -139,20 +137,18 @@ fn resting_report(client_id: u64) -> ExecEvent {
         side: Side::Buy,
         liquidity: None,
         price: PRICE,
-        qty: Qty(8_000),
-        last_price: Price(0),
-        last_qty: Qty(0),
-        cumulative_qty: Qty(0),
-        cumulative_quote: 0,
+        qty: Qty::from_mantissa(8_000),
+        last_price: Price::from_mantissa(0),
+        last_qty: Qty::from_mantissa(0),
+        cumulative_qty: Qty::from_mantissa(0),
+        cumulative_quote: Notional::from_mantissa(0),
         commission: 0,
         commission_asset: AssetId::UNKNOWN,
         reject_code: 0,
         amends_remaining: ExecEvent::AMENDS_UNKNOWN,
         recon_seq: 0,
-        exchange_ts_us: NOW,
+        exchange_ts_us: NOW.as_venue_calendar(),
         request_sent_ts_us: None,
-        received_ts_us: NOW,
-        queued_ts_us: NOW,
     }
 }
 
@@ -286,7 +282,9 @@ fn a_refused_placement_releases_only_this_runs_reservation_and_trips_only_on_cor
         );
         if is_fatal {
             assert!(
-                fatal.reason().is_some_and(|text| text.contains(VENUE)),
+                fatal
+                    .reason()
+                    .is_some_and(|reason| reason.to_string().contains(VENUE)),
                 "{reason:?} stopped the run without naming the venue"
             );
         }
@@ -330,7 +328,7 @@ fn a_refused_cancel_rearms_and_a_refused_amend_frees_the_slot() {
     let refused_amend = ExecRequest::AmendQty {
         instrument: INSTRUMENT,
         client_id: ClientOrderId(1),
-        qty: Qty(4_000),
+        qty: Qty::from_mantissa(4_000),
     };
     session.refuse(refused_amend, PlaceNotSentReason::NoTransport, NOW);
     assert_eq!(
@@ -368,7 +366,7 @@ fn a_request_the_wire_may_have_seen_is_in_doubt_and_never_resent() {
     assert_eq!(in_doubt.reject, Some(RejectClass::Ambiguous));
     assert_eq!(in_doubt.client_id, ClientOrderId(1));
     assert_eq!(in_doubt.side, Side::Sell);
-    assert_eq!(in_doubt.exchange_ts_us, NOW);
+    assert_eq!(in_doubt.exchange_ts_us, NOW.as_venue_calendar());
 
     session.events.clear();
     session.mark_in_doubt(status_request(7), NOW);
@@ -566,7 +564,7 @@ fn readiness_arms_once_after_the_pass_finishes_with_one_snapshot_end_per_instrum
 
     assert!(session.arm_readiness(NOW));
     assert_eq!(session.core.phase(), Phase::Quoting);
-    let ends: Vec<(ExecKind, InstrumentId, TsUs)> = session
+    let ends: Vec<(ExecKind, Option<InstrumentId>, VenueTs)> = session
         .events
         .iter()
         .map(|event| (event.kind, event.instrument, event.exchange_ts_us))
@@ -574,8 +572,16 @@ fn readiness_arms_once_after_the_pass_finishes_with_one_snapshot_end_per_instrum
     assert_eq!(
         ends,
         [
-            (ExecKind::SnapshotEnd, INSTRUMENT, NOW),
-            (ExecKind::SnapshotEnd, OTHER_INSTRUMENT, NOW),
+            (
+                ExecKind::SnapshotEnd,
+                Some(INSTRUMENT),
+                NOW.as_venue_calendar()
+            ),
+            (
+                ExecKind::SnapshotEnd,
+                Some(OTHER_INSTRUMENT),
+                NOW.as_venue_calendar()
+            ),
         ]
     );
     assert!(!session.arm_readiness(NOW), "readiness armed twice");
@@ -606,7 +612,7 @@ fn readiness_arms_once_after_the_pass_finishes_with_one_snapshot_end_per_instrum
     assert!(blocked.events.is_empty());
     blocked
         .core
-        .on_order_gone(ClientOrderId(9), Qty(0), &mut |_| {});
+        .on_order_gone(ClientOrderId(9), Qty::from_mantissa(0), &mut |_| {});
     assert!(
         blocked.arm_readiness(NOW),
         "the finished pass did not arm once the prior run's order was gone"

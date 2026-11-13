@@ -1,15 +1,13 @@
-//! Volume-bar fitness: the traded-notional clock cuts every closed bar to exactly its target and
-//! loses neither notional nor trades doing it, exactly rather than approximately; a klines target
-//! arms only on a trailing average it can stand behind and never moves under an open bar; and the
-//! dispatch fan-out hands the strategy exactly the bars that closed, oldest first.
+//! The notional clock cuts each closed bar exactly to its target and loses nothing, a kline target
+//! never moves under an open bar, and the strategy gets the closed bars, oldest first.
 
 use engine::hot::quant::toxicity::VolumeBar;
 use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
 use engine::hot::tracker::{MicroTracker, VolumeBarSeries};
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
-use engine::msg::inbound::{InboundMessage, KlineEvent};
+use engine::msg::inbound::{InboundMessage, KlineEvent, MessageBody};
 use engine::msg::persist::{FeatureId, PersistRecord};
-use engine::msg::time::TsUs;
+use engine::msg::time::LocalTs;
 use engine::runtime::config::{
     CandlesSpec, KlineInterval, TrackerSpec, VolumeBarsSpec, VolumeThreshold,
 };
@@ -18,7 +16,7 @@ use rtrb::Consumer;
 
 use crate::engine_support::{
     ONE, engine_without_warmup, instrument_row, persist_ring, strategy_log_ring, tracker_spec_all,
-    trade, ts,
+    trade, ts, venue_ts,
 };
 
 /// Closed-bar retention above the worst case every generator below can produce, so nothing is
@@ -79,7 +77,7 @@ proptest! {
         let mut reported = 0usize;
         for (index, &(price, qty, side)) in trades.iter().enumerate() {
             fed_notional += i128::from(price) * i128::from(qty) / i128::from(ONE);
-            reported += tracker.on_trade(&trade(0, price, qty, side, index as i64));
+            reported += tracker.on_trade(&trade(0, price, qty, side, index as i64), ts(index as i64));
         }
 
         let series = tracker.volume_bars().expect("volume clock configured");
@@ -123,19 +121,17 @@ fn closed_1m_kline(open_ts_us: i64, quote_volume: i64) -> KlineEvent {
     KlineEvent {
         instrument: InstrumentId(0),
         interval: KlineInterval::OneMinute,
-        open_ts_us: ts(open_ts_us),
-        open: Price(100 * ONE),
-        high: Price(100 * ONE),
-        low: Price(100 * ONE),
-        close: Price(100 * ONE),
-        base_volume: Qty(ONE),
+        open_ts_us: venue_ts(open_ts_us),
+        open: Price::from_mantissa(100 * ONE),
+        high: Price::from_mantissa(100 * ONE),
+        low: Price::from_mantissa(100 * ONE),
+        close: Price::from_mantissa(100 * ONE),
+        base_volume: Qty::from_mantissa(ONE),
         quote_volume,
         trade_count: 1,
         is_closed: true,
-        exchange_ts_us: ts(open_ts_us),
+        exchange_ts_us: venue_ts(open_ts_us),
         exchange_sent_ts_us: None,
-        received_ts_us: ts(open_ts_us),
-        queued_ts_us: ts(open_ts_us),
     }
 }
 
@@ -156,7 +152,7 @@ fn worth(usd: i64, when: i64) -> engine::msg::inbound::TradeEvent {
 /// opening one. The probe trade is a single mantissa unit, far below any legal target, so it can
 /// never close the bar it opens; `None` means the clock is dormant and opened nothing.
 fn probe_target(tracker: &mut MicroTracker, when: i64) -> Option<i64> {
-    tracker.on_trade(&trade(0, ONE, 1, Side::Buy, when));
+    tracker.on_trade(&trade(0, ONE, 1, Side::Buy, when), ts(when));
     tracker
         .volume_bars()
         .and_then(|series| series.open)
@@ -166,7 +162,7 @@ fn probe_target(tracker: &mut MicroTracker, when: i64) -> Option<i64> {
 /// A dormant klines clock accumulates NOTHING — bars cut against a target the history cannot yet
 /// justify would be incomparable with every bar after it, so trades pour through untouched.
 fn assert_dormant(tracker: &mut MicroTracker, when: i64, reason: &str) {
-    let closed = tracker.on_trade(&worth(1_000, when));
+    let closed = tracker.on_trade(&worth(1_000, when), ts(when));
     let series = tracker.volume_bars().expect("volume clock configured");
     assert_eq!(closed, 0, "{reason}: a dormant clock closes no bars");
     assert_eq!(series.closed.len(), 0, "{reason}: no bars cemented");
@@ -220,7 +216,11 @@ fn klines_clock_arms_only_on_a_mean_it_can_stand_behind() {
 #[test]
 fn a_kline_closing_mid_bar_leaves_the_open_bars_target_frozen() {
     let mut tracker = klines_tracker(60, 10 * ONE);
-    assert_eq!(tracker.on_trade(&worth(4, 1)), 0, "4 of a 10 USD target");
+    assert_eq!(
+        tracker.on_trade(&worth(4, 1), ts(1)),
+        0,
+        "4 of a 10 USD target"
+    );
 
     // Ten candles of 80 USD lift the trailing mean well clear of the 10 the open bar was cut against.
     for index in 60..70 {
@@ -237,7 +237,7 @@ fn a_kline_closing_mid_bar_leaves_the_open_bars_target_frozen() {
     );
 
     assert_eq!(
-        tracker.on_trade(&worth(6, 2)),
+        tracker.on_trade(&worth(6, 2), ts(2)),
         1,
         "6 more fills the frozen 10 USD target"
     );
@@ -269,7 +269,7 @@ fn rotation_disarms_a_klines_clock() {
     let spec = klines_spec(200);
     let mut tracker = klines_tracker(60, 10 * ONE);
     assert_eq!(
-        tracker.on_trade(&worth(25, 1)),
+        tracker.on_trade(&worth(25, 1), ts(1)),
         2,
         "the clock is armed and cutting"
     );
@@ -314,7 +314,7 @@ impl Strategy for BarProbe {
     }
 }
 
-fn delivered_bars(consumer: &mut Consumer<PersistRecord>) -> Vec<(f64, TsUs)> {
+fn delivered_bars(consumer: &mut Consumer<PersistRecord>) -> Vec<(f64, LocalTs)> {
     let mut rows = Vec::new();
     while let Ok(record) = consumer.pop() {
         if let PersistRecord::Feature(row) = record {
@@ -343,9 +343,8 @@ fn on_volume_fires_once_per_closed_bar_oldest_first() {
     );
 
     // Half of the 1 USD target: opens a bar, closes none.
-    let mut half = trade(0, ONE, ONE / 2, Side::Buy, 1_000);
-    half.received_ts_us = ts(1_500);
-    engine.dispatch(&InboundMessage::Trade(half));
+    let half = trade(0, ONE, ONE / 2, Side::Buy, 1_000);
+    engine.dispatch(&InboundMessage::new(ts(1_500), MessageBody::Trade(half)));
     assert_eq!(
         delivered_bars(&mut consumer),
         Vec::new(),
@@ -353,9 +352,8 @@ fn on_volume_fires_once_per_closed_bar_oldest_first() {
     );
 
     // 4.5 targets on top of the half already banked: fills the open bar and cuts four more.
-    let mut sweep = trade(0, ONE, 9 * ONE / 2, Side::Buy, 2_000);
-    sweep.received_ts_us = ts(2_500);
-    engine.dispatch(&InboundMessage::Trade(sweep));
+    let sweep = trade(0, ONE, 9 * ONE / 2, Side::Buy, 2_000);
+    engine.dispatch(&InboundMessage::new(ts(2_500), MessageBody::Trade(sweep)));
 
     let delivered = delivered_bars(&mut consumer);
     assert_eq!(

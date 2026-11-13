@@ -1,14 +1,14 @@
-//! The volume clock: trades cut into equal-notional bars. A trade's notional is split exactly at
-//! each target, so a closed bar always holds its target and the excess pours into the next bar —
-//! the equal-volume buckets toxicity measures (VPIN) are defined over.
+//! The volume clock: trades cut into bars of equal notional, split exactly at each target, so a
+//! closed bar holds its target. Toxicity measures such as VPIN are defined over these bars.
 
 use super::sampling::{FieldSeries, TradeAggregates, notional_i128};
 use super::{BACKING_MULTIPLE, CandleSeries, Latest};
+use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::hot::quant::toxicity::VolumeBar;
 use crate::hot::series::{Element, FastQueue};
 use crate::msg::ids::{FIXED_SCALE, Side};
 use crate::msg::inbound::TradeEvent;
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 use crate::runtime::config::{TARGET_WINDOW_CANDLES, VolumeBarsSpec, VolumeThreshold};
 
 const MIN_TARGET_CANDLES: usize = 60;
@@ -17,9 +17,10 @@ const MIN_TARGET_NOTIONAL: i128 = FIXED_SCALE as i128;
 
 impl crate::hot::series::sealed::Sealed for VolumeBar {}
 impl Element for VolumeBar {}
+digest_by_hash!(VolumeBar);
 
 impl VolumeBar {
-    fn opening(open_ts_us: TsUs, target: i64) -> Self {
+    fn opening(open_ts_us: VenueTs, target: i64) -> Self {
         Self {
             open_ts_us,
             close_ts_us: open_ts_us,
@@ -50,6 +51,9 @@ pub(super) struct VolumeClock {
     trades: TradeAggregates,
     sampled: Option<FieldSeries>,
 }
+
+digest_fields! { VolumeBarSeries { closed, open } }
+digest_fields! { VolumeClock { fixed_target, next_target, bars, trades, sampled } }
 
 impl VolumeClock {
     /// # Panics

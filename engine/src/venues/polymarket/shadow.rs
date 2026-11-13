@@ -1,8 +1,5 @@
-//! Shadow book + validator: the venue re-emits a full `book` frame ~every 150ms. Only
-//! the first after a (re)subscribe forwards as a Snapshot; the rest are consumed here as validation.
-//! A shadow book, built from the messages actually forwarded to the hot path, is compared level-for-
-//! level against each venue book; because the cut carries no sequence number, a lone mismatch is a
-//! timing artefact — re-baseline waits for several consecutive disagreements (a real desync).
+//! Checks the books that the venue sends about every 150 ms against a shadow of what reached the
+//! engine. A cut carries no sequence, so only several mismatches in a row mean a desync.
 //!
 //! Neutral types only (Price/Qty/`Level`) — no venue wire structs cross into this module.
 
@@ -23,7 +20,7 @@ impl ShadowBook {
             Side::Buy => &mut self.bids,
             Side::Sell => &mut self.asks,
         };
-        if qty == Qty(0) {
+        if qty == Qty::from_mantissa(0) {
             book.remove(&price);
         } else {
             book.insert(price, qty);
@@ -38,7 +35,7 @@ impl ShadowBook {
     fn fill(book: &mut BTreeMap<Price, Qty>, levels: &[Level]) {
         book.clear();
         for level in levels {
-            if level.qty != Qty(0) {
+            if level.qty != Qty::from_mantissa(0) {
                 book.insert(level.price, level.qty);
             }
         }
@@ -64,7 +61,7 @@ impl ShadowBook {
         ascending_levels: &[Level],
         side: Side,
     ) -> Option<BookMismatch> {
-        let venue_level = |level: &&Level| level.qty != Qty(0);
+        let venue_level = |level: &&Level| level.qty != Qty::from_mantissa(0);
         let mut shadow = book.iter().map(|(&price, &qty)| Level { price, qty });
         let mut venue = ascending_levels.iter().filter(venue_level).copied();
         loop {

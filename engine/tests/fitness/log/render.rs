@@ -1,5 +1,5 @@
-//! A hot log call copies raw words on the hot thread, and only the drain turns them into the line an
-//! operator reads, with the same words that line has always had.
+//! A hot log call copies raw words on the hot thread, and only the drain turns them into the line
+//! an operator reads, with the same words that line has always had.
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -10,8 +10,8 @@ use engine::hot::strategy::Strategy;
 use engine::log::{Level, LogDrain, LogOutput, LogValue, LogWriter, open_hot_lane};
 use engine::msg::exec::ExecKind;
 use engine::msg::ids::{InstrumentId, Side};
-use engine::msg::inbound::InboundMessage;
-use engine::msg::time::{EngineClock, TsUs};
+use engine::msg::inbound::{InboundMessage, MessageBody};
+use engine::msg::time::{EngineClock, LocalTs};
 use engine::runtime::config::KlineInterval;
 
 use crate::engine_support::{
@@ -68,16 +68,17 @@ fn overfull_bid_snapshot() -> Vec<InboundMessage> {
             let levels: Vec<(i64, i64)> = (0..20)
                 .map(|level| ((best_bid - chunk * 20 - level) * ONE, ONE))
                 .collect();
-            InboundMessage::Book(partial_snapshot_chunk(0, Side::Buy, &levels, SNAPSHOT_AT))
+            InboundMessage::new(
+                ts(SNAPSHOT_AT),
+                MessageBody::Book(partial_snapshot_chunk(0, Side::Buy, &levels, SNAPSHOT_AT)),
+            )
         })
         .collect();
     let asks = [((best_bid + 1) * ONE, ONE)];
-    messages.push(InboundMessage::Book(last_snapshot_chunk(
-        0,
-        Side::Sell,
-        &asks,
-        SNAPSHOT_AT,
-    )));
+    messages.push(InboundMessage::new(
+        ts(SNAPSHOT_AT),
+        MessageBody::Book(last_snapshot_chunk(0, Side::Sell, &asks, SNAPSHOT_AT)),
+    ));
     messages
 }
 
@@ -116,7 +117,7 @@ fn hot_warning_is_formatted_on_the_drain() {
     let output = LogOutput {
         open: Box::new({
             let writer = writer.clone();
-            move |_at: TsUs| Ok(Box::new(writer.clone()) as Box<dyn LogWriter>)
+            move |_at: LocalTs| Ok(Box::new(writer.clone()) as Box<dyn LogWriter>)
         }),
         fallback: Box::new(io::stderr()),
         reopen_limit: 3,

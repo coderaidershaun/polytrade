@@ -1,8 +1,8 @@
 //! Outcome leg: Up/Down token. Validates book vs shadow, detects collapse, emits normalized.
 
 use crate::msg::ids::{InstrumentId, Qty, Side};
-use crate::msg::inbound::{BookReset, InboundMessage, Level};
-use crate::msg::time::TsUs;
+use crate::msg::inbound::{BookReset, InboundMessage, Level, MessageBody};
+use crate::msg::time::{LocalTs, VenueTs};
 use crate::venues::polymarket::book::{BookNormaliser, ChunkStamps};
 use crate::venues::polymarket::parse::{PolyBook, PolyDelta};
 use crate::venues::polymarket::rotation::TokenId;
@@ -46,7 +46,7 @@ impl Leg {
         self.token.is_some()
     }
 
-    pub(super) fn assign(&mut self, token: TokenId, now: TsUs) {
+    pub(super) fn assign(&mut self, token: TokenId, now: LocalTs) {
         self.token = Some(token);
         self.shadow.resubscribe();
         self.collapse.reset();
@@ -65,7 +65,7 @@ impl Leg {
     pub(super) fn on_venue_book(
         &mut self,
         book: &PolyBook,
-        now: TsUs,
+        now: LocalTs,
         emit: &mut impl FnMut(InboundMessage),
     ) -> Option<BookMismatch> {
         let bids_ascending: Vec<Level> = book.bids.iter().rev().copied().collect();
@@ -77,11 +77,12 @@ impl Leg {
                 None
             }
             BookFrameOutcome::Diverged(mismatch) => {
-                emit(InboundMessage::BookReset(BookReset {
-                    instrument: self.instrument,
-                    received_ts_us: now,
-                    queued_ts_us: now,
-                }));
+                emit(InboundMessage::new(
+                    now,
+                    MessageBody::BookReset(BookReset {
+                        instrument: self.instrument,
+                    }),
+                ));
                 self.normaliser.emit_snapshot(book, emit);
                 self.reseed_collapse(book);
                 Some(mismatch)
@@ -93,8 +94,8 @@ impl Leg {
     pub(super) fn on_deltas(
         &mut self,
         deltas: &[&PolyDelta],
-        received_ts_us: TsUs,
-        exchange_ts_us: TsUs,
+        received_ts_us: LocalTs,
+        exchange_ts_us: VenueTs,
         emit: &mut impl FnMut(InboundMessage),
     ) -> bool {
         self.normaliser.emit_price_change(
@@ -129,8 +130,8 @@ impl Leg {
         }
     }
 
-    fn observe_level(&mut self, side: Side, level: &Level, exchange_ts_us: TsUs) {
-        if level.qty == Qty(0) {
+    fn observe_level(&mut self, side: Side, level: &Level, exchange_ts_us: VenueTs) {
+        if level.qty == Qty::from_mantissa(0) {
             return;
         }
         self.collapse.observe(LevelUpdate {

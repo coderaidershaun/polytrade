@@ -2,7 +2,7 @@
 
 use crate::msg::exec::VenueOrderStatus;
 use crate::msg::ids::{ClientOrderId, Qty, TradeId};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 use super::super::orders::SimOrder;
 use super::super::resting::RefusalReason;
@@ -56,8 +56,8 @@ pub enum AnswerSubject {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DueAnswer {
-    pub event_ts_us: TsUs,
-    pub due_ts_us: TsUs,
+    pub event_ts_us: LocalTs,
+    pub due_ts_us: LocalTs,
     pub voice: VenueVoice,
 }
 

@@ -4,7 +4,7 @@
 use engine::msg::exec::Liquidity;
 use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::Level;
-use engine::msg::time::TsUs;
+use engine::msg::time::VenueTs;
 use engine::msg::ui::{UI_BOOK_LEVELS, UiBookSnapshot, UiBookState, UiEvent};
 
 /// A realistic epoch: large stamps are what the charts' f64 normalisation before the f32
@@ -16,11 +16,11 @@ const MILLI: i64 = FIXED_SCALE / 1000;
 pub const INSTRUMENT: InstrumentId = InstrumentId(0);
 
 pub fn px(tick_index: i64) -> Price {
-    Price(tick_index * FIXED_SCALE)
+    Price::from_mantissa(tick_index * FIXED_SCALE)
 }
 
 pub fn qm(milli: i64) -> Qty {
-    Qty(milli * MILLI)
+    Qty::from_mantissa(milli * MILLI)
 }
 
 pub fn level(tick_index: i64, milli: i64) -> Level {
@@ -34,7 +34,7 @@ pub fn level(tick_index: i64, milli: i64) -> Level {
 pub fn unit(tick_index: i64) -> Level {
     Level {
         price: px(tick_index),
-        qty: Qty(FIXED_SCALE),
+        qty: Qty::from_mantissa(FIXED_SCALE),
     }
 }
 
@@ -52,8 +52,8 @@ pub fn book(
     asks: &[Level],
 ) -> UiBookSnapshot {
     let empty = Level {
-        price: Price(0),
-        qty: Qty(0),
+        price: Price::from_mantissa(0),
+        qty: Qty::from_mantissa(0),
     };
     let mut bid_levels = [empty; UI_BOOK_LEVELS];
     let mut ask_levels = [empty; UI_BOOK_LEVELS];
@@ -66,7 +66,7 @@ pub fn book(
     UiBookSnapshot {
         instrument: INSTRUMENT,
         seq,
-        event_ts_us: TsUs::from_micros(event_ts_us),
+        event_ts_us: VenueTs::from_micros(event_ts_us),
         state,
         bid_len: bids.len().min(UI_BOOK_LEVELS) as u16,
         ask_len: asks.len().min(UI_BOOK_LEVELS) as u16,
@@ -80,7 +80,7 @@ pub fn fill(seq: u64, event_ts_us: i64, side: Side, price: Price, qty: Qty) -> U
     UiEvent::Fill {
         instrument: INSTRUMENT,
         seq,
-        event_ts_us: TsUs::from_micros(event_ts_us),
+        event_ts_us: VenueTs::from_micros(event_ts_us),
         side,
         price,
         qty,

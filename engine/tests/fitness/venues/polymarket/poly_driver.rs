@@ -1,13 +1,10 @@
-//! Driver-level replay: the pure `PolyDriverCore` must fold a fixed event sequence into fixed
-//! effects, so a recorded rotation replays without sockets. These synthetic sequences pin
-//! the load-bearing driver behaviours — the subscribe-time rotation slot sequence, the zero-gap
-//! handover (the next window subscribes + snapshots while the old one still streams), reconnect
-//! re-baseline, and force-teardown of an occupied slot.
+//! The pure Polymarket driver folds a fixed event sequence into fixed effects, so a recorded
+//! rotation replays with no socket, handover and teardown included.
 
 use std::sync::Arc;
 
 use engine::msg::ids::{InstrumentId, Price, Qty};
-use engine::msg::inbound::{BookChunkKind, InboundMessage, Level};
+use engine::msg::inbound::{BookChunkKind, Level, MessageBody};
 use engine::venues::polymarket::actor::{DriverEffect, PolyDriverCore, SlotLegs};
 use engine::venues::polymarket::discovery::PolySchedule;
 use engine::venues::polymarket::parse::{PolyBook, PolyFrame};
@@ -15,7 +12,7 @@ use engine::venues::polymarket::rotation::{
     OutcomeLeg, ProbeOutcome, TokenId, WindowAssignment, WindowTokens,
 };
 
-use crate::engine_support::ts_secs;
+use crate::engine_support::{ts_secs, venue_ts_secs};
 
 const SECOND_US: i64 = 1_000_000;
 const WINDOW_SECS: i64 = 300;
@@ -67,8 +64,8 @@ fn assignment(open_secs: i64) -> WindowAssignment {
             instrument: down,
             token: down_token,
         },
-        window_open_ts_us: ts_secs(open_secs),
-        window_close_ts_us: ts_secs(open_secs + WINDOW_SECS),
+        window_open_ts_us: venue_ts_secs(open_secs),
+        window_close_ts_us: venue_ts_secs(open_secs + WINDOW_SECS),
         condition_id: Arc::from(format!("cond-{open_secs}").as_str()),
     }
 }
@@ -81,25 +78,25 @@ fn book_frame(token: &str, now_secs: i64) -> PolyFrame {
         asset_id: token.into(),
         bids: vec![
             Level {
-                price: Price(50_000_000),
-                qty: Qty(100),
+                price: Price::from_mantissa(50_000_000),
+                qty: Qty::from_mantissa(100),
             },
             Level {
-                price: Price(49_000_000),
-                qty: Qty(200),
+                price: Price::from_mantissa(49_000_000),
+                qty: Qty::from_mantissa(200),
             },
         ],
         asks: vec![
             Level {
-                price: Price(51_000_000),
-                qty: Qty(150),
+                price: Price::from_mantissa(51_000_000),
+                qty: Qty::from_mantissa(150),
             },
             Level {
-                price: Price(52_000_000),
-                qty: Qty(250),
+                price: Price::from_mantissa(52_000_000),
+                qty: Qty::from_mantissa(250),
             },
         ],
-        exchange_ts_us: ts_secs(now_secs),
+        exchange_ts_us: venue_ts_secs(now_secs),
         received_ts_us: ts_secs(now_secs),
     })
 }
@@ -176,14 +173,14 @@ fn tag(effect: &DriverEffect) -> Tag {
             Tag::BindExecution(assignment.up.token.as_str().to_owned())
         }
         DriverEffect::PersistRotation(row) => Tag::PersistRotation(row.instrument.0),
-        DriverEffect::Emit(message) => match message {
-            InboundMessage::MarketRotation(rotation) => Tag::Rotation(rotation.instrument.0),
-            InboundMessage::BookReset(reset) => Tag::BookReset(reset.instrument.0),
-            InboundMessage::Book(chunk) => match chunk.kind {
+        DriverEffect::Emit(message) => match &message.body {
+            MessageBody::MarketRotation(rotation) => Tag::Rotation(rotation.instrument.0),
+            MessageBody::BookReset(reset) => Tag::BookReset(reset.instrument.0),
+            MessageBody::Book(chunk) => match chunk.kind {
                 BookChunkKind::Snapshot => Tag::Snapshot(chunk.instrument.0),
                 BookChunkKind::Delta => Tag::Delta(chunk.instrument.0),
             },
-            InboundMessage::Trade(trade) => Tag::Trade(trade.instrument.0),
+            MessageBody::Trade(trade) => Tag::Trade(trade.instrument.0),
             other => panic!("unexpected emitted message: {other:?}"),
         },
     }

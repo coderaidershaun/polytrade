@@ -1,13 +1,12 @@
-//! Binance parse goldens: normalised output pinned against real venue payloads — the recorded
-//! aggTrade replays, the venue-stamp clamp over the whole i64 space, the perp depth pu/T
-//! normalisation, and the REST-kline structural tail rule.
+//! Binance parsing against recorded payloads: trades, the clamp of venue stamps, perp depth, and
+//! the tail rule of REST klines.
 //!
 //! No recorder tool exists for `fixtures/`, so these committed goldens are the sole source of
 //! truth: to change them, re-record by hand from the live venue.
 
 use engine::msg::ids::{InstrumentId, Price, Side};
 use engine::msg::inbound::TradeEvent;
-use engine::msg::time::TsUs;
+use engine::msg::time::{LocalTs, VenueTs};
 use engine::runtime::config::KlineInterval;
 use engine::venues::binance::parse::{
     DepthDiff, ParseContext, RestKlineTail, parse_agg_trade, parse_combined_frame,
@@ -23,7 +22,7 @@ const INSTRUMENT: InstrumentId = InstrumentId(7);
 fn ctx(received_us: i64) -> ParseContext {
     ParseContext {
         instrument: INSTRUMENT,
-        received_ts_us: TsUs::from_micros(received_us),
+        received_ts_us: LocalTs::from_micros(received_us),
     }
 }
 
@@ -39,7 +38,7 @@ mod timestamp_clamp {
 
     proptest! {
         /// Over the entire `i64` venue-stamp space, parsing never panics and the stamp never
-        /// escapes the window (parse defends `TsUs::diff`).
+        /// escapes the window (parse defends `LocalTs::diff`).
         #[test]
         fn clamp_stays_inside_window(ms in any::<i64>(), now_us in 0i64..=4_000_000_000_000_000i64) {
             let clamped = agg_trade_at(ms, now_us).exchange_ts_us.micros();
@@ -70,18 +69,18 @@ mod venue_send_stamp {
         let both = agg_trade(&format!(r#""E":{SENT_MS},"T":{MATCH_MS}"#));
         assert_eq!(
             both.exchange_ts_us,
-            TsUs::from_micros(MATCH_MS * 1_000),
+            VenueTs::from_micros(MATCH_MS * 1_000),
             "the match stamp still comes from T"
         );
         assert_eq!(
             both.exchange_sent_ts_us,
-            Some(TsUs::from_micros(SENT_MS * 1_000))
+            Some(VenueTs::from_micros(SENT_MS * 1_000))
         );
 
         let absurd = agg_trade(&format!(r#""E":{},"T":{MATCH_MS}"#, i64::MAX));
         assert_eq!(
             absurd.exchange_sent_ts_us,
-            Some(TsUs::from_micros(RECEIVED_US + MAX_VENUE_SKEW_US)),
+            Some(VenueTs::from_micros(RECEIVED_US + MAX_VENUE_SKEW_US)),
             "E clamps like every other venue stamp"
         );
 
@@ -124,9 +123,9 @@ mod rest_klines {
         // Fields still decode exactly (locks the decimal and millisecond-to-microsecond boundary).
         assert_eq!(
             events[0].open_ts_us,
-            TsUs::from_micros(1_672_515_780_000_000)
+            VenueTs::from_micros(1_672_515_780_000_000)
         );
-        assert_eq!(events[0].close, Price(200_000));
+        assert_eq!(events[0].close, Price::from_mantissa(200_000));
         assert_eq!(events[0].quote_volume, 100_000_000);
         assert_eq!(events[0].trade_count, 100);
     }
@@ -146,7 +145,7 @@ mod rest_klines {
         .expect("parses");
         assert_eq!(
             events[0].exchange_ts_us,
-            TsUs::from_micros(ROW0_CLOSE_US),
+            VenueTs::from_micros(ROW0_CLOSE_US),
             "hours behind the fetch that carried it"
         );
         assert_eq!(events[0].exchange_sent_ts_us, None);
@@ -172,8 +171,8 @@ mod depth {
                 prev_final_update_id: Some(149),
                 bids: vec![level(240_000, 1_000_000_000)],
                 asks: vec![level(260_000, 10_000_000_000)],
-                exchange_ts_us: TsUs::from_micros(1_672_515_782_130_000),
-                received_ts_us: TsUs::from_micros(received),
+                exchange_ts_us: VenueTs::from_micros(1_672_515_782_130_000),
+                received_ts_us: LocalTs::from_micros(received),
             }
         );
     }
@@ -201,7 +200,7 @@ mod recorded_agg_trade {
     }
 
     fn assert_fixture_replays(fixture: &str, market: &str) {
-        let received = TsUs::from_micros(RECORDED_RECEIVED_US);
+        let received = LocalTs::from_micros(RECORDED_RECEIVED_US);
         let context = ParseContext {
             instrument: INSTRUMENT,
             received_ts_us: received,
@@ -217,8 +216,8 @@ mod recorded_agg_trade {
                 "recorded aggregate covers a forward raw range"
             );
             let event = parsed.trade;
-            assert!(event.price.0 > 0, "price mantissa positive");
-            assert!(event.qty.0 > 0, "qty mantissa positive");
+            assert!(event.price.mantissa() > 0, "price mantissa positive");
+            assert!(event.qty.mantissa() > 0, "qty mantissa positive");
             assert!(
                 (EPOCH_LO_US..EPOCH_HI_US).contains(&event.exchange_ts_us.micros()),
                 "exchange stamp within the recording epoch"
@@ -227,8 +226,6 @@ mod recorded_agg_trade {
                 event.exchange_sent_ts_us.is_some(),
                 "real venue frames carry the E send stamp"
             );
-            assert_eq!(event.received_ts_us, received);
-            assert_eq!(event.queued_ts_us, received);
             match event.side {
                 Side::Buy => saw_buy = true,
                 Side::Sell => saw_sell = true,

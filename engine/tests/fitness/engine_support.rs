@@ -1,5 +1,7 @@
-//! Shared builders for the dispatch fitness tests (zero-alloc + replay): synthetic messages,
-//! a fully-configured instrument row, and a persistence ring wired to a `PersistSink`.
+//! Builders that many tests share, so that each builds its messages, its instrument row, and its
+//! persistence ring wired to a `PersistSink` the same way.
+
+use std::num::NonZeroU32;
 
 use engine::hot::dispatch::{
     ExecWiring, ExposureWiring, HotEngine, HotEngineSetup, LinkWiring, PersistWiring,
@@ -14,18 +16,20 @@ use engine::hot::strategy::{EngineView, Strategy, StrategyConfig};
 use engine::link::OutboundLink;
 use engine::log::HotRecord;
 use engine::msg::exec::{
-    ACCOUNT_CHUNK_ASSETS, AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind,
-    ExecLaneItem, Liquidity, Provenance, VenueOrderStatus,
+    AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind, ExecLaneItem, Liquidity,
+    Provenance, VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{
+    AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
+};
 use engine::msg::inbound::{
-    BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, BookReset, InboundMessage, KlineEvent, Level,
-    MarketRotation, RunControl, SpinTick, TradeEvent,
+    BookChunk, BookChunkKind, BookReset, InboundMessage, KlineEvent, Level, MarketRotation,
+    MessageBody, RunControl, SpinTick, TradeEvent,
 };
 use engine::msg::persist::{FeatureId, FillRow, OrderRow, PersistRecord};
 use engine::msg::run_state::RunAssertion;
 use engine::msg::run_state::RunState;
-use engine::msg::time::{DurationUs, Stamper, TsUs};
+use engine::msg::time::{DurationUs, LocalTs, Stamper, VenueTs};
 use engine::msg::ui::{UI_BOOK_RING_CAPACITY, UI_EVENT_RING_CAPACITY, UiBookSnapshot, UiEvent};
 use engine::runtime::config::{BinanceMarket, Subscriptions, VenueMarket};
 use engine::runtime::config::{
@@ -42,20 +46,22 @@ use crate::micro_strategy::MicroRecorder;
 
 pub const ONE: i64 = 100_000_000;
 
-pub fn ts(us: i64) -> TsUs {
-    TsUs::from_micros(us)
+pub fn ts(us: i64) -> LocalTs {
+    LocalTs::from_micros(us)
+}
+
+pub fn venue_ts(us: i64) -> VenueTs {
+    VenueTs::from_micros(us)
 }
 
 pub fn trade(instrument: u16, price: i64, qty: i64, side: Side, when: i64) -> TradeEvent {
     TradeEvent {
         instrument: InstrumentId(instrument),
-        price: Price(price),
-        qty: Qty(qty),
+        price: Price::from_mantissa(price),
+        qty: Qty::from_mantissa(qty),
         side,
-        exchange_ts_us: ts(when),
+        exchange_ts_us: venue_ts(when),
         exchange_sent_ts_us: None,
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
     }
 }
 
@@ -67,28 +73,16 @@ fn chunk(
     is_last_chunk: bool,
     when: i64,
 ) -> BookChunk {
-    let mut filled = [Level {
-        price: Price(0),
-        qty: Qty(0),
-    }; BOOK_CHUNK_LEVELS];
-    for (slot, &(price, qty)) in filled.iter_mut().zip(levels) {
-        *slot = Level {
-            price: Price(price),
-            qty: Qty(qty),
-        };
+    let mut chunk = BookChunk::new(InstrumentId(instrument), kind, side);
+    for &(price, qty) in levels {
+        chunk.push_levels(&[Level {
+            price: Price::from_mantissa(price),
+            qty: Qty::from_mantissa(qty),
+        }]);
     }
-    BookChunk {
-        instrument: InstrumentId(instrument),
-        kind,
-        side,
-        levels: filled,
-        len: levels.len() as u8,
-        is_last_chunk,
-        update_id: when as u64,
-        exchange_ts_us: None,
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
-    }
+    chunk.is_last_chunk = is_last_chunk;
+    chunk.update_id = when as u64;
+    chunk
 }
 
 /// Bids-not-last then asks-last; each side as its own last chunk would trip the implicit reset.
@@ -163,24 +157,22 @@ pub fn partial_delta_chunk(
     chunk(instrument, BookChunkKind::Delta, side, levels, false, when)
 }
 
-pub fn book_reset(instrument: u16, when: i64) -> BookReset {
-    BookReset {
+pub fn book_reset(instrument: u16, when: i64) -> InboundMessage {
+    let reset = BookReset {
         instrument: InstrumentId(instrument),
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
-    }
+    };
+    InboundMessage::new(ts(when), MessageBody::BookReset(reset))
 }
 
 /// Emitted at subscribe, so `open`/`close` are the window bounds while `when` is the (earlier)
 /// receipt stamp — mirrors the pre-open phase where `window_open_ts_us` exceeds `received_ts_us`.
-pub fn rotation(instrument: u16, open: i64, close: i64, when: i64) -> MarketRotation {
-    MarketRotation {
+pub fn rotation(instrument: u16, open: i64, close: i64, when: i64) -> InboundMessage {
+    let rotation = MarketRotation {
         instrument: InstrumentId(instrument),
-        window_open_ts_us: ts(open),
-        window_close_ts_us: ts(close),
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
-    }
+        window_open_ts_us: venue_ts(open),
+        window_close_ts_us: venue_ts(close),
+    };
+    InboundMessage::new(ts(when), MessageBody::MarketRotation(rotation))
 }
 
 pub fn kline(
@@ -194,28 +186,22 @@ pub fn kline(
     KlineEvent {
         instrument: InstrumentId(instrument),
         interval,
-        open_ts_us: ts(when),
-        open: Price(open),
-        high: Price(high),
-        low: Price(low),
-        close: Price(close),
-        base_volume: Qty(ONE),
+        open_ts_us: venue_ts(when),
+        open: Price::from_mantissa(open),
+        high: Price::from_mantissa(high),
+        low: Price::from_mantissa(low),
+        close: Price::from_mantissa(close),
+        base_volume: Qty::from_mantissa(ONE),
         quote_volume: 42,
         trade_count: 3,
         is_closed,
-        exchange_ts_us: ts(when),
+        exchange_ts_us: venue_ts(when),
         exchange_sent_ts_us: None,
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
     }
 }
 
-pub fn spin(seq: u64, when: i64) -> SpinTick {
-    SpinTick {
-        seq,
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
-    }
+pub fn spin(seq: u64, when: i64) -> InboundMessage {
+    InboundMessage::new(ts(when), MessageBody::SpinTick(SpinTick { seq }))
 }
 
 fn all_spin_fields() -> Vec<SpinField> {
@@ -295,7 +281,7 @@ pub fn instrument_row(id: u16, tracker: TrackerSpec, book_capacity: usize) -> In
         subscriptions: Subscriptions::default(),
         kline_intervals: vec![KlineInterval::OneMinute],
         book_capacity,
-        max_exposure_quote: TEST_MAX_EXPOSURE_QUOTE,
+        max_exposure_quote: Notional::from_mantissa(TEST_MAX_EXPOSURE_QUOTE),
         tracker,
     }
 }
@@ -339,7 +325,7 @@ pub const NOMINAL_SPIN: DurationUs = DurationUs::from_micros(100_000);
 
 /// These tests assert on what the strategy sees from the very first message, so they opt out of
 /// warmup rather than inherit the config default and silently assert on a suppressed prefix.
-/// `warmup_suppresses_callbacks_by_message_time` covers the suppressing engine.
+/// `warmup_holds_callbacks_by_message_time` covers the suppressing engine.
 pub fn engine_without_warmup(
     instruments: &[InstrumentRow],
     strategy: Box<dyn Strategy>,
@@ -499,11 +485,10 @@ pub fn engine_with_link(setup: LinkedSetup<'_>) -> LinkedEngine {
 
 /// The marker the link actor would push for `assertion`, stamped at `when`.
 pub fn run_control(assertion: RunAssertion, when: i64) -> InboundMessage {
-    InboundMessage::RunControl(RunControl {
-        desired: assertion,
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
-    })
+    InboundMessage::new(
+        ts(when),
+        MessageBody::RunControl(RunControl { desired: assertion }),
+    )
 }
 
 pub fn idle_at(epoch: u64) -> RunAssertion {
@@ -539,7 +524,7 @@ pub fn persist_ring_for(
 ) -> (PersistWiring, Consumer<PersistRecord>) {
     let (producer, consumer) = RingBuffer::<PersistRecord>::new(capacity);
     let wiring = PersistWiring {
-        sink: PersistSink::new(producer),
+        sink: PersistSink::new(producer, NonZeroU32::MAX),
         tables,
     };
     (wiring, consumer)
@@ -650,30 +635,38 @@ impl FillPen {
             return None;
         }
         self.is_adopted[side as usize] = true;
-        Some(InboundMessage::Exec(ExecEvent {
-            kind: ExecKind::SnapshotOrder,
-            // A large size, because the slot must outlive every fill this pen reports into it.
-            qty: Qty(i64::MAX / 4),
-            ..exec_event(self.instrument, self.client_id(side), side, price, when)
-        }))
+        Some(InboundMessage::new(
+            ts(when),
+            MessageBody::Exec(ExecEvent {
+                kind: ExecKind::SnapshotOrder,
+                // A large size, because the slot must outlive every fill this pen reports into it.
+                qty: Qty::from_mantissa(i64::MAX / 4),
+                ..exec_event(self.instrument, self.client_id(side), side, price, when)
+            }),
+        ))
     }
 
     /// One more fill on an already-seated side, as a single allocation-free message.
     pub fn report(&mut self, side: Side, price: i64, qty: i64, when: i64) -> InboundMessage {
         let total = &mut self.cumulative[side as usize];
         total.0 += qty;
-        total.1 += Price(price).notional(Qty(qty));
-        let (cumulative_qty, cumulative_quote) = (Qty(total.0), total.1);
-        InboundMessage::Exec(ExecEvent {
-            kind: ExecKind::ReportTrade,
-            status: Some(VenueOrderStatus::PartiallyFilled),
-            last_price: Price(price),
-            last_qty: Qty(qty),
-            cumulative_qty,
-            cumulative_quote,
-            qty: Qty(i64::MAX / 4),
-            ..exec_event(self.instrument, self.client_id(side), side, price, when)
-        })
+        total.1 += Price::from_mantissa(price)
+            .notional(Qty::from_mantissa(qty))
+            .mantissa();
+        let (cumulative_qty, cumulative_quote) = (Qty::from_mantissa(total.0), total.1);
+        InboundMessage::new(
+            ts(when),
+            MessageBody::Exec(ExecEvent {
+                kind: ExecKind::ReportTrade,
+                status: Some(VenueOrderStatus::PartiallyFilled),
+                last_price: Price::from_mantissa(price),
+                last_qty: Qty::from_mantissa(qty),
+                cumulative_qty,
+                cumulative_quote: Notional::from_mantissa(cumulative_quote),
+                qty: Qty::from_mantissa(i64::MAX / 4),
+                ..exec_event(self.instrument, self.client_id(side), side, price, when)
+            }),
+        )
     }
 
     /// The same fill from a venue that did NOT say whether we made or took.
@@ -683,13 +676,12 @@ impl FillPen {
     /// maker in a fee-determining column. A named variant rather than a flag on
     /// [`FillPen::report`]: a `bool` at the call site would not say which way it pointed.
     pub fn silent_report(&mut self, side: Side, price: i64, qty: i64, when: i64) -> InboundMessage {
-        let InboundMessage::Exec(event) = self.report(side, price, qty, when) else {
+        let mut message = self.report(side, price, qty, when);
+        let MessageBody::Exec(event) = &mut message.body else {
             unreachable!("report builds an Exec message");
         };
-        InboundMessage::Exec(ExecEvent {
-            liquidity: None,
-            ..event
-        })
+        event.liquidity = None;
+        message
     }
 }
 
@@ -702,7 +694,7 @@ pub fn exec_event(
     when: i64,
 ) -> ExecEvent {
     ExecEvent {
-        instrument,
+        instrument: Some(instrument),
         client_id,
         venue_order_id: None,
         trade_id: None,
@@ -712,12 +704,12 @@ pub fn exec_event(
         provenance: Provenance::Mine,
         side,
         liquidity: Some(Liquidity::Maker),
-        price: Price(price),
-        qty: Qty(0),
-        last_price: Price(0),
-        last_qty: Qty(0),
-        cumulative_qty: Qty(0),
-        cumulative_quote: 0,
+        price: Price::from_mantissa(price),
+        qty: Qty::from_mantissa(0),
+        last_price: Price::from_mantissa(0),
+        last_qty: Qty::from_mantissa(0),
+        cumulative_qty: Qty::from_mantissa(0),
+        cumulative_quote: Notional::from_mantissa(0),
         commission: 0,
         commission_asset: AssetId::UNKNOWN,
         reject_code: 0,
@@ -725,44 +717,33 @@ pub fn exec_event(
         // engine-level fitness event is built from here, so a zero would have all of them make it.
         amends_remaining: ExecEvent::AMENDS_UNKNOWN,
         recon_seq: 0,
-        exchange_ts_us: ts(when),
+        exchange_ts_us: venue_ts(when),
         request_sent_ts_us: None,
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
     }
 }
 
 pub fn stream_ready(instrument: InstrumentId, when: i64) -> InboundMessage {
-    InboundMessage::Exec(ExecEvent {
-        kind: ExecKind::StreamReady,
-        ..exec_event(instrument, ClientOrderId(0), Side::Buy, 0, when)
-    })
+    InboundMessage::new(
+        ts(when),
+        MessageBody::Exec(ExecEvent {
+            kind: ExecKind::StreamReady,
+            ..exec_event(instrument, ClientOrderId(0), Side::Buy, 0, when)
+        }),
+    )
 }
 
 /// A whole-account snapshot in one chunk with nothing locked, all three stamps at `when`.
 pub fn account_chunk(balances: &[(AssetId, i64)], when: i64) -> AccountChunk {
-    let mut slots = [AssetBalance {
-        asset: AssetId::UNKNOWN,
-        free: 0,
-        locked: 0,
-    }; ACCOUNT_CHUNK_ASSETS];
-    for (slot, &(asset, free)) in balances.iter().enumerate() {
-        slots[slot] = AssetBalance {
+    let mut chunk = AccountChunk::new(AccountChunkKind::Snapshot, 1, venue_ts(when));
+    for &(asset, free) in balances {
+        chunk.push_balances(&[AssetBalance {
             asset,
             free,
             locked: 0,
-        };
+        }]);
     }
-    AccountChunk {
-        kind: AccountChunkKind::Snapshot,
-        balances: slots,
-        len: u8::try_from(balances.len()).expect("a chunk holds a handful of balances"),
-        is_last_chunk: true,
-        venue_update_ts_ms: 1,
-        exchange_ts_us: ts(when),
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
-    }
+    chunk.is_last_chunk = true;
+    chunk
 }
 
 pub fn local_refusals(ui_events: &mut Consumer<UiEvent>) -> Vec<RejectReason> {
@@ -800,9 +781,9 @@ pub fn drain_orders_and_fills(records: &mut Consumer<PersistRecord>) -> Banked {
 /// A two-sided book around the midpoint, fresh as of the spin that reads it.
 pub fn top(bid: i64, ask: i64) -> BookTop {
     BookTop {
-        best_bid: Some(Price(bid)),
-        best_ask: Some(Price(ask)),
-        mid: Price(bid + (ask - bid) / 2),
+        best_bid: Some(Price::from_mantissa(bid)),
+        best_ask: Some(Price::from_mantissa(ask)),
+        mid: Price::from_mantissa(bid + (ask - bid) / 2),
         is_valid: true,
         last_commit_ts_us: ts(1_000),
         now_ts_us: ts(1_000),
@@ -820,14 +801,18 @@ pub fn rich() -> FundsView {
 /// One price level from bare mantissas.
 pub fn level(price: i64, qty: i64) -> Level {
     Level {
-        price: Price(price),
-        qty: Qty(qty),
+        price: Price::from_mantissa(price),
+        qty: Qty::from_mantissa(qty),
     }
 }
 
 /// Whole seconds as a timestamp. [`ts`] takes microseconds.
-pub fn ts_secs(secs: i64) -> TsUs {
-    TsUs::from_micros(secs * 1_000_000)
+pub fn ts_secs(secs: i64) -> LocalTs {
+    LocalTs::from_micros(secs * 1_000_000)
+}
+
+pub fn venue_ts_secs(secs: i64) -> VenueTs {
+    VenueTs::from_micros(secs * 1_000_000)
 }
 
 /// Declares nothing and reads nothing, so every command and record a test sees is the engine's.

@@ -1,7 +1,5 @@
-//! End-to-end replay fitness: the real runtime below the binary — input rings, hot
-//! thread, `PersistWriter` — driven by one fixed sequence through a single queue (so order is
-//! deterministic), drained like a SIGTERM, and read back. Covers schema, footer, rotation,
-//! drain-flush completeness, and cross-run determinism.
+//! The real runtime below the binary, driven by one fixed sequence, drained as on SIGTERM, and read
+//! back: schema, footer, rotation, a complete flush, and equal tables across runs.
 
 use std::path::Path;
 use std::time::Duration;
@@ -10,7 +8,9 @@ use rtrb::RingBuffer;
 use tokio::sync::mpsc;
 
 use engine::hot::ingress::IngressQueues;
-use engine::hot::spawn::{HotThreadConfig, IdleWait, QueueProducer, spawn_hot_thread};
+use engine::hot::spawn::{
+    HotDriver, HotLoop, HotThreadConfig, IdleWait, QueueProducer, spawn_hot_thread,
+};
 use engine::hot::strategy::StrategyConfig;
 use engine::msg::ids::{FIXED_SCALE, QueueId, SourceId};
 use engine::msg::inbound::InboundMessage;
@@ -18,6 +18,7 @@ use engine::msg::persist::RotationRow;
 use engine::runtime::config::{
     ExecutionMode, RecordedTables, StrategyId, TableKind, TradingEngineId,
 };
+use engine::runtime::pin_to_core;
 use engine::runtime::shutdown::{DrainSignal, FatalSignal};
 use engine::tape::{PersistConfig, PersistWriter, RunMeta};
 
@@ -194,13 +195,20 @@ fn e2e_reads_back_every_table_and_drains_clean() {
     }
 }
 
+/// FITNESS: the threaded runtime is a pure function of its input. Two runs of one sequence through
+/// real rings, the hot thread and the writer drain without a fatal and write the same rows to each
+/// table, so nothing that the tape does not carry reaches the output.
 #[test]
-fn e2e_replay_is_identical_across_runs() {
-    let dir_a = TempDir::new("determinism-a");
-    let dir_b = TempDir::new("determinism-b");
-    run_e2e(dir_a.path());
-    run_e2e(dir_b.path());
+fn two_threaded_runs_give_equal_tables_and_drain_clean() {
+    let dir_a = TempDir::new("threaded-a");
+    let dir_b = TempDir::new("threaded-b");
+    let first = run_e2e(dir_a.path());
+    let second = run_e2e(dir_b.path());
 
+    assert!(
+        !first.fatal_tripped && !second.fatal_tripped,
+        "a clean run must never trip the input-queue fatal signal"
+    );
     for expect in &TABLES {
         let rows_a = table_rows(dir_a.path(), expect.name);
         let rows_b = table_rows(dir_b.path(), expect.name);
@@ -226,7 +234,12 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
 
     let (input_producer, input_consumer) = RingBuffer::<InboundMessage>::new(1024);
     let ingress = IngressQueues::new(vec![input_consumer]);
-    let mut producer = QueueProducer::new(input_producer, fatal.clone(), QueueId(0), SourceId(0));
+    let mut producer = QueueProducer::new(
+        input_producer,
+        fatal.clone(),
+        QueueId::new(0).unwrap(),
+        SourceId(0),
+    );
 
     let (sink, persist_consumer) = persist_ring(4096);
     let (log_sink, _log_consumer) = strategy_log_ring(64);
@@ -273,18 +286,21 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
         rotations_rx,
     );
 
+    let (hot_fatal, hot_drain) = (fatal.clone(), drain.clone());
     let hot = spawn_hot_thread(
         HotThreadConfig {
             core_id: None,
             tag: "e2e-hot",
-            samples: None,
-            idle: IdleWait::Spin,
         },
-        ingress,
-        engine,
-        fatal.clone(),
-        drain.clone(),
-    );
+        pin_to_core,
+    )
+    .expect("a thread with no core never refuses its pin")
+    .start(move || HotLoop {
+        driver: HotDriver::new(ingress, engine, None),
+        idle: IdleWait::Spin,
+        fatal: hot_fatal,
+        drain: hot_drain,
+    });
 
     for message in message_sequence() {
         producer.push(message);

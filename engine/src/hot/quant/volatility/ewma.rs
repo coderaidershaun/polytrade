@@ -1,5 +1,7 @@
 //! EWMA (RiskMetrics): streaming [`EwmaVol`], one log return folded in per microprice.
 
+use crate::hot::digest::digest_fields;
+
 /// RiskMetrics: λ weights prior var, (1−λ) weights fresh squared return. λ = 2^(−1/H) for half-life H.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EwmaVol {
@@ -7,6 +9,8 @@ pub struct EwmaVol {
     prev_price: Option<f64>,
     variance: Option<f64>,
 }
+
+digest_fields! { EwmaVol { decay, prev_price, variance } }
 
 impl EwmaVol {
     pub fn new(halflife_events: u32) -> Self {

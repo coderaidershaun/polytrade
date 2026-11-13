@@ -1,16 +1,16 @@
-//! Startup scale preflight for Binance: confirm each instrument's max price and quantity fit the
-//! i64 1e-8 range, stamp the tick/step grid and the order floors and counts onto the registry, and
-//! read the account's ORDERS budget, which the hot side paces against without knowing whose buckets
-//! they are. Anything out of range, unlisted, absent or unreadable refuses the start loudly.
+//! The start check of Binance scales: each instrument must fit the fixed-point range, and its grid,
+//! limits and order budget go onto the registry. A value out of range refuses the start.
 
 use crate::hot::exec::{MAX_ORDER_BUDGET_WINDOWS, OrderBudget, OrderBudgetWindow};
 use crate::info;
-use crate::msg::ids::{DecimalError, InstrumentId, Price, Qty};
+use crate::msg::ids::{DecimalError, Notional, Price, Qty};
 use crate::msg::time::DurationUs;
 use crate::runtime::config::{BinanceMarket, VenueMarket};
 use crate::runtime::registry::{
     BinanceLimits, InstrumentRow, OrderRateLimit, RateInterval, Registry,
 };
+
+use crate::venues::port::VenueScales;
 
 use super::rest::{BinanceEnv, ExchangeInfo, RestClient, RestError, SymbolFilter};
 
@@ -92,15 +92,15 @@ pub enum ScaleError {
 }
 
 pub(crate) async fn preflight_scales(
-    registry: &mut Registry,
+    registry: &Registry,
     env: BinanceEnv,
-) -> Result<(), ScaleError> {
+) -> Result<VenueScales, ScaleError> {
+    let mut found = VenueScales::default();
     for binance_market in [BinanceMarket::Spot, BinanceMarket::Perpetual] {
-        let members: Vec<InstrumentId> = registry
+        let members: Vec<&InstrumentRow> = registry
             .instruments()
             .iter()
             .filter(|row| row.market == VenueMarket::Binance(binance_market))
-            .map(|row| row.instrument_id)
             .collect();
         if members.is_empty() {
             continue;
@@ -110,23 +110,22 @@ pub(crate) async fn preflight_scales(
                 market: binance_market.as_str(),
                 source,
             })?;
-        for id in members {
-            let row = registry.instrument(id);
+        for row in members {
             let info = client
                 .exchange_info(&row.venue_symbol)
                 .await
                 .map_err(|source| exchange_info_failure(row, binance_market, source))?;
-            let scales = check_symbol_scale(row, &info)?;
-            registry.set_scales(id, scales.tick_size, scales.step_size);
-            registry.set_binance_limits(id, scales.limits);
-            registry.set_order_rate_limits(check_order_rate_limits(binance_market, &info)?);
+            found
+                .binance
+                .push((row.instrument_id, check_symbol_scale(row, &info)?));
+            found.order_rate_limits = check_order_rate_limits(binance_market, &info)?;
         }
     }
     info!(
         "scale preflight ok on binance {} — every instrument fits the i64 1e-8 range",
         env.as_str()
     );
-    Ok(())
+    Ok(found)
 }
 
 /// The trading grid and order limits the scale preflight parsed from one instrument's
@@ -182,7 +181,7 @@ pub fn check_symbol_scale(
     };
     let tick_size = Price::parse_decimal(tick)
         .map_err(|source| scale_out_of_range(row, "tickSize", tick, source))?;
-    if tick_size.0 <= 0 {
+    if tick_size.mantissa() <= 0 {
         return Err(scale_not_positive(row, "tickSize", tick));
     }
 
@@ -191,7 +190,7 @@ pub fn check_symbol_scale(
     };
     let step_size = Qty::parse_decimal(step)
         .map_err(|source| scale_out_of_range(row, "stepSize", step, source))?;
-    if step_size.0 <= 0 {
+    if step_size.mantissa() <= 0 {
         return Err(scale_not_positive(row, "stepSize", step));
     }
 
@@ -218,11 +217,11 @@ fn check_symbol_limits(
     };
     let min_qty = Qty::parse_decimal(min_qty)
         .map_err(|source| scale_out_of_range(row, "minQty", min_qty, source))?;
-    if min_qty.0 <= 0 {
+    if min_qty.mantissa() <= 0 {
         return Err(scale_limit_not_positive(
             row,
             "minQty",
-            min_qty.0.to_string(),
+            min_qty.mantissa().to_string(),
         ));
     }
 
@@ -239,15 +238,13 @@ fn check_symbol_limits(
     let Some(notional) = notional else {
         return Err(scale_field_missing(row, notional_field));
     };
-    // A notional is an amount of quote money, so it uses the same 1e-8 mantissa as quote_volume.
-    let min_notional = Qty::parse_decimal(notional)
-        .map(|value| value.0)
+    let min_notional = Notional::parse_decimal(notional)
         .map_err(|source| scale_out_of_range(row, "minNotional", notional, source))?;
-    if min_notional <= 0 {
+    if min_notional <= Notional::ZERO {
         return Err(scale_limit_not_positive(
             row,
             "minNotional",
-            min_notional.to_string(),
+            min_notional.mantissa().to_string(),
         ));
     }
 

@@ -1,6 +1,5 @@
-//! The balance sweep, and the answers to the reads the driver asks for rather than causes:
-//! balances, fills, the two public calls a rotation binding needs, the allowance cache, and the
-//! dead man's switch.
+//! The balance sweep, and the answers to the reads that the driver asks for: balances, fills, the
+//! public calls of a rotation binding, the allowance cache, and the dead man's switch.
 //!
 //! None of these answer an order. They are what makes an order possible — which token this leg is
 //! trading, whether its sell side is even reachable, and whether the venue still believes this
@@ -106,16 +105,17 @@ impl Actor {
             self.balances.clear();
             return;
         }
+        let received_ts_us = self.control.clock.now();
         let chunks = account_snapshot(
             &self.balances,
             AccountChunkKind::Snapshot,
             AccountStamps {
                 settled_through: self.settled_through,
-                received_ts_us: self.control.clock.now(),
+                received_ts_us,
             },
         );
         self.balances.clear();
-        self.session.events.send_account(chunks);
+        self.session.events.send_account(received_ts_us, chunks);
         self.settle_pass_read(resync_seq);
         // A fill may have landed during the sweep, making these reads stale, so a
         // restatement is issued if one is now due.
@@ -295,7 +295,7 @@ impl Actor {
                 "polymarket execution bound instrument {} to token {} (tick {}, neg-risk {}) until {}",
                 entry.instrument.0,
                 entry.token_id,
-                entry.tick.0,
+                entry.tick.mantissa(),
                 entry.is_neg_risk,
                 entry.window_close_ts_us.micros()
             );

@@ -1,9 +1,8 @@
-//! Per-instrument position ledger: position base, cash, and mark-to-market. Engine owns it because
-//! PnL calculation needs cost basis (fill prices are thrown away by strategy counters). Uses exact i64
-//! quote mantissas throughout (no float). Only division is average cost (roll_basis) when closing a
-//! partial position. Fills fold during their message, before the strategy sees on_fill.
+//! The position, cash and cost basis of each instrument, so the engine can value its own PnL: a
+//! strategy's counters drop the fill prices. Each amount is an exact mantissa, never a float.
 
-use crate::msg::ids::{InstrumentId, Price, Qty, Side};
+use crate::hot::digest::{digest_by_hash, digest_fields};
+use crate::msg::ids::{InstrumentId, Notional, Price, Qty, Side};
 use crate::runtime::exposure::InstrumentExposure;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -11,16 +10,16 @@ pub(crate) struct LedgerFill {
     pub(crate) instrument: InstrumentId,
     pub(crate) side: Side,
     pub(crate) base: Qty,
-    pub(crate) notional_quote: i64,
-    pub(crate) commission_quote: i64,
+    pub(crate) notional_quote: Notional,
+    pub(crate) commission_quote: Notional,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub(crate) struct LedgerRow {
-    position_base: i64,
-    cash_quote: i64,
-    basis_quote: i64,
-    realised_at_boot: i64,
+    position_base: Qty,
+    cash_quote: Notional,
+    basis_quote: Notional,
+    realised_at_boot: Notional,
     mark: Option<Price>,
 }
 
@@ -32,67 +31,64 @@ impl LedgerRow {
 
     #[inline]
     pub(crate) fn position_base(&self) -> Qty {
-        Qty(self.position_base)
+        self.position_base
     }
 
     #[inline]
-    pub(crate) fn cash_quote(&self) -> i64 {
+    pub(crate) fn cash_quote(&self) -> Notional {
         self.cash_quote
     }
 
     #[inline]
-    pub(crate) fn basis_quote(&self) -> i64 {
+    pub(crate) fn basis_quote(&self) -> Notional {
         self.basis_quote
     }
 
     #[inline]
-    pub(crate) fn exposure_quote(&self) -> i64 {
+    pub(crate) fn exposure_quote(&self) -> Notional {
         self.mark
-            .map_or(0, |mark| mark.notional(self.position_base()))
+            .map_or(Notional::ZERO, |mark| mark.notional(self.position_base))
     }
 
     #[inline]
-    pub(crate) fn pnl_quote(&self) -> i64 {
-        narrow(
-            i128::from(self.cash_quote) + i128::from(self.exposure_quote()),
+    pub(crate) fn pnl_quote(&self) -> Notional {
+        narrow_quote(
+            wide(self.cash_quote) + wide(self.exposure_quote()),
             "pnl_quote",
         )
     }
 
     #[inline]
-    pub(crate) fn session_realised_quote(&self) -> i64 {
-        narrow(
-            i128::from(self.realised_quote()) - i128::from(self.realised_at_boot),
+    pub(crate) fn session_realised_quote(&self) -> Notional {
+        narrow_quote(
+            wide(self.realised_quote()) - wide(self.realised_at_boot),
             "session_realised_quote",
         )
     }
 
     #[inline]
-    fn realised_quote(&self) -> i64 {
-        narrow(
-            i128::from(self.cash_quote) + i128::from(self.basis_quote),
+    fn realised_quote(&self) -> Notional {
+        narrow_quote(
+            wide(self.cash_quote) + wide(self.basis_quote),
             "realised_quote",
         )
     }
 
     #[inline]
     fn roll_basis(&mut self, base_delta: i128, cost_delta: i128) {
-        let position = i128::from(self.position_base);
+        let position = i128::from(self.position_base.mantissa());
         let closed = if position.signum() == -base_delta.signum() {
             position.abs().min(base_delta.abs())
         } else {
             0
         };
         if closed == 0 {
-            self.basis_quote = narrow(i128::from(self.basis_quote) + cost_delta, "basis_quote");
+            self.basis_quote = narrow_quote(wide(self.basis_quote) + cost_delta, "basis_quote");
             return;
         }
-        let released = i128::from(self.basis_quote) * closed / position.abs();
+        let released = wide(self.basis_quote) * closed / position.abs();
         let opened = cost_delta - cost_delta * closed / base_delta.abs();
-        self.basis_quote = narrow(
-            i128::from(self.basis_quote) - released + opened,
-            "basis_quote",
-        );
+        self.basis_quote = narrow_quote(wide(self.basis_quote) - released + opened, "basis_quote");
     }
 }
 
@@ -101,9 +97,12 @@ pub(crate) struct PositionLedger {
     rows: Vec<LedgerRow>,
 }
 
+digest_by_hash!(LedgerRow);
+digest_fields! { PositionLedger { rows } }
+
 impl PositionLedger {
     pub(crate) fn new(instrument_count: usize, restored: &[InstrumentExposure]) -> Self {
-        debug_assert!(
+        assert!(
             instrument_count <= usize::from(u16::MAX),
             "{instrument_count} instrument rows exceed the u16 instrument-id space"
         );
@@ -112,13 +111,13 @@ impl PositionLedger {
             let Some(row) = rows.get_mut(usize::from(exposure.instrument.0)) else {
                 continue;
             };
-            row.position_base = exposure.position_base.0;
-            row.cash_quote = exposure.cash_quote;
-            row.basis_quote = exposure.basis_quote;
+            row.position_base = exposure.position_base;
+            row.cash_quote = Notional::from_mantissa(exposure.cash_quote);
+            row.basis_quote = Notional::from_mantissa(exposure.basis_quote);
             row.realised_at_boot = row.realised_quote();
-            debug_assert_eq!(
+            assert_eq!(
                 row.session_realised_quote(),
-                0,
+                Notional::ZERO,
                 "a restored row must boot having realised nothing THIS session, or the kill switch \
                  measures a previous run's result"
             );
@@ -149,14 +148,14 @@ impl PositionLedger {
         // Side already carries the direction, so a negative size is not a sell — it is a bug that
         // would move the position and the cash the same way and never be visible again. Zero is
         // legitimate: a size rounded down at the scale boundary is a fill of nothing.
-        debug_assert!(
-            fill.base.0 >= 0 && fill.notional_quote >= 0,
+        assert!(
+            fill.base.mantissa() >= 0 && fill.notional_quote >= Notional::ZERO,
             "a fill's size and value are unsigned by contract, got base {} quote {}",
-            fill.base.0,
-            fill.notional_quote
+            fill.base.mantissa(),
+            fill.notional_quote.mantissa()
         );
-        let notional = i128::from(fill.notional_quote);
-        let qty = i128::from(fill.base.0);
+        let notional = wide(fill.notional_quote);
+        let qty = i128::from(fill.base.mantissa());
         // `cost_delta` carries the position's own sign — what a buy PAID, what a sell RECEIVED — so
         // the basis and the position it belongs to always read the same way round. Cash is its
         // mirror, since money leaves on a buy and arrives on a sell.
@@ -166,14 +165,17 @@ impl PositionLedger {
         };
         let row = &mut self.rows[usize::from(fill.instrument.0)];
         row.roll_basis(base_delta, cost_delta);
-        row.position_base = narrow(i128::from(row.position_base) + base_delta, "position_base");
+        row.position_base = Qty::from_mantissa(narrow(
+            i128::from(row.position_base.mantissa()) + base_delta,
+            "position_base",
+        ));
         // The commission is a cost whichever way the fill went, and only ever reaches here already
         // filtered to the instrument's own quote asset — a fee paid in some other asset belongs to
         // that asset's balance, not to this instrument's PnL. It never touches the basis: a fee is
         // realised the moment it is paid, and burying it in the cost of an open position would let
         // the kill switch ignore the one cost a maker pays on every single fill.
-        row.cash_quote = narrow(
-            i128::from(row.cash_quote) - cost_delta - i128::from(fill.commission_quote),
+        row.cash_quote = narrow_quote(
+            wide(row.cash_quote) - cost_delta - wide(fill.commission_quote),
             "cash_quote",
         );
     }
@@ -207,4 +209,16 @@ impl PositionLedger {
 pub(crate) fn narrow(value: i128, field: &'static str) -> i64 {
     i64::try_from(value)
         .unwrap_or_else(|_| panic!("position ledger overflow: {field} = {value} leaves i64"))
+}
+
+/// The quote money of an exact sum, with the panic of [`narrow`].
+#[inline]
+pub(crate) fn narrow_quote(value: i128, field: &'static str) -> Notional {
+    Notional::from_mantissa(narrow(value, field))
+}
+
+/// Quote money widened for a sum that cannot wrap.
+#[inline]
+pub(crate) fn wide(quote: Notional) -> i128 {
+    i128::from(quote.mantissa())
 }

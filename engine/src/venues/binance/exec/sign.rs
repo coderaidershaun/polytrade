@@ -1,12 +1,11 @@
-//! Signs every private Binance call with HMAC-SHA256. Parameters become the exact signed bytes,
-//! which REST sends in the URL and the WebSocket API sends as JSON, so nothing private reaches the
-//! wire unsigned.
+//! Signs each private Binance call with HMAC-SHA256 over the exact bytes that go on the wire, so
+//! nothing private leaves unsigned.
 
 use std::fmt;
 
 use ring::hmac;
 
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs, VenueTs};
 use crate::runtime::secrets::Secret;
 
 const TIMESTAMP_PARAM: &str = "timestamp";
@@ -62,9 +61,9 @@ impl ClockOffset {
 
     /// `observed_at` must be when the response arrived. Taken at receipt, the offset lags, which is
     /// safe; taken at send, it would stamp requests ahead of the venue's clock.
-    pub fn learn(server_time: TsUs, observed_at: TsUs) -> Self {
+    pub fn learn(server_time: VenueTs, observed_at: LocalTs) -> Self {
         Self {
-            correction: server_time.diff(observed_at),
+            correction: server_time.offset_from(observed_at),
         }
     }
 
@@ -74,8 +73,13 @@ impl ClockOffset {
 
     /// Takes the time as a parameter rather than reading a clock, so a replay stamps identically.
     /// Rounds down, which is the safe side.
-    pub fn stamp(self, local_now: TsUs) -> RequestStamp {
-        RequestStamp((local_now + self.correction).micros().div_euclid(1_000))
+    pub fn stamp(self, local_now: LocalTs) -> RequestStamp {
+        RequestStamp(
+            local_now
+                .on_venue_clock(self.correction)
+                .micros()
+                .div_euclid(1_000),
+        )
     }
 }
 

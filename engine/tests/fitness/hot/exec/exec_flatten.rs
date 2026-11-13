@@ -1,10 +1,5 @@
-//! FITNESS: ctx.flatten is the only liquidity-taking path. All safeguards against overuse
-//! are tested here. Flatten is a DECLARATION (level-triggered like quotes), not a command:
-//! market orders outliving intent should not exist. The engine plans a new order each spin
-//! based on current position. The flatten lane is separate from ctx.quote by design: a quote
-//! declared Immediate is still refused by the reconciler, because a strategy that meant to rest
-//! but crossed the spread has made a mistake. Both halves are pinned together to prevent
-//! convergence on the easiest path.
+//! Flatten is the one path that takes liquidity, declared each spin like a quote. These tests hold
+//! its safeguards, and that a quote that would cross is still refused.
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
@@ -13,8 +8,8 @@ use engine::hot::exec::{
 };
 use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{ExecCommand, ExecKind, ExecLaneItem, OrderStyle, VenueOrderStatus};
-use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, Price, Qty, Side};
-use engine::msg::inbound::{InboundMessage, SpinTick};
+use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, Notional, Price, Qty, Side};
+use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::DurationUs;
 use engine::runtime::config::{RecordedTables, TrackerSpec};
 use engine::runtime::registry::InstrumentRow;
@@ -22,7 +17,7 @@ use rtrb::Consumer;
 
 use crate::engine_support::{
     ALL_TABLES, FillPen, account_chunk, exec_event, instrument_row, rich, snapshot_pair,
-    stream_ready, top,
+    stream_ready, top, ts,
 };
 use crate::exec_support::{
     CEILING, INSTRUMENT, QuotingSetup, built_quoting_engine, drain_commands, exec_settings,
@@ -33,8 +28,8 @@ use crate::exec_support::{
 /// decimals, and the venue refuses anything below five shares or above `1 − tick`.
 const TICK: i64 = FIXED_SCALE / 100;
 const SHARE_STEP: i64 = FIXED_SCALE / 100;
-const MIN_SHARES: Qty = Qty(5 * FIXED_SCALE);
-const MAX_PRICE: Price = Price(FIXED_SCALE - TICK);
+const MIN_SHARES: Qty = Qty::from_mantissa(5 * FIXED_SCALE);
+const MAX_PRICE: Price = Price::from_mantissa(FIXED_SCALE - TICK);
 /// The crypto taker rate: 0.07.
 const FEE_RATE: i64 = 7 * FIXED_SCALE / 100;
 
@@ -47,7 +42,7 @@ fn poly_grid() -> TickGrid {
         tick: TICK,
         step: SHARE_STEP,
         min_qty: MIN_SHARES,
-        min_notional: 0,
+        min_notional: Notional::from_mantissa(0),
         max_amends: 0,
         max_price: Some(MAX_PRICE),
     }
@@ -55,13 +50,13 @@ fn poly_grid() -> TickGrid {
 
 fn poly_row() -> InstrumentRow {
     InstrumentRow {
-        tick_size: Some(Price(TICK)),
-        lot_size: Some(Qty(SHARE_STEP)),
+        tick_size: Some(Price::from_mantissa(TICK)),
+        lot_size: Some(Qty::from_mantissa(SHARE_STEP)),
         min_qty: Some(MIN_SHARES),
         max_num_orders: Some(32),
         max_num_order_amends: Some(0),
         max_price: Some(MAX_PRICE),
-        max_exposure_quote: CEILING,
+        max_exposure_quote: Notional::from_mantissa(CEILING),
         ..instrument_row(0, TrackerSpec::default(), 64)
     }
 }
@@ -71,13 +66,13 @@ fn limits() -> ExecLimits {
         requote_threshold_ticks: 1,
         max_quote_distance_centi_bps: 100_000_000,
         max_book_age: DurationUs::from_secs(3_600),
-        max_order_notional_quote: 1_000_000 * FIXED_SCALE,
+        max_order_notional_quote: Notional::from_mantissa(1_000_000 * FIXED_SCALE),
     }
 }
 
 fn holding(position_base: i64) -> FlattenInput {
     FlattenInput {
-        position_base: Qty(position_base),
+        position_base: Qty::from_mantissa(position_base),
         grid: poly_grid(),
         top: top(BID, ASK),
         limits: limits(),
@@ -117,15 +112,15 @@ fn plan_flatten_outcomes_match_named_cases() {
         input: FlattenInput,
         expect: Expect,
     }
-    let sell_price = Price(BID - SLACK_TICKS as i64 * TICK);
-    let buy_price = Price(ASK + SLACK_TICKS as i64 * TICK);
+    let sell_price = Price::from_mantissa(BID - SLACK_TICKS as i64 * TICK);
+    let buy_price = Price::from_mantissa(ASK + SLACK_TICKS as i64 * TICK);
     let cases = [
         Case {
             name: "a_long_sells_into_the_bid_through_the_slack",
             input: holding(10 * FIXED_SCALE),
             expect: Expect::Place {
                 price: sell_price,
-                qty: Qty(10 * FIXED_SCALE),
+                qty: Qty::from_mantissa(10 * FIXED_SCALE),
             },
         },
         Case {
@@ -133,7 +128,7 @@ fn plan_flatten_outcomes_match_named_cases() {
             input: holding(-10 * FIXED_SCALE),
             expect: Expect::Place {
                 price: buy_price,
-                qty: Qty(10 * FIXED_SCALE),
+                qty: Qty::from_mantissa(10 * FIXED_SCALE),
             },
         },
         Case {
@@ -144,12 +139,12 @@ fn plan_flatten_outcomes_match_named_cases() {
         Case {
             name: "buying_through_an_ask_already_at_the_top_stops_at_the_top",
             input: FlattenInput {
-                top: top(MAX_PRICE.0 - TICK, MAX_PRICE.0),
+                top: top(MAX_PRICE.mantissa() - TICK, MAX_PRICE.mantissa()),
                 ..holding(-10 * FIXED_SCALE)
             },
             expect: Expect::Place {
                 price: MAX_PRICE,
-                qty: Qty(10 * FIXED_SCALE),
+                qty: Qty::from_mantissa(10 * FIXED_SCALE),
             },
         },
         Case {
@@ -159,8 +154,8 @@ fn plan_flatten_outcomes_match_named_cases() {
                 ..holding(10 * FIXED_SCALE)
             },
             expect: Expect::Place {
-                price: Price(TICK),
-                qty: Qty(10 * FIXED_SCALE),
+                price: Price::from_mantissa(TICK),
+                qty: Qty::from_mantissa(10 * FIXED_SCALE),
             },
         },
         Case {
@@ -170,23 +165,23 @@ fn plan_flatten_outcomes_match_named_cases() {
                     max_price: None,
                     ..poly_grid()
                 },
-                top: top(MAX_PRICE.0 - TICK, MAX_PRICE.0),
+                top: top(MAX_PRICE.mantissa() - TICK, MAX_PRICE.mantissa()),
                 fee_model: FeeModel::None,
                 ..holding(-10 * FIXED_SCALE)
             },
             expect: Expect::Place {
-                price: Price(MAX_PRICE.0 + SLACK_TICKS as i64 * TICK),
-                qty: Qty(10 * FIXED_SCALE),
+                price: Price::from_mantissa(MAX_PRICE.mantissa() + SLACK_TICKS as i64 * TICK),
+                qty: Qty::from_mantissa(10 * FIXED_SCALE),
             },
         },
         Case {
             name: "one_step_under_the_minimum_is_refused_rather_than_rounded",
-            input: holding(MIN_SHARES.0 - SHARE_STEP),
+            input: holding(MIN_SHARES.mantissa() - SHARE_STEP),
             expect: Expect::Refuse(RejectReason::QtyBelowMin),
         },
         Case {
             name: "the_minimum_itself_still_trades",
-            input: holding(MIN_SHARES.0),
+            input: holding(MIN_SHARES.mantissa()),
             expect: Expect::Place {
                 price: sell_price,
                 qty: MIN_SHARES,
@@ -252,31 +247,38 @@ fn plan_flatten_outcomes_match_named_cases() {
 /// shares at 0.50 costs 1.75, and the same hundred at 0.10 or 0.90 costs 0.63.
 #[test]
 fn the_taker_fee_matches_the_venues_published_worked_examples() {
-    let hundred = Qty(100 * FIXED_SCALE);
-    let even_money = Price(FIXED_SCALE / 2);
+    let hundred = Qty::from_mantissa(100 * FIXED_SCALE);
+    let even_money = Price::from_mantissa(FIXED_SCALE / 2);
     assert_eq!(
         FeeModel::BinaryOutcome.taker_fee_quote(even_money, hundred, FEE_RATE),
-        175 * FIXED_SCALE / 100,
+        Notional::from_mantissa(175 * FIXED_SCALE / 100),
         "100 shares at 0.50 costs 1.75"
     );
-    for price in [Price(FIXED_SCALE / 10), Price(9 * FIXED_SCALE / 10)] {
+    for price in [
+        Price::from_mantissa(FIXED_SCALE / 10),
+        Price::from_mantissa(9 * FIXED_SCALE / 10),
+    ] {
         assert_eq!(
             FeeModel::BinaryOutcome.taker_fee_quote(price, hundred, FEE_RATE),
-            63 * FIXED_SCALE / 100,
+            Notional::from_mantissa(63 * FIXED_SCALE / 100),
             "and 0.63 at either 0.10 or 0.90 — the curve is symmetric about even money"
         );
     }
     assert_eq!(
         FeeModel::BinaryOutcome.taker_fee_quote(even_money, hundred, 0),
-        0,
+        Notional::from_mantissa(0),
         "a rate of nothing charges nothing"
     );
     // The curve is only meaningful between the bounds. Beyond them it must answer zero rather than
     // go negative: a negative fee hands a buy MORE headroom the further out of range the price is.
-    for outside in [Price(0), Price(FIXED_SCALE), Price(100_000 * FIXED_SCALE)] {
+    for outside in [
+        Price::from_mantissa(0),
+        Price::from_mantissa(FIXED_SCALE),
+        Price::from_mantissa(100_000 * FIXED_SCALE),
+    ] {
         assert_eq!(
             FeeModel::BinaryOutcome.taker_fee_quote(outside, hundred, FEE_RATE),
-            0
+            Notional::from_mantissa(0)
         );
     }
 }
@@ -290,11 +292,11 @@ fn the_taker_fee_matches_the_venues_published_worked_examples() {
 /// buys strictly more, so the number cannot be coming from any other cap.
 #[test]
 fn a_buy_reserves_the_taker_fee_alongside_the_notional() {
-    let price = Price(ASK + SLACK_TICKS as i64 * TICK);
-    let budget = price.notional(Qty(10 * FIXED_SCALE));
+    let price = Price::from_mantissa(ASK + SLACK_TICKS as i64 * TICK);
+    let budget = price.notional(Qty::from_mantissa(10 * FIXED_SCALE));
     let short_of_ten = FlattenInput {
         funds: FundsView {
-            spendable: budget,
+            spendable: budget.mantissa(),
             floor: 0,
         },
         ..holding(-10 * FIXED_SCALE)
@@ -302,7 +304,7 @@ fn a_buy_reserves_the_taker_fee_alongside_the_notional() {
 
     let with_fee = placed(plan_flatten(short_of_ten)).qty;
     assert!(
-        with_fee < Qty(10 * FIXED_SCALE),
+        with_fee < Qty::from_mantissa(10 * FIXED_SCALE),
         "the account holds exactly the notional of ten shares, so ten shares plus their fee is more \
          than it has: asked for {with_fee:?}"
     );
@@ -314,7 +316,7 @@ fn a_buy_reserves_the_taker_fee_alongside_the_notional() {
     .qty;
     assert_eq!(
         free_of_charge,
-        Qty(10 * FIXED_SCALE),
+        Qty::from_mantissa(10 * FIXED_SCALE),
         "and the identical budget covers all ten when nothing is charged on top"
     );
     assert!(
@@ -347,7 +349,7 @@ impl Strategy for CrossingQuoter {
             Side::Sell,
             QuoteLevel::ZERO,
             Some(DesiredQuote {
-                price: Price(BID),
+                price: Price::from_mantissa(BID),
                 qty: MIN_SHARES,
                 style: OrderStyle::Immediate,
             }),
@@ -380,13 +382,16 @@ fn flattening_engine(strategy: Box<dyn Strategy>) -> (HotEngine, Consumer<ExecLa
 /// restates balances. That gate is `exec_order`'s to pin; here it would silently stop re-fire.
 fn make_ready_with_inventory(engine: &mut HotEngine, when: i64) {
     engine.dispatch(&stream_ready(INSTRUMENT, when));
-    engine.dispatch(&InboundMessage::Account(account_chunk(
-        &[
-            (AssetId(0), 10_000 * FIXED_SCALE),
-            (AssetId(1), 10_000 * FIXED_SCALE),
-        ],
-        when,
-    )));
+    engine.dispatch(&InboundMessage::new(
+        ts(when),
+        MessageBody::Account(account_chunk(
+            &[
+                (AssetId(0), 10_000 * FIXED_SCALE),
+                (AssetId(1), 10_000 * FIXED_SCALE),
+            ],
+            when,
+        )),
+    ));
     open_orders_snapshot(engine, when);
 }
 
@@ -399,8 +404,8 @@ fn seat_book(engine: &mut HotEngine, when: i64) {
         &[(ASK, 100 * FIXED_SCALE)],
         when,
     );
-    engine.dispatch(&InboundMessage::Book(bids));
-    engine.dispatch(&InboundMessage::Book(asks));
+    engine.dispatch(&InboundMessage::new(ts(when), MessageBody::Book(bids)));
+    engine.dispatch(&InboundMessage::new(ts(when), MessageBody::Book(asks)));
 }
 
 /// An engine long ten shares bought at 0.41 through the real inbound path, with its commands drained.
@@ -452,7 +457,7 @@ fn a_declared_flatten_sends_one_marketable_order_and_expires_with_the_declaratio
     );
     let (side, qty, style, client_id) = sent[0];
     assert_eq!(side, Side::Sell, "a long is closed by selling");
-    assert_eq!(qty, Qty(10 * FIXED_SCALE), "all of it");
+    assert_eq!(qty, Qty::from_mantissa(10 * FIXED_SCALE), "all of it");
     assert_eq!(style, OrderStyle::Immediate);
 
     // The order dies without filling; the position is untouched and still wants closing.
@@ -483,29 +488,35 @@ fn a_partial_fill_re_fires_next_spin_sized_by_what_is_left() {
     spin_at(&mut engine, 1, 30);
     let first = flatten_places(&drain_commands(&mut commands));
     let (_, qty, _, client_id) = first[0];
-    assert_eq!(qty, Qty(10 * FIXED_SCALE));
+    assert_eq!(qty, Qty::from_mantissa(10 * FIXED_SCALE));
 
     // Four of the ten shares trade and the remainder is killed, which is what a fill-and-kill does.
-    let price = Price(BID - SLACK_TICKS as i64 * TICK);
-    let filled = Qty(4 * FIXED_SCALE);
-    engine.dispatch(&InboundMessage::Exec(engine::msg::exec::ExecEvent {
-        kind: ExecKind::ReportTrade,
-        status: Some(VenueOrderStatus::PartiallyFilled),
-        qty: Qty(10 * FIXED_SCALE),
-        last_price: price,
-        last_qty: filled,
-        cumulative_qty: filled,
-        cumulative_quote: price.notional(filled),
-        ..exec_event(INSTRUMENT, client_id, Side::Sell, price.0, 40)
-    }));
-    engine.dispatch(&InboundMessage::Exec(engine::msg::exec::ExecEvent {
-        kind: ExecKind::ReportExpired,
-        status: Some(VenueOrderStatus::Expired),
-        qty: Qty(10 * FIXED_SCALE),
-        cumulative_qty: filled,
-        cumulative_quote: price.notional(filled),
-        ..exec_event(INSTRUMENT, client_id, Side::Sell, price.0, 41)
-    }));
+    let price = Price::from_mantissa(BID - SLACK_TICKS as i64 * TICK);
+    let filled = Qty::from_mantissa(4 * FIXED_SCALE);
+    engine.dispatch(&InboundMessage::new(
+        ts(40),
+        MessageBody::Exec(engine::msg::exec::ExecEvent {
+            kind: ExecKind::ReportTrade,
+            status: Some(VenueOrderStatus::PartiallyFilled),
+            qty: Qty::from_mantissa(10 * FIXED_SCALE),
+            last_price: price,
+            last_qty: filled,
+            cumulative_qty: filled,
+            cumulative_quote: price.notional(filled),
+            ..exec_event(INSTRUMENT, client_id, Side::Sell, price.mantissa(), 40)
+        }),
+    ));
+    engine.dispatch(&InboundMessage::new(
+        ts(41),
+        MessageBody::Exec(engine::msg::exec::ExecEvent {
+            kind: ExecKind::ReportExpired,
+            status: Some(VenueOrderStatus::Expired),
+            qty: Qty::from_mantissa(10 * FIXED_SCALE),
+            cumulative_qty: filled,
+            cumulative_quote: price.notional(filled),
+            ..exec_event(INSTRUMENT, client_id, Side::Sell, price.mantissa(), 41)
+        }),
+    ));
     drain_commands(&mut commands);
 
     spin_at(&mut engine, 2, 50);
@@ -513,7 +524,7 @@ fn a_partial_fill_re_fires_next_spin_sized_by_what_is_left() {
     assert_eq!(second.len(), 1, "the rest still wants closing: {second:?}");
     assert_eq!(
         second[0].1,
-        Qty(6 * FIXED_SCALE),
+        Qty::from_mantissa(6 * FIXED_SCALE),
         "six shares left, so six shares asked for — not the original ten and not a remainder \
          tracked somewhere the ledger cannot correct"
     );
@@ -547,9 +558,12 @@ fn a_market_order_declared_as_a_quote_is_still_refused_by_name() {
 
 /// Ends an unfilled marketable order, which is what a venue does with a take that found no match.
 fn kill_unfilled(engine: &mut HotEngine, client_id: ClientOrderId, when: i64) {
-    engine.dispatch(&InboundMessage::Exec(engine::msg::exec::ExecEvent {
-        kind: ExecKind::ReportExpired,
-        status: Some(VenueOrderStatus::Expired),
-        ..exec_event(INSTRUMENT, client_id, Side::Sell, BID, when)
-    }));
+    engine.dispatch(&InboundMessage::new(
+        ts(when),
+        MessageBody::Exec(engine::msg::exec::ExecEvent {
+            kind: ExecKind::ReportExpired,
+            status: Some(VenueOrderStatus::Expired),
+            ..exec_event(INSTRUMENT, client_id, Side::Sell, BID, when)
+        }),
+    ));
 }

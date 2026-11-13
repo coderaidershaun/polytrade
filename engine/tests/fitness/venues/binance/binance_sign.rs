@@ -1,13 +1,11 @@
-//! Credential + signing fitness: a signed Binance request must reproduce the venue's documented
-//! HMAC vector, must build the same payload no matter what order the caller set the params in, and
-//! must never carry a secret into a log line. Every failure here is silent — a wrong payload order
-//! reads as a rejected order, and a leaked secret reads as nothing at all until the account drains.
+//! A signed Binance request matches the venue's documented HMAC vector, signs the same bytes
+//! whatever the order of its parameters, and never puts a secret in a log line.
 
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::runtime::secrets::{CredentialVariables, EnvFile, Secret, SecretError};
 use engine::venues::binance::exec::{
     ClockOffset, RecvWindow, RequestParams, RequestSigner, SignError,
@@ -29,7 +27,7 @@ const ORDER_PARAMS: [(&str, &str); 6] = [
     ("price", "0.1"),
 ];
 
-const STAMP: TsUs = TsUs::from_micros(1_499_827_319_559_000);
+const STAMP: LocalTs = LocalTs::from_micros(1_499_827_319_559_000);
 
 fn signer() -> RequestSigner {
     RequestSigner::new(&Secret::new(DOCUMENTED_SECRET))
@@ -171,8 +169,8 @@ fn credential_values_never_leak_into_an_error_or_a_debug_rendering() {
 
 #[test]
 fn a_skewed_host_clock_stamps_venue_time() {
-    let venue_now = TsUs::from_micros(1_499_827_319_559_000);
-    let host_now = venue_now - DurationUs::from_secs(2);
+    let venue_now = VenueTs::from_micros(1_499_827_319_559_000);
+    let host_now = LocalTs::from_micros(venue_now.micros()) - DurationUs::from_secs(2);
     let offset = ClockOffset::learn(venue_now, host_now);
 
     assert_eq!(offset.correction(), DurationUs::from_secs(2));

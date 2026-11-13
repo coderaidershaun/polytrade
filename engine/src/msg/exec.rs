@@ -1,21 +1,19 @@
-//! The execution vocabulary: order-lifecycle events, inbound account balances, and outbound
-//! commands. All fixed-size plain data. Venue-neutral, since the edge normalizes wire
-//! spellings before anything reaches here. Absence is spelled two ways: an identity or
-//! classification that may be missing is an `Option`; a missing number is zero.
+//! The execution vocabulary in fixed-size plain data: order events, account balances, and commands
+//! to the edge. Each venue spelling is normalised at the edge, before it reaches here.
 
 use crate::msg::ids::{
-    AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId,
+    AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, TradeId, VenueOrderId,
 };
 use crate::msg::labelled_enum::labelled_enum;
-use crate::msg::time::{Tick, TsUs};
+use crate::msg::time::{LocalTs, Tick, VenueTs};
 
-/// A normalised order-lifecycle transition. Stream-lifecycle kinds carry only their kind
-/// and their stamps.
+/// A normalised order-lifecycle transition. Stream-lifecycle kinds carry only their kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExecEvent {
     /// A configured instrument; the edge drops any symbol that isn't configured. Balances
-    /// instead carry an UNKNOWN asset when this happens.
-    pub instrument: InstrumentId,
+    /// instead carry an UNKNOWN asset when this happens. `None` for an event of the account
+    /// stream itself, which names no instrument.
+    pub instrument: Option<InstrumentId>,
     pub client_id: ClientOrderId,
     pub venue_order_id: Option<VenueOrderId>,
     pub trade_id: Option<TradeId>,
@@ -33,7 +31,7 @@ pub struct ExecEvent {
     /// The venue's absolute cumulative total, never a delta, so a dropped event can never
     /// corrupt the ledger.
     pub cumulative_qty: Qty,
-    pub cumulative_quote: i64,
+    pub cumulative_quote: Notional,
     /// The fee for `last_qty`, as a 1e-8 mantissa, negative for a rebate. The asset is UNKNOWN when
     /// this configured instrument is not charged a fee at all.
     pub commission: i64,
@@ -48,13 +46,11 @@ pub struct ExecEvent {
     /// instead. Lets the fold discard answers that have gone stale.
     pub recon_seq: u64,
     /// The venue's own transaction time, never interchanged with a local stamp.
-    pub exchange_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
     /// This process's wire-send stamp for the request this event answers. `None` for a
     /// stream event, a plain REST read, or a synthesised event, since none of those answer
     /// a timed request.
-    pub request_sent_ts_us: Option<TsUs>,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
+    pub request_sent_ts_us: Option<LocalTs>,
 }
 
 impl ExecEvent {
@@ -210,8 +206,8 @@ pub enum AccountChunkKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AccountChunk {
     pub kind: AccountChunkKind,
-    pub balances: [AssetBalance; ACCOUNT_CHUNK_ASSETS],
-    pub len: u8,
+    balances: [AssetBalance; ACCOUNT_CHUNK_ASSETS],
+    len: u8,
     pub is_last_chunk: bool,
     /// The venue's own stamp on the evidence that these balances moved, in whole milliseconds —
     /// never a sequence, an id, or a reading of a local clock. The hot side holds a balance
@@ -222,21 +218,38 @@ pub struct AccountChunk {
     /// reservation for want of evidence is the safe direction — a local clock advances on every
     /// read and frees one before the money moved.
     pub venue_update_ts_ms: u64,
-    pub exchange_ts_us: TsUs,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
 }
 
 impl AccountChunk {
-    /// The filled prefix of the balances array; the `len` invariant is asserted here.
+    /// A chunk with no balance yet, not the last of its snapshot.
+    pub fn new(kind: AccountChunkKind, venue_update_ts_ms: u64, exchange_ts_us: VenueTs) -> Self {
+        Self {
+            kind,
+            balances: [AssetBalance {
+                asset: AssetId::UNKNOWN,
+                free: 0,
+                locked: 0,
+            }; ACCOUNT_CHUNK_ASSETS],
+            len: 0,
+            is_last_chunk: false,
+            venue_update_ts_ms,
+            exchange_ts_us,
+        }
+    }
+
+    /// Takes the balances in order until the chunk is full, and returns how many it took.
+    pub fn push_balances(&mut self, balances: &[AssetBalance]) -> usize {
+        let start = usize::from(self.len);
+        let taken = balances.len().min(ACCOUNT_CHUNK_ASSETS - start);
+        self.balances[start..start + taken].copy_from_slice(&balances[..taken]);
+        self.len += taken as u8;
+        taken
+    }
+
     #[inline]
     pub fn active_balances(&self) -> &[AssetBalance] {
-        debug_assert!(
-            self.len as usize <= ACCOUNT_CHUNK_ASSETS,
-            "chunk len {} exceeds capacity {ACCOUNT_CHUNK_ASSETS}",
-            self.len
-        );
-        &self.balances[..self.len as usize]
+        &self.balances[..usize::from(self.len)]
     }
 }
 
@@ -297,12 +310,12 @@ impl ExecCommand {
     }
 }
 
-/// A command on its way to the edge, stamped with the message time of the spin whose drain sent it,
-/// for a replay to reproduce.
+/// A command on its way to the edge, stamped with the fold time of its banking, so a replay gives
+/// the same stamp however long the command waited in the bank.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StampedExecCommand {
     pub command: ExecCommand,
-    pub issued_ts_us: TsUs,
+    pub issued_ts_us: LocalTs,
     /// The latency counter when the command entered the bank. A command that waited there keeps
     /// it. Only a sender reads it, to time the command's way to the wire.
     pub issue_tick: Tick,
@@ -312,7 +325,7 @@ pub struct StampedExecCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExecLaneItem {
     Command(StampedExecCommand),
-    Watermark(TsUs),
+    Watermark(LocalTs),
 }
 
 /// Why an exit is cancelling. Every exit path must cancel, since there is no bound on

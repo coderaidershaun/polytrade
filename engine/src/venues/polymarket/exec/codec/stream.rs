@@ -7,7 +7,7 @@
 
 use crate::msg::exec::{ExecEvent, ExecKind, Liquidity};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, TradeId};
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 use crate::venues::edge::decode::{order_side, price_field, qty_field, unknown_enum};
 use crate::venues::edge::venue_clock::clamp_or_receipt;
 
@@ -83,8 +83,8 @@ pub struct TradeLineage {
     /// The venue charges takers only, and publishes a rate rather than an amount. Only the rate
     /// travels; turning it into money here would put a float where an exact amount belongs.
     pub fee_rate_bps: i32,
-    pub exchange_ts_us: TsUs,
-    pub received_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
+    pub received_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -145,7 +145,7 @@ fn decode_order_event(
         // A resting order fills at its own limit, exactly.
         cumulative_quote: price.notional(filled),
         exchange_ts_us: venue_stamp(&event.timestamp, 1, context),
-        ..blank_event(kind, instrument, known.client_id, context)
+        ..blank_event(kind, Some(instrument), known.client_id, context)
     }))
 }
 
@@ -266,7 +266,7 @@ fn bps(text: &str) -> i32 {
 
 /// The venue stamps in text, and in seconds on one surface where another uses milliseconds. An
 /// unreadable stamp falls back to the moment this process received the frame.
-fn venue_stamp(text: &str, millis_per_unit: i64, context: &DecodeContext<'_>) -> TsUs {
+fn venue_stamp(text: &str, millis_per_unit: i64, context: &DecodeContext<'_>) -> VenueTs {
     let venue_ms = text
         .trim()
         .parse::<i64>()

@@ -1,46 +1,35 @@
-//! Guéant fill-intensity estimator (A, k) over the exponentially-decayed reach histogram. Driven
-//! through `MicroTracker`, because the histogram is anchored on the tracker's PRE-trade top of book
-//! and that anchoring is half the calculation: an estimator fed the post-trade book reports a fill
-//! intensity that is wrong in one direction all day and errors nowhere.
+//! The fill-intensity estimator, driven through the tracker, because it must read the top of book
+//! from before the trade: the book after the trade gives an error that no test would see.
 //!
 //! The reach histograms are private with no accessor, so only the two anomaly counters are pinned
 //! directly, and buy-to-ask routing is pinned through `estimate.bid.is_none()`. The bucket
 //! contents (per-depth fill, sweep grouping by `(side, exchange_ts)`, the shallower-continuation
 //! rule, decay between groups, the clamp of an inside-spread print to bucket 0) and the closed-form
-//! geometric MLE cross-check of the fit are not checked from outside the crate.
+//! geometric maximum-likelihood check of the fit are not checked from outside the crate.
 
 use super::Lcg;
 use engine::hot::book::{Book, SnapshotOutcome};
 use engine::hot::quant::intensity::{IntensityFit, PacedIntensity};
 use engine::hot::tracker::MicroTracker;
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
-use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, Level, TradeEvent};
+use engine::msg::inbound::{BookChunk, BookChunkKind, Level, TradeEvent};
 use engine::runtime::config::{IntensitySpec, TrackerSpec};
 
-use crate::engine_support::ts;
+use crate::engine_support::{ts, venue_ts};
 
-const TICK: Price = Price(10);
-const ASK: Price = Price(100_000);
-const BID: Price = Price(ASK.0 - TICK.0);
+const TICK: Price = Price::from_mantissa(10);
+const ASK: Price = Price::from_mantissa(100_000);
+const BID: Price = Price::from_mantissa(ASK.mantissa() - TICK.mantissa());
 
 fn snapshot_chunk(side: Side, price: Price, is_last_chunk: bool) -> BookChunk {
-    let mut levels = [Level {
-        price: Price(0),
-        qty: Qty(0),
-    }; BOOK_CHUNK_LEVELS];
-    levels[0] = Level { price, qty: Qty(1) };
-    BookChunk {
-        instrument: InstrumentId(0),
-        kind: BookChunkKind::Snapshot,
-        side,
-        levels,
-        len: 1,
-        is_last_chunk,
-        update_id: 1,
-        exchange_ts_us: None,
-        received_ts_us: ts(0),
-        queued_ts_us: ts(0),
-    }
+    let mut chunk = BookChunk::new(InstrumentId(0), BookChunkKind::Snapshot, side);
+    chunk.push_levels(&[Level {
+        price,
+        qty: Qty::from_mantissa(1),
+    }]);
+    chunk.is_last_chunk = is_last_chunk;
+    chunk.update_id = 1;
+    chunk
 }
 
 /// Tracker configured with intensity alone, its top of book already at BID/ASK.
@@ -69,17 +58,22 @@ fn ev(side: Side, price: Price, when: i64) -> TradeEvent {
     TradeEvent {
         instrument: InstrumentId(0),
         price,
-        qty: Qty(1),
+        qty: Qty::from_mantissa(1),
         side,
-        exchange_ts_us: ts(when),
+        exchange_ts_us: venue_ts(when),
         exchange_sent_ts_us: None,
-        received_ts_us: ts(when),
-        queued_ts_us: ts(when),
     }
 }
 
 fn buy(tracker: &mut MicroTracker, ticks: i64, when: i64) {
-    tracker.on_trade(&ev(Side::Buy, Price(ASK.0 + ticks * TICK.0), when));
+    tracker.on_trade(
+        &ev(
+            Side::Buy,
+            Price::from_mantissa(ASK.mantissa() + ticks * TICK.mantissa()),
+            when,
+        ),
+        ts(when),
+    );
 }
 
 fn geometric(tracker: &mut MicroTracker, seed: u64, k: f64, count: i64, dt_us: i64) {
@@ -106,7 +100,7 @@ fn prints_inside_the_spread_or_without_a_book_are_counted_as_anomalies() {
 
     // A print with no book to anchor against cannot be bucketed at all.
     tracker.on_book_reset();
-    tracker.on_trade(&ev(Side::Sell, BID, 1_000_000));
+    tracker.on_trade(&ev(Side::Sell, BID, 1_000_000), ts(1_000_000));
     assert_eq!(
         tracker
             .intensity()
@@ -154,7 +148,7 @@ fn fit_recovers_a_and_k_and_warm_starts() {
 #[test]
 fn a_pacer_with_no_cadence_never_fits() {
     let mut unconfigured = MicroTracker::new(&TrackerSpec::default(), &[], Some(TICK));
-    unconfigured.on_trade(&ev(Side::Buy, ASK, 0));
+    unconfigured.on_trade(&ev(Side::Buy, ASK, 0), ts(0));
     assert!(
         unconfigured.intensity().is_none(),
         "no reach histogram configured, so there are no counts to pace against"

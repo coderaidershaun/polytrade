@@ -1,7 +1,5 @@
-//! Zero-allocation fitness for the Hawkes monitor's live path: once the event window and the
-//! fitter's warm-start cache exist, streaming events into the window and refitting touches the
-//! allocator not at all. The cold fit is primed OUTSIDE the measured window, because a cold fit is
-//! an initialisation event, not steady state.
+//! The live path of the Hawkes monitor allocates nothing: once the window and the warm-start cache
+//! exist, events and refits never reach the allocator. The cold fit runs before the measure.
 //!
 //! Liveness counters ride alongside the allocation assertion: a fitter that quietly stopped
 //! producing estimates would satisfy "allocated nothing" perfectly, so it must be shown to have
@@ -9,9 +7,9 @@
 
 use crate::hot::quant::ExpSimulation;
 use engine::hot::quant::hawkes::{HawkesEvents, HawkesMle, HawkesParams};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs};
 
-const START: TsUs = TsUs::from_micros(0);
+const START: LocalTs = LocalTs::from_micros(0);
 
 /// Shorter than a production window on purpose: the fit's cost scales with it, and what this test
 /// proves (no allocation, live fits) does not depend on window length, so the suite buys nothing
@@ -31,16 +29,18 @@ const FIT_STRIDE: usize = 2_500;
 
 /// Repeats a simulated path end-to-end, shifting each lap past the previous one so the stamps stay
 /// non-decreasing — an out-of-order stamp would be clamped and collapse the fit window's span.
-fn tile(path: &[TsUs], wanted: usize) -> Vec<TsUs> {
+fn tile(path: &[LocalTs], wanted: usize) -> Vec<LocalTs> {
     let lap = path[path.len() - 1].micros() - path[0].micros() + 1_000_000;
     (0..wanted)
         .map(|index| {
-            TsUs::from_micros(path[index % path.len()].micros() + (index / path.len()) as i64 * lap)
+            LocalTs::from_micros(
+                path[index % path.len()].micros() + (index / path.len()) as i64 * lap,
+            )
         })
         .collect()
 }
 
-fn exponential_path() -> Vec<TsUs> {
+fn exponential_path() -> Vec<LocalTs> {
     ExpSimulation {
         params: HawkesParams::new(0.5, 0.8, 2.0),
         start_ts: START,

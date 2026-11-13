@@ -9,10 +9,10 @@ use account::has_account_update;
 use correlation::request_matches_answer;
 use summary::SimRunSummary;
 
-use crate::msg::exec::{CancelReason, ExecEvent, StampedExecCommand};
+use crate::msg::exec::{CancelReason, StampedExecCommand};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId};
-use crate::msg::inbound::InboundMessage;
-use crate::msg::time::TsUs;
+use crate::msg::inbound::{InboundMessage, MessageBody};
+use crate::msg::time::LocalTs;
 use crate::runtime::registry::AssetDictionary;
 use crate::runtime::shutdown::FatalSignal;
 use crate::venues::binance::exec::{DecodeContext, ResponseContext};
@@ -27,18 +27,18 @@ use super::core::schedule::{
 use super::core::{SimEmission, SimVenue};
 use super::wire::{SimFill, VenueWire, response_messages, stream_messages};
 
-/// The two timestamps an effect needs are both venue time and both `TsUs`, so only distinct field
+/// The two timestamps an effect needs are both venue time and both `LocalTs`, so only distinct field
 /// names stop a caller swapping them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct EffectStamp {
     /// When a request the effect sends reaches the matching model.
-    effective_ts_us: TsUs,
+    effective_ts_us: LocalTs,
     /// What the driver stamps on events it synthesises for the engine.
-    reported_ts_us: TsUs,
+    reported_ts_us: LocalTs,
 }
 
 impl EffectStamp {
-    const fn at(ts_us: TsUs) -> Self {
+    const fn at(ts_us: LocalTs) -> Self {
         Self {
             effective_ts_us: ts_us,
             reported_ts_us: ts_us,
@@ -47,7 +47,7 @@ impl EffectStamp {
 }
 
 pub struct SimExecDriver {
-    session: ExecSession<Vec<ExecEvent>>,
+    session: ExecSession<Vec<InboundMessage>>,
     venue: SimVenue,
     schedule: DeliverySchedule,
     wire: VenueWire,
@@ -79,7 +79,7 @@ impl SimExecDriver {
         }
     }
 
-    pub fn on_command(&mut self, stamped: StampedExecCommand, effective_ts_us: TsUs) {
+    pub fn on_command(&mut self, stamped: StampedExecCommand, effective_ts_us: LocalTs) {
         let command = stamped.command;
         let mut outgoing = Vec::new();
         self.session.core.on_command(
@@ -97,8 +97,8 @@ impl SimExecDriver {
 
     pub fn advance_to(
         &mut self,
-        horizon: TsUs,
-        effect_ts_us: TsUs,
+        horizon: LocalTs,
+        effect_ts_us: LocalTs,
         context: DecodeContext<'_>,
     ) -> Vec<InboundMessage> {
         let Self {
@@ -113,10 +113,7 @@ impl SimExecDriver {
             summary.observe(emission);
             schedule.accept(emission);
         }
-        let mut forwarded: Vec<InboundMessage> = std::mem::take(&mut self.session.events)
-            .into_iter()
-            .map(InboundMessage::Exec)
-            .collect();
+        let mut forwarded = std::mem::take(&mut self.session.events);
         let mut due = std::mem::take(&mut self.due);
         self.schedule.advance_to(horizon, &mut due);
         for answer in &due {
@@ -142,7 +139,7 @@ impl SimExecDriver {
         forwarded
     }
 
-    pub fn begin_sweep(&mut self, reason: CancelReason, at_ts_us: TsUs) {
+    pub fn begin_sweep(&mut self, reason: CancelReason, at_ts_us: LocalTs) {
         let outgoing = self.session.sweep(reason, None);
         let cancelling: Vec<ClientOrderId> = outgoing
             .iter()
@@ -192,7 +189,7 @@ impl SimExecDriver {
         request_id: RequestId,
         request: ExecRequest,
         recon_seq: u64,
-        effective_ts_us: TsUs,
+        effective_ts_us: LocalTs,
     ) {
         if !matches!(request, ExecRequest::SubscribeUserStream) {
             // `sent_at` is venue time, never a clock reading: replaying the same tape has to
@@ -210,7 +207,7 @@ impl SimExecDriver {
     fn fold(&mut self, messages: &[InboundMessage], stamp: EffectStamp) {
         let mut outgoing = Vec::new();
         for message in messages {
-            let InboundMessage::Exec(event) = message else {
+            let MessageBody::Exec(event) = &message.body else {
                 continue;
             };
             self.session.fold(event, 0, &mut outgoing);
@@ -221,7 +218,7 @@ impl SimExecDriver {
     fn decode(
         &mut self,
         voice: &VenueVoice,
-        event_ts_us: TsUs,
+        event_ts_us: LocalTs,
         decode: DecodeContext<'_>,
     ) -> Vec<InboundMessage> {
         let at_ts_us = decode.received_ts_us;
@@ -232,15 +229,14 @@ impl SimExecDriver {
                 stream_messages(&[payload], decode)
             }
             VenueVoice::Synthesised(SynthesisedEvent::StreamReset) => {
-                vec![InboundMessage::Exec(stream_reset(at_ts_us))]
+                vec![InboundMessage::new(
+                    at_ts_us,
+                    MessageBody::Exec(stream_reset(at_ts_us)),
+                )]
             }
             VenueVoice::Synthesised(SynthesisedEvent::PlaceNotSent(order)) => {
-                vec![InboundMessage::Exec(place_not_sent(
-                    self.instrument,
-                    order.client_id,
-                    order.side,
-                    at_ts_us,
-                ))]
+                let event = place_not_sent(self.instrument, order.client_id, order.side, at_ts_us);
+                vec![InboundMessage::new(at_ts_us, MessageBody::Exec(event))]
             }
             VenueVoice::Synthesised(SynthesisedEvent::StreamSubscribed) => Vec::new(),
         }
@@ -251,7 +247,7 @@ impl SimExecDriver {
     fn answer_messages(
         &mut self,
         answer: &VenueAnswer,
-        event_ts_us: TsUs,
+        event_ts_us: LocalTs,
         decode: DecodeContext<'_>,
     ) -> Vec<InboundMessage> {
         let Some(held) = self
@@ -271,14 +267,14 @@ impl SimExecDriver {
             },
         );
         for message in &mut messages {
-            if let InboundMessage::Exec(event) = message {
+            if let MessageBody::Exec(event) = &mut message.body {
                 event.request_sent_ts_us = Some(held.sent_at);
             }
         }
         messages
     }
 
-    fn mint_answer(&self, answer: &VenueAnswer, event_ts_us: TsUs) -> String {
+    fn mint_answer(&self, answer: &VenueAnswer, event_ts_us: LocalTs) -> String {
         let wire = &self.wire;
         match answer {
             VenueAnswer::PlaceAccepted(order) => wire.place_ack(order, event_ts_us),
@@ -295,7 +291,7 @@ impl SimExecDriver {
     fn mint_report(
         &self,
         report: &VenueReport,
-        event_ts_us: TsUs,
+        event_ts_us: LocalTs,
         assets: &AssetDictionary,
     ) -> String {
         let wire = &self.wire;
@@ -338,6 +334,6 @@ fn asset_name(assets: &AssetDictionary, asset: AssetId) -> &str {
         .unwrap_or_else(|| panic!("simulated wallet names unknown asset {}", asset.0))
 }
 
-fn venue_millis(at_ts_us: TsUs) -> u64 {
+fn venue_millis(at_ts_us: LocalTs) -> u64 {
     u64::try_from(at_ts_us.micros() / 1_000).unwrap_or_default()
 }

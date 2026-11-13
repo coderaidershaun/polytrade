@@ -46,54 +46,62 @@ pub fn order_amounts(request: &AmountRequest) -> Result<OrderAmounts, AmountErro
         tick,
     } = *request;
 
-    if tick.0 <= 0 {
-        return Err(AmountError::TickNotPositive { tick: tick.0 });
+    if tick.mantissa() <= 0 {
+        return Err(AmountError::TickNotPositive {
+            tick: tick.mantissa(),
+        });
     }
-    if price.0 <= 0 {
-        return Err(AmountError::PriceNotPositive { price: price.0 });
+    if price.mantissa() <= 0 {
+        return Err(AmountError::PriceNotPositive {
+            price: price.mantissa(),
+        });
     }
-    if size.0 <= 0 {
-        return Err(AmountError::SizeNotPositive { size: size.0 });
+    if size.mantissa() <= 0 {
+        return Err(AmountError::SizeNotPositive {
+            size: size.mantissa(),
+        });
     }
 
-    let tick_decimals = decimal_places(tick.0);
+    let tick_decimals = decimal_places(tick.mantissa());
     let amount_decimals = tick_decimals + LOT_DECIMALS;
     if amount_decimals > VENUE_DECIMALS {
         return Err(AmountError::TickTooFine {
-            tick: tick.0,
+            tick: tick.mantissa(),
             decimals: tick_decimals,
         });
     }
-    if price.0 % tick.0 != 0 {
+    if price.mantissa() % tick.mantissa() != 0 {
         return Err(AmountError::PriceOffTick {
-            price: price.0,
-            tick: tick.0,
+            price: price.mantissa(),
+            tick: tick.mantissa(),
         });
     }
-    if price.0 > FIXED_SCALE - tick.0 {
+    if price.mantissa() > FIXED_SCALE - tick.mantissa() {
         return Err(AmountError::PriceOutOfBand {
-            price: price.0,
-            tick: tick.0,
+            price: price.mantissa(),
+            tick: tick.mantissa(),
         });
     }
     let lot = FIXED_SCALE / 10_i64.pow(LOT_DECIMALS);
-    if size.0 % lot != 0 {
-        return Err(AmountError::SizeOffLot { size: size.0 });
+    if size.mantissa() % lot != 0 {
+        return Err(AmountError::SizeOffLot {
+            size: size.mantissa(),
+        });
     }
 
     // The product carries 2×FIXED_DECIMALS places; the division truncates it to `amount_decimals`
     // and the multiplication reinflates to the venue's 6, both exactly because both are powers of
     // ten and `amount_decimals <= VENUE_DECIMALS`.
-    let notional = i128::from(price.0) * i128::from(size.0);
+    let notional = i128::from(price.mantissa()) * i128::from(size.mantissa());
     let truncate = 10_i128.pow(2 * FIXED_DECIMALS - amount_decimals);
     let reinflate = 10_i128.pow(VENUE_DECIMALS - amount_decimals);
     let money = notional / truncate * reinflate;
-    let shares = i128::from(size.0) / 10_i128.pow(FIXED_DECIMALS - VENUE_DECIMALS);
+    let shares = i128::from(size.mantissa()) / 10_i128.pow(FIXED_DECIMALS - VENUE_DECIMALS);
 
     if money == 0 {
         return Err(AmountError::NotionalTruncatedToZero {
-            price: price.0,
-            size: size.0,
+            price: price.mantissa(),
+            size: size.mantissa(),
         });
     }
 

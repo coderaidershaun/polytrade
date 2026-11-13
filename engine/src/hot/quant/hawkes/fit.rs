@@ -4,7 +4,7 @@
 use super::{HawkesEvents, HawkesParams};
 use crate::hot::quant::MIN_RATE;
 use crate::hot::quant::optimise::NelderMead;
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 const PARAMS: usize = 3;
 const SIMPLEX: usize = PARAMS + 1;
@@ -60,7 +60,7 @@ impl HawkesMle {
         }
     }
 
-    pub fn fit(&mut self, events: &HawkesEvents, now: TsUs) -> Option<HawkesEstimate> {
+    pub fn fit(&mut self, events: &HawkesEvents, now: LocalTs) -> Option<HawkesEstimate> {
         let Some((times, end)) = fit_window(events, now, self.min_events) else {
             return self.last.map(|last| HawkesEstimate {
                 is_stale: true,
@@ -91,7 +91,7 @@ impl HawkesMle {
     }
 }
 
-fn fit_window(events: &HawkesEvents, now: TsUs, min_events: usize) -> Option<(&[f64], f64)> {
+fn fit_window(events: &HawkesEvents, now: LocalTs, min_events: usize) -> Option<(&[f64], f64)> {
     let times = events.times_secs();
     if times.len() < min_events {
         return None;

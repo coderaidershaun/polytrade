@@ -1,8 +1,5 @@
-//! Turns YAML into a validated config. An unknown-field typo becomes a named startup
-//! error rather than silent data loss. Defaults live in code, not in the file.
-//! Each larger block a config file can carry has its own submodule, beside `error` and `identity`.
-//! The root schema and the small blocks that only name a directory live here, so a caller writes
-//! `config::LinkConfig` and never names a submodule.
+//! Turns YAML into a validated config, so a misspelt key is a named start error, not a lost
+//! setting. Defaults live in code, and a caller names each block from this module.
 
 mod engine;
 mod error;
@@ -17,6 +14,7 @@ mod sources;
 mod tables;
 mod tracker;
 
+use std::num::NonZeroU32;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
@@ -128,18 +126,7 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
             1..=MAX_OPERATIONAL_DURATION_MS,
             "1..=86400000 (24h operational ceiling)",
         )?;
-        check_range(
-            "queues.input_capacity",
-            self.queues.input_capacity as u64,
-            1..=u64::MAX,
-            "greater than 0",
-        )?;
-        check_range(
-            "queues.persistence_capacity",
-            self.queues.persistence_capacity as u64,
-            1..=u64::MAX,
-            "greater than 0",
-        )?;
+        self.queues.validate()?;
         if let Some(persistence) = &self.persistence {
             check_range(
                 "persistence.retention_hours",
@@ -147,6 +134,14 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
                 1..=87_600,
                 "1..=87600 (1 hour to 10 years)",
             )?;
+            if let Some(limit) = persistence.seal_try_limit {
+                check_range(
+                    "persistence.seal_try_limit",
+                    u64::from(limit),
+                    1..=u64::from(u32::MAX),
+                    "1 or more",
+                )?;
+            }
         }
         self.logging.validate(self.engine.drain_deadline_ms)?;
         self.source.validate()?;
@@ -206,13 +201,61 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
     }
 }
 
+/// The slots of each ring. Each kind of input queue has its own capacity, because a full timer or
+/// execution ring halts the engine while a full link ring drops a frame.
+impl<P> Config<P> {
+    pub(crate) fn seal_try_limit(&self) -> NonZeroU32 {
+        let configured = self
+            .persistence
+            .as_ref()
+            .and_then(|persistence| persistence.seal_try_limit);
+        let limit = configured.unwrap_or_else(|| {
+            let drain_deadline_us = self.engine.drain_deadline_ms.saturating_mul(1_000);
+            let spins = drain_deadline_us.div_ceil(self.engine.spin_interval_us);
+            u32::try_from(spins).unwrap_or(u32::MAX)
+        });
+        NonZeroU32::new(limit).unwrap_or(NonZeroU32::MIN)
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueuesConfig {
+    /// The input ring of each market-data connection.
     #[serde(default = "default_input_capacity")]
     pub input_capacity: usize,
+    /// `None` takes the spins of one `engine.drain_deadline_ms`, and 16 slots at least.
+    #[serde(default)]
+    pub timer_capacity: Option<usize>,
+    #[serde(default = "default_link_capacity")]
+    pub link_capacity: usize,
+    /// `None` takes the capacity of the command lane, so the edge can answer each command that the
+    /// lane holds.
+    #[serde(default)]
+    pub execution_capacity: Option<usize>,
     #[serde(default = "default_persistence_capacity")]
     pub persistence_capacity: usize,
+}
+
+impl QueuesConfig {
+    fn validate(&self) -> Result<(), ConfigError> {
+        let capacities = [
+            ("queues.input_capacity", Some(self.input_capacity)),
+            ("queues.timer_capacity", self.timer_capacity),
+            ("queues.link_capacity", Some(self.link_capacity)),
+            ("queues.execution_capacity", self.execution_capacity),
+            (
+                "queues.persistence_capacity",
+                Some(self.persistence_capacity),
+            ),
+        ];
+        for (field, capacity) in capacities {
+            if let Some(capacity) = capacity {
+                check_range(field, capacity as u64, 1..=u64::MAX, "greater than 0")?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -241,6 +284,10 @@ pub struct PersistenceConfig {
     pub dir: PathBuf,
     #[serde(default = "default_retention_hours")]
     pub retention_hours: u64,
+    /// The tries of a waiting seal before quoting halts. `None` takes the spins of one
+    /// `engine.drain_deadline_ms`: a writer that takes no seal for that long has stalled.
+    #[serde(default)]
+    pub seal_try_limit: Option<u32>,
 }
 
 /// Separate from `persistence:` and always in force, because position outlives any single run.
@@ -321,6 +368,10 @@ fn check_range(
 
 fn default_input_capacity() -> usize {
     65_536
+}
+
+fn default_link_capacity() -> usize {
+    1_024
 }
 
 fn default_persistence_capacity() -> usize {

@@ -48,29 +48,33 @@ impl SimRunSummary {
             } => {
                 self.joins += 1;
                 let ahead = match queue_ahead {
-                    QueueAhead::Known(qty) => qty.0.to_string(),
+                    QueueAhead::Known(qty) => qty.mantissa().to_string(),
                     QueueAhead::Unobservable => "unknown".to_owned(),
                 };
                 info!(
                     "sim JOIN client={} side={:?} price={} qty={} queue_ahead={ahead}",
                     snapshot.order.client_id.0,
                     snapshot.order.side,
-                    snapshot.order.price.0,
-                    snapshot.order.qty.0
+                    snapshot.order.price.mantissa(),
+                    snapshot.order.qty.mantissa()
                 );
             }
             VenueEvent::PostOnlyCrossed { snapshot } => {
                 self.refusals += 1;
                 info!(
                     "sim REFUSE client={} side={:?} price={} reason=post_only_cross",
-                    snapshot.order.client_id.0, snapshot.order.side, snapshot.order.price.0
+                    snapshot.order.client_id.0,
+                    snapshot.order.side,
+                    snapshot.order.price.mantissa()
                 );
             }
             VenueEvent::PlaceRefused { snapshot, reason } => {
                 self.refusals += 1;
                 info!(
                     "sim REFUSE client={} side={:?} price={} reason={reason:?}",
-                    snapshot.order.client_id.0, snapshot.order.side, snapshot.order.price.0
+                    snapshot.order.client_id.0,
+                    snapshot.order.side,
+                    snapshot.order.price.mantissa()
                 );
             }
             VenueEvent::Filled {
@@ -80,8 +84,8 @@ impl SimRunSummary {
                 ..
             } => {
                 self.fills += 1;
-                self.filled_base += i128::from(settlement.last_qty.0);
-                self.filled_quote += i128::from(settlement.last_quote);
+                self.filled_base += i128::from(settlement.last_qty.mantissa());
+                self.filled_quote += i128::from(settlement.last_quote.mantissa());
                 if snapshot.order.is_complete() {
                     self.full_fills += 1;
                 }
@@ -94,9 +98,9 @@ impl SimRunSummary {
                     "sim FILL client={} side={:?} price={} last_qty={} cumulative_qty={} trade_id={} prints_seen={} resting_us={resting_us}",
                     snapshot.order.client_id.0,
                     snapshot.order.side,
-                    snapshot.order.price.0,
-                    settlement.last_qty.0,
-                    settlement.cumulative_qty.0,
+                    snapshot.order.price.mantissa(),
+                    settlement.last_qty.mantissa(),
+                    settlement.cumulative_qty.mantissa(),
                     trade_id.0,
                     snapshot.prints_seen
                 );
@@ -107,8 +111,8 @@ impl SimRunSummary {
                     "sim CANCEL client={} side={:?} price={} filled={} prints_seen={} resyncs={}",
                     snapshot.order.client_id.0,
                     snapshot.order.side,
-                    snapshot.order.price.0,
-                    snapshot.order.filled.0,
+                    snapshot.order.price.mantissa(),
+                    snapshot.order.filled.mantissa(),
                     snapshot.prints_seen,
                     snapshot.resyncs_while_resting
                 );
@@ -122,9 +126,9 @@ impl SimRunSummary {
                     "sim AMEND client={} side={:?} price={} total_qty={} filled={}",
                     snapshot.order.client_id.0,
                     snapshot.order.side,
-                    snapshot.order.price.0,
-                    total_qty.0,
-                    snapshot.order.filled.0
+                    snapshot.order.price.mantissa(),
+                    total_qty.mantissa(),
+                    snapshot.order.filled.mantissa()
                 );
             }
             VenueEvent::MarketReset { reason } => {

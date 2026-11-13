@@ -1,5 +1,7 @@
-//! Strategy desired quotes per instrument/side. Level-triggered (survives one spin), not per-message (cleared every drain). Expired declaration = cancel. No escape hatch: declare every spin or absent.
+//! The quotes that a strategy declares for each instrument and side. A declaration lives for its
+//! spin only, and one that is not declared again means a cancel.
 
+use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::msg::exec::OrderStyle;
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
@@ -69,6 +71,9 @@ pub struct DesiredBook {
     /// nobody asked for.
     flatten: Vec<Option<u64>>,
 }
+
+digest_by_hash!(QuoteLevel, DesiredSide);
+digest_fields! { DesiredBook { sides, flatten } }
 
 impl DesiredBook {
     pub fn new(instrument_count: usize) -> Self {

@@ -1,9 +1,7 @@
-//! The time-driven arms: the exit latches, the request deadlines and the periodic reconcile reads.
-//! A timeout goes to reconcile rather than to a retry, because the command may already have
-//! executed and the safe move is to ask. A refusal is resent instead, because it is proof that
-//! nothing happened.
+//! The arms of the loop that time drives: exit latches, request deadlines, and periodic reads. A
+//! timeout leads to a read, never a resend, because the command may already have run.
 
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 use crate::venues::edge::EdgeDriver;
 use crate::venues::exec::{SessionOutcome, TimeoutFallout};
 use crate::warn;
@@ -29,10 +27,14 @@ impl Actor {
         }
         self.retry_sweep(Some(writer)).await;
         self.control
-            .finished_exit(now, self.venue(), self.session.core.mirror().len())
+            .finished_exit(now, self.venue(), self.session.core.mirror())
     }
 
-    async fn expire_requests(&mut self, now: TsUs, writer: &mut Writer) -> Option<SessionOutcome> {
+    async fn expire_requests(
+        &mut self,
+        now: LocalTs,
+        writer: &mut Writer,
+    ) -> Option<SessionOutcome> {
         let expired = self.session.expire(now);
         let mut ended = None;
         for fallout in expired.unanswered_reads {

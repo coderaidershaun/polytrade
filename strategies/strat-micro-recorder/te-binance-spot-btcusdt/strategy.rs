@@ -1,4 +1,5 @@
-//! Records microstructure columns + quotes Guéant levels each spin. Per-instrument state in models/features/params siblings.
+//! Records microstructure columns + quotes Guéant levels each spin. Per-instrument state in
+//! models/features/params siblings.
 
 use engine::hot::quant::hawkes::HawkesChoice;
 use engine::hot::quant::liquidity::KylesLambdaSpec;
@@ -12,7 +13,7 @@ use engine::hot::strategy::{
 };
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Side};
 use engine::msg::inbound::{BookChunk, KlineEvent, SpinTick, TradeEvent};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs};
 use engine::runtime::config::{Instruments, StrategySpec, TableKind};
 
 #[path = "features.rs"]
@@ -170,7 +171,7 @@ impl Strategy for MicroRecorder {
         let Some(features) = self.features else {
             return;
         };
-        let now = ctx.event_ts();
+        let now = ctx.now().as_local();
         let cfg = SpinCfg {
             features,
             gueant: self.gueant,
@@ -200,16 +201,17 @@ impl Strategy for MicroRecorder {
         model.is_dirty = true;
     }
 
-    fn on_trade(&mut self, _ctx: &mut StrategyCtx<'_>, event: &TradeEvent) {
+    fn on_trade(&mut self, ctx: &mut StrategyCtx<'_>, event: &TradeEvent) {
         let Some(model) = self.recorded_mut(event.instrument) else {
             return;
         };
-        model.markouts.on_trade(event);
+        let received_ts_us = ctx.now().as_local();
+        model.markouts.on_trade(event, received_ts_us);
         let hawkes = match event.side {
             Side::Buy => &mut model.hawkes_ask,
             Side::Sell => &mut model.hawkes_bid,
         };
-        hawkes.on_arrival(event.exchange_ts_us, event.received_ts_us);
+        hawkes.on_arrival(event.exchange_ts_us, received_ts_us);
     }
 
     fn on_book_update(&mut self, ctx: &mut StrategyCtx<'_>, chunk: &BookChunk) {
@@ -223,7 +225,7 @@ impl Strategy for MicroRecorder {
             return;
         }
         let mid = ctx.tracker(chunk.instrument).mid();
-        model.feed_markout_mid(ctx.event_ts(), mid);
+        model.feed_markout_mid(ctx.now().as_local(), mid);
     }
 
     fn on_book_reset(&mut self, _ctx: &mut StrategyCtx<'_>, instrument: InstrumentId) {
@@ -334,7 +336,7 @@ fn record_spin(
     cfg: SpinCfg,
     instrument: InstrumentId,
     state: &mut InstrumentState,
-    now: TsUs,
+    now: LocalTs,
 ) {
     let max_exposure_quote = state.max_exposure_quote;
     let model = &mut state.binance;
@@ -346,7 +348,7 @@ fn record_spin(
     let spread = tracker.last_spread();
     // Ledger seeded from persisted cost basis → restart resumes real inventory. Read once per spin so all columns describe same position.
     let exposure_quote = ctx.exposure_quote(instrument);
-    let inventory = exposure_quote as f64 / FIXED_SCALE as f64;
+    let inventory = exposure_quote.to_f64();
 
     if let Some(mid) = mid {
         model.spin_mids.push(mid);
@@ -406,12 +408,14 @@ fn record_spin(
     }
     let ewma_vol = ctx.ewma_vol(instrument);
     ctx.emit_present(features.ewma_vol_per_event, instrument, ewma_vol);
-    let resilience_median = model.resilience_window.median(&mut model.median_scratch);
+    let resilience_median = model
+        .resilience_window
+        .median_over_window(&mut model.median_scratch);
     ctx.emit_present(features.resilience_median_1m, instrument, resilience_median);
     ctx.emit_present(
         features.resilience_mean_1m,
         instrument,
-        model.resilience_window.mean(),
+        model.resilience_window.running_mean(),
     );
     let intensity_scale = mid
         .zip(model.tick)
@@ -464,8 +468,10 @@ fn record_spin(
         order_notional: cfg.order_notional,
         max_exposure_quote,
     };
-    let bid_quote = bid_model.filter(|_| !budget.would_breach(exposure_quote, Side::Buy));
-    let ask_quote = ask_model.filter(|_| !budget.would_breach(exposure_quote, Side::Sell));
+    let bid_quote =
+        bid_model.filter(|_| !budget.would_breach(exposure_quote.mantissa(), Side::Buy));
+    let ask_quote =
+        ask_model.filter(|_| !budget.would_breach(exposure_quote.mantissa(), Side::Sell));
     // A log record carries at most six words, so each spin's values go out as several short
     // lines, in a fixed order, each led by the same words a reader searches for.
     engine::note!(

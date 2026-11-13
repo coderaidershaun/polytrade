@@ -2,4 +2,8 @@
 //! warmup, and resume.
 
 mod dispatch_replay;
-mod strategy_resume;
+mod fold_time;
+mod resume;
+mod spin_steps;
+mod state_digest;
+mod strategy_gate;

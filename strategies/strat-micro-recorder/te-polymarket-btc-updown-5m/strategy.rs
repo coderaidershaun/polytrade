@@ -14,7 +14,7 @@ use engine::hot::strategy::{
 };
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{MarketRotation, SpinTick, TradeEvent};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, LocalTs};
 use engine::runtime::config::StrategySpec;
 use serde::Deserialize;
 
@@ -134,8 +134,12 @@ impl Strategy for PolyUpPublisher {
             return;
         };
         match event.side {
-            Side::Buy => slot.buy_qty.0 += event.qty.0,
-            Side::Sell => slot.sell_qty.0 += event.qty.0,
+            Side::Buy => {
+                slot.buy_qty = Qty::from_mantissa(slot.buy_qty.mantissa() + event.qty.mantissa());
+            }
+            Side::Sell => {
+                slot.sell_qty = Qty::from_mantissa(slot.sell_qty.mantissa() + event.qty.mantissa());
+            }
         }
     }
 
@@ -148,15 +152,25 @@ impl Strategy for PolyUpPublisher {
         }
     }
 
+    /// A park leaves a hole in the traded volume and in the trade intensity, so each leg starts
+    /// again as at a rotation. The rotation that the edge sends after the resume opens the warmup
+    /// of its market, so it never reaches this strategy as a callback.
+    fn on_resume(&mut self, _ctx: &mut StrategyCtx<'_>) {
+        let refit_interval = self.refit_interval;
+        for slot in self.slots.iter_mut().flatten() {
+            *slot = UpSlot::new(slot.instrument, refit_interval);
+        }
+    }
+
     fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
-        let now = ctx.event_ts();
+        let now = ctx.now().as_local();
         self.publish(ctx, now);
         self.trade_the_open_window(ctx, now);
     }
 }
 
 impl PolyUpPublisher {
-    fn publish(&mut self, ctx: &mut StrategyCtx<'_>, now: TsUs) {
+    fn publish(&mut self, ctx: &mut StrategyCtx<'_>, now: LocalTs) {
         let Some(topic) = self.topic else { return };
         let mut frame = link_schema::UpFrame::ABSENT;
         let mut has_role = false;
@@ -177,7 +191,7 @@ impl PolyUpPublisher {
     /// Only the leg hosting the open window is tradeable. The other one is either pre-open — where
     /// the engine refuses a quote anyway, and asking would fill the log with its refusals — or past
     /// its close, where nothing can be traded out of what it settles into.
-    fn trade_the_open_window(&mut self, ctx: &mut StrategyCtx<'_>, now: TsUs) {
+    fn trade_the_open_window(&mut self, ctx: &mut StrategyCtx<'_>, now: LocalTs) {
         let Some(maker) = self.maker else { return };
         let Some((instrument, window)) = self.open_window(ctx, now) else {
             return;
@@ -185,7 +199,11 @@ impl PolyUpPublisher {
         maker.declare(ctx, instrument, window, now);
     }
 
-    fn open_window(&self, ctx: &StrategyCtx<'_>, now: TsUs) -> Option<(InstrumentId, WindowInfo)> {
+    fn open_window(
+        &self,
+        ctx: &StrategyCtx<'_>,
+        now: LocalTs,
+    ) -> Option<(InstrumentId, WindowInfo)> {
         self.slots.iter().flatten().find_map(|slot| {
             let window = ctx.window(slot.instrument)?;
             (role_at(window, now)? == Role::Current).then_some((slot.instrument, window))
@@ -212,7 +230,7 @@ impl Maker {
             "quote_stop_lead_ms must leave time to get out before the window closes"
         );
         Self {
-            order_qty: Qty((params.order_shares * FIXED_SCALE as f64).round() as i64),
+            order_qty: Qty::from_mantissa((params.order_shares * FIXED_SCALE as f64).round() as i64),
             edge_ticks: i64::from(params.edge_ticks),
             quote_stop_lead: DurationUs::from_millis(i64::from(params.quote_stop_lead_ms)),
         }
@@ -224,14 +242,14 @@ impl Maker {
         ctx: &mut StrategyCtx<'_>,
         instrument: InstrumentId,
         window: WindowInfo,
-        now: TsUs,
+        now: LocalTs,
     ) {
         let position = ctx.position_base(instrument);
         // Past the stop there is no quote worth having: this market is minutes from settling to 0
         // or 1 and a fill here is one nothing can be traded out of. Declaring nothing withdraws the
         // ladder, which is what frees the side for the flatten below.
         if window.is_past_quote_stop(now, self.quote_stop_lead) {
-            if position.0 != 0 {
+            if position.mantissa() != 0 {
                 ctx.flatten(instrument);
             }
             return;
@@ -244,7 +262,7 @@ impl Maker {
             return;
         };
         let grid = ctx.tick_grid(instrument);
-        let (side, quote) = match position.0.signum() {
+        let (side, quote) = match position.mantissa().signum() {
             0 => (Side::Buy, Some(self.bid(best_bid.price, grid))),
             // Long: offer it back and stop bidding. One position at a time is the whole strategy —
             // an engine that never adds to a fill cannot lose more than one order's worth per window.
@@ -261,7 +279,9 @@ impl Maker {
     /// one on a market already trading at a tick.
     fn bid(self, best_bid: Price, grid: TickGrid) -> DesiredQuote {
         DesiredQuote {
-            price: Price((best_bid.0 - self.edge_ticks * grid.tick).max(grid.tick)),
+            price: Price::from_mantissa(
+                (best_bid.mantissa() - self.edge_ticks * grid.tick).max(grid.tick),
+            ),
             qty: self.order_qty,
             style: OrderStyle::PostOnly,
         }
@@ -271,13 +291,16 @@ impl Maker {
     /// order size cannot be sold by any order, so asking would only produce a refusal per spin; it
     /// rides to the flatten, which says so once and loudly.
     fn ask(self, best_ask: Price, position: Qty, grid: TickGrid) -> Option<DesiredQuote> {
-        let qty = Qty(position.0 - position.0.rem_euclid(grid.step));
+        let qty =
+            Qty::from_mantissa(position.mantissa() - position.mantissa().rem_euclid(grid.step));
         if qty < grid.min_qty {
             return None;
         }
-        let ceiling = grid.max_price.map_or(i64::MAX, |max| max.0);
+        let ceiling = grid.max_price.map_or(i64::MAX, |max| max.mantissa());
         Some(DesiredQuote {
-            price: Price((best_ask.0 + self.edge_ticks * grid.tick).min(ceiling)),
+            price: Price::from_mantissa(
+                (best_ask.mantissa() + self.edge_ticks * grid.tick).min(ceiling),
+            ),
             qty,
             style: OrderStyle::PostOnly,
         })
@@ -289,15 +312,15 @@ impl UpSlot {
         Self {
             instrument,
             intensity: PacedIntensity::new(refit_interval),
-            buy_qty: Qty(0),
-            sell_qty: Qty(0),
+            buy_qty: Qty::from_mantissa(0),
+            sell_qty: Qty::from_mantissa(0),
         }
     }
 
     fn role_block<'f>(
         &self,
         ctx: &StrategyCtx<'_>,
-        now: TsUs,
+        now: LocalTs,
         frame: &'f mut link_schema::UpFrame,
     ) -> Option<&'f mut link_schema::UpRole> {
         match role_at(ctx.window(self.instrument)?, now)? {
@@ -306,7 +329,7 @@ impl UpSlot {
         }
     }
 
-    fn write(&mut self, ctx: &StrategyCtx<'_>, now: TsUs, block: &mut link_schema::UpRole) {
+    fn write(&mut self, ctx: &StrategyCtx<'_>, now: LocalTs, block: &mut link_schema::UpRole) {
         block.buy_vol = self.buy_qty.to_f64();
         block.sell_vol = self.sell_qty.to_f64();
         self.write_book(ctx, block);
@@ -331,7 +354,7 @@ impl UpSlot {
     fn write_intensity(
         &mut self,
         ctx: &StrategyCtx<'_>,
-        now: TsUs,
+        now: LocalTs,
         block: &mut link_schema::UpRole,
     ) {
         let counts = ctx.tracker(self.instrument).intensity();
@@ -359,7 +382,8 @@ enum Role {
 /// Half-open `[open, close)`: window N's close IS window N+1's open, so the two slots tile the
 /// timeline with no instant where both are current. After close a slot has no role — the market only
 /// settles towards 0 or 1, which answers a different question from the one either caller asks.
-fn role_at(window: WindowInfo, now: TsUs) -> Option<Role> {
+fn role_at(window: WindowInfo, now: LocalTs) -> Option<Role> {
+    let now = now.as_venue_calendar();
     if window.open_ts_us <= now && now < window.close_ts_us {
         return Some(Role::Current);
     }

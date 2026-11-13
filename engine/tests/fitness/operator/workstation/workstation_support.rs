@@ -5,7 +5,7 @@ use std::path::Path;
 
 use engine::msg::ids::{InstrumentId, Price, Qty};
 use engine::msg::inbound::Level;
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::time::{DurationUs, VenueTs};
 use engine::msg::ui::{DomQuote, UI_BOOK_LEVELS, UiBookSnapshot, UiBookState, UiEvent};
 use engine::operator::workstation::chart::model::{BookContinuity, ChartModel};
 use engine::operator::workstation::dom_view::DomOverlay;
@@ -14,7 +14,7 @@ pub type NamedCase = (&'static str, fn(&str));
 
 /// One-mantissa tick, so a price mantissa reads directly as its tick index and a mid reads as the
 /// plain sum of the two best indices (half-ticks).
-pub const TICK: Price = Price(1);
+pub const TICK: Price = Price::from_mantissa(1);
 
 /// The shipped one-second spin, so the five-minute window is exactly 300 buckets and a bucket index
 /// reads as its second.
@@ -34,27 +34,27 @@ pub struct BookFixture<'a> {
 
 pub fn book_snapshot(fixture: BookFixture) -> UiBookSnapshot {
     let empty = Level {
-        price: Price(0),
-        qty: Qty(0),
+        price: Price::from_mantissa(0),
+        qty: Qty::from_mantissa(0),
     };
     let mut bid_levels = [empty; UI_BOOK_LEVELS];
     let mut ask_levels = [empty; UI_BOOK_LEVELS];
     for (slot, &(price, qty)) in bid_levels.iter_mut().zip(fixture.bids) {
         *slot = Level {
-            price: Price(price),
-            qty: Qty(qty),
+            price: Price::from_mantissa(price),
+            qty: Qty::from_mantissa(qty),
         };
     }
     for (slot, &(price, qty)) in ask_levels.iter_mut().zip(fixture.asks) {
         *slot = Level {
-            price: Price(price),
-            qty: Qty(qty),
+            price: Price::from_mantissa(price),
+            qty: Qty::from_mantissa(qty),
         };
     }
     UiBookSnapshot {
         instrument: InstrumentId(fixture.instrument),
         seq: fixture.seq,
-        event_ts_us: TsUs::from_micros(fixture.event_ts),
+        event_ts_us: VenueTs::from_micros(fixture.event_ts),
         state: fixture.state,
         bid_len: fixture.bids.len() as u16,
         ask_len: fixture.asks.len() as u16,
@@ -73,8 +73,8 @@ pub fn overlay(desired: DomQuote) -> DomOverlay<'static> {
     }
 }
 
-pub fn at(bucket: u64) -> TsUs {
-    TsUs::from_micros(bucket as i64 * SPIN.micros())
+pub fn at(bucket: u64) -> VenueTs {
+    VenueTs::from_micros(bucket as i64 * SPIN.micros())
 }
 
 pub fn chart_with_ticks(ticks: &[Option<Price>]) -> ChartModel {
@@ -111,7 +111,7 @@ pub fn valid_book(instrument: u16, bucket: u64, bid: i64, ask: i64) -> UiBookSna
 }
 
 /// Fold one two-sided commit stamped at an arbitrary `event_ts_us` with no snapshot loss before it.
-pub fn commit_at(chart: &mut ChartModel, instrument: u16, event_ts_us: TsUs) {
+pub fn commit_at(chart: &mut ChartModel, instrument: u16, event_ts_us: VenueTs) {
     let snapshot = UiBookSnapshot {
         event_ts_us,
         ..valid_book(instrument, 0, 100, 102)

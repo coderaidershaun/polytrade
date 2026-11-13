@@ -7,7 +7,7 @@ use crate::hot::quant::BPS;
 use crate::hot::series::{Element, FastQueue};
 use crate::msg::ids::{Price, Qty, Side};
 use crate::msg::inbound::TradeEvent;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 
 /// Queue heuristic: our quote joins LAST, fills when this fraction of level qty traded (9/10 covers unknown cancellations).
 const QUEUE_FILL_NUM: i128 = 9;
@@ -38,7 +38,7 @@ pub enum MarkoutSide {
 pub struct MarkoutFill {
     pub side: MarkoutSide,
     pub price: Price,
-    pub fill_ts_us: TsUs,
+    pub fill_ts_us: LocalTs,
 }
 
 impl MarkoutSide {
@@ -63,15 +63,15 @@ impl MarkoutSide {
     #[inline]
     const fn is_through(self, armed: Price, print: Price) -> bool {
         match self {
-            MarkoutSide::Bid => print.0 <= armed.0,
-            MarkoutSide::Ask => print.0 >= armed.0,
+            MarkoutSide::Bid => print.mantissa() <= armed.mantissa(),
+            MarkoutSide::Ask => print.mantissa() >= armed.mantissa(),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct MidSample {
-    ts_us: TsUs,
+    ts_us: LocalTs,
     mid: f64,
 }
 
@@ -80,7 +80,7 @@ impl Element for MidSample {}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct PendingFill {
-    fill_ts_us: TsUs,
+    fill_ts_us: LocalTs,
     fill_price: f64,
 }
 
@@ -152,8 +152,8 @@ impl SideMarkouts {
         Self {
             side,
             armed: None,
-            queue_ahead: Qty(0),
-            eaten: Qty(0),
+            queue_ahead: Qty::from_mantissa(0),
+            eaten: Qty::from_mantissa(0),
             forward_lanes: ForwardHorizon::ALL
                 .map(|horizon| ForwardLane::new(horizon, matured_window, spin_interval)),
             reverse_series: ReverseHorizon::ALL
@@ -165,7 +165,7 @@ impl SideMarkouts {
         }
     }
 
-    /// Realised markouts (bps, oldest first); smooth with FastQueue::ema.
+    /// Realised markouts in bps, oldest first. Smooth them with `FastQueue::ema_over_window`.
     #[inline]
     pub fn forward(&self, horizon: ForwardHorizon) -> &FastQueue<f64> {
         &self.forward_lanes[horizon.index()].matured
@@ -209,19 +209,25 @@ impl SideMarkouts {
     fn arm(&mut self, price: Price, level_qty: Qty) {
         if self.armed != Some(price) {
             self.queue_ahead = level_qty;
-            self.eaten = Qty(0);
+            self.eaten = Qty::from_mantissa(0);
         }
         self.armed = Some(price);
     }
 
     /// Print AT armed level; true if past fill threshold.
     fn eat(&mut self, qty: Qty) -> bool {
-        self.eaten = Qty(self.eaten.0.saturating_add(qty.0));
-        i128::from(self.eaten.0) * QUEUE_FILL_DEN >= i128::from(self.queue_ahead.0) * QUEUE_FILL_NUM
+        self.eaten = Qty::from_mantissa(self.eaten.mantissa().saturating_add(qty.mantissa()));
+        i128::from(self.eaten.mantissa()) * QUEUE_FILL_DEN
+            >= i128::from(self.queue_ahead.mantissa()) * QUEUE_FILL_NUM
     }
 
     /// Some(armed) if print filled us at our level, None else (side effects apply either way).
-    fn on_trade(&mut self, trade: &TradeEvent, mids: &FastQueue<MidSample>) -> Option<Price> {
+    fn on_trade(
+        &mut self,
+        trade: &TradeEvent,
+        received_ts_us: LocalTs,
+        mids: &FastQueue<MidSample>,
+    ) -> Option<Price> {
         let armed = self.armed?;
         if !self.side.is_through(armed, trade.price) {
             return None;
@@ -232,16 +238,16 @@ impl SideMarkouts {
         }
         self.armed = None;
         self.fills += 1;
-        self.record_reverse(trade.received_ts_us, mids);
+        self.record_reverse(received_ts_us, mids);
         self.queue_forward(PendingFill {
-            fill_ts_us: trade.received_ts_us,
+            fill_ts_us: received_ts_us,
             fill_price: armed.to_f64(),
         });
         Some(armed)
     }
 
     /// Pre-fill drift over each reverse horizon (vs newest mid at/before target).
-    fn record_reverse(&mut self, fill_ts_us: TsUs, mids: &FastQueue<MidSample>) {
+    fn record_reverse(&mut self, fill_ts_us: LocalTs, mids: &FastQueue<MidSample>) {
         let Some(latest) = mids.last() else {
             self.reverse_gaps += ReverseHorizon::ALL.len() as u64;
             return;
@@ -349,9 +355,9 @@ impl MarkoutTracker {
     #[inline]
     pub fn arm(&mut self, side: MarkoutSide, price: Price, level_qty: Qty) {
         debug_assert!(
-            price.0 > 0,
+            price.mantissa() > 0,
             "armed {side:?} quote is the forward-markout denominator, got {}",
-            price.0
+            price.mantissa()
         );
         self.side_mut(side).arm(price, level_qty);
     }
@@ -372,22 +378,22 @@ impl MarkoutTracker {
 
     /// Route print by aggressor (seller->bid, buyer->ask). Fill at OUR armed level (not print), stamped at receipt.
     /// Report recorded fill (routed side only) or None if no armed level reached.
-    pub fn on_trade(&mut self, trade: &TradeEvent) -> Option<MarkoutFill> {
+    pub fn on_trade(&mut self, trade: &TradeEvent, received_ts_us: LocalTs) -> Option<MarkoutFill> {
         let side = MarkoutSide::from_aggressor(trade.side);
         let markouts = match side {
             MarkoutSide::Bid => &mut self.bid,
             MarkoutSide::Ask => &mut self.ask,
         };
-        let price = markouts.on_trade(trade, &self.mids)?;
+        let price = markouts.on_trade(trade, received_ts_us, &self.mids)?;
         Some(MarkoutFill {
             side,
             price,
-            fill_ts_us: trade.received_ts_us,
+            fill_ts_us: received_ts_us,
         })
     }
 
     /// Feed mid, mature fills (non-decreasing ts_us; skip invalid).
-    pub fn on_mid(&mut self, ts_us: TsUs, mid: f64) {
+    pub fn on_mid(&mut self, ts_us: LocalTs, mid: f64) {
         if !(mid.is_finite() && mid > 0.0) {
             return;
         }
@@ -428,7 +434,7 @@ impl MarkoutTracker {
 }
 
 /// Newest sample at/before target (None if unreachable).
-fn sample_at_or_before(mids: &FastQueue<MidSample>, target: TsUs) -> Option<MidSample> {
+fn sample_at_or_before(mids: &FastQueue<MidSample>, target: LocalTs) -> Option<MidSample> {
     let samples = mids.as_slice();
     let reaching = samples.partition_point(|sample| sample.ts_us <= target);
     reaching.checked_sub(1).map(|index| samples[index])

@@ -1,4 +1,5 @@
-//! Adapter actor: transport + parse + sequencers. Owns read loop (REST resync), stamps queued_ts_us.
+//! Adapter actor: transport + parse + sequencers. Owns read loop (REST resync), stamps
+//! queued_ts_us.
 
 mod depth_resync;
 mod kline_backfill;
@@ -14,12 +15,12 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::hot::spawn::QueueProducer;
 use crate::msg::ids::{InstrumentId, StreamEpoch};
-use crate::msg::inbound::{InboundMessage, TappedMessage, VenueMeta};
+use crate::msg::inbound::{InboundMessage, MessageBody, TappedMessage, VenueMeta};
 use crate::msg::run_state::RunState;
-use crate::msg::time::{EngineClock, TsUs};
+use crate::msg::time::{EngineClock, LocalTs};
 use crate::runtime::config::{BinanceMarket, KlineInterval};
 use crate::runtime::registry::{ConnectionCategory, InstrumentRow, ProducerGroup};
-use crate::runtime::shutdown::{FatalSignal, RunStateCell, TaskHandle};
+use crate::runtime::shutdown::{FatalReason, FatalSignal, RunStateCell, TaskHandle};
 use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::lane::{Flow, Lane, LaneSpec, SessionEnd, run_lane};
 use crate::venues::edge::rest_quiet::SharedRestQuiet;
@@ -194,7 +195,7 @@ impl Actor {
         run_lane(spec, self).await;
     }
 
-    async fn handle_text(&mut self, raw: &str, received_ts_us: TsUs) -> Flow {
+    async fn handle_text(&mut self, raw: &str, received_ts_us: LocalTs) -> Flow {
         let frame = match parse_combined_frame(raw) {
             Ok(frame) => frame,
             Err(error) => {
@@ -238,7 +239,7 @@ impl Actor {
     fn handle_trade(&mut self, data: &str, ctx: ParseContext) {
         let Some(event) = self.parsed(parse_agg_trade(data, ctx)) else { return };
         self.flush_tapped(vec![TappedMessage {
-            message: InboundMessage::Trade(event.trade),
+            message: InboundMessage::new(ctx.received_ts_us, MessageBody::Trade(event.trade)),
             venue_meta: VenueMeta::Trade {
                 aggregate_id: event.aggregate_id,
                 first_trade_id: event.first_trade_id,
@@ -255,7 +256,7 @@ impl Actor {
     )]
     fn flush(&mut self, out: Vec<InboundMessage>) {
         for mut message in out {
-            message.set_queued_ts_us(self.clock.now());
+            message.header.queued_ts_us = self.clock.now();
             self.producer.push(message);
         }
     }
@@ -269,7 +270,9 @@ impl Actor {
     fn on_parse_error(&mut self, error: ParseError) {
         if error.is_fatal() {
             error!("binance adapter {} fatal parse: {error}", self.label);
-            self.fatal.trip(format!("binance {}: {error}", self.label));
+            self.fatal.trip(FatalReason::MarketDataUnreadable {
+                source_id: self.producer.source_id(),
+            });
             return;
         }
         warn_repeating!(

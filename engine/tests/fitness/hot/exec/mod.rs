@@ -1,5 +1,6 @@
 //! Tests of the execution engine on the hot thread: orders, budgets, gates, and reconciliation.
 
+mod command_lane;
 mod exec_audit;
 mod exec_budget;
 mod exec_flatten;

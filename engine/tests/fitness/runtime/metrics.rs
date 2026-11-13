@@ -13,11 +13,13 @@ use engine::link::{
 };
 use engine::msg::exec::{ExecEvent, ExecKind};
 use engine::msg::ids::{ClientOrderId, InstrumentId, QueueId, Side};
-use engine::msg::inbound::{BookChunk, InboundMessage, KlineEvent, TradeEvent};
+use engine::msg::inbound::{InboundMessage, KlineEvent, MessageBody, MessageHeader, TradeEvent};
 use engine::msg::latency::{
     Category, CommandKind, CounterSample, EngineCounters, Stage, StageSample, WireSample,
 };
-use engine::msg::time::{ClockSource, DurationUs, Stamper, Tick, TickAnchor, TickScale, TsUs};
+use engine::msg::time::{
+    ClockSource, DurationUs, LocalTs, Stamper, Tick, TickAnchor, TickScale, VenueTs,
+};
 use engine::msg::ui::{LatencyFlow, LatencyReading, LatencyReport, Percentile, UiEvent};
 use engine::operator::workstation::link::session::{Delivery, LinkSession, LinkTarget};
 use engine::operator::workstation::model::UiModel;
@@ -39,7 +41,8 @@ use crate::engine_support::{
 const INTERVAL_US: i64 = 60_000_000;
 const DISPLAY: DurationUs = DurationUs::from_millis(1_000);
 const SMALLEST_RING: u64 = 1_024;
-const NO_STAMP: TsUs = StageSample::ABSENT;
+const NO_STAMP: LocalTs = StageSample::ABSENT;
+const NO_VENUE_STAMP: VenueTs = StageSample::ABSENT_VENUE;
 
 /// Distinct by construction, so a stage that subtracts the wrong pair lands on another stage's
 /// number instead of on its own.
@@ -131,8 +134,12 @@ impl Counter {
     }
 }
 
-fn ts(micros: i64) -> TsUs {
-    TsUs::from_micros(micros)
+fn ts(micros: i64) -> LocalTs {
+    LocalTs::from_micros(micros)
+}
+
+fn venue_ts(micros: i64) -> VenueTs {
+    VenueTs::from_micros(micros)
 }
 
 fn config(window_intervals: u64) -> LatencyConfig {
@@ -227,11 +234,11 @@ impl Harness {
             done_tick: self.counter.at(done),
             received_ts_us: ts(RECEIVED_US),
             queued_ts_us: ts(QUEUED_US),
-            exchange_sent_ts_us: ts(VENUE_SENT_US),
-            exchange_ts_us: ts(VENUE_MATCH_US),
+            exchange_sent_ts_us: venue_ts(VENUE_SENT_US),
+            exchange_ts_us: venue_ts(VENUE_MATCH_US),
             request_sent_ts_us: NO_STAMP,
             category,
-            queue: QueueId(0),
+            queue: QueueId::new(0).unwrap(),
             pop_seq: 0,
         }
     }
@@ -244,7 +251,7 @@ impl Harness {
             issued_ts_us: ts(RECEIVED_US),
             client_id: ClientOrderId(7),
             kind: CommandKind::Place,
-            queue: QueueId(1),
+            queue: QueueId::new(1).unwrap(),
         }
     }
 }
@@ -278,8 +285,8 @@ fn each_stage_subtracts_the_stamps_its_name_claims() {
     let trade = harness.trade();
     harness.samples.stages.push(trade);
     let exec = StageSample {
-        exchange_sent_ts_us: NO_STAMP,
-        exchange_ts_us: NO_STAMP,
+        exchange_sent_ts_us: NO_VENUE_STAMP,
+        exchange_ts_us: NO_VENUE_STAMP,
         request_sent_ts_us: ts(RECEIVED_US - 8_000),
         ..harness.message(Category::Exec, POP_TICK, DONE_TICK)
     };
@@ -378,6 +385,11 @@ const BACKFILLED_CANDLE_AGE_US: i64 = 6 * 60 * 60 * 1_000_000;
 fn stamped_messages() -> Vec<InboundMessage> {
     let stamped = |when: i64| (ts(RECEIVED_US), ts(QUEUED_US), when);
     let (received_ts_us, queued_ts_us, _) = stamped(0);
+    let header = MessageHeader {
+        received_ts_us,
+        queued_ts_us,
+    };
+    let message = |body| InboundMessage { header, body };
     let candle = kline(
         0,
         KlineInterval::OneMinute,
@@ -387,10 +399,8 @@ fn stamped_messages() -> Vec<InboundMessage> {
     );
     let answer = |kind: ExecKind, client: u64, venue_us: i64, request: Option<i64>| ExecEvent {
         kind,
-        exchange_ts_us: ts(venue_us),
+        exchange_ts_us: venue_ts(venue_us),
         request_sent_ts_us: request.map(ts),
-        received_ts_us,
-        queued_ts_us,
         ..exec_event(
             InstrumentId(0),
             ClientOrderId(client),
@@ -400,45 +410,38 @@ fn stamped_messages() -> Vec<InboundMessage> {
         )
     };
     vec![
-        InboundMessage::Trade(TradeEvent {
-            exchange_ts_us: ts(VENUE_MATCH_US),
-            exchange_sent_ts_us: Some(ts(VENUE_SENT_US)),
-            received_ts_us,
-            queued_ts_us,
+        message(MessageBody::Trade(TradeEvent {
+            exchange_ts_us: venue_ts(VENUE_MATCH_US),
+            exchange_sent_ts_us: Some(venue_ts(VENUE_SENT_US)),
             ..trade(0, 100 * ONE, ONE, Side::Buy, RECEIVED_US)
-        }),
-        InboundMessage::Book(BookChunk {
-            exchange_ts_us: Some(ts(RECEIVED_US - 1_500)),
-            received_ts_us,
-            queued_ts_us,
-            ..delta_chunk(0, Side::Buy, &[(100 * ONE, ONE)], RECEIVED_US)
-        }),
-        InboundMessage::Exec(answer(
+        })),
+        message(MessageBody::Book({
+            let mut chunk = delta_chunk(0, Side::Buy, &[(100 * ONE, ONE)], RECEIVED_US);
+            chunk.exchange_ts_us = Some(venue_ts(RECEIVED_US - 1_500));
+            chunk
+        })),
+        message(MessageBody::Exec(answer(
             ExecKind::ReportNew,
             1,
             RECEIVED_US - 4_000,
             Some(RECEIVED_US - 8_000),
-        )),
-        InboundMessage::Exec(answer(
+        ))),
+        message(MessageBody::Exec(answer(
             ExecKind::PlaceNotSent,
             2,
             RECEIVED_US - 60_000,
             None,
-        )),
-        InboundMessage::Kline(KlineEvent {
-            exchange_ts_us: ts(RECEIVED_US - 2_500),
-            exchange_sent_ts_us: Some(ts(RECEIVED_US - 2_500)),
-            received_ts_us,
-            queued_ts_us,
+        ))),
+        message(MessageBody::Kline(KlineEvent {
+            exchange_ts_us: venue_ts(RECEIVED_US - 2_500),
+            exchange_sent_ts_us: Some(venue_ts(RECEIVED_US - 2_500)),
             ..candle
-        }),
-        InboundMessage::Kline(KlineEvent {
-            exchange_ts_us: ts(RECEIVED_US - BACKFILLED_CANDLE_AGE_US),
+        })),
+        message(MessageBody::Kline(KlineEvent {
+            exchange_ts_us: venue_ts(RECEIVED_US - BACKFILLED_CANDLE_AGE_US),
             exchange_sent_ts_us: None,
-            received_ts_us,
-            queued_ts_us,
             ..candle
-        }),
+        })),
     ]
 }
 
@@ -558,7 +561,7 @@ fn negative_venue_stage_is_counted_and_keeps_the_last_value() {
     let good = harness.trade();
     harness.samples.stages.push(good);
     let venue_ahead = StageSample {
-        exchange_sent_ts_us: ts(RECEIVED_US + 500),
+        exchange_sent_ts_us: venue_ts(RECEIVED_US + 500),
         ..harness.trade()
     };
     harness.samples.stages.push(venue_ahead);
@@ -645,11 +648,11 @@ fn engine_identity() -> LinkIdentity {
         token_hash: LinkHash::of_name(""),
         strategy_hash: LinkHash::of_name("strat-fitness"),
         sender_te_hash: LinkHash::of_name("te-fitness"),
-        boot_ts_us: ts(1_000),
+        boot_ts_us: venue_ts(1_000),
     }
 }
 
-fn workstation(now: TsUs) -> LinkSession {
+fn workstation(now: LocalTs) -> LinkSession {
     LinkSession::new(
         LinkTarget {
             strategy: StrategyId::new("strat-fitness").expect("the strategy id is a literal"),
@@ -717,7 +720,7 @@ fn latency_report_reaches_the_workstation_feed() {
         "no execution sample yet"
     );
 
-    let now = report.built_ts_us;
+    let now = LocalTs::from_micros(report.built_ts_us.micros());
     let mut session = workstation(now);
     let delivery = session.on_datagram(&report_frame(report), now);
     let Some(Delivery::Latency(delivered)) = delivery else {
@@ -740,7 +743,7 @@ fn latency_report_reaches_the_workstation_feed() {
         ..detached_setup(&instruments, Box::new(Idle))
     });
     for seq in 0..3 {
-        engine.dispatch(&InboundMessage::SpinTick(spin(seq, 700 + seq as i64)));
+        engine.dispatch(&spin(seq, 700 + seq as i64));
     }
     let teed: Vec<UiEvent> = std::iter::from_fn(|| events.pop().ok()).collect();
     assert!(
@@ -845,7 +848,7 @@ fn stale_latency_report_shows_its_age() {
 
     let mut model = UiModel::with_capacity(1, DurationUs::from_millis(100));
     model.apply_latency_report(report);
-    let rotation = |seq: u64, at: TsUs| UiEvent::Rotation {
+    let rotation = |seq: u64, at: VenueTs| UiEvent::Rotation {
         instrument: InstrumentId(0),
         seq,
         event_ts_us: at,
@@ -880,12 +883,12 @@ pub(super) fn row_clock_sources(clock_source: ClockSource) -> Vec<ClockSource> {
         .collect()
 }
 
-fn arb_stamp() -> impl Strategy<Value = TsUs> {
+fn arb_stamp() -> impl Strategy<Value = LocalTs> {
     prop_oneof![
-        Just(TsUs::from_micros(i64::MIN)),
-        Just(TsUs::from_micros(i64::MAX)),
-        Just(TsUs::from_micros(0)),
-        any::<i64>().prop_map(TsUs::from_micros),
+        Just(LocalTs::from_micros(i64::MIN)),
+        Just(LocalTs::from_micros(i64::MAX)),
+        Just(LocalTs::from_micros(0)),
+        any::<i64>().prop_map(LocalTs::from_micros),
     ]
 }
 
@@ -901,7 +904,7 @@ fn arb_category() -> impl Strategy<Value = Category> {
 struct RawStage {
     pop: u64,
     done: u64,
-    stamps: [TsUs; 5],
+    stamps: [LocalTs; 5],
     category: Category,
     queue: u8,
     pop_seq: u32,
@@ -913,7 +916,7 @@ fn arb_stage() -> impl Strategy<Value = RawStage> {
         arb_tick(),
         prop::array::uniform5(arb_stamp()),
         arb_category(),
-        any::<u8>(),
+        0..20_u8,
         any::<u32>(),
     )
         .prop_map(|(pop, done, stamps, category, queue, pop_seq)| RawStage {
@@ -945,11 +948,11 @@ proptest! {
                 done_tick: harness.counter.at(raw.done),
                 received_ts_us: raw.stamps[0],
                 queued_ts_us: raw.stamps[1],
-                exchange_sent_ts_us: raw.stamps[2],
-                exchange_ts_us: raw.stamps[3],
+                exchange_sent_ts_us: VenueTs::from_micros(raw.stamps[2].micros()),
+                exchange_ts_us: VenueTs::from_micros(raw.stamps[3].micros()),
                 request_sent_ts_us: raw.stamps[4],
                 category: raw.category,
-                queue: QueueId(raw.queue),
+                queue: QueueId::new(usize::from(raw.queue)).unwrap(),
                 pop_seq: raw.pop_seq,
             };
             harness.samples.stages.push(sample);

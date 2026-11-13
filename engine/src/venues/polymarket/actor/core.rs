@@ -1,13 +1,12 @@
-//! Pure driver core: two A/B slots, each an FSM + Up/Down legs. Schedules prefetch + subscribe,
-//! routes frames by token, translates actions → effects. No sockets/REST/clock — replays identically.
-//! Async shell performs effects and feeds results back.
+//! The pure core of the Polymarket market-data driver: two window slots with their legs, which turn
+//! frames and times into effects. It has no socket and no clock, so it replays the same way.
 
 use std::sync::Arc;
 
 use crate::msg::ids::InstrumentId;
-use crate::msg::inbound::{BookReset, InboundMessage, MarketRotation, TradeEvent};
+use crate::msg::inbound::{BookReset, InboundMessage, MarketRotation, MessageBody, TradeEvent};
 use crate::msg::persist::RotationRow;
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 use crate::venues::polymarket::discovery::{PolySchedule, Slot};
 use crate::venues::polymarket::parse::{
     PolyBook, PolyDelta, PolyFrame, PolyPriceChange, PolyTickSizeChange, PolyTrade,
@@ -35,7 +34,7 @@ pub struct SlotLegs {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DriverEffect {
     /// Idempotent resolve (shell de-dupes in-flight).
-    Resolve(TsUs),
+    Resolve(VenueTs),
     Subscribe(WindowTokens),
     Unsubscribe(WindowTokens),
     /// Grace-tail `/book` 404 probe on both tokens.
@@ -113,7 +112,7 @@ impl PolyDriverCore {
         }
     }
 
-    pub fn on_tick(&mut self, now: TsUs, emit: &mut dyn FnMut(DriverEffect)) {
+    pub fn on_tick(&mut self, now: LocalTs, emit: &mut dyn FnMut(DriverEffect)) {
         for slot in 0..2 {
             self.prefetch(slot, now, emit);
             self.try_assign(slot, now, emit);
@@ -121,7 +120,12 @@ impl PolyDriverCore {
         }
     }
 
-    pub fn on_frame(&mut self, now: TsUs, frame: &PolyFrame, emit: &mut dyn FnMut(DriverEffect)) {
+    pub fn on_frame(
+        &mut self,
+        now: LocalTs,
+        frame: &PolyFrame,
+        emit: &mut dyn FnMut(DriverEffect),
+    ) {
         match frame {
             PolyFrame::Book(book) => self.on_book(now, book, emit),
             PolyFrame::PriceChange(change) => self.on_price_change(now, change, emit),
@@ -138,7 +142,7 @@ impl PolyDriverCore {
 
     pub fn on_window_resolved(
         &mut self,
-        now: TsUs,
+        now: LocalTs,
         assignment: WindowAssignment,
         emit: &mut dyn FnMut(DriverEffect),
     ) {
@@ -162,7 +166,7 @@ impl PolyDriverCore {
     /// [`PolySchedule::window_at`]'s grid assert holds by construction.
     pub(super) fn assignment_from_market(
         &self,
-        start: TsUs,
+        start: VenueTs,
         market: &GammaMarket,
     ) -> WindowAssignment {
         let legs = &self.slots[self.schedule.window_at(start).slot.as_usize()];
@@ -185,7 +189,7 @@ impl PolyDriverCore {
     /// safe — only the one whose live window matches the probed tokens acts.
     pub fn on_probe_result(
         &mut self,
-        now: TsUs,
+        now: LocalTs,
         tokens: WindowTokens,
         outcome: ProbeOutcome,
         emit: &mut dyn FnMut(DriverEffect),
@@ -205,7 +209,7 @@ impl PolyDriverCore {
 
     /// A fresh socket: every live leg re-baselines (the venue resends full books), so emit a BookReset
     /// per live instrument now and forward the coming book as a Snapshot.
-    pub fn on_reconnect(&mut self, now: TsUs, emit: &mut dyn FnMut(DriverEffect)) {
+    pub fn on_reconnect(&mut self, now: LocalTs, emit: &mut dyn FnMut(DriverEffect)) {
         for slot in &mut self.slots {
             for side in [LegSide::Up, LegSide::Down] {
                 let leg = slot.leg_mut(side);
@@ -214,11 +218,10 @@ impl PolyDriverCore {
                 }
                 leg.resubscribe();
                 let instrument = leg.instrument();
-                emit(DriverEffect::Emit(InboundMessage::BookReset(BookReset {
-                    instrument,
-                    received_ts_us: now,
-                    queued_ts_us: now,
-                })));
+                emit(DriverEffect::Emit(InboundMessage::new(
+                    now,
+                    MessageBody::BookReset(BookReset { instrument }),
+                )));
             }
         }
     }
@@ -240,7 +243,7 @@ impl PolyDriverCore {
         self.force_teardowns
     }
 
-    fn prefetch(&mut self, slot: usize, now: TsUs, emit: &mut dyn FnMut(DriverEffect)) {
+    fn prefetch(&mut self, slot: usize, now: LocalTs, emit: &mut dyn FnMut(DriverEffect)) {
         let target = self.target_index(slot, now);
         if self.slots[slot].handled_index == Some(target) {
             return;
@@ -258,7 +261,7 @@ impl PolyDriverCore {
         }
     }
 
-    fn try_assign(&mut self, slot: usize, now: TsUs, emit: &mut dyn FnMut(DriverEffect)) {
+    fn try_assign(&mut self, slot: usize, now: LocalTs, emit: &mut dyn FnMut(DriverEffect)) {
         let Some(assignment) = self.slots[slot].resolved.as_ref() else {
             return;
         };
@@ -266,7 +269,7 @@ impl PolyDriverCore {
             .schedule
             .window_index_containing(assignment.window_open_ts_us);
         let subscribe_at = self.schedule.subscribe_at(assignment.window_open_ts_us);
-        if self.slots[slot].handled_index == Some(index) || now < subscribe_at {
+        if self.slots[slot].handled_index == Some(index) || now.as_venue_calendar() < subscribe_at {
             return;
         }
         let assignment = self.slots[slot].resolved.take().expect("resolved present");
@@ -276,8 +279,8 @@ impl PolyDriverCore {
 
     /// The next window index destined for this slot: the nearest at-or-after `now` with the slot's
     /// parity, stepped one full slot period past a window already handed over.
-    fn target_index(&self, slot: usize, now: TsUs) -> i64 {
-        let current = self.schedule.current_window(now);
+    fn target_index(&self, slot: usize, now: LocalTs) -> i64 {
+        let current = self.schedule.current_window(now.as_venue_calendar());
         let base = if current.slot.as_usize() == slot { current.index } else { current.index + 1 };
         if self.slots[slot].handled_index == Some(base) { base + 2 } else { base }
     }
@@ -285,7 +288,7 @@ impl PolyDriverCore {
     fn feed(
         &mut self,
         slot: usize,
-        now: TsUs,
+        now: LocalTs,
         input: SlotInput,
         emit: &mut dyn FnMut(DriverEffect),
     ) {
@@ -301,7 +304,7 @@ impl PolyDriverCore {
     fn exec_action(
         &mut self,
         slot: usize,
-        now: TsUs,
+        now: LocalTs,
         action: SlotAction,
         emit: &mut dyn FnMut(DriverEffect),
     ) {
@@ -314,14 +317,13 @@ impl PolyDriverCore {
                 emit(DriverEffect::Subscribe(tokens));
             }
             SlotAction::Rotation(facts) => {
-                emit(DriverEffect::Emit(InboundMessage::MarketRotation(
-                    MarketRotation {
+                emit(DriverEffect::Emit(InboundMessage::new(
+                    now,
+                    MessageBody::MarketRotation(MarketRotation {
                         instrument: facts.instrument,
                         window_open_ts_us: facts.window_open_ts_us,
                         window_close_ts_us: facts.window_close_ts_us,
-                        received_ts_us: now,
-                        queued_ts_us: now,
-                    },
+                    }),
                 )));
                 emit(DriverEffect::PersistRotation(RotationRow {
                     instrument: facts.instrument,
@@ -334,11 +336,10 @@ impl PolyDriverCore {
                 }));
             }
             SlotAction::BookReset(instrument) => {
-                emit(DriverEffect::Emit(InboundMessage::BookReset(BookReset {
-                    instrument,
-                    received_ts_us: now,
-                    queued_ts_us: now,
-                })));
+                emit(DriverEffect::Emit(InboundMessage::new(
+                    now,
+                    MessageBody::BookReset(BookReset { instrument }),
+                )));
             }
             SlotAction::Unsubscribe(tokens) => {
                 self.slots[slot].up.clear();
@@ -353,7 +354,7 @@ impl PolyDriverCore {
         }
     }
 
-    fn on_book(&mut self, now: TsUs, book: &PolyBook, emit: &mut dyn FnMut(DriverEffect)) {
+    fn on_book(&mut self, now: LocalTs, book: &PolyBook, emit: &mut dyn FnMut(DriverEffect)) {
         let Some((slot, side)) = self.route(&book.asset_id) else {
             return;
         };
@@ -372,7 +373,7 @@ impl PolyDriverCore {
 
     fn on_price_change(
         &mut self,
-        now: TsUs,
+        now: LocalTs,
         change: &PolyPriceChange,
         emit: &mut dyn FnMut(DriverEffect),
     ) {
@@ -406,22 +407,23 @@ impl PolyDriverCore {
         }
     }
 
-    fn on_trade(&mut self, now: TsUs, trade: &PolyTrade, emit: &mut dyn FnMut(DriverEffect)) {
+    fn on_trade(&mut self, now: LocalTs, trade: &PolyTrade, emit: &mut dyn FnMut(DriverEffect)) {
         let Some((slot, side)) = self.route(&trade.asset_id) else {
             return;
         };
         self.feed(slot, now, SlotInput::Frame, emit);
         let instrument = self.slots[slot].leg(side).instrument();
-        emit(DriverEffect::Emit(InboundMessage::Trade(TradeEvent {
-            instrument,
-            price: trade.price,
-            qty: trade.qty,
-            side: trade.side,
-            exchange_ts_us: trade.exchange_ts_us,
-            exchange_sent_ts_us: None,
-            received_ts_us: trade.received_ts_us,
-            queued_ts_us: trade.received_ts_us,
-        })));
+        emit(DriverEffect::Emit(InboundMessage::new(
+            trade.received_ts_us,
+            MessageBody::Trade(TradeEvent {
+                instrument,
+                price: trade.price,
+                qty: trade.qty,
+                side: trade.side,
+                exchange_ts_us: trade.exchange_ts_us,
+                exchange_sent_ts_us: None,
+            }),
+        )));
     }
 
     fn route(&self, asset_id: &str) -> Option<(usize, LegSide)> {

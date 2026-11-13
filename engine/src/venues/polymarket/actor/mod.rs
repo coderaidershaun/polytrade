@@ -1,4 +1,5 @@
-//! Driver actor: socket/tick/ping/REST shell. Single-owner loop → monotone input. 5m rotation: T-60s subscribe, 404 probe teardown.
+//! Driver actor: socket/tick/ping/REST shell. Single-owner loop → monotone input. 5m rotation:
+//! T-60s subscribe, 404 probe teardown.
 
 mod core;
 mod effects;
@@ -18,10 +19,10 @@ use tokio_tungstenite::tungstenite::{Error as ProtocolError, Message};
 use crate::hot::spawn::QueueProducer;
 use crate::msg::persist::RotationRow;
 use crate::msg::run_state::RunState;
-use crate::msg::time::{EngineClock, TsUs};
+use crate::msg::time::{EngineClock, LocalTs};
 use crate::runtime::config::PolySeries;
 use crate::runtime::registry::{InstrumentRow, ProducerGroup};
-use crate::runtime::shutdown::{FatalSignal, RunStateCell, TaskHandle};
+use crate::runtime::shutdown::{FatalReason, FatalSignal, RunStateCell, TaskHandle};
 use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::lane::{Flow, Lane, LaneSpec, SessionEnd, run_lane};
 use crate::venues::edge::rest_quiet::RestQuiet;
@@ -159,7 +160,7 @@ impl Actor {
     )]
     async fn bootstrap(&mut self) {
         let now = self.clock.now();
-        let current = self.schedule.current_window(now);
+        let current = self.schedule.current_window(now.as_venue_calendar());
         match self.rest.resolve_slug(current.window_start_ts_us).await {
             Ok(market) => {
                 let assignment = self
@@ -229,7 +230,7 @@ impl Actor {
         }
     }
 
-    async fn on_text(&mut self, text: &str, now: TsUs, writer: &mut Writer) -> Flow {
+    async fn on_text(&mut self, text: &str, now: LocalTs, writer: &mut Writer) -> Flow {
         if is_frameless(text) {
             return Flow::Continue;
         }
@@ -240,8 +241,9 @@ impl Actor {
             }
             Err(error) if error.is_fatal() => {
                 error!("polymarket adapter {} fatal parse: {error}", self.label);
-                self.fatal
-                    .trip(format!("polymarket {}: {error}", self.label));
+                self.fatal.trip(FatalReason::MarketDataUnreadable {
+                    source_id: self.producer.source_id(),
+                });
                 Flow::Reconnect
             }
             Err(error) => {
@@ -251,7 +253,7 @@ impl Actor {
         }
     }
 
-    async fn drive_tick(&mut self, now: TsUs, writer: &mut Writer) -> Flow {
+    async fn drive_tick(&mut self, now: LocalTs, writer: &mut Writer) -> Flow {
         let effects = collect_effects(|emit| self.core.on_tick(now, emit));
         self.execute(effects, writer).await
     }

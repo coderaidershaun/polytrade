@@ -1,15 +1,18 @@
-//! Engine-owned order truth: the fixed slot array, the geography that addresses a slot, and the
-//! lifecycle that hands slots out and takes them back.
+//! The engine's own record of its orders: a fixed table of slots, the client id that names a slot,
+//! and the rules that hand slots out and take them back.
 //!
-//! What an event MEANS lives next door in `transition.rs`. The two are separable because the store
-//! never interprets: it locates a slot, and the transition table decides what happens to it.
+//! The table never reads what an event means: it finds the slot, and a separate transition table
+//! decides what happens to it.
 
 use std::ops::Range;
 
+use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::msg::exec::{ExecEvent, OrderStyle};
-use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side, VenueOrderId};
+use crate::msg::ids::{
+    ClientOrderId, InstrumentId, Notional, Price, Qty, Side, Spend, VenueOrderId,
+};
 use crate::msg::persist::OrderLifecycle;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 
 use super::account::AccountWatermark;
@@ -27,11 +30,13 @@ pub struct ClientIdLayout {
 }
 
 impl ClientIdLayout {
+    /// # Panics
+    /// When `slot_index` is past the slot table.
     #[inline]
     pub fn encode(self, slot_index: usize, generation: u16) -> ClientOrderId {
-        debug_assert!(
+        assert!(
             slot_index < MAX_ORDER_SLOTS,
-            "slot index {slot_index} beyond the table"
+            "slot index {slot_index} beyond the table of {MAX_ORDER_SLOTS} slots"
         );
         ClientOrderId(
             (u64::from(self.run_nonce) << 32)
@@ -86,7 +91,7 @@ pub struct OrderClaim {
     pub price: Price,
     pub qty: Qty,
     pub style: OrderStyle,
-    pub claimed_ts_us: TsUs,
+    pub claimed_ts_us: LocalTs,
     pub recon_seq: u64,
 }
 
@@ -155,10 +160,10 @@ impl From<OrderState> for OrderLifecycle {
 pub struct ReconcilePass {
     pub instrument: InstrumentId,
     pub recon_seq: u64,
-    pub recon_ts_us: TsUs,
+    pub recon_ts_us: LocalTs,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OrderSlot {
     pub client_id: ClientOrderId,
     pub venue_order_id: Option<VenueOrderId>,
@@ -170,15 +175,16 @@ pub struct OrderSlot {
     pub price: Price,
     pub qty: Qty,
     pub filled_base: Qty,
-    pub filled_quote: i64,
+    pub filled_quote: Notional,
     pub amends_used: u8,
     pub generation: u16,
-    pub reserved_amount: i64,
+    /// `None` while nothing is held for the order, a zero amount included.
+    pub reserved_amount: Option<Spend>,
     pub reserved_at: AccountWatermark,
     pub placed_recon_seq: u64,
     pub seen_recon_seq: u64,
-    pub last_event_ts_us: TsUs,
-    pub closed_ts_us: TsUs,
+    pub last_event_ts_us: LocalTs,
+    pub closed_ts_us: LocalTs,
 }
 
 impl OrderSlot {
@@ -190,18 +196,18 @@ impl OrderSlot {
         level: QuoteLevel::ZERO,
         style: None,
         instrument: InstrumentId(0),
-        price: Price(0),
-        qty: Qty(0),
-        filled_base: Qty(0),
-        filled_quote: 0,
+        price: Price::from_mantissa(0),
+        qty: Qty::from_mantissa(0),
+        filled_base: Qty::from_mantissa(0),
+        filled_quote: Notional::ZERO,
         amends_used: 0,
         generation: 0,
-        reserved_amount: 0,
+        reserved_amount: None,
         reserved_at: AccountWatermark::ZERO,
         placed_recon_seq: 0,
         seen_recon_seq: 0,
-        last_event_ts_us: TsUs::from_micros(0),
-        closed_ts_us: TsUs::from_micros(0),
+        last_event_ts_us: LocalTs::from_micros(0),
+        closed_ts_us: LocalTs::from_micros(0),
     };
 
     /// Whether the venue is holding this order PASSIVELY — the shape a cancel can actually reach.
@@ -216,7 +222,7 @@ impl OrderSlot {
 
     #[inline]
     pub fn fold_fill(&mut self, event: &ExecEvent) -> FillDelta {
-        let delta_base = event.cumulative_qty.0 - self.filled_base.0;
+        let delta_base = event.cumulative_qty.mantissa() - self.filled_base.mantissa();
         let delta_quote = event.cumulative_quote - self.filled_quote;
         if delta_base <= 0 {
             return FillDelta::NONE;
@@ -224,7 +230,7 @@ impl OrderSlot {
         self.filled_base = event.cumulative_qty;
         self.filled_quote = event.cumulative_quote;
         FillDelta {
-            base: Qty(delta_base),
+            base: Qty::from_mantissa(delta_base),
             quote: delta_quote,
             // SMELL: the quantity above comes from the venue's running totals, but the fee comes
             // from this one report. A report that carries the fee of only one of its trades, or a
@@ -238,20 +244,21 @@ impl OrderSlot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FillDelta {
     pub base: Qty,
-    pub quote: i64,
+    pub quote: Notional,
     pub commission: i64,
 }
 
 impl FillDelta {
     pub const NONE: FillDelta = FillDelta {
-        base: Qty(0),
-        quote: 0,
+        base: Qty::from_mantissa(0),
+        quote: Notional::ZERO,
+
         commission: 0,
     };
 
     #[inline]
     pub fn is_empty(self) -> bool {
-        self.base.0 == 0
+        self.base.mantissa() == 0
     }
 }
 
@@ -259,6 +266,9 @@ pub struct OrderTable {
     slots: Box<[OrderSlot; MAX_ORDER_SLOTS]>,
     layout: ClientIdLayout,
 }
+
+digest_by_hash!(ClientIdLayout, OrderSlot);
+digest_fields! { OrderTable { slots, layout } }
 
 impl OrderTable {
     pub fn new(run_nonce: u32) -> Self {
@@ -357,7 +367,7 @@ impl OrderTable {
         Some((index, client_id))
     }
 
-    pub fn adopt(&mut self, event: &ExecEvent) -> Option<usize> {
+    pub fn adopt(&mut self, event: &ExecEvent, now: LocalTs) -> Option<usize> {
         let index = ClientIdLayout::slot_of(event.client_id);
         let slot = self.slots.get_mut(index)?;
         if slot.state != OrderState::Free {
@@ -369,11 +379,11 @@ impl OrderTable {
             state: OrderState::Unknown,
             side: event.side,
             level: level_of_slot(index),
-            instrument: event.instrument,
+            instrument: event.instrument?,
             price: event.price,
             qty: event.qty,
             generation: ClientIdLayout::generation_of(event.client_id),
-            last_event_ts_us: event.received_ts_us,
+            last_event_ts_us: now,
             placed_recon_seq: event.recon_seq,
             ..OrderSlot::EMPTY
         };
@@ -381,7 +391,7 @@ impl OrderTable {
     }
 
     #[inline]
-    pub fn is_timed_out(&self, index: usize, now: TsUs, timeout: DurationUs) -> bool {
+    pub fn is_timed_out(&self, index: usize, now: LocalTs, timeout: DurationUs) -> bool {
         let slot = &self.slots[index];
         slot.state.is_in_flight() && now.diff(slot.last_event_ts_us) > timeout
     }
@@ -424,7 +434,7 @@ impl OrderTable {
         &mut self.slots[index]
     }
 
-    pub fn reap(&mut self, now: TsUs, window: DurationUs) {
+    pub fn reap(&mut self, now: LocalTs, window: DurationUs) {
         for slot in self.slots.iter_mut() {
             let is_reapable = matches!(slot.state, OrderState::Closed(_))
                 && now.diff(slot.closed_ts_us) >= window;

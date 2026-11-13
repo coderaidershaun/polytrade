@@ -1,7 +1,9 @@
-//! Per-instrument book: two sorted vecs (bids desc, asks asc), fixed capacity. Adapter sequencing; book counts/warns quirks.
+//! Per-instrument book: two sorted vecs (bids desc, asks asc), fixed capacity. Adapter sequencing;
+//! book counts/warns quirks.
 
 use std::cmp::Ordering;
 
+use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::log::hot_warn;
 use crate::msg::ids::{Price, Qty, Side};
 use crate::msg::inbound::{BookChunk, Level};
@@ -61,6 +63,9 @@ struct BookSide {
     order: SortOrder,
     is_trim_warned: bool,
 }
+
+digest_by_hash!(BookState, BookVoice, SortOrder);
+digest_fields! { BookSide { levels, capacity, order, is_trim_warned } }
 
 enum ApplyOutcome {
     Applied,
@@ -124,7 +129,7 @@ impl BookSide {
     fn apply(&mut self, level: Level) -> ApplyOutcome {
         match self.search(level.price) {
             Ok(index) => {
-                if level.qty.0 == 0 {
+                if level.qty.mantissa() == 0 {
                     self.levels.remove(index);
                     self.is_trim_warned = false;
                 } else {
@@ -133,7 +138,7 @@ impl BookSide {
                 ApplyOutcome::Applied
             }
             Err(index) => {
-                if level.qty.0 == 0 {
+                if level.qty.mantissa() == 0 {
                     ApplyOutcome::RemoveMissing
                 } else {
                     self.insert_new(index, level)
@@ -196,6 +201,13 @@ pub struct Book {
     crossed_count: u64,
     remove_missing_count: u64,
     is_crossed_warned: bool,
+}
+
+digest_fields! {
+    Book {
+        bids, asks, state, voice, capacity_per_side, trimmed_count, locked_count, crossed_count,
+        remove_missing_count, is_crossed_warned,
+    }
 }
 
 impl Book {
@@ -419,8 +431,8 @@ impl Book {
         hot_warn!(
             "crossed book: instrument {} best bid {} > best ask {}",
             chunk.instrument.0,
-            bid.0,
-            ask.0
+            bid.mantissa(),
+            ask.mantissa()
         );
     }
 }

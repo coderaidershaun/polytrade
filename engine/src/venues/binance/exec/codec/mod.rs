@@ -1,6 +1,5 @@
-//! Translates Binance JSON to and from [`ExecEvent`] and [`AccountChunk`], resolving symbols,
-//! assets and client ids in one place. It holds no socket, clock or state: every stamp arrives as a
-//! parameter, so a replay decodes identically.
+//! Translates Binance JSON to and from the execution vocabulary in one place, with no socket, clock
+//! or state: each stamp is a parameter, so a replay decodes the same way.
 
 mod client_id;
 mod reject;
@@ -10,8 +9,8 @@ mod stream;
 mod wire;
 
 use crate::msg::exec::VenueOrderStatus;
-use crate::msg::ids::InstrumentId;
-use crate::msg::time::TsUs;
+use crate::msg::ids::{InstrumentId, Notional};
+use crate::msg::time::LocalTs;
 use crate::runtime::registry::{AssetDictionary, Registry};
 use crate::venues::edge::decode::{DecimalFault, JsonFrame, mantissa_field, unknown_enum};
 use crate::venues::exec::EngineIdentity;
@@ -33,7 +32,7 @@ pub struct DecodeContext<'a> {
     pub identity: EngineIdentity,
     /// When this process received the message. Venue stamps are clamped against it; it is not the
     /// venue's clock.
-    pub received_ts_us: TsUs,
+    pub received_ts_us: LocalTs,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -131,12 +130,12 @@ fn venue_status(field: &'static str, status: &str) -> Result<VenueOrderStatus, W
 }
 
 /// Binance negates an amount it cannot supply, so a leading `-` is a refusal, not a number.
-fn money_field(field: &'static str, text: &str) -> Result<i64, WireError> {
+fn money_field(field: &'static str, text: &str) -> Result<Notional, WireError> {
     if text.starts_with('-') {
         return Err(WireError::UnavailableAmount {
             field,
             value: text.into(),
         });
     }
-    Ok(mantissa_field(field, text)?)
+    Ok(Notional::from_mantissa(mantissa_field(field, text)?))
 }

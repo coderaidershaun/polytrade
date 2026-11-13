@@ -1,6 +1,5 @@
-//! Where log lines go: one writer for each UTC day of record time, reopened when a write fails,
-//! and given up for a fallback once reopening keeps failing. Engine and strategy lines share it;
-//! the tag column tells them apart.
+//! Where log lines go: one file for each UTC day of record time, reopened when a write fails, and a
+//! fallback to stderr once reopening keeps failing.
 
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};
@@ -10,7 +9,7 @@ use std::path::{Path, PathBuf};
 use super::LogConfig;
 use super::lane::BacktraceMessage;
 use super::record::Callsite;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs};
 
 const FLUSH_INTERVAL: DurationUs = DurationUs::from_secs(1);
 const MICROS_PER_DAY: i64 = 86_400_000_000;
@@ -30,7 +29,7 @@ pub trait LogWriter: Write + Send {
 impl LogWriter for io::Stderr {}
 
 /// Opens the writer for the UTC day of the line at the given time.
-pub type OpenWriter = Box<dyn FnMut(TsUs) -> io::Result<Box<dyn LogWriter>> + Send>;
+pub type OpenWriter = Box<dyn FnMut(LocalTs) -> io::Result<Box<dyn LogWriter>> + Send>;
 
 /// Where the drain writes: what `open` gives for the day of each line, and the writer it falls back
 /// to once `reopen_limit` reopens in a row have failed.
@@ -78,7 +77,7 @@ impl LogWriter for FileWriter {
     }
 }
 
-fn open_log_file(dir: &Path, stem: &str, at: TsUs) -> io::Result<Box<dyn LogWriter>> {
+fn open_log_file(dir: &Path, stem: &str, at: LocalTs) -> io::Result<Box<dyn LogWriter>> {
     fs::create_dir_all(dir)?;
     let day = at.civil();
     let name = format!("{stem}-{:04}-{:02}-{:02}.log", day.year, day.month, day.day);
@@ -112,7 +111,7 @@ pub(super) struct Output {
     reopens_in_a_row: u32,
     /// Reused for each line, so a line allocates only while the buffer still grows.
     line: String,
-    last_flush: Option<TsUs>,
+    last_flush: Option<LocalTs>,
     counts: OutputCounts,
 }
 
@@ -135,7 +134,7 @@ impl Output {
     }
 
     /// One record's line: time, level, tag, module, file:line, text.
-    pub(super) fn write_line(&mut self, tag: &str, callsite: &Callsite, at: TsUs, text: &str) {
+    pub(super) fn write_line(&mut self, tag: &str, callsite: &Callsite, at: LocalTs, text: &str) {
         self.line.clear();
         let level = callsite.level();
         push_timestamp(&mut self.line, at);
@@ -169,7 +168,7 @@ impl Output {
         self.emit(message.ts_us, true);
     }
 
-    pub(super) fn write_drop_notice(&mut self, tag: &str, notice: DropNotice, now: TsUs) {
+    pub(super) fn write_drop_notice(&mut self, tag: &str, notice: DropNotice, now: LocalTs) {
         self.line.clear();
         push_timestamp(&mut self.line, now);
         writeln!(
@@ -181,7 +180,7 @@ impl Output {
         self.emit(now, true);
     }
 
-    pub(super) fn flush_if_due(&mut self, now: TsUs) {
+    pub(super) fn flush_if_due(&mut self, now: LocalTs) {
         let is_due = self
             .last_flush
             .is_none_or(|last| now.diff(last) >= FLUSH_INTERVAL);
@@ -190,7 +189,7 @@ impl Output {
         }
     }
 
-    pub(super) fn flush(&mut self, now: TsUs) {
+    pub(super) fn flush(&mut self, now: LocalTs) {
         self.last_flush = Some(now);
         let target = match self.writer.as_mut() {
             Some(writer) if !self.is_on_fallback => writer,
@@ -205,7 +204,7 @@ impl Output {
     }
 
     /// Flushes and pushes the lines to disk, for the end of the run.
-    pub(super) fn sync(&mut self, now: TsUs) {
+    pub(super) fn sync(&mut self, now: LocalTs) {
         self.flush(now);
         let target = match self.writer.as_mut() {
             Some(writer) if !self.is_on_fallback => writer,
@@ -217,7 +216,7 @@ impl Output {
     }
 
     /// Writes the line held in `self.line`. Returns whether it reached a writer.
-    fn emit(&mut self, at: TsUs, should_flush: bool) -> bool {
+    fn emit(&mut self, at: LocalTs, should_flush: bool) -> bool {
         if !self.is_on_fallback {
             self.open_for_day(at);
         }
@@ -255,7 +254,7 @@ impl Output {
     }
 
     /// A line of a new UTC day closes the writer of the old day and opens the next one.
-    fn open_for_day(&mut self, at: TsUs) {
+    fn open_for_day(&mut self, at: LocalTs) {
         let day = at.micros().div_euclid(MICROS_PER_DAY);
         if self.day == Some(day) {
             return;
@@ -274,7 +273,7 @@ impl Output {
 
     /// One reset of the output: a fresh writer from `open`. After `reopen_limit` reopens with no
     /// line written in between, the output gives up on `open` for good and uses the fallback.
-    fn reopen(&mut self, at: TsUs) {
+    fn reopen(&mut self, at: LocalTs) {
         if self.reopens_in_a_row >= self.targets.reopen_limit {
             self.switch_to_fallback();
             return;
@@ -307,7 +306,7 @@ impl Output {
     }
 }
 
-fn push_timestamp(line: &mut String, at: TsUs) {
+fn push_timestamp(line: &mut String, at: LocalTs) {
     let civil = at.civil();
     write!(
         line,

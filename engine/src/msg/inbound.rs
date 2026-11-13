@@ -1,14 +1,14 @@
-//! Normalised inbound messages: fixed-size POD Copy (only currency into hot path).
-//! Book payloads chunk [Level; BOOK_CHUNK_LEVELS]. Every variant carries received_ts_us (uniform key).
+//! Normalised inbound messages, the only data into the hot path: a header of the two local stamps,
+//! so each kind is ordered by one received stamp, and a fixed-size body of one kind.
 
 // SMELL: the plain message data imports the link and the runtime config here, and other message
 // files import the hot thread, its sinks, and the runtime registry, so the vocabulary depends on
 // the code it should sit beneath. These types need a home that imports nothing above it.
-use crate::link::InboundLink;
+use crate::link::LinkFrame;
 use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{AggregateTradeId, InstrumentId, Price, Qty, RawTradeId, Side, StreamEpoch};
 use crate::msg::run_state::RunAssertion;
-use crate::msg::time::TsUs;
+use crate::msg::time::{LocalTs, VenueTs};
 use crate::runtime::config::KlineInterval;
 
 pub const BOOK_CHUNK_LEVELS: usize = 20;
@@ -19,52 +19,83 @@ pub struct Level {
     pub qty: Qty,
 }
 
+/// The two stamps this process takes of every message. The received stamp is the key that orders
+/// the fold across every input queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MessageHeader {
+    pub received_ts_us: LocalTs,
+    /// Set by the producer as it pushes the message onto its input queue.
+    pub queued_ts_us: LocalTs,
+}
+
+/// Aligned to a cache line, so each slot of an input ring starts a line and no two slots share one.
+#[repr(align(64))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InboundMessage {
+    pub header: MessageHeader,
+    pub body: MessageBody,
+}
+
+// Each slot of an input ring is this size. The link frame and the book chunk fill the body, so a
+// field added to either makes the message 448 bytes.
+const _: () = assert!(size_of::<InboundMessage>() == 384 && align_of::<InboundMessage>() == 64);
+
 // Large variant by design (heap indirection forbidden).
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum InboundMessage {
+pub enum MessageBody {
     Trade(TradeEvent),
     Book(BookChunk),
     BookReset(BookReset),
     MarketRotation(MarketRotation),
     Kline(KlineEvent),
     SpinTick(SpinTick),
-    Link(InboundLink),
+    Link(LinkFrame),
     RunControl(RunControl),
     Exec(ExecEvent),
     Account(AccountChunk),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MessageKind {
+    Trade,
+    Book,
+    BookReset,
+    MarketRotation,
+    Kline,
+    SpinTick,
+    Link,
+    RunControl,
+    Exec,
+    Account,
+}
+
 impl InboundMessage {
+    /// The queued stamp starts at the received stamp, and the producer sets it again as it pushes.
     #[inline]
-    pub fn received_ts_us(&self) -> TsUs {
-        match self {
-            InboundMessage::Trade(event) => event.received_ts_us,
-            InboundMessage::Book(chunk) => chunk.received_ts_us,
-            InboundMessage::BookReset(reset) => reset.received_ts_us,
-            InboundMessage::MarketRotation(rotation) => rotation.received_ts_us,
-            InboundMessage::Kline(event) => event.received_ts_us,
-            InboundMessage::SpinTick(tick) => tick.received_ts_us,
-            InboundMessage::Link(link) => link.received_ts_us,
-            InboundMessage::RunControl(control) => control.received_ts_us,
-            InboundMessage::Exec(event) => event.received_ts_us,
-            InboundMessage::Account(chunk) => chunk.received_ts_us,
+    pub fn new(received_ts_us: LocalTs, body: MessageBody) -> Self {
+        Self {
+            header: MessageHeader {
+                received_ts_us,
+                queued_ts_us: received_ts_us,
+            },
+            body,
         }
     }
 
     #[inline]
-    pub fn set_queued_ts_us(&mut self, ts: TsUs) {
-        match self {
-            InboundMessage::Trade(event) => event.queued_ts_us = ts,
-            InboundMessage::Book(chunk) => chunk.queued_ts_us = ts,
-            InboundMessage::BookReset(reset) => reset.queued_ts_us = ts,
-            InboundMessage::MarketRotation(rotation) => rotation.queued_ts_us = ts,
-            InboundMessage::Kline(event) => event.queued_ts_us = ts,
-            InboundMessage::SpinTick(tick) => tick.queued_ts_us = ts,
-            InboundMessage::Link(link) => link.queued_ts_us = ts,
-            InboundMessage::RunControl(control) => control.queued_ts_us = ts,
-            InboundMessage::Exec(event) => event.queued_ts_us = ts,
-            InboundMessage::Account(chunk) => chunk.queued_ts_us = ts,
+    pub fn kind(&self) -> MessageKind {
+        match self.body {
+            MessageBody::Trade(_) => MessageKind::Trade,
+            MessageBody::Book(_) => MessageKind::Book,
+            MessageBody::BookReset(_) => MessageKind::BookReset,
+            MessageBody::MarketRotation(_) => MessageKind::MarketRotation,
+            MessageBody::Kline(_) => MessageKind::Kline,
+            MessageBody::SpinTick(_) => MessageKind::SpinTick,
+            MessageBody::Link(_) => MessageKind::Link,
+            MessageBody::RunControl(_) => MessageKind::RunControl,
+            MessageBody::Exec(_) => MessageKind::Exec,
+            MessageBody::Account(_) => MessageKind::Account,
         }
     }
 }
@@ -81,11 +112,9 @@ pub struct TradeEvent {
     pub price: Price,
     pub qty: Qty,
     pub side: Side,
-    pub exchange_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
     /// Venue SEND stamp vs `exchange_ts_us`'s MATCH stamp; `None` when the venue publishes only one.
-    pub exchange_sent_ts_us: Option<TsUs>,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
+    pub exchange_sent_ts_us: Option<VenueTs>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,49 +122,65 @@ pub struct BookChunk {
     pub instrument: InstrumentId,
     pub kind: BookChunkKind,
     pub side: Side,
-    pub levels: [Level; BOOK_CHUNK_LEVELS],
-    pub len: u8,
+    levels: [Level; BOOK_CHUNK_LEVELS],
+    len: u8,
     pub is_last_chunk: bool,
     pub update_id: u64,
-    /// Anchor varies by venue (send/transact/publish); `None` for REST. 384-byte budget affords only one field.
-    pub exchange_ts_us: Option<TsUs>,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
+    /// The moment this stamps differs by venue: the send, the transaction, or the publication. It is
+    /// `None` for a REST snapshot. The message has room for only one such field.
+    pub exchange_ts_us: Option<VenueTs>,
 }
 
 impl BookChunk {
+    /// A chunk with no level yet, not the last of its update, with no update id and no venue stamp.
+    pub fn new(instrument: InstrumentId, kind: BookChunkKind, side: Side) -> Self {
+        Self {
+            instrument,
+            kind,
+            side,
+            levels: [Level {
+                price: Price::from_mantissa(0),
+                qty: Qty::from_mantissa(0),
+            }; BOOK_CHUNK_LEVELS],
+            len: 0,
+            is_last_chunk: false,
+            update_id: 0,
+            exchange_ts_us: None,
+        }
+    }
+
+    /// Takes the levels in order until the chunk is full, and returns how many it took.
+    pub fn push_levels(&mut self, levels: &[Level]) -> usize {
+        let start = usize::from(self.len);
+        let taken = levels.len().min(BOOK_CHUNK_LEVELS - start);
+        self.levels[start..start + taken].copy_from_slice(&levels[..taken]);
+        self.len += taken as u8;
+        taken
+    }
+
     #[inline]
     pub fn active_levels(&self) -> &[Level] {
-        debug_assert!(
-            self.len as usize <= BOOK_CHUNK_LEVELS,
-            "chunk len {} exceeds capacity {BOOK_CHUNK_LEVELS}",
-            self.len
-        );
-        &self.levels[..self.len as usize]
+        &self.levels[..usize::from(self.len)]
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BookReset {
     pub instrument: InstrumentId,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MarketRotation {
     pub instrument: InstrumentId,
-    pub window_open_ts_us: TsUs,
-    pub window_close_ts_us: TsUs,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
+    pub window_open_ts_us: VenueTs,
+    pub window_close_ts_us: VenueTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KlineEvent {
     pub instrument: InstrumentId,
     pub interval: KlineInterval,
-    pub open_ts_us: TsUs,
+    pub open_ts_us: VenueTs,
     pub open: Price,
     pub high: Price,
     pub low: Price,
@@ -146,29 +191,21 @@ pub struct KlineEvent {
     pub is_closed: bool,
     /// Candle time: the frame's event time live, the candle's own CLOSE on REST backfill. Hours old
     /// there by design, so it is never a transport measurement — [`Self::exchange_sent_ts_us`] is.
-    pub exchange_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
     /// Venue SEND stamp; `None` on REST backfill rows, which carry no send time of their own.
-    pub exchange_sent_ts_us: Option<TsUs>,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
+    pub exchange_sent_ts_us: Option<VenueTs>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpinTick {
     pub seq: u64,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
 }
 
 // Run-state marker (level-triggered, dedups on epoch).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunControl {
     pub desired: RunAssertion,
-    pub received_ts_us: TsUs,
-    pub queued_ts_us: TsUs,
 }
-
-const _: () = assert!(size_of::<InboundMessage>() <= 384);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TappedMessage {
@@ -176,11 +213,11 @@ pub struct TappedMessage {
     pub venue_meta: VenueMeta,
 }
 
-#[allow(clippy::large_enum_variant)] // Same reason as InboundMessage: heap indirection forbidden.
+#[allow(clippy::large_enum_variant)] // Same reason as MessageBody: heap indirection forbidden.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MarketTapItem {
     Event(TappedMessage),
-    Watermark { received_ts_us: TsUs },
+    Watermark { received_ts_us: LocalTs },
 }
 
 /// Venue continuity metadata used only by the simulator.
@@ -193,10 +230,10 @@ pub enum VenueMeta {
         stream_epoch: StreamEpoch,
     },
     DepthDelta {
-        exchange_ts_us: TsUs,
+        exchange_ts_us: VenueTs,
     },
     DepthReset {
-        exchange_ts_us: TsUs,
+        exchange_ts_us: VenueTs,
     },
     /// Snapshot chunks and messages without venue sequence data.
     None,

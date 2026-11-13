@@ -194,7 +194,7 @@ impl DeliverySchedule {
 fn status_of(snapshot: OrderSnapshot) -> VenueOrderStatus {
     match snapshot.phase {
         OrderPhase::Closed(reason) => reason.venue_status(),
-        _ if snapshot.order.filled.0 > 0 => VenueOrderStatus::PartiallyFilled,
+        _ if snapshot.order.filled.mantissa() > 0 => VenueOrderStatus::PartiallyFilled,
         _ => VenueOrderStatus::New,
     }
 }

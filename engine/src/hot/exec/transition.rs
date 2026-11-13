@@ -12,6 +12,7 @@
 //! landed, and treating it that way emits a second cancel.
 
 use crate::msg::exec::{ExecEvent, ExecKind, RejectClass, VenueOrderStatus};
+use crate::msg::time::LocalTs;
 
 use super::order::{CloseReason, FillDelta, OrderSlot, OrderState};
 
@@ -22,7 +23,7 @@ pub struct Applied {
     pub is_resurrection: bool,
 }
 
-pub fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent) -> Applied {
+pub fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent, now: LocalTs) -> Applied {
     if slot.state == OrderState::Free {
         return Applied {
             fill: FillDelta::NONE,
@@ -76,7 +77,7 @@ pub fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent) -> Applied {
 
         ExecKind::ReportTrade => {
             let is_complete = event.status == Some(VenueOrderStatus::Filled)
-                || (slot.qty.0 > 0 && slot.filled_base.0 >= slot.qty.0);
+                || (slot.qty.mantissa() > 0 && slot.filled_base.mantissa() >= slot.qty.mantissa());
             if is_complete {
                 close_or_keep(previous_state, CloseReason::Filled)
             } else {
@@ -107,7 +108,7 @@ pub fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent) -> Applied {
         if previous_state == OrderState::AmendInFlight {
             slot.amends_used = slot.amends_used.saturating_add(1);
         }
-        if event.qty.0 > 0 {
+        if event.qty.mantissa() > 0 {
             slot.qty = slot.qty.min(event.qty);
         }
     }
@@ -116,7 +117,7 @@ pub fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent) -> Applied {
     }
     if event.kind == ExecKind::SnapshotOrder {
         slot.seen_recon_seq = slot.seen_recon_seq.max(event.recon_seq);
-        if event.qty.0 > 0 {
+        if event.qty.mantissa() > 0 {
             slot.price = event.price;
             slot.qty = event.qty;
         }
@@ -124,9 +125,9 @@ pub fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent) -> Applied {
     if let Some(id) = event.venue_order_id {
         slot.venue_order_id = Some(id);
     }
-    slot.last_event_ts_us = event.received_ts_us;
+    slot.last_event_ts_us = now;
     if matches!(next, OrderState::Closed(_)) && !matches!(previous_state, OrderState::Closed(_)) {
-        slot.closed_ts_us = event.received_ts_us;
+        slot.closed_ts_us = now;
     }
     Applied {
         fill,

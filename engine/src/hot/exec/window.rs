@@ -1,16 +1,12 @@
-//! Execution windows for markets that expire. This module handles three aspects: when a window admits
-//! quotes, what happens to resting orders as the window closes, and how rotation into the next market
-//! affects accounting. All three relate to the same fundamental fact: each instrument slot points to
-//! a market that rotates periodically. Instruments without rotation (like Binance) are unaffected.
-//! Every deadline derives from message timestamps, so replays close and rotate at exact sequence points.
+//! Markets that expire: when a window admits quotes, which orders a closing window pulls, and what
+//! a rotation carries. Deadlines read message time, so a replay closes at the same point.
 
-use crate::hot::ledger::{PositionLedger, narrow};
+use crate::hot::ledger::{PositionLedger, narrow_quote, wide};
 use crate::hot::strategy::Actions;
 use crate::log::hot_warn;
-use crate::msg::ids::{InstrumentId, Qty, Side};
-use crate::msg::time::TsUs;
+use crate::msg::ids::{InstrumentId, Notional, Qty, Side};
 
-use super::engine::ExecEngine;
+use super::engine::{ExecEngine, FoldStamps};
 use super::spin::SpinInput;
 
 impl ExecEngine {
@@ -25,12 +21,12 @@ impl ExecEngine {
             return;
         }
         let row = ledger.row(instrument);
-        self.instruments[index].realised_carried_quote = narrow(
-            i128::from(self.instruments[index].realised_carried_quote)
-                + i128::from(row.session_realised_quote()),
+        self.instruments[index].realised_carried_quote = narrow_quote(
+            wide(self.instruments[index].realised_carried_quote)
+                + wide(row.session_realised_quote()),
             "realised_carried_quote",
         );
-        if row.position_base().0 != 0 {
+        if row.position_base().mantissa() != 0 {
             stranded_position_warning(instrument, row.position_base());
         }
         self.pnl_at_baseline[index] = None;
@@ -38,7 +34,7 @@ impl ExecEngine {
 
     /// Realised result carried from windows this instrument has already rotated through.
     #[inline]
-    pub(super) fn realised_carried_quote(&self, instrument: InstrumentId) -> i64 {
+    pub(super) fn realised_carried_quote(&self, instrument: InstrumentId) -> Notional {
         self.instruments[usize::from(instrument.0)].realised_carried_quote
     }
 
@@ -46,7 +42,7 @@ impl ExecEngine {
     #[inline]
     pub(super) fn admits_window(&self, instrument: InstrumentId, input: &SpinInput<'_>) -> bool {
         input.windows[usize::from(instrument.0)].is_none_or(|window| {
-            window.admits_quote_at(input.tick.received_ts_us, self.settings.quote_stop_margin)
+            window.admits_quote_at(input.now.as_local(), self.settings.quote_stop_margin)
         })
     }
 
@@ -55,7 +51,7 @@ impl ExecEngine {
     /// edge to sweep and shut down, wrong for a routine rotation every few minutes that must leave the
     /// next window quotable. Runs every spin past the stop; refused cancels re-read as Live.
     pub(super) fn sweep_closing_windows(&mut self, input: &mut SpinInput<'_>) {
-        let at = input.tick.received_ts_us;
+        let at = input.now.as_local();
         let margin = self.settings.quote_stop_margin;
         for index in 0..self.instruments.len() {
             let is_closing =
@@ -64,7 +60,7 @@ impl ExecEngine {
                 continue;
             }
             let instrument = InstrumentId(index as u16);
-            let pulled = self.cancel_resting_orders(instrument, at, input.bank);
+            let pulled = self.cancel_resting_orders(instrument, input.stamps(), input.bank);
             if pulled > 0 {
                 report_window_sweep(instrument, pulled);
             }
@@ -76,7 +72,7 @@ impl ExecEngine {
     fn cancel_resting_orders(
         &mut self,
         instrument: InstrumentId,
-        at: TsUs,
+        stamps: FoldStamps,
         bank: &mut Actions,
     ) -> usize {
         let mut pulled = 0;
@@ -85,7 +81,7 @@ impl ExecEngine {
                 if !self.orders.slot(index).is_resting_quote() {
                     continue;
                 }
-                if !self.cancel_slot(index, at, bank) {
+                if !self.cancel_slot(index, stamps, bank) {
                     return pulled;
                 }
                 pulled += 1;
@@ -118,6 +114,6 @@ fn stranded_position_warning(instrument: InstrumentId, position: Qty) {
         "instrument {} rotated to a new window still holding {} base — that position is stranded on \
          a market this engine can no longer trade",
         instrument.0,
-        position.0
+        position.mantissa()
     );
 }

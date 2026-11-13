@@ -58,7 +58,7 @@ pub(super) fn persist_bring_up<P>(setup: PersistBringUpSetup<'_, P>) -> PersistB
     );
     PersistBringUp {
         wiring: Some(PersistWiring {
-            sink: PersistSink::new(producer),
+            sink: PersistSink::new(producer, setup.config.seal_try_limit()),
             tables,
         }),
         handle: Some(handle),

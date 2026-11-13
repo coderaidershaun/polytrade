@@ -1,11 +1,8 @@
-//! Reconstructs every slot leg's book from the hot ring and watches the rotation lifecycle, so the
-//! live test can assert on physics the adapter never states outright: zero-gap handover (a new
-//! window's book reaches Valid while the old still streams) and teardown latency (the old window's
-//! final `BookReset` relative to its nominal close). The adapter surfaces neither on the ring; both
-//! are inferred from the message sequence here, off any production path.
+//! Rebuilds each leg's book from the hot ring and watches each rotation, so the live test can
+//! assert the handover with no gap and the delay of each teardown.
 
 use engine::hot::book::{Book, BookState};
-use engine::msg::inbound::{BookChunkKind, InboundMessage, Level};
+use engine::msg::inbound::{BookChunkKind, InboundMessage, Level, MessageBody};
 use engine::runtime::registry::Registry;
 
 use crate::US;
@@ -145,9 +142,9 @@ impl RotationObserver {
 
     pub fn observe(&mut self, message: InboundMessage) {
         self.total_messages += 1;
-        let now = message.received_ts_us().micros();
-        match message {
-            InboundMessage::MarketRotation(rotation) => {
+        let now = message.header.received_ts_us.micros();
+        match message.body {
+            MessageBody::MarketRotation(rotation) => {
                 let index = rotation.instrument.0 as usize;
                 self.legs[index].last_msg_us = Some(now);
                 self.legs[index].pending_rotation_reset = true;
@@ -158,11 +155,11 @@ impl RotationObserver {
                     rotation.window_close_ts_us.micros(),
                 );
             }
-            InboundMessage::BookReset(reset) => {
+            MessageBody::BookReset(reset) => {
                 let index = reset.instrument.0 as usize;
                 self.on_book_reset(index, now);
             }
-            InboundMessage::Book(chunk) => {
+            MessageBody::Book(chunk) => {
                 let index = chunk.instrument.0 as usize;
                 self.legs[index].last_msg_us = Some(now);
                 match chunk.kind {
@@ -174,16 +171,16 @@ impl RotationObserver {
                 self.note_valid(index, now);
                 self.note_collapse(index, now);
             }
-            InboundMessage::Trade(trade) => {
+            MessageBody::Trade(trade) => {
                 let index = trade.instrument.0 as usize;
                 self.legs[index].last_msg_us = Some(now);
             }
-            InboundMessage::Kline(_)
-            | InboundMessage::SpinTick(_)
-            | InboundMessage::Link(_)
-            | InboundMessage::RunControl(_)
-            | InboundMessage::Exec(_)
-            | InboundMessage::Account(_) => {}
+            MessageBody::Kline(_)
+            | MessageBody::SpinTick(_)
+            | MessageBody::Link(_)
+            | MessageBody::RunControl(_)
+            | MessageBody::Exec(_)
+            | MessageBody::Account(_) => {}
         }
     }
 

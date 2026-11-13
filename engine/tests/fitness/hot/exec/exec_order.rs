@@ -1,10 +1,9 @@
-//! FITNESS: the order table's two money invariants — that a passive quote is never snapped into
-//! aggression, and that a venue event stream which duplicates, reorders and arrives late can never
-//! move our filled totals twice or lose a fill that was really paid.
+//! The two money rules of the order table: a passive quote never snaps into aggression, and a
+//! duplicated, reordered or late event stream never books a fill twice or loses one.
 //!
-//! Both failures are silent by construction. An inverted snap still compiles, still produces a legal
-//! order, and every layer downstream agrees with it; a double-folded fill produces a ledger that is
-//! wrong in a direction no downstream reader can detect.
+//! Both failures are silent by construction. An inverted snap still compiles, still makes a legal
+//! order, and each layer after it agrees with it. A fill folded twice makes a ledger that is wrong
+//! in a way that no later reader can detect.
 
 use engine::hot::exec::{
     AccountTable, ClientIdLayout, CloseReason, MAX_ORDER_SLOTS, OrderClaim, OrderSlot, OrderState,
@@ -14,8 +13,10 @@ use engine::msg::exec::{
     AccountChunk, AccountChunkKind, ExecEvent, ExecKind, OrderStyle, Provenance, RejectClass,
     VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, VenueOrderId};
-use engine::msg::time::{DurationUs, TsUs};
+use engine::msg::ids::{
+    AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, Spend, VenueOrderId,
+};
+use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use proptest::prelude::*;
 
 use crate::engine_support::account_chunk;
@@ -23,9 +24,12 @@ use crate::engine_support::account_chunk;
 const RUN_NONCE: u32 = 0x5EED_1234;
 const TICK: i64 = 1_000_000;
 
+/// The receipt stamp of every venue answer built here.
+const RECEIVED: LocalTs = LocalTs::from_micros(2);
+
 fn event(kind: ExecKind, client_id: ClientOrderId) -> ExecEvent {
     ExecEvent {
-        instrument: InstrumentId(0),
+        instrument: Some(InstrumentId(0)),
         client_id,
         venue_order_id: Some(VenueOrderId(77)),
         trade_id: None,
@@ -35,21 +39,19 @@ fn event(kind: ExecKind, client_id: ClientOrderId) -> ExecEvent {
         provenance: Provenance::Mine,
         side: Side::Buy,
         liquidity: None,
-        price: Price(100 * TICK),
-        qty: Qty(10),
-        last_price: Price(0),
-        last_qty: Qty(0),
-        cumulative_qty: Qty(0),
-        cumulative_quote: 0,
+        price: Price::from_mantissa(100 * TICK),
+        qty: Qty::from_mantissa(10),
+        last_price: Price::from_mantissa(0),
+        last_qty: Qty::from_mantissa(0),
+        cumulative_qty: Qty::from_mantissa(0),
+        cumulative_quote: Notional::from_mantissa(0),
         commission: 0,
         commission_asset: AssetId(1),
         reject_code: 0,
         amends_remaining: ExecEvent::AMENDS_UNKNOWN,
         recon_seq: 0,
-        exchange_ts_us: TsUs::from_micros(1),
+        exchange_ts_us: VenueTs::from_micros(1),
         request_sent_ts_us: None,
-        received_ts_us: TsUs::from_micros(2),
-        queued_ts_us: TsUs::from_micros(3),
     }
 }
 
@@ -58,10 +60,10 @@ fn buy_claim(level: QuoteLevel, price: i64, qty: i64) -> OrderClaim {
         instrument: InstrumentId(0),
         side: Side::Buy,
         level,
-        price: Price(price),
-        qty: Qty(qty),
+        price: Price::from_mantissa(price),
+        qty: Qty::from_mantissa(qty),
         style: OrderStyle::PostOnly,
-        claimed_ts_us: TsUs::from_micros(1),
+        claimed_ts_us: LocalTs::from_micros(1),
         recon_seq: 0,
     }
 }
@@ -70,7 +72,7 @@ fn live_slot() -> OrderSlot {
     OrderSlot {
         client_id: ClientOrderId(1),
         state: OrderState::Live,
-        qty: Qty(10),
+        qty: Qty::from_mantissa(10),
         ..OrderSlot::EMPTY
     }
 }
@@ -84,18 +86,18 @@ proptest! {
         mantissa in -1_000_000_000_000i64..1_000_000_000_000,
         increment in 1i64..1_000_000,
     ) {
-        let raw = Price(mantissa);
+        let raw = Price::from_mantissa(mantissa);
         let bid = Side::Buy.snap_passive(raw, increment);
         let ask = Side::Sell.snap_passive(raw, increment);
 
-        prop_assert!(bid.0 <= raw.0, "a buy snapped UP, from {} to {}", raw.0, bid.0);
-        prop_assert!(ask.0 >= raw.0, "a sell snapped DOWN, from {} to {}", raw.0, ask.0);
-        prop_assert_eq!(bid.0.rem_euclid(increment), 0, "a buy left the grid");
-        prop_assert_eq!(ask.0.rem_euclid(increment), 0, "a sell left the grid");
+        prop_assert!(bid.mantissa() <= raw.mantissa(), "a buy snapped UP, from {} to {}", raw.mantissa(), bid.mantissa());
+        prop_assert!(ask.mantissa() >= raw.mantissa(), "a sell snapped DOWN, from {} to {}", raw.mantissa(), ask.mantissa());
+        prop_assert_eq!(bid.mantissa().rem_euclid(increment), 0, "a buy left the grid");
+        prop_assert_eq!(ask.mantissa().rem_euclid(increment), 0, "a sell left the grid");
         // Never further than one increment: rounding past a whole tick is a different price, not a
         // snap, and on a wide grid it would silently reprice the quote.
-        prop_assert!(raw.0 - bid.0 < increment);
-        prop_assert!(ask.0 - raw.0 < increment);
+        prop_assert!(raw.mantissa() - bid.mantissa() < increment);
+        prop_assert!(ask.mantissa() - raw.mantissa() < increment);
     }
 
     /// FITNESS: folding the venue's CUMULATIVE totals is idempotent under any redelivery order.
@@ -111,8 +113,8 @@ proptest! {
         for step in &steps {
             cumulative += i64::from(*step);
             let mut trade = event(ExecKind::ReportTrade, ClientOrderId(1));
-            trade.cumulative_qty = Qty(cumulative);
-            trade.cumulative_quote = cumulative * 100;
+            trade.cumulative_qty = Qty::from_mantissa(cumulative);
+            trade.cumulative_quote = Notional::from_mantissa(cumulative * 100);
             reports.push(trade);
         }
         let highest = cumulative;
@@ -122,13 +124,13 @@ proptest! {
             }
         }
 
-        let mut slot = OrderSlot { qty: Qty(highest), ..live_slot() };
+        let mut slot = OrderSlot { qty: Qty::from_mantissa(highest), ..live_slot() };
         let mut applied_base = 0i64;
         for report in &reports {
-            applied_base += apply_exec_event(&mut slot, report).fill.base.0;
+            applied_base += apply_exec_event(&mut slot, report, RECEIVED).fill.base.mantissa();
         }
 
-        prop_assert_eq!(slot.filled_base.0, highest, "the slot's total is not the venue's");
+        prop_assert_eq!(slot.filled_base.mantissa(), highest, "the slot's total is not the venue's");
         prop_assert_eq!(applied_base, highest, "the deltas handed out do not sum to the total");
     }
 }
@@ -153,7 +155,7 @@ fn ambiguous_or_late_answers_never_resolve_past_what_the_venue_confirmed() {
     };
     let mut ack = event(ExecKind::AckFailed, ClientOrderId(1));
     ack.reject = Some(RejectClass::Ambiguous);
-    let applied = apply_exec_event(&mut ambiguous, &ack);
+    let applied = apply_exec_event(&mut ambiguous, &ack, RECEIVED);
     assert_eq!(
         applied.state,
         OrderState::Unknown,
@@ -170,9 +172,9 @@ fn ambiguous_or_late_answers_never_resolve_past_what_the_venue_confirmed() {
         ..live_slot()
     };
     let mut trade = event(ExecKind::ReportTrade, ClientOrderId(1));
-    trade.cumulative_qty = Qty(4);
-    trade.cumulative_quote = 400;
-    let applied = apply_exec_event(&mut mid_cancel, &trade);
+    trade.cumulative_qty = Qty::from_mantissa(4);
+    trade.cumulative_quote = Notional::from_mantissa(400);
+    let applied = apply_exec_event(&mut mid_cancel, &trade, RECEIVED);
     assert_eq!(
         applied.state,
         OrderState::CancelInFlight,
@@ -180,24 +182,24 @@ fn ambiguous_or_late_answers_never_resolve_past_what_the_venue_confirmed() {
     );
     assert_eq!(
         applied.fill.base,
-        Qty(4),
+        Qty::from_mantissa(4),
         "the partial fill was still applied"
     );
 
     let mut closed = OrderSlot {
         state: OrderState::Closed(CloseReason::Filled),
-        qty: Qty(10),
-        filled_base: Qty(6),
-        filled_quote: 600,
+        qty: Qty::from_mantissa(10),
+        filled_base: Qty::from_mantissa(6),
+        filled_quote: Notional::from_mantissa(600),
         ..live_slot()
     };
     let mut late = event(ExecKind::ReportTrade, ClientOrderId(1));
-    late.cumulative_qty = Qty(10);
-    late.cumulative_quote = 1_000;
-    let applied = apply_exec_event(&mut closed, &late);
+    late.cumulative_qty = Qty::from_mantissa(10);
+    late.cumulative_quote = Notional::from_mantissa(1_000);
+    let applied = apply_exec_event(&mut closed, &late, RECEIVED);
     assert_eq!(
         applied.fill.base,
-        Qty(4),
+        Qty::from_mantissa(4),
         "a late fill on a closed order was lost"
     );
     assert_eq!(
@@ -239,17 +241,16 @@ fn a_client_id_addresses_only_the_slot_and_generation_it_was_encoded_for() {
         .expect("a fresh side has free slots");
     assert_eq!(table.find(first), Some(index));
 
-    let mut canceled = event(ExecKind::AckCanceled, first);
-    canceled.received_ts_us = TsUs::from_micros(10);
-    apply_exec_event(table.slot_mut(index), &canceled);
+    let canceled = event(ExecKind::AckCanceled, first);
+    apply_exec_event(table.slot_mut(index), &canceled, LocalTs::from_micros(10));
     table.reap(
-        TsUs::from_micros(10 + 60_000_000),
+        LocalTs::from_micros(10 + 60_000_000),
         DurationUs::from_micros(60_000_000),
     );
 
     let (reused, second) = table
         .claim(OrderClaim {
-            claimed_ts_us: TsUs::from_micros(100),
+            claimed_ts_us: LocalTs::from_micros(100),
             ..buy_claim(QuoteLevel::ZERO, 0, 0)
         })
         .expect("the reaped slot is free again");
@@ -356,13 +357,14 @@ fn a_pending_cancel_answer_never_resolves_the_cancel_it_was_asked_about() {
     apply_exec_event(
         table.slot_mut(index),
         &event(ExecKind::AckPlaced, client_id),
+        RECEIVED,
     );
     table.slot_mut(index).state = OrderState::CancelInFlight;
 
     let mut probe = event(ExecKind::SnapshotOrder, client_id);
     probe.status = Some(VenueOrderStatus::PendingCancel);
     probe.recon_seq = 1;
-    let applied = apply_exec_event(table.slot_mut(index), &probe);
+    let applied = apply_exec_event(table.slot_mut(index), &probe, RECEIVED);
     assert_eq!(
         applied.state,
         OrderState::CancelInFlight,
@@ -375,12 +377,12 @@ fn a_pending_cancel_answer_never_resolves_the_cancel_it_was_asked_about() {
     );
 
     let mut trade = event(ExecKind::ReportTrade, client_id);
-    trade.cumulative_qty = Qty(4);
-    trade.cumulative_quote = 400;
-    let applied = apply_exec_event(table.slot_mut(index), &trade);
+    trade.cumulative_qty = Qty::from_mantissa(4);
+    trade.cumulative_quote = Notional::from_mantissa(400);
+    let applied = apply_exec_event(table.slot_mut(index), &trade, RECEIVED);
     assert_eq!(
         applied.fill.base,
-        Qty(4),
+        Qty::from_mantissa(4),
         "a fill arriving after the probe was lost"
     );
     assert_eq!(
@@ -392,18 +394,20 @@ fn a_pending_cancel_answer_never_resolves_the_cancel_it_was_asked_about() {
     let mut restated = event(ExecKind::SnapshotOrder, client_id);
     restated.status = Some(VenueOrderStatus::PendingCancel);
     restated.recon_seq = 2;
-    restated.cumulative_qty = Qty(4);
-    restated.cumulative_quote = 400;
+    restated.cumulative_qty = Qty::from_mantissa(4);
+    restated.cumulative_quote = Notional::from_mantissa(400);
     assert_eq!(
-        apply_exec_event(table.slot_mut(index), &restated).fill.base,
-        Qty(0),
+        apply_exec_event(table.slot_mut(index), &restated, RECEIVED)
+            .fill
+            .base,
+        Qty::from_mantissa(0),
         "a probe restating the venue's running totals paid the same fill a second time"
     );
 
     let mut canceled = event(ExecKind::ReportCanceled, client_id);
-    canceled.cumulative_qty = Qty(4);
-    canceled.cumulative_quote = 400;
-    let applied = apply_exec_event(table.slot_mut(index), &canceled);
+    canceled.cumulative_qty = Qty::from_mantissa(4);
+    canceled.cumulative_quote = Notional::from_mantissa(400);
+    let applied = apply_exec_event(table.slot_mut(index), &canceled, RECEIVED);
     assert_eq!(
         applied.state,
         OrderState::Closed(CloseReason::Canceled),
@@ -420,7 +424,7 @@ fn a_pending_cancel_answer_never_resolves_the_cancel_it_was_asked_about() {
     );
     assert_eq!(
         table.slot(index).filled_base,
-        Qty(4),
+        Qty::from_mantissa(4),
         "the fill moved money more than once across the probe, the restatement and the cancel"
     );
 }
@@ -440,38 +444,39 @@ fn a_reservation_releases_only_on_terminal_proof_from_either_direction() {
     let mut account = AccountTable::new();
     account.apply(&balances(quote, 1_000, 1, AccountChunkKind::Snapshot));
 
-    let taken_at = account.reserve(quote, 400);
+    let four_hundred = Spend::Quote(Notional::from_mantissa(400));
+    let taken_at = account.reserve(quote, four_hundred);
     assert_eq!(
         account.balance(quote).spendable(),
         600,
         "the reservation must shrink what the next order may spend"
     );
     assert_eq!(
-        account.release(quote, 400, taken_at),
+        account.release(quote, four_hundred, taken_at),
         ReleaseOutcome::Held,
         "released on the ack alone — the same balance can now fund a second order"
     );
     account.apply(&balances(quote, 600, 2, AccountChunkKind::Update));
     assert_eq!(
-        account.release(quote, 400, taken_at),
+        account.release(quote, four_hundred, taken_at),
         ReleaseOutcome::Released
     );
     assert_eq!(account.balance(quote).spendable(), 600);
 
     let mut unsent_account = AccountTable::new();
     unsent_account.apply(&balances(quote, 1_000, 1, AccountChunkKind::Snapshot));
-    unsent_account.reserve(quote, 400);
+    unsent_account.reserve(quote, four_hundred);
     let mut slot = OrderSlot {
         state: OrderState::PendingNew,
-        reserved_amount: 400,
+        reserved_amount: Some(four_hundred),
         ..live_slot()
     };
     let unsent = event(ExecKind::PlaceNotSent, slot.client_id);
     assert_eq!(
-        apply_exec_event(&mut slot, &unsent).state,
+        apply_exec_event(&mut slot, &unsent, RECEIVED).state,
         OrderState::Closed(CloseReason::Rejected)
     );
-    unsent_account.release_unsent(quote, 400);
+    unsent_account.release_unsent(quote, four_hundred);
     assert_eq!(
         unsent_account.balance(quote).spendable(),
         1_000,
@@ -485,12 +490,9 @@ fn balances(
     venue_update_ts_ms: u64,
     kind: AccountChunkKind,
 ) -> AccountChunk {
-    AccountChunk {
-        kind,
-        venue_update_ts_ms,
-        exchange_ts_us: TsUs::from_micros(1),
-        received_ts_us: TsUs::from_micros(2),
-        queued_ts_us: TsUs::from_micros(3),
-        ..account_chunk(&[(asset, free)], 0)
-    }
+    let mut chunk = account_chunk(&[(asset, free)], 0);
+    chunk.kind = kind;
+    chunk.venue_update_ts_ms = venue_update_ts_ms;
+    chunk.exchange_ts_us = VenueTs::from_micros(1);
+    chunk
 }

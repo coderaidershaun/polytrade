@@ -5,7 +5,8 @@
 //! closes a position. Metering locally turns that into a choice: quoting stops first, and the
 //! headroom left over belongs to the way out.
 
-use crate::msg::time::{DurationUs, TsUs};
+use crate::hot::digest::digest_fields;
+use crate::msg::time::{DurationUs, LocalTs};
 
 /// The venues wired so far declare at most two order buckets per market. Four leaves room for one
 /// that declares more without the meter's memory depending on anything but this constant.
@@ -69,6 +70,8 @@ pub(super) struct BudgetMeter {
     len: usize,
 }
 
+digest_fields! { BudgetMeter { windows, len } }
+
 impl BudgetMeter {
     pub(super) fn new(budget: OrderBudget) -> Self {
         let mut windows = [WindowMeter::EMPTY; MAX_ORDER_BUDGET_WINDOWS];
@@ -83,7 +86,7 @@ impl BudgetMeter {
 
     /// The only place message time enters, which is what leaves [`BudgetMeter::admits_place`] a
     /// pure read: every placement in a spin is judged against the same stamp.
-    pub(super) fn observe_spin(&mut self, now: TsUs) {
+    pub(super) fn observe_spin(&mut self, now: LocalTs) {
         for window in &mut self.windows[..self.len] {
             window.advance_to(now);
         }
@@ -112,6 +115,8 @@ struct WindowMeter {
     places: [u32; COUNTED_SLOTS],
 }
 
+digest_fields! { WindowMeter { slot_width_us, max_places, newest_slot, places } }
+
 impl WindowMeter {
     /// Nothing declared and nothing counted. The one-microsecond slot width is a divisor rather
     /// than a policy: a window narrower than its own slot count would otherwise divide by zero.
@@ -132,7 +137,7 @@ impl WindowMeter {
 
     /// A stamp older than the newest one is left in the newest slot rather than reopening a slot
     /// already retired — the conservative direction, since the count only ever stays higher.
-    fn advance_to(&mut self, now: TsUs) {
+    fn advance_to(&mut self, now: LocalTs) {
         let slot = now.micros().div_euclid(self.slot_width_us);
         let advanced = slot.saturating_sub(self.newest_slot);
         if advanced <= 0 {

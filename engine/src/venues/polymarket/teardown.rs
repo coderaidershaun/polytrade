@@ -1,11 +1,8 @@
-//! Collapse detector: at resolution the venue removes every level in
-//! a single-timestamp burst of size-0 updates, then goes silent. This pure machine spots the burst —
-//! a same-venue-ts run of removals that drives a two-sided book to an empty side. The following
-//! silence (and the definitive `/book` 404) are the rotation FSM's to weigh; the burst alone is the
-//! fast path it is allowed to miss.
+//! Spots the burst of removals at one venue time with which the venue empties a resolved market,
+//! the fast sign of a teardown. The silence after it is for the rotation to weigh.
 
 use crate::msg::ids::{Price, Qty, Side};
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 
 use super::shadow::ShadowBook;
 
@@ -14,7 +11,7 @@ pub struct LevelUpdate {
     pub side: Side,
     pub price: Price,
     pub qty: Qty,
-    pub exchange_ts_us: TsUs,
+    pub exchange_ts_us: VenueTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -30,7 +27,7 @@ const MIN_BURST_REMOVALS: u32 = 2;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CollapseDetector {
     book: ShadowBook,
-    burst_ts: Option<TsUs>,
+    burst_ts: Option<VenueTs>,
     burst_removals: u32,
     two_sided_at_burst_start: bool,
     collapsed: bool,
@@ -38,7 +35,7 @@ pub struct CollapseDetector {
 
 impl CollapseDetector {
     pub fn observe(&mut self, update: LevelUpdate) -> CollapseSignal {
-        let is_removal = update.qty == Qty(0);
+        let is_removal = update.qty == Qty::from_mantissa(0);
         if is_removal {
             if self.burst_ts != Some(update.exchange_ts_us) {
                 self.burst_ts = Some(update.exchange_ts_us);

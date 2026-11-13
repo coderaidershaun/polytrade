@@ -1,13 +1,12 @@
-//! Pure projections from the model to what the monitor shows, free of egui so they test natively:
-//! quote distances, feature freshness, channel histories and names, and the tab and scroll state a
-//! caller owns.
+//! Pure projections from the model to what the monitor shows, free of the window toolkit so that
+//! they are tested natively.
 
 use super::model::FeatureCell;
-use crate::hot::exec::ExecHalt;
 use crate::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::persist::FeatureId;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, VenueTs};
+use crate::msg::ui::UiHalt;
 use crate::operator::workstation::dom_view::{DomUnit, delta_from_mid, snapshot_mid, tick_index};
 use crate::operator::workstation::exec_model::{BalanceCell, OrderStatus, RejectCell};
 use crate::operator::workstation::model::UiModel;
@@ -122,7 +121,7 @@ pub struct AccountView<'a> {
     pub ask: SideCountView,
     pub last_reject: Option<RejectCell>,
     /// `None` until the engine's first execution frame.
-    pub halt: Option<ExecHalt>,
+    pub halt: Option<UiHalt>,
     /// Balances in assets the catalog does not name. They share one id, so only their count shows.
     pub unknown_asset_balances: u64,
     /// Exposure frames an engine sent that could not be used. It shows beside the count above, so
@@ -177,12 +176,12 @@ fn holding(balance: Option<BalanceCell>) -> Option<i64> {
 /// in the half-tick mid, so the value rounds once. A result too large for `i64` is absent rather
 /// than clamped, because a clamped money figure is wrong and nothing on screen would say so.
 fn value_at_mid(holding: i64, mid_half_ticks: i64, tick: Price) -> Option<i64> {
-    if tick.0 <= 0 {
+    if tick.mantissa() <= 0 {
         return None;
     }
     let scaled = i128::from(holding)
         .checked_mul(i128::from(mid_half_ticks))?
-        .checked_mul(i128::from(tick.0))?;
+        .checked_mul(i128::from(tick.mantissa()))?;
     i64::try_from(scaled / (2 * i128::from(FIXED_SCALE))).ok()
 }
 
@@ -201,7 +200,7 @@ fn side_counts(model: &UiModel, instrument: InstrumentId, side: Side) -> SideCou
 fn feature_row(
     feature: FeatureId,
     cell: Option<FeatureCell>,
-    freshest: Option<TsUs>,
+    freshest: Option<VenueTs>,
     spin_interval: DurationUs,
 ) -> FeatureRowView {
     let Some(cell) = cell else {

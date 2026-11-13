@@ -1,17 +1,15 @@
-//! Turning a decision into a command: claim the slot, reserve the money, bank the command, record
-//! the transition. Split from the spin loop because deciding WHAT to do and committing to it are
-//! separate jobs — everything here runs after the argument is over, and every path through it must
-//! leave the slot, the reservation and the audit trail agreeing.
+//! Turns a decision into a command: claim the slot, reserve the money, bank the command, and record
+//! the change, so that each path leaves the slot, the reservation and the audit rows agreeing.
 
 use crate::hot::strategy::Actions;
 use crate::msg::exec::ExecCommand;
 use crate::msg::ids::{ClientOrderId, InstrumentId, Side};
 use crate::msg::persist::{OrderLifecycle, OrderTransition};
-use crate::msg::time::TsUs;
+use crate::msg::time::LocalTs;
 
 use super::audit::bank_engine_driven;
 use super::desired::QuoteLevel;
-use super::engine::ExecEngine;
+use super::engine::{ExecEngine, FoldStamps};
 use super::gates::HaltReason;
 use super::order::{CloseReason, OrderClaim, OrderState};
 use super::reconcile::{PlaceIntent, ReconcileOutcome};
@@ -26,15 +24,16 @@ impl ExecEngine {
         outcome: ReconcileOutcome,
         input: &mut SpinInput<'_>,
     ) {
-        let at = input.tick.received_ts_us;
+        let stamps = input.stamps();
+        let at = stamps.fold;
         match outcome {
             ReconcileOutcome::Nothing | ReconcileOutcome::Reject(_) => {}
             ReconcileOutcome::Place(intent) => {
-                self.place(instrument, side, level, intent, at, input.bank)
+                self.place(instrument, side, level, intent, stamps, input.bank)
             }
             ReconcileOutcome::Cancel => {
                 if let Some(index) = self.resting_index(instrument, side, level) {
-                    self.cancel_slot(index, at, input.bank);
+                    self.cancel_slot(index, stamps, input.bank);
                 }
             }
             ReconcileOutcome::AmendQty(qty) => {
@@ -49,7 +48,14 @@ impl ExecEngine {
                 };
                 if self.bank_or_halt(command, at) {
                     let next = OrderState::AmendInFlight;
-                    self.move_slot(index, next, OrderTransition::AmendSent, at, input.bank);
+                    let received = stamps.received;
+                    self.move_slot(
+                        index,
+                        next,
+                        OrderTransition::AmendSent,
+                        received,
+                        input.bank,
+                    );
                 }
             }
         }
@@ -68,7 +74,13 @@ impl ExecEngine {
 
     /// The slot moves to cancel-in-flight only once the cancel is banked: a slot waiting on an answer
     /// is one the engine stops asking about, so a cancel that never left must leave it as it was.
-    pub(super) fn cancel_slot(&mut self, index: usize, at: TsUs, bank: &mut Actions) -> bool {
+    pub(super) fn cancel_slot(
+        &mut self,
+        index: usize,
+        stamps: FoldStamps,
+        bank: &mut Actions,
+    ) -> bool {
+        let at = stamps.fold;
         let slot = self.orders.slot(index);
         let command = ExecCommand::Cancel {
             instrument: slot.instrument,
@@ -77,7 +89,13 @@ impl ExecEngine {
         let is_sent = self.bank_or_halt(command, at);
         if is_sent {
             let next = OrderState::CancelInFlight;
-            self.move_slot(index, next, OrderTransition::CancelSent, at, bank);
+            self.move_slot(
+                index,
+                next,
+                OrderTransition::CancelSent,
+                stamps.received,
+                bank,
+            );
         }
         is_sent
     }
@@ -87,13 +105,13 @@ impl ExecEngine {
         index: usize,
         next: OrderState,
         transition: OrderTransition,
-        at: TsUs,
+        received: LocalTs,
         bank: &mut Actions,
     ) {
         let slot = self.orders.slot_mut(index);
         let previous = OrderLifecycle::from(slot.state);
         slot.state = next;
-        bank_engine_driven(bank, slot, transition, previous, at);
+        bank_engine_driven(bank, slot, transition, previous, received);
     }
 
     /// Every placement the engine mints passes through here, so every one of them spends the venue
@@ -105,22 +123,26 @@ impl ExecEngine {
         side: Side,
         level: QuoteLevel,
         intent: PlaceIntent,
-        at: TsUs,
+        stamps: FoldStamps,
         bank: &mut Actions,
     ) {
+        let at = stamps.fold;
         let Some((index, client_id)) = self.claim(instrument, side, level, intent, at) else {
             return;
         };
-        let is_banked = self.pending.bank(ExecCommand::Place {
-            instrument,
-            client_id,
-            side,
-            price: intent.price,
-            qty: intent.qty,
-            style: intent.style,
-        });
+        let is_banked = self.pending.bank(
+            ExecCommand::Place {
+                instrument,
+                client_id,
+                side,
+                price: intent.price,
+                qty: intent.qty,
+                style: intent.style,
+            },
+            at,
+        );
         if !is_banked {
-            self.unwind(index, at, bank);
+            self.unwind(index, stamps, bank);
             return;
         }
         self.budget.record_place();
@@ -129,7 +151,7 @@ impl ExecEngine {
             self.orders.slot(index),
             OrderTransition::Placed,
             OrderLifecycle::Free,
-            at,
+            stamps.received,
         );
     }
 
@@ -139,7 +161,7 @@ impl ExecEngine {
         side: Side,
         level: QuoteLevel,
         intent: PlaceIntent,
-        at: TsUs,
+        at: LocalTs,
     ) -> Option<(usize, ClientOrderId)> {
         let Some((index, client_id)) = self.orders.claim(OrderClaim {
             instrument,
@@ -158,17 +180,19 @@ impl ExecEngine {
         let amount = side.spend(intent.price, intent.qty);
         let reserved_at = self.account.reserve(asset, amount);
         let slot = self.orders.slot_mut(index);
-        slot.reserved_amount = amount;
+        slot.reserved_amount = Some(amount).filter(|amount| amount.mantissa() != 0);
         slot.reserved_at = reserved_at;
         Some((index, client_id))
     }
 
     #[cold]
-    fn unwind(&mut self, index: usize, at: TsUs, bank: &mut Actions) {
+    fn unwind(&mut self, index: usize, stamps: FoldStamps, bank: &mut Actions) {
+        let at = stamps.fold;
         self.release_unsent_reservation(index);
         self.orders.slot_mut(index).closed_ts_us = at;
         let next = OrderState::Closed(CloseReason::Rejected);
-        self.move_slot(index, next, OrderTransition::SendAbandoned, at, bank);
+        let received = stamps.received;
+        self.move_slot(index, next, OrderTransition::SendAbandoned, received, bank);
         self.halt(HaltReason::CommandBankOverflow, at);
     }
 
@@ -178,8 +202,8 @@ impl ExecEngine {
     /// unwind its claim before the halt, and the sweep the halt itself issues, which has nothing left
     /// to escalate to and says so out loud.
     #[inline]
-    pub(super) fn bank_or_halt(&mut self, command: ExecCommand, at: TsUs) -> bool {
-        let is_banked = self.pending.bank(command);
+    pub(super) fn bank_or_halt(&mut self, command: ExecCommand, at: LocalTs) -> bool {
+        let is_banked = self.pending.bank(command, at);
         if !is_banked {
             self.halt(HaltReason::CommandBankOverflow, at);
         }

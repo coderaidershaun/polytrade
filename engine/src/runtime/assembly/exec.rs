@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rtrb::RingBuffer;
+use rtrb::{Consumer, RingBuffer};
 use tokio::sync::mpsc;
 
 use crate::hot::dispatch::ExecWiring;
@@ -14,6 +14,7 @@ use crate::hot::sink::{ExecLaneBudget, ExecSink, SampleSink, exec_lane_capacity}
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::info;
 use crate::msg::exec::ExecLaneItem;
+use crate::msg::ids::{Notional, Qty, QueueId};
 use crate::msg::latency::WireSample;
 use crate::msg::time::{DurationUs, EngineClock, Stamper};
 use crate::runtime::config::{
@@ -23,11 +24,13 @@ use crate::runtime::config::{
 use crate::runtime::registry::Registry;
 use crate::runtime::shutdown::{FatalSignal, RunStateCell};
 use crate::venues::edge::backoff::BackoffCaps;
-use crate::venues::edge::{EdgeInputs, EdgeSettings, EdgeSpawn, SenderSettings, VenueEdge};
+use crate::venues::edge::{
+    EdgeCheck, EdgeInputs, EdgeSettings, EdgeSpawn, SenderSettings, VenueEdge,
+};
 use crate::venues::exec::{TeTag, VenueCapabilities};
-use crate::venues::venue::{ExecutionVenue, WindowAssignment};
+use crate::venues::venue::{CheckedVenue, ExecutionVenue, WindowAssignment};
 
-use super::EngineError;
+use super::StartError;
 use super::exec_identity::ExecutionLease;
 
 /// The cancel sweep's share of the drain deadline, as a fraction rather than a fixed
@@ -35,7 +38,6 @@ use super::exec_identity::ExecutionLease;
 const SWEEP_SHARE_OF_DRAIN: u32 = 2;
 
 pub(super) struct ExecBringUp {
-    pub(super) wiring: Option<ExecWiring>,
     pub(super) spawn: Option<EdgeSpawn>,
     /// Only the simulated venue feeds itself from market taps, so only it has any to hold open
     /// across its own shutdown sweep.
@@ -46,7 +48,6 @@ pub(super) struct ExecBringUp {
 impl ExecBringUp {
     fn disabled() -> Self {
         ExecBringUp {
-            wiring: None,
             spawn: None,
             tap_gate: None,
             lease: None,
@@ -54,13 +55,142 @@ impl ExecBringUp {
     }
 }
 
-pub(super) struct ExecBringUpSetup<'a> {
+/// What preflight proved for an armed run: the venue, checked for its bring-up, and the lease, taken
+/// last, whose run nonce the client order ids of this run are minted under.
+pub(super) struct ExecPlan {
+    venue: CheckedVenue,
+    capabilities: VenueCapabilities,
+    lease: ExecutionLease,
+    queue: QueueId,
+    te_tag: TeTag,
+}
+
+pub(super) struct ExecCheck<'a> {
     pub(super) execution: Option<&'a ExecutionConfig>,
-    /// The venue the startup gate probed and passed. `None` when execution is disarmed or absent,
-    /// since the probe never ran.
+    /// The venue the permission probe passed. `None` when execution is disarmed or absent, since the
+    /// probe never ran.
     pub(super) venue: Option<ExecutionVenue>,
     pub(super) registry: &'a Registry,
     pub(super) identity: &'a RunIdentity,
+    pub(super) spin_interval: DurationUs,
+    pub(super) input_capacity: usize,
+    pub(super) lease_dir: &'a Path,
+}
+
+/// The checks of an armed run, the lease last: taking it spends a run nonce, so each config this
+/// venue cannot honour is refused before one is burnt on it.
+///
+/// # Errors
+/// [`StartError::ExecutionNotWired`] when an armed config reaches here without the probe or the
+/// input queue that arming implies, [`StartError::ExecutionTooManyInstruments`] when the order
+/// table cannot address every row, [`StartError::Venue`] when the venue refuses the config or its
+/// own bring-up, and `ExecutionIdentity*` when the lease cannot be taken.
+pub(super) fn check_execution(check: ExecCheck<'_>) -> Result<Option<ExecPlan>, StartError> {
+    let Some(execution) = check.execution.filter(|config| config.mode.is_enabled()) else {
+        return Ok(None);
+    };
+    let mode = execution.mode.as_str();
+    let Some(queue) = check.registry.exec_queue_id() else {
+        return Err(StartError::ExecutionNotWired {
+            mode,
+            detail: "the registry allocated no execution input queue",
+        });
+    };
+    let instruments = check.registry.instruments();
+    if instruments.len() > MAX_ORDER_INSTRUMENTS {
+        return Err(StartError::ExecutionTooManyInstruments {
+            found: instruments.len(),
+            max: MAX_ORDER_INSTRUMENTS,
+        });
+    }
+    // Each venue's physics come from the venue's own module. Read here, where the venue is known,
+    // and carried into `settings` — the hot engine stays venue-neutral and never names one.
+    let venue = match execution.mode {
+        ExecutionMode::Sim => ExecutionVenue::Simulated,
+        ExecutionMode::Live => check.venue.ok_or(StartError::ExecutionNotWired {
+            mode,
+            detail: "the startup permission probe was never run",
+        })?,
+        ExecutionMode::Off => unreachable!("disabled execution was filtered above"),
+    };
+    let capabilities = venue.capabilities(check.registry)?;
+    check_execution_against_venue(&capabilities, execution)?;
+    let venue = venue.check(EdgeCheck {
+        registry: check.registry,
+        execution,
+        spin_interval: check.spin_interval,
+        input_capacity: check.input_capacity,
+    })?;
+    let te_tag = TeTag::of(check.identity);
+    let lease = venue.with_lease_namespace(|namespace| {
+        ExecutionLease::acquire(check.lease_dir, te_tag, namespace)
+    })?;
+    Ok(Some(ExecPlan {
+        venue,
+        capabilities,
+        lease,
+        queue,
+        te_tag,
+    }))
+}
+
+/// The command lane of an armed run. Its write end goes into the engine, which the hot thread
+/// builds, and its read end into the edge, which is built once the input rings of the hot thread
+/// exist.
+pub(super) struct CommandLane {
+    pub(super) wiring: Option<ExecWiring>,
+    pub(super) edge: Option<PlannedEdge>,
+}
+
+/// An edge that preflight checked, with the read end of its command lane.
+pub(super) struct PlannedEdge {
+    plan: ExecPlan,
+    commands: Consumer<ExecLaneItem>,
+    lane_capacity: usize,
+}
+
+/// Opens the command lane of an armed run, before the engine that writes it is built.
+pub(super) fn open_command_lane(
+    plan: Option<ExecPlan>,
+    execution: Option<&ExecutionConfig>,
+    spin_interval: DurationUs,
+    stamper: &Stamper,
+) -> CommandLane {
+    let (Some(plan), Some(execution)) = (plan, execution) else {
+        return CommandLane {
+            wiring: None,
+            edge: None,
+        };
+    };
+    let edge_stall = edge_stall();
+    let lane_capacity = command_lane_capacity(spin_interval);
+    let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(lane_capacity);
+    info!(
+        "execution command lane: {lane_capacity} slots ({} KiB), sized to hold a {}s edge stall at the configured {}ms spin",
+        lane_capacity * size_of::<ExecLaneItem>() / 1_024,
+        edge_stall.micros() / 1_000_000,
+        spin_interval.micros() / 1_000
+    );
+    let wiring = ExecWiring {
+        sink: ExecSink::new(commands_producer, stamper.clone()),
+        settings: settings(execution, &plan.capabilities),
+        run_nonce: plan.lease.run_nonce(),
+    };
+    CommandLane {
+        wiring: Some(wiring),
+        edge: Some(PlannedEdge {
+            plan,
+            commands,
+            lane_capacity,
+        }),
+    }
+}
+
+pub(super) struct ExecBringUpSetup<'a> {
+    /// `None` when execution is disarmed or absent.
+    pub(super) edge: Option<PlannedEdge>,
+    pub(super) execution: Option<&'a ExecutionConfig>,
+    pub(super) registry: &'a Registry,
     /// The write end of the execution input queue; `None` if the registry allocated no queue.
     pub(super) producer: Option<QueueProducer>,
     /// The market-data queue producers, handed over so a venue that matches orders against the
@@ -78,75 +208,38 @@ pub(super) struct ExecBringUpSetup<'a> {
     pub(super) fatal: &'a FatalSignal,
     pub(super) desired_run_state: RunStateCell,
     pub(super) drain_deadline: Duration,
-    pub(super) spin_interval: DurationUs,
     pub(super) input_capacity: usize,
-    pub(super) lease_dir: &'a Path,
 }
 
-/// # Errors
-/// [`EngineError::ExecutionNotWired`] when an armed config reaches here without the probe or the
-/// input queue that arming implies, [`EngineError::ExecutionTooManyInstruments`] when the order
-/// table cannot address every row, `ExecutionIdentity*` when lease acquisition fails, and
-/// [`EngineError::Venue`] when the venue refuses the config or its own bring-up.
-pub(super) fn exec_bring_up(mut setup: ExecBringUpSetup<'_>) -> Result<ExecBringUp, EngineError> {
-    let Some(execution) = setup.execution.filter(|config| config.mode.is_enabled()) else {
-        return Ok(ExecBringUp::disabled());
+/// Builds the edge that preflight checked: nothing here can refuse the run.
+pub(super) fn exec_bring_up(setup: ExecBringUpSetup<'_>) -> ExecBringUp {
+    let (Some(edge), Some(execution)) = (setup.edge, setup.execution) else {
+        return ExecBringUp::disabled();
     };
+    let producer = setup
+        .producer
+        .expect("preflight checked that the registry allocated the execution input queue");
+    let PlannedEdge {
+        plan:
+            ExecPlan {
+                venue,
+                lease,
+                queue,
+                te_tag,
+                ..
+            },
+        commands,
+        lane_capacity,
+    } = edge;
     let mode = execution.mode.as_str();
-    let (Some(producer), Some(queue)) = (setup.producer.take(), setup.registry.exec_queue_id())
-    else {
-        return Err(EngineError::ExecutionNotWired {
-            mode,
-            detail: "the registry allocated no execution input queue",
-        });
-    };
-    let instruments = setup.registry.instruments();
-    if instruments.len() > MAX_ORDER_INSTRUMENTS {
-        return Err(EngineError::ExecutionTooManyInstruments {
-            found: instruments.len(),
-            max: MAX_ORDER_INSTRUMENTS,
-        });
-    }
-
-    let te_tag = TeTag::of(setup.identity);
-    let edge_stall = DurationUs::from_micros(BackoffCaps::default().max.as_micros() as i64);
-    let lane_capacity = exec_lane_capacity(ExecLaneBudget {
-        spin_interval: setup.spin_interval,
-        edge_stall,
-    });
-    let (commands_producer, commands_consumer) = RingBuffer::<ExecLaneItem>::new(lane_capacity);
-    info!(
-        "execution command lane: {lane_capacity} slots ({} KiB), sized to hold a {}s edge stall at the configured {}ms spin",
-        lane_capacity * size_of::<ExecLaneItem>() / 1_024,
-        edge_stall.micros() / 1_000_000,
-        setup.spin_interval.micros() / 1_000
-    );
     let sweep_deadline = setup.drain_deadline / SWEEP_SHARE_OF_DRAIN;
-
-    // Each venue's physics come from the venue's own module. Read here, where the venue is known,
-    // and carried into `settings` — the hot engine stays venue-neutral and never names one.
-    let venue = match execution.mode {
-        ExecutionMode::Sim => ExecutionVenue::Simulated,
-        ExecutionMode::Live => setup.venue.take().ok_or(EngineError::ExecutionNotWired {
-            mode,
-            detail: "the startup permission probe was never run",
-        })?,
-        ExecutionMode::Off => unreachable!("disabled execution was filtered above"),
-    };
-    let capabilities = venue.capabilities(setup.registry)?;
-    // Acquiring the lease spends a run nonce that client order ids are minted under, so a config
-    // this venue cannot honour is refused before one is burnt on it.
-    check_execution_against_venue(&capabilities, execution)?;
-    let lease = venue.with_lease_namespace(|namespace| {
-        ExecutionLease::acquire(setup.lease_dir, te_tag, namespace)
-    })?;
     let described = venue.describe();
     let VenueEdge { spawn, tap_gate } = venue.bring_up(
         EdgeInputs {
             registry: setup.registry,
             execution,
             identity: lease.identity(te_tag),
-            commands: commands_consumer,
+            commands,
             producer,
             settings: EdgeSettings {
                 clock: setup.clock.clone(),
@@ -161,7 +254,6 @@ pub(super) fn exec_bring_up(mut setup: ExecBringUpSetup<'_>) -> Result<ExecBring
             },
             groups: setup.groups,
             lane_capacity,
-            spin_interval: setup.spin_interval,
             input_capacity: setup.input_capacity,
             sender: SenderSettings {
                 stamper: setup.stamper.clone(),
@@ -172,7 +264,7 @@ pub(super) fn exec_bring_up(mut setup: ExecBringUpSetup<'_>) -> Result<ExecBring
             },
         },
         setup.window_assignments,
-    )?;
+    );
 
     let run_nonce = lease.run_nonce();
     info!(
@@ -180,28 +272,23 @@ pub(super) fn exec_bring_up(mut setup: ExecBringUpSetup<'_>) -> Result<ExecBring
         sweep_deadline.as_millis(),
         setup.drain_deadline.as_millis()
     );
-    Ok(ExecBringUp {
-        wiring: Some(ExecWiring {
-            sink: ExecSink::new(commands_producer, setup.stamper.clone()),
-            settings: settings(execution, &capabilities),
-            run_nonce,
-        }),
+    ExecBringUp {
         spawn: Some(spawn),
         tap_gate,
         lease: Some(lease),
-    })
+    }
 }
 
 /// Settings whose meaning depends on the venue, checked once the venue is known. Config validation
 /// bounds each of these on its own; only here is there anything to compare them against.
 ///
 /// # Errors
-/// [`EngineError::ExecutionFieldInert`] for a setting this venue never reads, and
-/// [`EngineError::ExecutionBaseFloorOnPosition`] for the one that does reach it and does harm.
+/// [`StartError::ExecutionFieldInert`] for a setting this venue never reads, and
+/// [`StartError::ExecutionBaseFloorOnPosition`] for the one that does reach it and does harm.
 fn check_execution_against_venue(
     capabilities: &VenueCapabilities,
     execution: &ExecutionConfig,
-) -> Result<(), EngineError> {
+) -> Result<(), StartError> {
     // Two settings are deliberately not checked here: recv_window_ms and max_clock_skew_ms bound a
     // request-signing protocol rather than anything a venue does. Each is bounded already — the
     // first where the signing edge turns it into a signed window, the second by config validation
@@ -211,7 +298,7 @@ fn check_execution_against_venue(
     if !capabilities.rotates_markets
         && execution.quote_stop_margin_ms != DEFAULT_QUOTE_STOP_MARGIN_MS
     {
-        return Err(EngineError::ExecutionFieldInert {
+        return Err(StartError::ExecutionFieldInert {
             field: "quote_stop_margin_ms",
             value: execution.quote_stop_margin_ms.to_string().into(),
             venue_fact: "this venue's instruments never expire, so there is no closing window to \
@@ -219,7 +306,7 @@ fn check_execution_against_venue(
         });
     }
     if capabilities.fee_model == FeeModel::None && execution.taker_fee_rate > 0.0 {
-        return Err(EngineError::ExecutionFieldInert {
+        return Err(StartError::ExecutionFieldInert {
             field: "taker_fee_rate",
             value: execution.taker_fee_rate.to_string().into(),
             venue_fact: "this venue takes its cut out of what a trade receives rather than \
@@ -227,7 +314,7 @@ fn check_execution_against_venue(
         });
     }
     if capabilities.base_asset_is_position && execution.min_base_balance > 0.0 {
-        return Err(EngineError::ExecutionBaseFloorOnPosition {
+        return Err(StartError::ExecutionBaseFloorOnPosition {
             value: execution.min_base_balance.to_string().into(),
         });
     }
@@ -242,13 +329,18 @@ fn settings(execution: &ExecutionConfig, capabilities: &VenueCapabilities) -> Ex
             // comparing as floats would risk both a spurious violation and a determinism hazard.
             max_quote_distance_centi_bps: (execution.max_quote_distance_bps * 100.0).round() as i64,
             max_book_age: DurationUs::from_millis(execution.max_book_age_ms as i64),
-            max_order_notional_quote: validated_mantissa(execution.max_order_notional_quote),
+            max_order_notional_quote: Notional::from_mantissa(validated_mantissa(
+                execution.max_order_notional_quote,
+            )),
         },
         max_orders_per_side: execution.max_orders_per_side as usize,
-        min_base_balance: validated_mantissa(execution.min_base_balance),
-        min_quote_balance: validated_mantissa(execution.min_quote_balance),
+        min_base_balance: Qty::from_mantissa(validated_mantissa(execution.min_base_balance)),
+        min_quote_balance: Notional::from_mantissa(validated_mantissa(execution.min_quote_balance)),
         max_consecutive_rejects: execution.max_consecutive_rejects,
-        max_session_loss_quote: validated_mantissa(execution.max_session_loss_quote),
+        max_session_loss_quote: Notional::from_mantissa(validated_mantissa(
+            execution.max_session_loss_quote,
+        )),
+
         inflight_timeout: DurationUs::from_millis(execution.inflight_timeout_ms as i64),
         exec_silence_spins: execution.exec_silence_spins,
         order_reap_window: DurationUs::from_secs(execution.order_reap_secs as i64),
@@ -259,4 +351,20 @@ fn settings(execution: &ExecutionConfig, capabilities: &VenueCapabilities) -> Ex
         taker_fee_rate: validated_mantissa(execution.taker_fee_rate),
         holds_reservations_until_settled: capabilities.holds_reservations_until_settled,
     }
+}
+
+/// An edge that cannot reach its venue waits at most the cap of its backoff before it tries again,
+/// so that cap is the longest stall that the command lane must hold.
+fn edge_stall() -> DurationUs {
+    DurationUs::from_micros(BackoffCaps::default().max.as_micros() as i64)
+}
+
+/// The command lane holds the commands of a busy spin and a watermark for each spin of the longest
+/// edge stall. The execution input queue takes the same default, so the edge can answer each
+/// command that the lane holds.
+pub(super) fn command_lane_capacity(spin_interval: DurationUs) -> usize {
+    exec_lane_capacity(ExecLaneBudget {
+        spin_interval,
+        edge_stall: edge_stall(),
+    })
 }

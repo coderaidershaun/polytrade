@@ -29,7 +29,7 @@ disallowed-methods = [
     { path = "quanta::Upkeep::start", reason = "starts a thread that reads the clock; only a permitted site may" },
     { path = "engine::msg::time::EngineClock::start", reason = "starts a clock; the process has one" },
     { path = "engine::msg::time::EngineClock::now", reason = "a clock read; only a permitted site may read one" },
-    { path = "engine::msg::time::boot_stamp_us", reason = "a clock read; only a permitted site may read one" },
+    { path = "engine::msg::time::wall_clock_now", reason = "a clock read; only a permitted site may read one" },
     { path = "engine::msg::time::Stamper::stamp", reason = "a counter read; only a permitted site may read one" },
     { path = "engine::msg::time::TickScale::nanos", reason = "turns ticks into time; only the metrics thread may" },
     { path = "engine::msg::time::TickScale::nanos_since", reason = "turns ticks into time; only the metrics thread may" },

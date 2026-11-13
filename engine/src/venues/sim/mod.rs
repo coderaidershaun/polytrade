@@ -1,4 +1,4 @@
-//! Simulated Binance Spot execution behind the same edge contract as the live adapter.
+//! Simulated Binance Spot execution, run by the same execution machinery as a live venue edge.
 
 mod actor;
 mod bringup;
@@ -16,7 +16,7 @@ pub mod wire;
 
 /// The only way to stand this venue up: a caller hands over its inputs here and reaches nothing
 /// deeper.
-pub(crate) use bringup::bring_up;
+pub(crate) use bringup::{SimPlan, bring_up, plan};
 pub use error::SimVenueError;
 
 use crate::hot::exec::OrderBudget;

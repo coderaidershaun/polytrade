@@ -8,6 +8,9 @@
 use tokio_tungstenite::tungstenite::{Error as ProtocolError, Message};
 
 use crate::msg::exec::{ExecEvent, Liquidity};
+use crate::msg::time::LocalTs;
+use crate::runtime::shutdown::{AnswerPart, FatalReason};
+use crate::venues::edge::EdgeDriver;
 use crate::venues::edge::RECENT_TRADES;
 use crate::venues::exec::{Outgoing, SessionOutcome};
 use crate::{error, warn};
@@ -61,9 +64,11 @@ impl Actor {
         text: &str,
         outgoing: &mut Vec<Outgoing>,
     ) -> bool {
-        match decode_stream_frame(text, &self.decode_context()) {
+        let context = self.decode_context();
+        let received_ts_us = context.received_ts_us;
+        match decode_stream_frame(text, &context) {
             Ok(StreamEvent::Order(event)) => {
-                self.on_stream_order(event, outgoing);
+                self.on_stream_order(event, received_ts_us, outgoing);
                 false
             }
             Ok(StreamEvent::Trade(lineage)) => {
@@ -79,9 +84,10 @@ impl Actor {
             }
             Err(error) if error.is_fatal() => {
                 error!("polymarket execution fatal stream decode: {error}");
-                self.control
-                    .fatal
-                    .trip(format!("polymarket execution: {error}"));
+                self.control.fatal.trip(FatalReason::UndecodableAnswer {
+                    venue: self.venue(),
+                    part: AnswerPart::Stream,
+                });
                 false
             }
             Err(error) => {
@@ -92,13 +98,18 @@ impl Actor {
         }
     }
 
-    fn on_stream_order(&mut self, event: ExecEvent, outgoing: &mut Vec<Outgoing>) {
+    fn on_stream_order(
+        &mut self,
+        event: ExecEvent,
+        received_ts_us: LocalTs,
+        outgoing: &mut Vec<Outgoing>,
+    ) {
         if event.status.is_some_and(|status| status.is_terminal()) {
             self.orders.forget(event.client_id);
             self.delayed.forget(event.client_id);
         }
         self.session.fold(&event, 0, outgoing);
-        self.forward_exec(event);
+        self.forward_exec(received_ts_us, event);
     }
 
     /// Reads lineage, fees, settlement only — never quantity (would multiply by settlement depth).
@@ -179,10 +190,10 @@ impl Actor {
             lineage.venue_trade_id, lineage.instrument.0, self.counts.settlement_failures
         );
         self.session.core.stop_quoting();
-        self.control.fatal.trip(format!(
-            "polymarket execution settlement failed on trade {} — a folded fill did not settle on chain",
-            lineage.venue_trade_id
-        ));
+        self.control.fatal.trip(FatalReason::SettlementFailed {
+            venue: self.venue(),
+            trade: lineage.trade_id,
+        });
     }
 
     /// Re-reads held frames in order; mappings landed since their first arrival may now explain them.

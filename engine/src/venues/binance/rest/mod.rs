@@ -13,7 +13,7 @@ mod weight;
 
 use serde::de::DeserializeOwned;
 
-use crate::msg::time::TsUs;
+use crate::msg::time::VenueTs;
 use crate::runtime::config::{BinanceMarket, KlineInterval};
 use crate::runtime::secrets::Secret;
 use crate::venues::edge::http::{self, Deadlines, HttpClient, TransportError};
@@ -225,10 +225,10 @@ impl RestClient {
 
     /// # Errors
     /// [`RestError`].
-    pub async fn server_time(&mut self) -> Result<TsUs, RestError> {
+    pub async fn server_time(&mut self) -> Result<VenueTs, RestError> {
         let fetched = self.request(&RestRequest::ServerTime).await?;
         let parsed: ServerTime = decode(&fetched)?;
-        Ok(TsUs::from_micros(
+        Ok(VenueTs::from_micros(
             parsed.server_time_ms.saturating_mul(1000),
         ))
     }

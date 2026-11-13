@@ -1,6 +1,5 @@
-//! The workstation's link loop as a state machine with no socket, clock, thread or channel:
-//! datagram bytes and the caller's time go in, deliveries, status and subscribe bytes come out. The
-//! browser page and a native test drive it the same way.
+//! The workstation's link loop as a state machine with no socket, clock or thread: bytes and time
+//! go in, deliveries and status come out, so the page and a native test drive it the same way.
 
 use std::net::SocketAddr;
 
@@ -9,7 +8,7 @@ use crate::link::{
     LinkHash, LinkIdentity, SequenceGate, Subscribe, TopicId, TopicSet,
 };
 use crate::msg::run_state::RunState;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::time::{DurationUs, LocalTs, VenueTs};
 use crate::msg::ui::{LatencyReport, UiBookSnapshot, UiCatalog, UiEvent};
 use crate::runtime::config::StrategyId;
 use crate::{info, warn, warn_repeating};
@@ -98,14 +97,14 @@ pub struct LinkSession {
     gate: SequenceGate,
     run_gate: RemoteRunGate,
     catalog: CatalogAssembly,
-    published_catalog_ts_us: Option<TsUs>,
+    published_catalog_ts_us: Option<VenueTs>,
     controller: Controller,
     reported: Option<Lifecycle>,
-    last_seen_ts_us: Option<TsUs>,
-    last_subscribe_ts_us: Option<TsUs>,
+    last_seen_ts_us: Option<LocalTs>,
+    last_subscribe_ts_us: Option<LocalTs>,
     subscribe_seq: u64,
     outbox: [u8; LINK_MAX_DATAGRAM],
-    last_report_ts_us: TsUs,
+    last_report_ts_us: LocalTs,
     is_engine_silent: bool,
     rejected: RejectCounts,
     delivered: DeliveredCounts,
@@ -119,7 +118,7 @@ impl LinkSession {
     ///
     /// # Errors
     /// [`LinkSessionError::NoPeers`] when the target names no engine to attach to.
-    pub fn new(target: LinkTarget, now: TsUs) -> Result<Self, LinkSessionError> {
+    pub fn new(target: LinkTarget, now: LocalTs) -> Result<Self, LinkSessionError> {
         if target.peers.is_empty() {
             return Err(LinkSessionError::NoPeers);
         }
@@ -138,7 +137,7 @@ impl LinkSession {
                 token_hash,
                 strategy_hash,
                 sender_te_hash: LinkHash::of_name(&sender),
-                boot_ts_us: now,
+                boot_ts_us: now.to_peer(),
             },
             guard: FrameGuard {
                 token_hash,
@@ -170,7 +169,7 @@ impl LinkSession {
     /// The session number in [`status`](Self::status) is already raised when this returns, whether
     /// or not the frame yields a delivery. Compare it after every datagram: when it moved, start
     /// the model over first, then apply the delivery.
-    pub fn on_datagram(&mut self, bytes: &[u8], now: TsUs) -> Option<Delivery> {
+    pub fn on_datagram(&mut self, bytes: &[u8], now: LocalTs) -> Option<Delivery> {
         let datagram = match LinkDatagram::decode(bytes, &self.guard) {
             Ok(datagram) => datagram,
             Err(error) => {
@@ -235,7 +234,7 @@ impl LinkSession {
     // SMELL: the silence warning and the periodic report run only when a caller asks for a
     // subscribe, and the browser asks only while its relay socket is open. A closed relay socket
     // therefore silences the warning too. They want a call of their own.
-    pub fn subscribe_due(&mut self, now: TsUs) -> Option<&[u8]> {
+    pub fn subscribe_due(&mut self, now: LocalTs) -> Option<&[u8]> {
         self.check_engine_silence(now);
         self.report_if_due(now);
         let is_due = self
@@ -298,7 +297,7 @@ impl LinkSession {
         self.active
     }
 
-    pub fn status(&self, now: TsUs) -> LinkStatus {
+    pub fn status(&self, now: LocalTs) -> LinkStatus {
         LinkStatus {
             peer: self.peer(),
             peer_index: self.active,
@@ -323,7 +322,7 @@ impl LinkSession {
         self.reported = None;
     }
 
-    fn on_catalog_frame(&mut self, previous_catalog_ts_us: Option<TsUs>) -> Option<Delivery> {
+    fn on_catalog_frame(&mut self, previous_catalog_ts_us: Option<VenueTs>) -> Option<Delivery> {
         if previous_catalog_ts_us.is_some()
             && previous_catalog_ts_us != self.catalog.catalog_ts_us()
         {
@@ -345,7 +344,7 @@ impl LinkSession {
         Some(Delivery::Catalog(catalog))
     }
 
-    fn note_engine_heard(&mut self, now: TsUs) {
+    fn note_engine_heard(&mut self, now: LocalTs) {
         self.last_seen_ts_us = Some(now);
         if self.is_engine_silent {
             self.is_engine_silent = false;
@@ -353,7 +352,7 @@ impl LinkSession {
         }
     }
 
-    fn check_engine_silence(&mut self, now: TsUs) {
+    fn check_engine_silence(&mut self, now: LocalTs) {
         let is_silent = self
             .last_seen_ts_us
             .is_some_and(|at| now.diff(at) >= PEER_SILENCE_LIMIT);
@@ -368,7 +367,7 @@ impl LinkSession {
         );
     }
 
-    fn report_if_due(&mut self, now: TsUs) {
+    fn report_if_due(&mut self, now: LocalTs) {
         if now.diff(self.last_report_ts_us) < REPORT_INTERVAL {
             return;
         }

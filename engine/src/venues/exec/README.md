@@ -26,10 +26,11 @@ each command to the venue's transport and from there to `ExecCore::on_command`):
 There is deliberately no cancel-all: the engine cannot distinguish foreign orders, so it
 never asks for something it could not account for.
 
-**Events out** (`InboundMessage::Exec(ExecEvent)` and `::Account(AccountChunk)` through
-`EventFunnel`): sixteen `ExecKind`s covering acks, reports, refusals, snapshots and stream
-lifecycle, plus balance chunks. Everything is a fixed-size POD of integer newtypes — prices
-and quantities are i64 mantissas, identity is packed integers, and no string crosses inward.
+**Events out** (an `InboundMessage` with body `MessageBody::Exec(ExecEvent)` or
+`MessageBody::Account(AccountChunk)`, through `EventFunnel`): sixteen `ExecKind`s covering acks,
+reports, refusals, snapshots and stream lifecycle, plus balance chunks. Everything is a fixed-size
+POD of integer newtypes — prices and quantities are i64 mantissas, identity is packed integers,
+and no string crosses inward.
 
 Both live in `msg/exec.rs`. The venue's raw codes ride along as tape-only fields; the hot
 engine branches solely on the normalised enums.
@@ -84,8 +85,9 @@ engine branches solely on the normalised enums.
 4. **Written obligations** — the rules no signature can carry:
    - Every command is eventually answered. A refusal, a timeout, a disconnect — each
      synthesises an event; no hot slot ever waits forever.
-   - One input queue per adapter, events stamped with monotone `queued_ts_us`. Acks and
-     stream reports share that one queue so the tape is deterministic. Never split lanes.
+   - One input queue per adapter, events stamped with a monotone `queued_ts_us` in the
+     message header. Acks and stream reports share that one queue so the tape is deterministic.
+     Never split lanes.
    - Fill quantities are cumulative absolute venue totals, never deltas. A dropped or
      re-delivered event must be a no-op, which is what makes drop+count safe. A venue that
      reports per-fill increments gets accumulated at the edge, before the seam.
@@ -113,7 +115,12 @@ arm readiness → Quoting. On disconnect: mark every in-flight request ambiguous
 `StreamReset` (which invalidates every hot slot to Unknown and disarms readiness),
 reconnect with backoff, resync again. On exit: plan a cancel sweep, retry it paced until
 the mirror confirms every order gone or the deadline forces an abort, then report, settle
-the latch, and stop.
+the latch, and stop. A sweep past its deadline with orders still mirrored never reports
+`Swept`: the session ends with `SweepPastDeadline`, which names the client id of each order
+that stays, and one ERROR line names them too. A final exit whose sweep was never confirmed,
+because the socket stayed down or nothing answered in time, ends the same way with no ids.
+The edge settles its latch with that failure, and the drain counts it as a failed step, so
+the exit is not graceful.
 
 ## Identity and ownership
 
@@ -162,6 +169,9 @@ variant there, and a dependency-allowlist amendment if signing needs a new crate
 1. `mod.rs` — credential env-var names, `capabilities()`, `lease_namespace(...)`.
 2. `handle.rs` — the setup and `bring_up(...) -> VenueEdge`, which builds the setup from
    the runtime's `EdgeInputs` and defers the `EdgeHandle::spawn` until the hot thread runs.
+   The bring-up cannot refuse: each check of the config and the registry that it needs runs
+   in preflight first, through `ExecutionVenue::check` with an `EdgeCheck`, before the lease
+   spends a run nonce. The checked venue carries what the check computed into the build.
 3. `actor/` — the `EdgeDriver` impl. The actor composes `ExecSession` and `EdgeControl` and
    writes only its transport, its resync read set, its answer handlers and the order of its
    housekeeping steps. Same filename for the same concept as the existing adapters.
@@ -175,14 +185,18 @@ variant there, and a dependency-allowlist amendment if signing needs a new crate
    SDK, never from our implementation — crypto has no local failure mode.
 6. `probe` + preflight — a read-only account report proving credentials, permissions,
    clocks and venue facts before any order-mutating code exists, and a startup gate that
-   refuses a run the probe would have refused.
+   refuses a run the probe would have refused. The gate is reached only through the venue
+   port (`VenuePort::probe` in `src/venues/port.rs`): the network port runs it, with its read of
+   `.env`, and a test gives a stand-in port that needs no key.
 7. `fixtures/<venue>/exec/` — committed real venue payloads with a non-Rust generator, the
    independent statement of the venue's wire.
 8. `tests/fitness/venues/<venue>/<venue>_exec_codec.rs` — goldens over those fixtures: the full
    kind/status table, the reject table plus an unknown-input-halts proptest, id round-trip
    or correlation-policy pins, exactly-one-snapshot-end, byte-exact signed bodies.
-9. Registry stamps: scales, order caps, amend budget, order-rate buckets, written by the
-   venue's startup scale preflight in `src/venues/<venue>/preflight.rs`.
+9. Registry stamps: scales, order caps, amend budget, order-rate buckets. The venue's
+   startup scale preflight in `src/venues/<venue>/preflight.rs` reads and checks them and
+   returns them in `VenueScales`, through the venue port (`VenuePort::read_scales`); preflight
+   stamps them onto the registry, so a stand-in port can give them in a test.
 
 The simulator is Binance-shaped and stays that way; a new venue's determinism evidence is
 its codec goldens plus a test double driven through its real codec, delivery-permutation

@@ -1,37 +1,45 @@
-//! The engine itself: construction, the readers a strategy sees, and the entry point every venue
-//! event folds through. Apply is ungated — a fill during warmup is money — and only the callback
-//! a strategy receives is gated.
+//! The execution engine: its construction, what a strategy reads of it, and the fold of each venue
+//! event. A fill always moves money, warmup or not, and only the strategy's callback waits.
 
+use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::hot::ledger::PositionLedger;
 use crate::hot::sink::{ExecSink, PendingCommands};
 use crate::hot::strategy::Actions;
 use crate::log::{hot_error, hot_warn};
 use crate::msg::exec::{AccountChunk, CancelReason, ExecCommand, ExecEvent, ExecKind, Provenance};
-use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Qty, Side};
-use crate::msg::persist::OrderTransition;
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Qty, Side};
+use crate::msg::time::{DurationUs, FoldTime, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 use crate::runtime::registry::InstrumentRow;
 
 use super::account::{AccountTable, Balance};
-use super::audit::bank_engine_driven;
 use super::budget::{BudgetMeter, OrderBudget};
 use super::desired::QuoteLevel;
 use super::event::PriorRunOrders;
 use super::flatten::FeeModel;
 use super::gates::{ExecHalt, HaltReason, Readiness, RefusalLatch};
-use super::order::{OrderSlot, OrderTable, ReconcilePass};
+use super::order::{OrderSlot, OrderTable};
 use super::reconcile::{ExecLimits, RejectReason, RestingOrder, TickGrid};
 use super::view::{ExecCallback, OrderReject, OrderView, WorkingOrderView};
+
+/// The two times of the message under fold. The fold time stamps what the engine decides: a slot, a
+/// deadline, a halt, and the bank stamp of a command. The received stamp of the message stamps each
+/// row that it writes and each value that it hands the strategy, because the tape keeps the raw
+/// stamp of each message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FoldStamps {
+    pub(crate) fold: LocalTs,
+    pub(crate) received: LocalTs,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExecSettings {
     pub limits: ExecLimits,
     pub max_orders_per_side: usize,
-    pub min_base_balance: i64,
-    pub min_quote_balance: i64,
+    pub min_base_balance: Qty,
+    pub min_quote_balance: Notional,
     pub max_consecutive_rejects: u32,
-    pub max_session_loss_quote: i64,
+    pub max_session_loss_quote: Notional,
     pub inflight_timeout: DurationUs,
     pub exec_silence_spins: u32,
     pub order_reap_window: DurationUs,
@@ -63,10 +71,10 @@ impl ExecSettings {
             // Kept non-zero to avoid halting on inherited state; the zero_alloc fitness
             // test measures this.
             max_orders_per_side: MAX_QUOTE_LEVELS,
-            min_base_balance: 0,
-            min_quote_balance: 0,
+            min_base_balance: Qty::from_mantissa(0),
+            min_quote_balance: Notional::ZERO,
             max_consecutive_rejects: 0,
-            max_session_loss_quote: 0,
+            max_session_loss_quote: Notional::ZERO,
             inflight_timeout: DurationUs::ZERO,
             exec_silence_spins: 0,
             order_reap_window: DurationUs::ZERO,
@@ -86,15 +94,15 @@ pub(super) struct InstrumentExec {
     pub(super) grid: TickGrid,
     pub(super) base_asset: AssetId,
     pub(super) quote_asset: AssetId,
-    pub(super) max_exposure_quote: i64,
-    pub(super) last_commit_ts_us: TsUs,
+    pub(super) max_exposure_quote: Notional,
+    pub(super) last_commit_ts_us: LocalTs,
     pub(super) is_prior_run_cancel_sent: bool,
     /// What the flatten pass last refused for, so a position it cannot shed is reported when the
     /// answer CHANGES rather than on every spin — same edge-triggering as [`RefusalLatch`].
     pub(super) flatten_refusal: Option<RejectReason>,
     /// Realised result of windows this instrument has already retired. The ledger row goes with the
     /// window it belonged to; the kill switch measures the RUN.
-    pub(super) realised_carried_quote: i64,
+    pub(super) realised_carried_quote: Notional,
 }
 
 impl InstrumentExec {
@@ -132,7 +140,21 @@ pub struct ExecEngine {
     pub(super) recon_seq: u64,
     /// The PnL baseline at the first honest valuation; the session loss gate compares
     /// against this. `None` until that first mark.
-    pub(super) pnl_at_baseline: Vec<Option<i64>>,
+    pub(super) pnl_at_baseline: Vec<Option<Notional>>,
+}
+
+digest_by_hash!(ExecSettings);
+digest_fields! {
+    InstrumentExec {
+        grid, base_asset, quote_asset, max_exposure_quote, last_commit_ts_us,
+        is_prior_run_cancel_sent, flatten_refusal, realised_carried_quote,
+    }
+}
+digest_fields! {
+    ExecEngine {
+        orders, prior_orders, account, pending, sink, halt, readiness, refusals, reject_streak,
+        budget, instruments, settings, spins_since_exec_event, recon_seq, pnl_at_baseline,
+    }
 }
 
 impl ExecEngine {
@@ -147,10 +169,10 @@ impl ExecEngine {
             .iter()
             .map(|row| InstrumentExec {
                 grid: TickGrid {
-                    tick: row.tick_size.map_or(1, |tick| tick.0.max(1)),
-                    step: row.lot_size.map_or(1, |lot| lot.0.max(1)),
-                    min_qty: row.min_qty.unwrap_or(Qty(0)),
-                    min_notional: row.min_notional.unwrap_or(0),
+                    tick: row.tick_size.map_or(1, |tick| tick.mantissa().max(1)),
+                    step: row.lot_size.map_or(1, |lot| lot.mantissa().max(1)),
+                    min_qty: row.min_qty.unwrap_or(Qty::from_mantissa(0)),
+                    min_notional: row.min_notional.unwrap_or(Notional::ZERO),
                     // When the venue declares no amend filter, a shrink is executed as a
                     // cancel followed by a place instead.
                     max_amends: row
@@ -161,10 +183,10 @@ impl ExecEngine {
                 base_asset: row.base_asset,
                 quote_asset: row.quote_asset,
                 max_exposure_quote: row.max_exposure_quote,
-                last_commit_ts_us: TsUs::from_micros(0),
+                last_commit_ts_us: LocalTs::from_micros(0),
                 is_prior_run_cancel_sent: false,
                 flatten_refusal: None,
-                realised_carried_quote: 0,
+                realised_carried_quote: Notional::ZERO,
             })
             .collect();
         Self {
@@ -253,10 +275,10 @@ impl ExecEngine {
         current.chain(prior)
     }
 
-    /// The staleness gate keys on this commit stamp, never on a clock read.
+    /// The staleness gate keys on the fold time of this commit, never on a clock read.
     #[inline]
-    pub fn on_book_commit(&mut self, instrument: InstrumentId, at: TsUs) {
-        self.instruments[usize::from(instrument.0)].last_commit_ts_us = at;
+    pub fn on_book_commit(&mut self, instrument: InstrumentId, at: FoldTime) {
+        self.instruments[usize::from(instrument.0)].last_commit_ts_us = at.as_local();
     }
 
     /// Folds one venue event and answers which callback it earned. See the module header for why
@@ -264,32 +286,34 @@ impl ExecEngine {
     pub(crate) fn on_exec_event(
         &mut self,
         event: &ExecEvent,
+        stamps: FoldStamps,
         ledger: &mut PositionLedger,
         bank: &mut Actions,
     ) -> ExecCallback {
+        let now = stamps.fold;
         self.spins_since_exec_event = 0;
         match event.kind {
-            ExecKind::StreamReset => return self.on_stream_reset(event.received_ts_us, bank),
+            ExecKind::StreamReset => return self.on_stream_reset(stamps.received, bank),
             ExecKind::StreamReady => {
                 self.readiness.observe_stream_ready();
                 return ExecCallback::None;
             }
-            ExecKind::SnapshotEnd => return self.on_snapshot_end(event, bank),
+            ExecKind::SnapshotEnd => return self.on_snapshot_end(event, stamps, bank),
             _ => {}
         }
         match event.provenance {
             Provenance::Foreign => return ExecCallback::None,
             Provenance::PriorRun => {
-                self.cancel_prior_run(event);
-                self.apply_to_prior_run(event, ledger, bank);
+                self.cancel_prior_run(event, now);
+                self.apply_to_prior_run(event, stamps, ledger, bank);
                 return ExecCallback::None;
             }
             Provenance::Mine => {}
         }
-        let Some(index) = self.locate(event) else {
+        let Some(index) = self.locate(event, now) else {
             return ExecCallback::None;
         };
-        self.apply_to_slot(index, event, ledger, bank)
+        self.apply_to_slot(index, event, stamps, ledger, bank)
     }
 
     /// Absolute balances only — see [`AccountChunk`] for why a delta may never reach here.
@@ -303,11 +327,11 @@ impl ExecEngine {
     /// half of the same promise: an order outliving the engine that placed it is the one failure
     /// with no upper bound on its cost.
     #[cold]
-    pub(super) fn cancel_all(&mut self, reason: CancelReason) {
+    pub(super) fn cancel_all(&mut self, reason: CancelReason, at: LocalTs) {
         for index in 0..self.instruments.len() {
             let instrument = InstrumentId(index as u16);
             let command = ExecCommand::CancelOurs { instrument, reason };
-            if !self.pending.bank(command) {
+            if !self.pending.bank(command, at) {
                 unswept_error(instrument);
             }
         }
@@ -316,7 +340,7 @@ impl ExecEngine {
     /// Halting stops quoting only; it never touches run state, recording markers only. It
     /// is one-way — only a restart rearms it.
     #[cold]
-    pub fn halt(&mut self, reason: HaltReason, at: TsUs) {
+    pub fn halt(&mut self, reason: HaltReason, at: LocalTs) {
         if self.halt.is_halted() {
             return;
         }
@@ -328,49 +352,17 @@ impl ExecEngine {
             reason,
             halted_ts_us: at,
         };
-        self.cancel_all(CancelReason::Halt);
-    }
-
-    #[cold]
-    fn on_stream_reset(&mut self, at: TsUs, bank: &mut Actions) -> ExecCallback {
-        hot_warn!(
-            "execution stream reset — every open order is unknown until a reconciliation lands"
-        );
-        self.readiness.observe_stream_reset();
-        // Every reason the pass last reported was derived from order state that is now a memory, so
-        // the next refusal is news again rather than a repeat the latch would swallow.
-        self.refusals.forget();
-        self.orders.invalidate_all(&mut |slot, previous| {
-            let transition = OrderTransition::StreamReset;
-            bank_engine_driven(bank, slot, transition, previous.into(), at);
-        });
-        ExecCallback::None
-    }
-
-    #[cold]
-    fn on_snapshot_end(&mut self, event: &ExecEvent, bank: &mut Actions) -> ExecCallback {
-        let pass = ReconcilePass {
-            instrument: event.instrument,
-            recon_seq: event.recon_seq,
-            recon_ts_us: event.received_ts_us,
-        };
-        self.orders.sweep_unseen(pass, &mut |slot, previous| {
-            swept_warning(slot, pass.recon_seq);
-            let transition = OrderTransition::SweepClosed;
-            bank_engine_driven(bank, slot, transition, previous.into(), pass.recon_ts_us);
-        });
-        self.readiness.observe_open_orders_snapshot();
-        ExecCallback::None
+        self.cancel_all(CancelReason::Halt, at);
     }
 
     /// Finds the slot an event belongs to, adopting one the venue knows about that this
     /// table does not.
-    fn locate(&mut self, event: &ExecEvent) -> Option<usize> {
+    fn locate(&mut self, event: &ExecEvent, now: LocalTs) -> Option<usize> {
         if let Some(index) = self.orders.find(event.client_id) {
             return Some(index);
         }
         if event.kind == ExecKind::SnapshotOrder
-            && let Some(index) = self.orders.adopt(event)
+            && let Some(index) = self.orders.adopt(event, now)
         {
             return Some(index);
         }
@@ -394,21 +386,22 @@ impl ExecEngine {
     /// the inherited order asks again — latching first would make one full bank the last word on an
     /// order still resting on the venue.
     #[cold]
-    fn cancel_prior_run(&mut self, event: &ExecEvent) {
-        let index = usize::from(event.instrument.0);
+    fn cancel_prior_run(&mut self, event: &ExecEvent, now: LocalTs) {
+        let Some(instrument) = event.instrument else {
+            return;
+        };
+        let index = usize::from(instrument.0);
         if self.instruments[index].is_prior_run_cancel_sent {
             return;
         }
-        let command = ExecCommand::CancelPriorRun {
-            instrument: event.instrument,
-        };
-        if !self.bank_or_halt(command, event.received_ts_us) {
+        let command = ExecCommand::CancelPriorRun { instrument };
+        if !self.bank_or_halt(command, now) {
             return;
         }
         self.instruments[index].is_prior_run_cancel_sent = true;
         hot_warn!(
             "an earlier run of this trading engine left orders resting on instrument {} — cancelling them",
-            event.instrument.0
+            instrument.0
         );
     }
 }
@@ -421,19 +414,6 @@ fn unswept_error(instrument: InstrumentId) {
     hot_error!(
         "the command bank is full, so the sweep of every order this run owns on instrument {} could not be sent — they may still be resting on the venue",
         instrument.0
-    );
-}
-
-/// A reconciliation retiring a working order is the engine LOSING one, not routine housekeeping: the
-/// venue was asked what it holds and did not mention an order this table believed in. It is logged
-/// as a warning because otherwise a duplicate resting on the venue is the first anyone hears of it.
-#[cold]
-fn swept_warning(slot: &OrderSlot, recon_seq: u64) {
-    hot_warn!(
-        "reconciliation pass {} did not name order {:x} on instrument {} — closing it as gone",
-        recon_seq,
-        slot.client_id.0,
-        slot.instrument.0
     );
 }
 

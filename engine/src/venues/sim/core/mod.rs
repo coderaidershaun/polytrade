@@ -28,13 +28,13 @@ pub(crate) use revise::ForcedOrderExit;
 use wallet::{FillSettlement, SimWallet, SimWalletSetup, WalletError};
 
 use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, TradeId};
-use crate::msg::inbound::{BookChunkKind, InboundMessage, TappedMessage, VenueMeta};
-use crate::msg::time::{DurationUs, TsUs};
+use crate::msg::inbound::{BookChunkKind, InboundMessage, MessageBody, TappedMessage, VenueMeta};
+use crate::msg::time::{DurationUs, LocalTs};
 use crate::venues::exec::ExecRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct SimEmission {
-    pub at_ts_us: TsUs,
+    pub at_ts_us: LocalTs,
     pub sequence: u64,
     pub event: VenueEvent,
 }
@@ -96,7 +96,7 @@ pub(crate) struct EmissionBook {
 }
 
 impl EmissionBook {
-    pub fn push(&mut self, at_ts_us: TsUs, event: VenueEvent) {
+    pub fn push(&mut self, at_ts_us: LocalTs, event: VenueEvent) {
         self.pending.push(SimEmission {
             at_ts_us,
             sequence: self.sequence,
@@ -105,7 +105,7 @@ impl EmissionBook {
         self.sequence += 1;
     }
 
-    fn drain_through(&mut self, horizon: TsUs, out: &mut Vec<SimEmission>) {
+    fn drain_through(&mut self, horizon: LocalTs, out: &mut Vec<SimEmission>) {
         self.pending
             .sort_by_key(|emission| (emission.at_ts_us, emission.sequence));
         let split = self
@@ -126,7 +126,7 @@ pub(crate) struct SimVenue {
     emissions: EmissionBook,
     wallet: SimWallet,
     verdict_retention: DurationUs,
-    reap_due_ts_us: Option<TsUs>,
+    reap_due_ts_us: Option<LocalTs>,
     reset_announced: bool,
 }
 
@@ -173,7 +173,7 @@ impl SimVenue {
         &self.market
     }
 
-    pub fn on_request(&mut self, request: &ExecRequest, effective_ts_us: TsUs) {
+    pub fn on_request(&mut self, request: &ExecRequest, effective_ts_us: LocalTs) {
         if let Some((at_ts_us, action)) = self.fold().admit(request, effective_ts_us) {
             self.timeline.push(at_ts_us, action.phase(), action);
         }
@@ -183,7 +183,7 @@ impl SimVenue {
     /// When the market inbox is full.
     pub fn on_market_batch(&mut self, tapped: &[TappedMessage], latency: latency::LatencyBudget) {
         for item in tapped {
-            let effective_ts_us = latency.market_effective(item.message.received_ts_us());
+            let effective_ts_us = latency.market_effective(item.message.header.received_ts_us);
             let Some(phase) = self.phase_of(&item.message, item.venue_meta) else {
                 continue;
             };
@@ -199,7 +199,7 @@ impl SimVenue {
         }
     }
 
-    pub fn advance_to_watermark(&mut self, horizon: TsUs, due: &mut Vec<SimEmission>) {
+    pub fn advance_to_watermark(&mut self, horizon: LocalTs, due: &mut Vec<SimEmission>) {
         while let Some(source) = self.next_due(horizon) {
             match source {
                 Source::Market => {
@@ -219,7 +219,7 @@ impl SimVenue {
         self.emissions.drain_through(horizon, due);
     }
 
-    fn reap_expired_verdicts(&mut self, horizon: TsUs) {
+    fn reap_expired_verdicts(&mut self, horizon: LocalTs) {
         let due = self.reap_due_ts_us.unwrap_or(horizon);
         if horizon < due {
             return;
@@ -228,7 +228,7 @@ impl SimVenue {
         self.reap_due_ts_us = Some(latency::shifted(horizon, [self.verdict_retention]));
     }
 
-    fn next_due(&self, horizon: TsUs) -> Option<Source> {
+    fn next_due(&self, horizon: LocalTs) -> Option<Source> {
         let market = self.inbox.peek().filter(|key| key.0 <= horizon);
         let scheduled = self.timeline.peek().filter(|key| key.0 <= horizon);
         match (market, scheduled) {
@@ -240,19 +240,19 @@ impl SimVenue {
     }
 
     fn phase_of(&self, message: &InboundMessage, venue_meta: VenueMeta) -> Option<Phase> {
-        match (message, venue_meta) {
-            (InboundMessage::Trade(_), VenueMeta::Trade { .. }) => Some(Phase::Trade),
-            (InboundMessage::Book(chunk), VenueMeta::DepthDelta { .. })
+        match (&message.body, venue_meta) {
+            (MessageBody::Trade(_), VenueMeta::Trade { .. }) => Some(Phase::Trade),
+            (MessageBody::Book(chunk), VenueMeta::DepthDelta { .. })
                 if chunk.kind == BookChunkKind::Delta =>
             {
                 Some(Phase::DeltaCommit)
             }
-            (InboundMessage::Book(chunk), VenueMeta::None)
+            (MessageBody::Book(chunk), VenueMeta::None)
                 if chunk.kind == BookChunkKind::Snapshot =>
             {
                 Some(Phase::SnapshotRebuild)
             }
-            (InboundMessage::BookReset(reset), VenueMeta::DepthReset { .. }) => {
+            (MessageBody::BookReset(reset), VenueMeta::DepthReset { .. }) => {
                 assert_eq!(
                     reset.instrument,
                     self.market.instrument(),
@@ -260,10 +260,7 @@ impl SimVenue {
                 );
                 Some(Phase::DepthReset)
             }
-            (
-                InboundMessage::Trade(_) | InboundMessage::Book(_) | InboundMessage::BookReset(_),
-                _,
-            ) => {
+            (MessageBody::Trade(_) | MessageBody::Book(_) | MessageBody::BookReset(_), _) => {
                 panic!("a matching market message reached the venue as {venue_meta:?}")
             }
             _ => None,
@@ -272,10 +269,10 @@ impl SimVenue {
 
     fn apply_market(&mut self, event: Sequenced<(InboundMessage, VenueMeta)>) {
         let (message, venue_meta) = event.item;
-        let reset = match &message {
-            InboundMessage::Trade(trade) => self.apply_trade(trade, venue_meta, event.at_ts_us),
-            InboundMessage::Book(chunk) => self.market.on_book_chunk(chunk, venue_meta),
-            InboundMessage::BookReset(_) => {
+        let reset = match &message.body {
+            MessageBody::Trade(trade) => self.apply_trade(trade, venue_meta, event.at_ts_us),
+            MessageBody::Book(chunk) => self.market.on_book_chunk(chunk, venue_meta),
+            MessageBody::BookReset(_) => {
                 let VenueMeta::DepthReset { exchange_ts_us } = venue_meta else {
                     panic!("a book reset reached the venue without its exchange stamp")
                 };
@@ -288,7 +285,7 @@ impl SimVenue {
         }
     }
 
-    pub fn restore_matching(&mut self, at_ts_us: TsUs) {
+    pub fn restore_matching(&mut self, at_ts_us: LocalTs) {
         let was_suspended = !self.market.is_matching_live();
         self.market.restore_matching();
         if was_suspended {
@@ -308,7 +305,7 @@ impl SimVenue {
         }
     }
 
-    pub fn suspend_matching(&mut self, reason: ResetReason, at_ts_us: TsUs) {
+    pub fn suspend_matching(&mut self, reason: ResetReason, at_ts_us: LocalTs) {
         let reason = self.market.suspend_matching(reason);
         self.record_reset(reason, at_ts_us);
     }
@@ -317,7 +314,7 @@ impl SimVenue {
         &mut self,
         trade: &crate::msg::inbound::TradeEvent,
         venue_meta: VenueMeta,
-        at_ts_us: TsUs,
+        at_ts_us: LocalTs,
     ) -> Option<ResetReason> {
         let evidence = TradeEvidence::from_meta(venue_meta);
         let SimVenue {
@@ -338,7 +335,7 @@ impl SimVenue {
             let taken = record.order.take(offered);
             let last_price = record.order.price;
             let is_complete = record.order.is_complete();
-            if taken.0 == 0 {
+            if taken.mantissa() == 0 {
                 return OwnFill { taken, is_complete };
             }
             let settlement = wallet.fill(
@@ -372,7 +369,7 @@ impl SimVenue {
     }
 
     #[cold]
-    fn record_reset(&mut self, reason: ResetReason, at_ts_us: TsUs) {
+    fn record_reset(&mut self, reason: ResetReason, at_ts_us: LocalTs) {
         for record in self
             .orders
             .iter_mut()
@@ -400,6 +397,6 @@ impl SimVenue {
 }
 
 const VACATE: OwnFill = OwnFill {
-    taken: Qty(0),
+    taken: Qty::from_mantissa(0),
     is_complete: true,
 };

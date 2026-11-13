@@ -5,8 +5,8 @@ use crate::msg::exec::{
     ACCOUNT_CHUNK_ASSETS, AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind,
     Provenance, RejectClass,
 };
-use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
-use crate::msg::time::TsUs;
+use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side};
+use crate::msg::time::{LocalTs, VenueTs};
 
 // A timed-out request may still have reached the venue, so its outcome is ambiguous and only a
 // reconciliation can settle it.
@@ -14,12 +14,12 @@ pub(crate) fn request_timed_out(
     instrument: InstrumentId,
     client_id: ClientOrderId,
     side: Side,
-    at: TsUs,
+    at: LocalTs,
 ) -> ExecEvent {
     ExecEvent {
         reject: Some(RejectClass::Ambiguous),
         side,
-        ..blank(ExecKind::AckFailed, instrument, client_id, at)
+        ..blank(ExecKind::AckFailed, Some(instrument), client_id, at)
     }
 }
 
@@ -29,11 +29,11 @@ pub(crate) fn place_not_sent(
     instrument: InstrumentId,
     client_id: ClientOrderId,
     side: Side,
-    at: TsUs,
+    at: LocalTs,
 ) -> ExecEvent {
     ExecEvent {
         side,
-        ..blank(ExecKind::PlaceNotSent, instrument, client_id, at)
+        ..blank(ExecKind::PlaceNotSent, Some(instrument), client_id, at)
     }
 }
 
@@ -42,33 +42,28 @@ pub(crate) fn place_not_sent(
 pub(crate) fn amend_not_sent(
     instrument: InstrumentId,
     client_id: ClientOrderId,
-    at: TsUs,
+    at: LocalTs,
 ) -> ExecEvent {
-    blank(ExecKind::AmendNotSent, instrument, client_id, at)
+    blank(ExecKind::AmendNotSent, Some(instrument), client_id, at)
 }
 
 // Ends an open-orders resync. The engine stays unready until it sees one.
-pub fn open_orders_snapshot_end(instrument: InstrumentId, at: TsUs) -> ExecEvent {
-    blank(ExecKind::SnapshotEnd, instrument, ClientOrderId(0), at)
+pub fn open_orders_snapshot_end(instrument: InstrumentId, at: LocalTs) -> ExecEvent {
+    blank(
+        ExecKind::SnapshotEnd,
+        Some(instrument),
+        ClientOrderId(0),
+        at,
+    )
 }
 
 // Live and simulated order streams both raise this once they subscribe.
-pub(crate) fn stream_ready(at: TsUs) -> ExecEvent {
-    blank(
-        ExecKind::StreamReady,
-        InstrumentId::NOT_APPLICABLE,
-        ClientOrderId(0),
-        at,
-    )
+pub(crate) fn stream_ready(at: LocalTs) -> ExecEvent {
+    blank(ExecKind::StreamReady, None, ClientOrderId(0), at)
 }
 
-pub(crate) fn stream_reset(at: TsUs) -> ExecEvent {
-    blank(
-        ExecKind::StreamReset,
-        InstrumentId::NOT_APPLICABLE,
-        ClientOrderId(0),
-        at,
-    )
+pub(crate) fn stream_reset(at: LocalTs) -> ExecEvent {
+    blank(ExecKind::StreamReset, None, ClientOrderId(0), at)
 }
 
 /// Sets identity and stamps and leaves every other field at a default, which the caller overrides
@@ -79,9 +74,9 @@ pub(crate) fn stream_reset(at: TsUs) -> ExecEvent {
 /// default to unknown, so a venue that cannot amend must say so itself.
 pub(crate) fn blank(
     kind: ExecKind,
-    instrument: InstrumentId,
+    instrument: Option<InstrumentId>,
     client_id: ClientOrderId,
-    at: TsUs,
+    at: LocalTs,
 ) -> ExecEvent {
     ExecEvent {
         instrument,
@@ -94,29 +89,26 @@ pub(crate) fn blank(
         provenance: Provenance::Mine,
         side: Side::Buy,
         liquidity: None,
-        price: Price(0),
-        qty: Qty(0),
-        last_price: Price(0),
-        last_qty: Qty(0),
-        cumulative_qty: Qty(0),
-        cumulative_quote: 0,
+        price: Price::from_mantissa(0),
+        qty: Qty::from_mantissa(0),
+        last_price: Price::from_mantissa(0),
+        last_qty: Qty::from_mantissa(0),
+        cumulative_qty: Qty::from_mantissa(0),
+        cumulative_quote: Notional::ZERO,
         commission: 0,
         commission_asset: AssetId::UNKNOWN,
         reject_code: 0,
         amends_remaining: ExecEvent::AMENDS_UNKNOWN,
         recon_seq: 0,
-        exchange_ts_us: at,
+        exchange_ts_us: at.as_venue_calendar(),
         request_sent_ts_us: None,
-        received_ts_us: at,
-        queued_ts_us: at,
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ChunkStamps {
     pub(crate) venue_update_ts_ms: u64,
-    pub(crate) exchange_ts_us: TsUs,
-    pub(crate) received_ts_us: TsUs,
+    pub(crate) exchange_ts_us: VenueTs,
 }
 
 /// The engine stays unready until it sees the last chunk of a balance snapshot, so an empty sweep
@@ -126,26 +118,12 @@ pub(crate) fn account_chunks(
     balances: &[AssetBalance],
     stamps: ChunkStamps,
 ) -> Vec<AccountChunk> {
-    let empty = AccountChunk {
-        kind,
-        balances: [AssetBalance {
-            asset: AssetId::UNKNOWN,
-            free: 0,
-            locked: 0,
-        }; ACCOUNT_CHUNK_ASSETS],
-        len: 0,
-        is_last_chunk: false,
-        venue_update_ts_ms: stamps.venue_update_ts_ms,
-        exchange_ts_us: stamps.exchange_ts_us,
-        received_ts_us: stamps.received_ts_us,
-        queued_ts_us: stamps.received_ts_us,
-    };
+    let empty = AccountChunk::new(kind, stamps.venue_update_ts_ms, stamps.exchange_ts_us);
     let mut chunks: Vec<AccountChunk> = balances
         .chunks(ACCOUNT_CHUNK_ASSETS)
         .map(|group| {
             let mut chunk = empty;
-            chunk.balances[..group.len()].copy_from_slice(group);
-            chunk.len = group.len() as u8;
+            chunk.push_balances(group);
             chunk
         })
         .collect();

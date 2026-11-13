@@ -1,6 +1,5 @@
-//! Folding venue responses into mirror state. Order leaves only when venue confirms it's gone;
-//! an ambiguous answer (a venue "no such order" that also spells "already filled", or no answer at
-//! all) triggers reconciliation, never a guess.
+//! Folds the venue's answers into the mirror. An order leaves only when the venue confirms it gone,
+//! and an ambiguous answer or no answer leads to a read, never a guess.
 
 use crate::msg::exec::{ExecCommand, ExecEvent, Provenance, RejectClass};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Qty};
@@ -50,7 +49,9 @@ impl ExecCore {
         if !is_possibly_live || self.is_mirrored(event.client_id) {
             return Ok(());
         }
-        let mut order = MirroredOrder::observed(event);
+        let Some(mut order) = MirroredOrder::observed(event) else {
+            return Ok(());
+        };
         if !self.has_opened_quoting {
             order.provenance = Provenance::PriorRun;
         }
@@ -73,10 +74,11 @@ impl ExecCore {
         executed_qty: Qty,
         emit: &mut dyn FnMut(ExecEffect),
     ) {
-        if executed_qty.0 > 0 {
+        if executed_qty.mantissa() > 0 {
             warn!(
                 "order {} left the book having filled {} — the fill must reach the ledger",
-                client_id.0, executed_qty.0
+                client_id.0,
+                executed_qty.mantissa()
             );
         }
         self.mirror.remove(client_id);

@@ -2,8 +2,8 @@
 
 use crate::hot::sink::ExposureSink;
 use crate::log::hot_warn;
-use crate::msg::inbound::InboundMessage;
-use crate::msg::time::TsUs;
+use crate::msg::inbound::{InboundMessage, MessageKind};
+use crate::msg::time::LocalTs;
 use crate::runtime::exposure::{ExposureSnapshot, InstrumentExposure, MAX_EXPOSURE_INSTRUMENTS};
 
 use super::HotState;
@@ -19,8 +19,8 @@ pub struct ExposureWiring<'a> {
 #[inline]
 pub(super) fn moves_position(message: &InboundMessage) -> bool {
     matches!(
-        message,
-        InboundMessage::Exec(_) | InboundMessage::MarketRotation(_)
+        message.kind(),
+        MessageKind::Exec | MessageKind::MarketRotation
     )
 }
 
@@ -57,15 +57,15 @@ pub(super) fn warn_uncovered_instruments(instrument_count: usize) {
 
 impl HotState {
     /// Publish basis snapshot (only where changed). Compare against last published, not ledger flag (can't drift).
-    pub(super) fn publish_exposure(&mut self, at: TsUs) {
+    pub(super) fn publish_exposure(&mut self, at: LocalTs) {
         let durable = self
             .ledger
             .rows()
             .map(|(instrument, row)| InstrumentExposure {
                 instrument,
                 position_base: row.position_base(),
-                cash_quote: row.cash_quote(),
-                basis_quote: row.basis_quote(),
+                cash_quote: row.cash_quote().mantissa(),
+                basis_quote: row.basis_quote().mantissa(),
             });
         let mut snapshot = snapshot_of(durable);
         if snapshot.active() == self.published_exposure.active() {
@@ -74,7 +74,7 @@ impl HotState {
         // Seq monotone from seed's 0 (writer's disk state). Mark informational only, saturate on overflow.
         snapshot.seq = self.published_exposure.seq + 1;
         snapshot.exposure_quote = self.ledger.rows().fold(0i64, |sum, (_, row)| {
-            sum.saturating_add(row.exposure_quote())
+            sum.saturating_add(row.exposure_quote().mantissa())
         });
         snapshot.emitted_ts_us = at;
         self.published_exposure = snapshot;

@@ -5,9 +5,12 @@ use crate::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, Provenance, RejectClass, VenueOrderStatus,
 };
 use crate::msg::ids::{ClientOrderId, InstrumentId, Qty};
+use crate::msg::time::LocalTs;
+use crate::runtime::shutdown::FatalReason;
 use crate::venues::binance::rest::{
     AccountInfo, AccountTrade, FailureVerdict, OrderRecord, RestError,
 };
+use crate::venues::edge::EdgeDriver;
 use crate::venues::exec::{EventSink, Outgoing, SessionOutcome};
 use crate::{error, warn};
 
@@ -26,9 +29,9 @@ impl Actor {
         let Some(outcome) = outcome else {
             error!("binance execution lost its rest worker — the reconcilers are gone");
             self.is_rest_gone = true;
-            self.control
-                .fatal
-                .trip("binance execution: the rest worker stopped answering");
+            self.control.fatal.trip(FatalReason::RestWorkerGone {
+                venue: self.venue(),
+            });
             return None;
         };
         self.on_rest_outcome(outcome, Some(writer)).await;
@@ -71,9 +74,10 @@ impl Actor {
         account: &AccountInfo,
         writer: Option<&mut Writer>,
     ) {
-        let context = self.decode_context(self.control.clock.now());
+        let received_ts_us = self.control.clock.now();
+        let context = self.decode_context(received_ts_us);
         match account_snapshot_chunks(&account.balances, account.update_time_ms, &context) {
-            Ok(chunks) => self.session.events.send_account(chunks),
+            Ok(chunks) => self.session.events.send_account(received_ts_us, chunks),
             // An unreadable balance fails the pass. Reporting without re-reading would leave the
             // mirror empty.
             Err(error) => {
@@ -120,22 +124,23 @@ impl Actor {
         else {
             return;
         };
-        let Some(event) = self.decode_order(order, ExecKind::SnapshotOrder, recon_seq) else {
+        let Some((event, received_ts_us)) =
+            self.decode_order(order, ExecKind::SnapshotOrder, recon_seq)
+        else {
             return;
         };
-        self.session.events.send_exec(event);
+        self.session.events.send_exec(received_ts_us, event);
         let core = &mut self.session.core;
         let mut outgoing = Vec::new();
         if !event.status.is_some_and(VenueOrderStatus::is_terminal) {
             // Still resting, so the cancel latch is re-armed; leaving it would strand the order.
             core.re_arm_cancel(client_id);
-            if core
-                .mirrored(client_id)
-                .is_some_and(|order| order.provenance == Provenance::PriorRun)
+            if let Some(instrument) = event.instrument
+                && core
+                    .mirrored(client_id)
+                    .is_some_and(|order| order.provenance == Provenance::PriorRun)
             {
-                let command = ExecCommand::CancelPriorRun {
-                    instrument: event.instrument,
-                };
+                let command = ExecCommand::CancelPriorRun { instrument };
                 core.on_command(command, &mut Outgoing::sink(&mut outgoing, recon_seq));
                 self.dispatch(outgoing, writer).await;
             }
@@ -161,10 +166,11 @@ impl Actor {
         order: &OrderRecord,
         kind: ExecKind,
         recon_seq: u64,
-    ) -> Option<ExecEvent> {
-        let context = self.decode_context(self.control.clock.now());
+    ) -> Option<(ExecEvent, LocalTs)> {
+        let received_ts_us = self.control.clock.now();
+        let context = self.decode_context(received_ts_us);
         match decode_order_record(order, kind, recon_seq, &context) {
-            Ok(event) => event,
+            Ok(event) => event.map(|event| (event, received_ts_us)),
             Err(error) => {
                 warn!(
                     "binance execution could not read resting order {}: {error} — it will not be mirrored, so no exit path will cancel it",
@@ -186,23 +192,30 @@ impl Actor {
         venue_order_id: i64,
         writer: Option<&mut Writer>,
     ) {
-        let Some(event) = self.decode_order(order, ExecKind::SnapshotOrder, 0) else {
+        let Some((event, received_ts_us)) = self.decode_order(order, ExecKind::SnapshotOrder, 0)
+        else {
             return;
         };
         if event.provenance == Provenance::Foreign {
             warn!(
                 "binance execution: order {venue_order_id} on {} is not this engine's — its fills are somebody else's and are left alone",
-                self.symbols.symbol(event.instrument).unwrap_or("?")
+                event
+                    .instrument
+                    .and_then(|instrument| self.symbols.symbol(instrument))
+                    .unwrap_or("?")
             );
             return;
         }
         self.counts.missed_fills += 1;
         warn!(
             "binance execution recovered a fill the account stream never delivered: order {venue_order_id} is {:?} order {:016x}, filled {} of {}",
-            event.provenance, event.client_id.0, event.cumulative_qty.0, event.qty.0
+            event.provenance,
+            event.client_id.0,
+            event.cumulative_qty.mantissa(),
+            event.qty.mantissa()
         );
         self.note_event(&event);
-        self.session.events.send_exec(event);
+        self.session.events.send_exec(received_ts_us, event);
         if !event.status.is_some_and(VenueOrderStatus::is_terminal) {
             return;
         }
@@ -413,7 +426,11 @@ impl Actor {
         let mut outgoing = Vec::new();
         // Gone means it never rested, so the cumulative quantity is zero.
         let core = &mut self.session.core;
-        core.on_order_gone(client_id, Qty(0), &mut Outgoing::sink(&mut outgoing, 0));
+        core.on_order_gone(
+            client_id,
+            Qty::from_mantissa(0),
+            &mut Outgoing::sink(&mut outgoing, 0),
+        );
         self.dispatch(outgoing, writer).await;
         self.session.arm_readiness(self.control.clock.now());
     }

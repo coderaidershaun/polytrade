@@ -1,13 +1,12 @@
-//! Polymarket parse + normalise goldens: the ascending-order trap (venue best = last, engine best =
-//! first), absolute-size delta application vs a `BTreeMap` model, decimal exactness, the ms→µs
-//! stamp clamp, and that control text never masquerades as a data frame.
+//! Polymarket parsing and normalising: the venue's best level is last and the engine's is first,
+//! sizes are absolute, decimals are exact, and control text is never data.
 
 use std::collections::BTreeMap;
 
 use engine::hot::book::{Book, SnapshotOutcome};
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
-use engine::msg::inbound::{BookChunkKind, InboundMessage, Level};
-use engine::msg::time::TsUs;
+use engine::msg::inbound::{BookChunkKind, InboundMessage, Level, MessageBody};
+use engine::msg::time::{LocalTs, VenueTs};
 use engine::venues::edge::decode::DecimalFault;
 use engine::venues::edge::venue_clock::MAX_VENUE_SKEW_US;
 use engine::venues::polymarket::book::{BookNormaliser, ChunkStamps};
@@ -20,11 +19,11 @@ const INSTRUMENT: InstrumentId = InstrumentId(9);
 const BOOK_CAPACITY: usize = 128;
 const RECEIVED_US: i64 = 1_784_439_700_000_000;
 
-fn received() -> TsUs {
-    TsUs::from_micros(RECEIVED_US)
+fn received() -> LocalTs {
+    LocalTs::from_micros(RECEIVED_US)
 }
 
-fn stamps(exchange_ts_us: TsUs) -> ChunkStamps {
+fn stamps(exchange_ts_us: VenueTs) -> ChunkStamps {
     ChunkStamps {
         exchange_ts_us,
         received_ts_us: received(),
@@ -37,7 +36,7 @@ fn parse(text: &str) -> PolyFrame {
 
 pub(crate) fn apply(book: &mut Book, messages: &[InboundMessage]) {
     for message in messages {
-        let InboundMessage::Book(chunk) = message else {
+        let MessageBody::Book(chunk) = &message.body else {
             continue;
         };
         match chunk.kind {
@@ -93,7 +92,7 @@ mod book_snapshot {
         );
         assert_eq!(
             book.exchange_ts_us,
-            TsUs::from_micros(1_784_439_695_963_000)
+            VenueTs::from_micros(1_784_439_695_963_000)
         );
     }
 }
@@ -114,9 +113,15 @@ mod price_change {
         assert_eq!(&*change.changes[0].asset_id, "TOKEN_UP");
         assert_eq!(change.changes[0].side, Side::Buy);
         assert_eq!(change.changes[0].level, level(1_000_000, 1_809_933_000_000));
-        assert_eq!(change.changes[0].best_bid, Some(Price(50_000_000)));
+        assert_eq!(
+            change.changes[0].best_bid,
+            Some(Price::from_mantissa(50_000_000))
+        );
         assert_eq!(change.changes[1].side, Side::Sell);
-        assert_eq!(change.changes[1].best_ask, Some(Price(50_000_000)));
+        assert_eq!(
+            change.changes[1].best_ask,
+            Some(Price::from_mantissa(50_000_000))
+        );
     }
 
     #[test]
@@ -169,11 +174,11 @@ mod chunk_stamp {
     const CHANGE: &str = r#"{"event_type":"price_change","market":"0xMKT","timestamp":"1784439696100",
      "price_changes":[{"asset_id":"TOKEN_UP","price":"0.47","size":"500","side":"BUY","best_bid":"0.50","best_ask":"0.51"}]}"#;
 
-    fn emitted_stamps(messages: &[InboundMessage], kind: BookChunkKind) -> Vec<Option<TsUs>> {
+    fn emitted_stamps(messages: &[InboundMessage], kind: BookChunkKind) -> Vec<Option<VenueTs>> {
         messages
             .iter()
-            .filter_map(|message| match message {
-                InboundMessage::Book(chunk) if chunk.kind == kind => Some(chunk.exchange_ts_us),
+            .filter_map(|message| match &message.body {
+                MessageBody::Book(chunk) if chunk.kind == kind => Some(chunk.exchange_ts_us),
                 _ => None,
             })
             .collect()
@@ -224,12 +229,12 @@ mod trade {
             panic!("trade frame");
         };
         assert_eq!(&*trade.asset_id, "TOKEN_UP");
-        assert_eq!(trade.price, Price(51_000_000));
-        assert_eq!(trade.qty, Qty(784_313_600));
+        assert_eq!(trade.price, Price::from_mantissa(51_000_000));
+        assert_eq!(trade.qty, Qty::from_mantissa(784_313_600));
         assert_eq!(trade.side, Side::Buy);
         assert_eq!(
             trade.exchange_ts_us,
-            TsUs::from_micros(1_784_439_696_531_000)
+            VenueTs::from_micros(1_784_439_696_531_000)
         );
     }
 }
@@ -292,7 +297,11 @@ mod tick_size_change {
             panic!("tick_size_change frame");
         };
         assert_eq!(change.asset_id, None, "bare_shape");
-        assert_eq!(change.exchange_ts_us, received(), "bare_shape");
+        assert_eq!(
+            change.exchange_ts_us,
+            received().as_venue_calendar(),
+            "bare_shape"
+        );
     }
 }
 
@@ -311,7 +320,7 @@ mod decimals {
         let PolyFrame::Trade(trade) = trade_size("112122.430000").expect("parses") else {
             panic!("trade");
         };
-        assert_eq!(trade.qty, Qty(11_212_243_000_000));
+        assert_eq!(trade.qty, Qty::from_mantissa(11_212_243_000_000));
     }
 
     #[test]
@@ -368,7 +377,7 @@ mod decimals {
 mod stamp_clamp {
     use super::*;
 
-    fn trade_at(ts_ms: &str) -> TsUs {
+    fn trade_at(ts_ms: &str) -> VenueTs {
         let frame = format!(
             r#"{{"event_type":"last_trade_price","asset_id":"T","price":"0.5","size":"1","side":"BUY","timestamp":"{ts_ms}"}}"#
         );
@@ -383,13 +392,13 @@ mod stamp_clamp {
     fn absurd_future_stamp_clamps_to_upper_edge() {
         assert_eq!(
             trade_at("999999999999999"),
-            TsUs::from_micros(RECEIVED_US.saturating_add(MAX_VENUE_SKEW_US))
+            VenueTs::from_micros(RECEIVED_US.saturating_add(MAX_VENUE_SKEW_US))
         );
     }
 
     proptest! {
         /// Any millisecond stamp string stays inside the receipt window, because the parse defends
-        /// `TsUs::diff`.
+        /// `LocalTs::diff`.
         #[test]
         fn clamp_stays_inside_window(ms in 0i64..=99_999_999_999_999i64) {
             let clamped = trade_at(&ms.to_string()).micros();

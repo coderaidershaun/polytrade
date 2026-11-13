@@ -1,9 +1,5 @@
-//! Live integration: one 12-minute capture of the REAL Polymarket adapter,
-//! spanning ≥2 full rotations, asserting the physics the fitness suite cannot reach with recorded
-//! fixtures — zero-gap handover, teardown latency, and the streamed book cross-checked against a
-//! live CLOB `/book` REST snapshot. The adapter feeds a real hot ring (an [`RotationObserver`]
-//! reconstructs the books) AND a real [`PersistWriter`] via the rotations side-channel, so the
-//! run also proves the live lineage parquet lands and reads back per leg.
+//! A 12-minute live capture of the Polymarket market-data actor across two rotations, for what
+//! recorded fixtures cannot show: the handover, the teardown delay, and the live book.
 //!
 //! This capture runs far longer than a quick live smoke test, because rotation physics set the
 //! span. Confirming a NEW window's book goes Valid while the OLD still streams, then measuring how
@@ -28,6 +24,7 @@ use engine::runtime::config::PolySeries;
 use engine::runtime::config::{
     Config, ExecutionMode, RecordedTables, StrategyId, TradingEngineId, VenueMarket,
 };
+use engine::runtime::pin_to_core;
 use engine::runtime::registry::Registry;
 use engine::runtime::shutdown::{FatalSignal, RunStateCell};
 use engine::tape::{PersistConfig, PersistWriter, RunMeta};
@@ -75,7 +72,7 @@ logging:
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live network, 12-min capture: an agent runs it only where a plan names it, by its exact name and with an empty environment"]
 async fn poly_rotation_capture_spans_two_rotations_with_zero_gap_handover() {
-    let log_handle = log::init(&LogConfig::default(), &EngineClock::start())
+    let log_handle = log::init(&LogConfig::default(), &EngineClock::start(), pin_to_core)
         .expect("no core is named, so the drain pins nothing and nothing can refuse it");
     log::register_thread("integration");
     let config: Config = Config::from_yaml(CONFIG_YAML).expect("parse integration config");

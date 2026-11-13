@@ -1,12 +1,11 @@
-//! Kyle's lambda regression: the slope a research column reports as price impact. A silently wrong
-//! slope, or an infinity leaking out of a degenerate window, poisons every downstream sizing model
-//! without ever failing a run.
+//! The Kyle's lambda slope that a research column reports as price impact: a wrong slope, or an
+//! infinity from a degenerate window, fails no run.
 
 use super::Lcg;
 use engine::hot::quant::liquidity::{KylesLambda, KylesLambdaSpec};
 use engine::msg::ids::Price;
 
-const TICK: Price = Price(1_000_000); // $0.01 at the 1e-8 fixed-point scale.
+const TICK: Price = Price::from_mantissa(1_000_000); // $0.01 at the 1e-8 fixed-point scale.
 
 fn approx(a: f64, b: f64, tol: f64) -> bool {
     (a - b).abs() <= tol

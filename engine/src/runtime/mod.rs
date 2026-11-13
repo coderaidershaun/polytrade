@@ -8,13 +8,14 @@ pub mod registry;
 pub mod secrets;
 pub mod shutdown;
 
-pub use pin::PinRefused;
+pub use pin::{PinCall, PinRefused, pin_to_core};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod assembly;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use assembly::{
-    EngineError, ExecutionLease, ExitReport, PinnedSenders, check_symbol_order_capacity,
-    decide_exit, metrics, run_trading_engine,
+    DrainDeadline, DrainFailure, DrainOutcome, DrainWatchdog, Engine, ExecutionLease, Exit,
+    ForcedExit, PinnedSenders, Preflight, StartError, StartPlan, Trigger,
+    check_symbol_order_capacity, metrics, run_trading_engine,
 };

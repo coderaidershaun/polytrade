@@ -2,7 +2,7 @@
 //! category does not list has no histogram, and a stamp that a sample lacks gives no value.
 
 use crate::msg::latency::{Category, Stage, StageSample, WireSample};
-use crate::msg::time::{Tick, TickScale, TsUs};
+use crate::msg::time::{LocalTs, Tick, TickScale, VenueTs};
 
 use super::ANCHOR_SPREAD_LIMIT_NS;
 
@@ -57,22 +57,32 @@ pub(super) enum Fault {
     Negative,
 }
 
-fn present(stamp: TsUs) -> Option<TsUs> {
+fn present(stamp: LocalTs) -> Option<LocalTs> {
     (stamp != StageSample::ABSENT).then_some(stamp)
 }
 
+fn present_venue(stamp: VenueTs) -> Option<VenueTs> {
+    (stamp != StageSample::ABSENT_VENUE).then_some(stamp)
+}
+
 /// From a venue stamp to one of ours. Negative means that the venue's clock runs ahead.
-fn venue_span(venue: TsUs, ours: TsUs) -> Result<u64, Fault> {
-    micros_span(venue, ours).ok_or(Fault::Negative)
+fn venue_span(venue: VenueTs, ours: LocalTs) -> Result<u64, Fault> {
+    micros_span(venue.micros(), ours.micros()).ok_or(Fault::Negative)
+}
+
+/// Between two stamps of the venue's clock. Negative means that the venue stamped them out of order.
+fn venue_internal_span(start: VenueTs, end: VenueTs) -> Result<u64, Fault> {
+    micros_span(start.micros(), end.micros()).ok_or(Fault::Negative)
 }
 
 /// Between two stamps of our own clock, which never runs backward unless something is wrong.
-fn own_span(start: TsUs, end: TsUs) -> Result<u64, Fault> {
-    micros_span(start, end).ok_or(Fault::Backward)
+fn own_span(start: LocalTs, end: LocalTs) -> Result<u64, Fault> {
+    micros_span(start.micros(), end.micros()).ok_or(Fault::Backward)
 }
 
-fn micros_span(start: TsUs, end: TsUs) -> Option<u64> {
-    let micros = i128::from(end.micros()) - i128::from(start.micros());
+/// Raw microseconds, widened so that no pair of stamps can overflow.
+fn micros_span(start_us: i64, end_us: i64) -> Option<u64> {
+    let micros = i128::from(end_us) - i128::from(start_us);
     (micros >= 0).then(|| u64::try_from(micros.saturating_mul(1_000)).unwrap_or(u64::MAX))
 }
 
@@ -89,13 +99,14 @@ pub(super) fn stage_nanos(
     let ticked = |nanos: Option<u64>| Some(nanos.ok_or(Fault::Backward));
     match stage {
         Stage::VenueToEngine => {
-            let venue = present(sample.exchange_sent_ts_us).or(present(sample.exchange_ts_us))?;
+            let venue = present_venue(sample.exchange_sent_ts_us)
+                .or(present_venue(sample.exchange_ts_us))?;
             Some(venue_span(venue, sample.received_ts_us))
         }
         Stage::VenueInternal => {
-            let sent = present(sample.exchange_sent_ts_us)?;
-            let matched = present(sample.exchange_ts_us)?;
-            Some(venue_span(matched, sent))
+            let sent = present_venue(sample.exchange_sent_ts_us)?;
+            let matched = present_venue(sample.exchange_ts_us)?;
+            Some(venue_internal_span(matched, sent))
         }
         Stage::WireToMessage => Some(own_span(sample.received_ts_us, sample.queued_ts_us)),
         Stage::QueueWait => Some(stamp_to_tick(scale, sample.queued_ts_us, sample.pop_tick)),
@@ -117,12 +128,12 @@ pub(super) fn stage_nanos(
     clippy::disallowed_methods,
     reason = "the metrics thread anchors ticks to engine time and turns them into time, off the fold"
 )]
-fn stamp_to_tick(scale: &TickScale, stamp: TsUs, tick: Tick) -> Result<u64, Fault> {
+fn stamp_to_tick(scale: &TickScale, stamp: LocalTs, tick: Tick) -> Result<u64, Fault> {
     if let Some(nanos) = scale.nanos_since(stamp, tick) {
         return Ok(nanos);
     }
     let tolerance_us = (UNRESOLVED_SPAN_NS / 1_000) as i64;
-    let earliest = TsUs::from_micros(stamp.micros().saturating_sub(tolerance_us));
+    let earliest = LocalTs::from_micros(stamp.micros().saturating_sub(tolerance_us));
     match scale.nanos_since(earliest, tick) {
         Some(_) => Ok(0),
         None => Err(Fault::Backward),

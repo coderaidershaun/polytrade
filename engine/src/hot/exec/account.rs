@@ -1,7 +1,8 @@
 //! Absolute balances only. Guard against double-spend: ack beats update.
 
+use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::msg::exec::{AccountChunk, AccountChunkKind, AssetBalance};
-use crate::msg::ids::AssetId;
+use crate::msg::ids::{AssetId, Spend};
 
 const MAX_ASSETS: usize = 16;
 
@@ -50,6 +51,10 @@ pub struct AccountTable {
     watermark: AccountWatermark,
     has_snapshot: bool,
 }
+
+digest_by_hash!(AccountWatermark);
+digest_fields! { AccountRow { free, locked } }
+digest_fields! { AccountTable { rows, reserved, is_known, watermark, has_snapshot } }
 
 impl AccountTable {
     pub fn new() -> Self {
@@ -112,9 +117,9 @@ impl AccountTable {
 
     /// Returns the watermark that decides when this reservation may be released.
     #[inline]
-    pub fn reserve(&mut self, asset: AssetId, amount: i64) -> AccountWatermark {
+    pub fn reserve(&mut self, asset: AssetId, amount: Spend) -> AccountWatermark {
         if let Some(index) = Self::index_of(asset) {
-            self.reserved[index] += amount;
+            self.reserved[index] += amount.mantissa();
         }
         self.watermark
     }
@@ -126,7 +131,7 @@ impl AccountTable {
     pub fn release(
         &mut self,
         asset: AssetId,
-        amount: i64,
+        amount: Spend,
         reserved_at: AccountWatermark,
     ) -> ReleaseOutcome {
         if self.watermark <= reserved_at {
@@ -135,15 +140,15 @@ impl AccountTable {
         let Some(index) = Self::index_of(asset) else {
             return ReleaseOutcome::Released;
         };
-        self.debit_reservation(index, amount, "released");
+        self.debit_reservation(index, amount.mantissa(), "released");
         ReleaseOutcome::Released
     }
 
     /// No account update needed (venue never saw this).
     #[inline]
-    pub fn release_unsent(&mut self, asset: AssetId, amount: i64) {
+    pub fn release_unsent(&mut self, asset: AssetId, amount: Spend) {
         if let Some(index) = Self::index_of(asset) {
-            self.debit_reservation(index, amount, "released unsent");
+            self.debit_reservation(index, amount.mantissa(), "released unsent");
         }
     }
 
