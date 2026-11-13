@@ -20,6 +20,7 @@ comply. IF one cannot comply, THEN surface conflict explicitly. Amendments: §15
 | quoting halt        | quoting stops, and the process stays up: `HaltReason` (§6)                   |
 | engine halt         | fatal latch, bounded drain, exit code not 0: `FatalReason` (§6)              |
 | ring-pressure halt  | a quoting halt that follows ring space, not messages (§6)                    |
+| incident record     | typed record of a money event, with a count, in its own table (§6)           |
 | polysim             | the repo that this workspace came from. In a clause: the code of this repo   |
 | Amended `<date>`    | amendment of that date, with its WHY (§15)                                   |
 | Replaced, WITHDRAWN | record of earlier law, not in force                                          |
@@ -91,6 +92,8 @@ Preflight:
   the exposure file, the permission probe, the link names and the link bind, the execution checks,
   and the checks of the venue setup.
 - [ ] The execution lease is the last check. So each other refusal leaves the run nonce unspent.
+  - Amended 2026-11-13: each venue has its own lease. Preflight takes the lock of each lease before
+    it advances any nonce. Section on several sources, end of §8.
 - [ ] The venue reads go through one `VenuePort`. `Preflight::run` uses the real port, which runs
   them on one current-thread runtime and drops it before it returns. `Preflight::run_with(port)`
   takes a stand-in, so a test needs no key.
@@ -125,6 +128,26 @@ The start:
   Canonical example: FastQueue oversized backing allocation.
 - [ ] No strings in hot-path lookups. Identity = compact typed indices, assigned from config at
   startup. String-like types live at edges.
+
+### Amended 2026-11-13: capacity from the registry
+
+WHY: constants capped the instruments and the assets at 16. The start refused 17 instruments, and
+asset 17 read 0 with no error. The registry knows each count at start.
+
+- [ ] No constant caps the count of instruments or of assets. A table whose size follows one of
+  these counts takes its size from the registry rows at start. Among them: order slots, prior-run
+  slots, account rows, the refusal latch, the command bank, the exposure snapshot.
+- [ ] `ExecCapacity` holds the size of each execution table. The start computes it one time from
+  the instrument rows. A run, the timing harness, and each test size an engine through it, from the
+  same rows.
+- [ ] The start refuses a count only where the bits of the client order id end. The slot bits must
+  address each slot of the order table. Thus 16 slot bits and 64 slots for each instrument give
+  at most 1,024 instruments.
+- [ ] That refusal is a HALT (start refused) of preflight, before any thread starts (§2,
+  2026-11-13). It names the table, the count that the table needs, and the count that the bits
+  address.
+- [ ] The start makes each table one time, at its full size. The rules at the top of §3 hold for
+  it: no growth, and a designed policy for a full table.
 
 ## 4. Numerics
 
@@ -281,6 +304,8 @@ WHY: execution command ring carries EVENTS, not state. Thus the precondition of 
   - Reachable failure becomes the bank's own high-water mark: a full bank is a quoting halt. It is
     one of the two ring-pressure halts (2026-11-13 section on failure classes, below). The bank is
     full when it holds `COMMAND_BANK_CAPACITY` commands, never at the capacity of its `Vec`.
+    - Amended 2026-11-13: the bank takes its capacity from the registry rows (§3, 2026-11-13
+      section on capacity). It is still full at that capacity.
     - Replaced 2026-11-13: "It is a message-driven count, not a ring occupancy. Thus §2 replay
       determinism survives." WHY: a bank fills only while the ring refuses its commands, so its
       halt follows ring space.
@@ -418,6 +443,36 @@ string. A sweep that gave up with orders at rest reported a clean sweep.
   `SessionOutcome::SweepPastDeadline` with the client ids of those orders, never `Swept`. The
   drain counts it as a failed step, so the exit is `DrainFailed`.
 
+### Amended 2026-11-13: money never ends in a log line
+
+WHY: a log line is not state. A full lane drops it (§7), a replay does not fold it, and no reader
+sums it. Thus the ledger loses money that only a log line holds. The ledger and the venue then
+differ, and no record says why.
+
+- [ ] Each fill and each fee of an own order that reaches the fold has at least one of three
+  outcomes:
+  - the ledger moves
+  - quoting halts
+  - the fold sends an incident record and increases the count of its kind
+- [ ] A hot log line can go beside the outcome, never in its place.
+- [ ] The fold never books money by a guess. IF it cannot book a fill with certainty, THEN quoting
+  halts, and the ledger stays as it is:
+  - An event of an own order with a fill and no slot: `HaltReason::OrphanFill`, with an incident
+    record. An event with no fill moves no money: a count only.
+  - A prior-run order with no free slot: `HaltReason::PriorRunOverflow`.
+- [ ] The fold books a fee one time for each trade id. It never books a fee two times.
+- [ ] A fee in an asset other than the quote asset goes into the fee row of that asset. A fee that
+  the fold does not book leaves an incident record.
+- [ ] A position at the close of its market window leaves an incident record. Its basis counts as a
+  loss in the loss budget of its quote asset, until a settlement message closes it.
+- [ ] An incident record names its kind: a fee gap, a stranded position, an orphan fill, or an
+  unbooked fee. The count of each kind is hot state, a function of the messages (§2).
+- [ ] The tape writer writes the incident table whenever the tape exists, as it writes the table
+  of rotations. No config can remove it. WHY: an incident is a money event.
+- [ ] A run with no tape has no incident table. Its counts stay in hot state, beside the hot log
+  lines. IF the persistence ring is full, THEN it drops the record and counts the drop. The
+  incident count stays.
+
 ## 7. Logging
 
 - [ ] Bespoke minimal subsystem. No logging framework dependency.
@@ -432,6 +487,8 @@ string. A sweep that gave up with orders at rest reported a clean sweep.
 - [ ] Debug builds: terminal. Release builds: efficient file sink.
 - [ ] Hot path steady state emits nothing. `WARN`/`ERROR` from hot path = OK: exceptional by
   definition.
+  - Amended 2026-11-13: a hot line about a fill or a fee goes beside its outcome, never in its
+    place. Section on money in §6 (2026-11-13).
 
 ### Amended 2026-07-20: strategy telemetry
 
@@ -658,6 +715,8 @@ source. Thus identity is two-part and the folder nests.
 - [ ] That folder carries main.rs (composition only) + strategy.rs + its `#[path]` siblings +
   config.yaml.
 - [ ] Identity = `(strategy-id, te-id)`.
+  - Amended 2026-11-13: a TE reads one source or more, and identity stays two-part. The WHY above
+    keeps its text. Section on several sources, end of §8.
 - [ ] bin name = `<strategy-id>-<te-id>`. Path = `strategies/<strategy-id>/<te-id>/main.rs`.
 - [ ] Pass both ids as literals to the lib seam's runner, now
   `run_trading_engine::<S>(strategy_id, te_id, forced_exit)`. It returns the `Exit`, and the
@@ -963,6 +1022,37 @@ test, or sits in a module that is a concept in its own right, and each clause na
     `SweepFailure`: the inputs and the values of `Exit` and `FatalReason`, by the clause on `Exit`.
   - `DrainWatchdog` and `ExitPlan`: by the ruling of §12 (2026-11-13).
 - [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
+
+### Amended 2026-11-13: one engine reads several sources
+
+WHY: a strategy can trade on or read more than one venue. A TE read one source (2026-07-25), so
+each venue needed its own engine. The link between two engines carries state and drops frames
+(§6, 2026-07-25). Thus no fold saw the messages of two venues in one order.
+
+- [ ] A TE reads one source or more. Its config names them in the list `sources:`. Each source has
+  its own execution block and its own checks.
+- [ ] Identity stays two-part (2026-07-25). One TE = one binary = one process. A source is an input
+  of a TE, never a part of its identity.
+- [ ] Each venue that a TE trades on has its own execution edge, command lane, execution lease, and
+  execution input queue. Each adapter keeps its ONE input queue (2026-08-08).
+- [ ] Preflight runs the checks of each source (§2, 2026-11-13). The execution leases stay the last
+  checks. Preflight takes the lock of each lease before it advances any run nonce. Thus a refused
+  lock leaves each nonce unspent.
+- [ ] The cap of 20 input queues (§2) counts the queues of all sources. The start refuses a config
+  that needs more (`ConfigError::TooManyInputQueues`).
+- [ ] The execution state of each venue sits in its own `VenueExec`. Examples: its account, rate
+  budget, readiness, reject streak, and command bank. A field that only the messages of one venue
+  change belongs there.
+- [ ] The registry knows an asset by its venue and its name. Thus USDT at two venues is two assets
+  with two balance rows.
+- [ ] A halt, the spin, and the fold time stay engine-wide. A quoting halt stops each venue of the
+  engine.
+- [ ] Each message that changes the state of one venue names that venue, directly or through its
+  instrument. The fold reads the venue from the message, never from its input queue. Hot state is
+  a function of the messages (§2).
+- [ ] Fitness tests pin it. `two_venues_equal_two_single_runs`: one run of two venues gives the rows
+  of two runs of one venue each. `balances_of_two_venues_never_mix`: two venues never share a
+  balance.
 
 ## 9. Naming & API Ergonomics
 
@@ -1396,6 +1486,8 @@ serializer with its own escaping bugs, for a crate already in the tree.
   environment.
   - Date, WHY, and the rest of this rule: the 2026-11-12 section on lanes and real funds, last
     section of §12.
+  - Amended 2026-11-13: the table of what an agent runs against a venue. Date, WHY, and the
+    table: the 2026-11-13 section of that name, after the section on seams that change.
   - Replaced 2026-11-12: the agent ran each live-network test deliberately.
     - Amended 2026-07-18. WHY: user directive. Agent runs ALL tests, live-network included. Network
       reach to venue endpoints is verified. Human is not required.
@@ -1587,6 +1679,42 @@ drives both. A seam that a change reshapes and that no test drives can break wit
   and §8 names it (2026-11-13 section on the fold, start, and exit seams).
 - [ ] This ruling makes no other item `pub`. The ban of 2026-07-28 on `pub(crate) -> pub` for a
   test holds for each other item.
+- [ ] Ruling, 2026-11-13: the fault seam of the chassis has no caller outside the tests, and it is
+  `pub` by this ruling. It is the decision that the session chassis of a venue edge takes on a
+  session error (`engine/src/venues/edge/mod.rs`, `engine/src/venues/exec/`). One function takes
+  the `ExecSessionError` and the fatal latch. It reads `failure_class()`, writes one ERROR line with
+  the values, and trips the latch with the typed reason. Test:
+  `session_errors_halt_the_engine_with_their_reason`.
+  - WHY: the seam changes. Each execution edge tripped the fatal latch at the place of each fault.
+    Now one reader of the class at the root of the edge trips it (§6, 2026-11-13). The chassis runs
+    only inside a live venue edge, and a test cannot start one with no key.
+  - The ruling makes `pub` that function and the value that it returns, IF it returns one. The
+    chassis calls it, and `EdgeControl` stays `pub(crate)`. §8 names the function as built.
+- [ ] This ruling makes no other item `pub`. The ban of 2026-07-28 on `pub(crate) -> pub` for a
+  test holds for each other item.
+
+### Amended 2026-11-13: what an agent runs against a venue
+
+WHY: the owner takes no part in a build (live policy). A plan or a skill can still give a run at a
+venue to a person. Thus each run against a venue needs one owner, in one table.
+
+| Run | Who | How |
+| --- | --- | --- |
+| Each test of target `fitness`: lanes `fitness` and `contract` | each agent | gate G step 4. Each venue there is a stand-in or a recorded payload |
+| Target `integration` | each agent compiles it | gate G step 4. Each of its tests is `#[ignore]`d, so none runs |
+| A public read of target `integration` | an agent, only where a plan names it | by its exact name, with an empty environment (top of §12) |
+| A signed test, its dry-run form, its kill switch, and its rollback | only `live-runner` | by the runbook of its job and the live policy |
+| Each other live run: the probe, an engine with execution `live` | only `live-runner` | by the live policy |
+| A run that a plan or a skill gives to a person | no lane of a person | the live policy decides (below) |
+
+- [ ] A live run = a process that sends a signed request to a venue (2026-11-12).
+- [ ] The run command of a signed test stands only in the runbook of the job that runs it. A
+  README, a comment, or an ignore reason never names it (2026-11-12).
+- [ ] IF a plan or a skill gives a run at a venue to a person, THEN the live policy decides.
+  `live-runner` does the run, or nobody does it, and the hand-off file of the job says so.
+- [ ] CAUTION: Do not start quoting again after a quoting halt, and do not start an engine again
+  after a refused start. §6 keeps each of them for a person, and no row of this table gives them
+  to an agent. A restart can send orders from a state that the halt found unsafe.
 
 ## 13. Performance
 
