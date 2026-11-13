@@ -1,7 +1,8 @@
 //! What each timed mode drives: one hot engine on one Binance spot instrument with a strategy that
 //! does nothing, the recorded trades it folds, and the engine's own metrics thread and log.
 
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 use anyhow::Context;
 
@@ -127,6 +128,10 @@ pub fn message(trades: &[TradeEvent], index: usize, clock: &EngineClock) -> Inbo
         });
     }
     let mut trade = trades[index % trades.len()];
+    // No venue sits behind the harness, so the venue's stamps are the send itself and the venue
+    // stages read zero rather than the age of the recording.
+    trade.exchange_ts_us = at;
+    trade.exchange_sent_ts_us = Some(at);
     trade.received_ts_us = at;
     trade.queued_ts_us = at;
     InboundMessage::Trade(trade)
@@ -160,6 +165,8 @@ pub struct MetricsRun {
     thread: MetricsThread,
     log: LogHandle,
     stem: &'static str,
+    /// How long each log file of the stem was before this run, so only the lines of this run print.
+    logged_before: HashMap<PathBuf, u64>,
 }
 
 impl MetricsRun {
@@ -172,6 +179,7 @@ impl MetricsRun {
         clock: &EngineClock,
         stem: &'static str,
     ) -> anyhow::Result<(MetricsRun, SampleProducers, Stamper)> {
+        let logged_before = log_lengths(stem);
         let log = engine::log::init(
             &LogConfig {
                 dir: PathBuf::from(LOG_DIR),
@@ -204,7 +212,13 @@ impl MetricsRun {
             core_id: None,
         })
         .context("the harness cannot start the metrics thread")?;
-        Ok((MetricsRun { thread, log, stem }, samples, stamper))
+        let run = MetricsRun {
+            thread,
+            log,
+            stem,
+            logged_before,
+        };
+        Ok((run, samples, stamper))
     }
 
     /// Stops the metrics thread, which closes its interval into the log, drains the log, and prints
@@ -215,29 +229,46 @@ impl MetricsRun {
     pub fn finish(self, label: &str) -> anyhow::Result<()> {
         self.thread.stop();
         self.log.drain();
-        print_latency_lines(label, self.stem)
+        print_latency_lines(label, self.stem, &self.logged_before)
     }
 }
 
-/// A debug build logs to stderr, so only a release build leaves a file to print from.
-fn print_latency_lines(label: &str, stem: &str) -> anyhow::Result<()> {
-    let folder = Path::new(LOG_DIR);
-    let Ok(entries) = std::fs::read_dir(folder) else {
-        println!("development {label}: no log file; a debug build writes its log to stderr");
-        return Ok(());
+fn log_files(stem: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(LOG_DIR) else {
+        return Vec::new();
     };
-    for entry in entries {
-        let path = entry.context("the log folder cannot be read")?.path();
-        let is_ours = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with(stem));
-        if !is_ours {
-            continue;
-        }
+    entries
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(stem))
+        })
+        .collect()
+}
+
+fn log_lengths(stem: &str) -> HashMap<PathBuf, u64> {
+    log_files(stem)
+        .into_iter()
+        .filter_map(|path| Some((path.clone(), std::fs::metadata(&path).ok()?.len())))
+        .collect()
+}
+
+/// A debug build logs to stderr, so only a release build leaves a file to print from.
+fn print_latency_lines(
+    label: &str,
+    stem: &str,
+    logged_before: &HashMap<PathBuf, u64>,
+) -> anyhow::Result<()> {
+    let files = log_files(stem);
+    if files.is_empty() {
+        println!("development {label}: no log file; a debug build writes its log to stderr");
+    }
+    for path in files {
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("cannot read {}", path.display()))?;
-        let lines = text.lines().filter(|line| {
+        let start = logged_before.get(&path).copied().unwrap_or(0) as usize;
+        let lines = text.get(start..).unwrap_or("").lines().filter(|line| {
             line.contains("] engine::runtime::assembly::metrics") || line.contains(" WARN ")
         });
         for line in lines {
