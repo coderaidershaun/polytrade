@@ -614,8 +614,8 @@ fn a_folder_that_does_not_sync_counts_as_a_failed_write() {
     drain_writer(writer).expect("a folder that syncs again takes the last write");
 }
 
-/// Two writes fail, the third passes, and two more fail: no limit of 3 in a row is reached. Each
-/// try leaves the file behind, because only its folder fails to sync, so the test sees each try.
+/// Two writes fail and the third passes, two times over, so no 3 writes in a row fail. Each try
+/// leaves the file behind, because only its folder fails to sync, so the test sees each try.
 fn a_write_that_passes_starts_the_count_again() {
     let root = TempDir::new("exposure-write-recovers");
     let registry = registry_for(BINANCE_SOURCE);
