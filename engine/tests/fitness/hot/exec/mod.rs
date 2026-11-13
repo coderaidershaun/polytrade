@@ -8,7 +8,7 @@ mod exec_ladder;
 mod exec_resync;
 mod exec_window;
 mod fills;
-mod loss_gate;
+mod loss;
 mod meter;
 mod order_table;
 mod prior_run;

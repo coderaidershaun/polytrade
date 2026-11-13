@@ -4,7 +4,7 @@
 use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::hot::ledger::{PositionLedger, narrow_quote, wide};
 use crate::log::hot_warn;
-use crate::msg::ids::{InstrumentId, Notional, Price, Qty, Side};
+use crate::msg::ids::{AssetId, InstrumentId, Notional, Price, Qty, Side};
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::time::LocalTs;
 
@@ -102,9 +102,10 @@ pub fn assess_loss(pnl: SessionPnl, max_loss: Notional) -> LossVerdict {
     if !breaches(mark_to_market_quote, max_loss) {
         return LossVerdict::Within;
     }
-    // Flat position = realised (except residue).
+    // A flat position has no side to withdraw, and its loss is realised, so the realised leg judges
+    // it: only realised loss halts.
     let Some(reducing) = reducing_side(pnl.position_base) else {
-        return LossVerdict::Realised;
+        return LossVerdict::Within;
     };
     LossVerdict::MarkToMarket { reducing }
 }
@@ -121,6 +122,27 @@ pub(super) fn reducing_side(position_base: Qty) -> Option<Side> {
         1 => Some(Side::Sell),
         -1 => Some(Side::Buy),
         _ => None,
+    }
+}
+
+/// The realised loss of each quote asset over the run, indexed by asset. The quote pass sums it at
+/// each spin before it reads it, and this is the one place where a sum is read.
+pub(super) struct LossSums {
+    realised_quote: Box<[i128]>,
+}
+
+impl LossSums {
+    pub(super) fn new(capacity: &ExecCapacity) -> Self {
+        Self {
+            realised_quote: vec![0; capacity.assets()].into_boxed_slice(),
+        }
+    }
+
+    pub(super) fn realised(&self, asset: AssetId) -> Notional {
+        narrow_quote(
+            self.realised_quote[usize::from(asset.0)],
+            "realised loss of a quote asset",
+        )
     }
 }
 
@@ -374,46 +396,57 @@ impl ExecEngine {
         }
     }
 
-    /// The session loss verdict alone, over every instrument. The halt keys on THIS rather than on
-    /// the combined permission the spin pass builds, because a realised breach is the only thing
-    /// that may halt and the position ceiling withdrawing a side is not one.
-    pub(super) fn session_permission(&self, ledger: &PositionLedger) -> QuotePermission {
-        let mut permission = QuotePermission::Both;
-        for (instrument, row) in ledger.rows() {
-            if usize::from(instrument.0) >= self.instruments.len() {
-                continue;
-            }
-            // No baseline yet means no honest valuation has ever existed for this instrument, so
-            // there is no mark-to-market number to judge — a restored position with no mark is a
-            // legitimate state, not an absent one. The REALISED leg is judged regardless: a round
-            // trip closed before the first two-sided book really did lose what it lost.
-            let baseline = self.pnl_at_baseline[usize::from(instrument.0)];
-            // The realised leg is this window's PLUS every window already rotated away, because a
-            // ledger row lasts one market and the budget lasts the run.
-            match assess_loss(
-                SessionPnl {
-                    mark_to_market_quote: baseline.map(|baseline| row.pnl_quote() - baseline),
-                    realised_quote: narrow_quote(
-                        wide(row.session_realised_quote())
-                            + wide(self.realised_carried_quote(instrument)),
-                        "session realised including carried windows",
-                    ),
-                    position_base: row.position_base(),
-                },
-                self.settings.max_session_loss_quote,
-            ) {
-                LossVerdict::Within => {}
-                LossVerdict::MarkToMarket { reducing } => {
-                    // SMELL: each instrument is judged against the whole session loss budget
-                    // on its own, and the losses are never added up, so two instruments can
-                    // each lose most of the budget and both pass. The one permission set here
-                    // also covers every instrument. The budget needs one sum over them all.
-                    permission = QuotePermission::ReducingOnly { reducing };
-                }
-                LossVerdict::Realised => return QuotePermission::Neither,
-            }
+    /// Sums the realised loss of each quote asset before the quote pass reads it: each window of
+    /// each instrument that quotes in that asset, those already rotated away included, because a
+    /// ledger row lasts one market and the budget lasts the run.
+    pub(super) fn sum_realised_losses(&mut self, ledger: &PositionLedger) {
+        self.loss_sums.realised_quote.fill(0);
+        for index in 0..self.instruments.len() {
+            let instrument = InstrumentId(index as u16);
+            let realised = wide(ledger.row(instrument).session_realised_quote())
+                + wide(self.realised_carried_quote(instrument));
+            let asset = self.instruments[index].quote_asset;
+            self.loss_sums.realised_quote[usize::from(asset.0)] += realised;
         }
-        permission
+    }
+
+    /// The loss verdict of one instrument. Its realised leg is the sum of its quote asset, so one
+    /// budget holds for each instrument of that asset, and a breach there halts. Its mark-to-market
+    /// leg is its own, so a loss still open on one instrument withdraws only the side that would
+    /// add to it, on that instrument.
+    ///
+    /// The mark-to-market leg reads the change since the first honest valuation of the instrument.
+    /// With no baseline yet there is no mark-to-market number to judge: a restored position with no
+    /// mark is a legitimate state.
+    pub(super) fn loss_verdict(
+        &self,
+        instrument: InstrumentId,
+        ledger: &PositionLedger,
+    ) -> LossVerdict {
+        let index = usize::from(instrument.0);
+        let row = ledger.row(instrument);
+        let baseline = self.pnl_at_baseline[index];
+        assess_loss(
+            SessionPnl {
+                mark_to_market_quote: baseline.map(|baseline| row.pnl_quote() - baseline),
+                realised_quote: self.loss_sums.realised(self.instruments[index].quote_asset),
+                position_base: row.position_base(),
+            },
+            self.settings.max_session_loss_quote,
+        )
+    }
+
+    /// The sides of one instrument that the loss budget leaves open.
+    pub(super) fn loss_permission(
+        &self,
+        instrument: InstrumentId,
+        ledger: &PositionLedger,
+    ) -> QuotePermission {
+        match self.loss_verdict(instrument, ledger) {
+            LossVerdict::Within => QuotePermission::Both,
+            LossVerdict::MarkToMarket { reducing } => QuotePermission::ReducingOnly { reducing },
+            LossVerdict::Realised => QuotePermission::Neither,
+        }
     }
 
     pub(super) fn record_refusal(
