@@ -11,7 +11,9 @@ use engine::venues::binance::exec::{
     parse_client_order_id,
 };
 use engine::venues::binance::rest::OrderRecord;
-use engine::venues::exec::{EngineIdentity, ExecCore, ExecEffect, MirroredOrder, Phase, TeTag};
+use engine::venues::exec::{
+    EngineIdentity, ExecCore, ExecEffect, MirroredOrder, OrderOwnership, Phase, TeTag,
+};
 use proptest::prelude::*;
 
 const INSTRUMENT: InstrumentId = InstrumentId(0);
@@ -83,10 +85,7 @@ proptest! {
         prop_assume!(
             parse_client_order_id(&text).is_none_or(|(tag, _)| tag != identity.te_tag)
         );
-        prop_assert_eq!(
-            classify_client_order_id(&text, identity).provenance,
-            Provenance::Foreign
-        );
+        prop_assert_eq!(classify_client_order_id(&text, identity), OrderOwnership::Foreign);
 
         let symbols = SymbolTable::new([(INSTRUMENT, "BTCUSDT".into())]);
         let assets = AssetDictionary::default();

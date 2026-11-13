@@ -143,7 +143,7 @@ fn decode_execution_report(
         trade_id: (report.trade_id >= 0).then_some(TradeId(report.trade_id)),
         status: Some(venue_status("X", &report.order_status)?),
         reject: report_reject(kind, &report.reject_reason),
-        provenance: ownership.provenance,
+        provenance: ownership.provenance(),
         side: order_side("S", &report.side)?,
         liquidity: matches!(kind, ExecKind::ReportTrade).then(|| match report.is_maker {
             true => Liquidity::Maker,
@@ -163,7 +163,7 @@ fn decode_execution_report(
         ..blank(
             kind,
             Some(instrument),
-            ownership.client_id,
+            ownership.event_client_id(),
             context.received_ts_us,
         )
     }))

@@ -34,7 +34,7 @@ pub fn parse_client_order_id(text: &str) -> Option<(TeTag, ClientOrderId)> {
 
 pub fn classify_client_order_id(text: &str, identity: EngineIdentity) -> OrderOwnership {
     let Some((tag, client_id)) = parse_client_order_id(text) else {
-        return OrderOwnership::FOREIGN;
+        return OrderOwnership::Foreign;
     };
     OrderOwnership::of(tag, client_id, identity)
 }
