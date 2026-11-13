@@ -18,9 +18,7 @@ use engine::link::{
     LinkFrame, LinkHash, LinkOrigin, LinkPayload, OutboundLink, TopicId, schema_hash_of_fields,
 };
 use engine::log::{HotRecord, LaneReader, TextRecord, open_hot_lane, open_text_lane};
-use engine::msg::exec::{
-    AccountChunk, ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus,
-};
+use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus};
 use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
 };
@@ -741,9 +739,11 @@ fn push_extras(inputs: &mut Inputs, shipped: Shipped, peers: &PeerFrames, i: i64
         27 => {
             let balances = [(AssetId(0), 1_000 * ONE), (AssetId(1), 1_000_000 * ONE)];
             // Each report carries its own venue time, or the engine sets it aside as stale.
-            let report = AccountChunk {
-                venue_update_ts_ms: u64::try_from(when / 1_000).expect("message time is positive"),
-                ..account_chunk(&balances, when)
+            let report = {
+                let mut chunk = account_chunk(&balances, when);
+                chunk.venue_update_ts_ms =
+                    u64::try_from(when / 1_000).expect("message time is positive");
+                chunk
             };
             inputs.push(
                 Queue::Venue,

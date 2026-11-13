@@ -12,7 +12,7 @@ use engine::hot::book::{Book, SnapshotOutcome};
 use engine::hot::quant::intensity::{IntensityFit, PacedIntensity};
 use engine::hot::tracker::MicroTracker;
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
-use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, Level, TradeEvent};
+use engine::msg::inbound::{BookChunk, BookChunkKind, Level, TradeEvent};
 use engine::runtime::config::{IntensitySpec, TrackerSpec};
 
 use crate::engine_support::{ts, venue_ts};
@@ -22,24 +22,14 @@ const ASK: Price = Price::from_mantissa(100_000);
 const BID: Price = Price::from_mantissa(ASK.mantissa() - TICK.mantissa());
 
 fn snapshot_chunk(side: Side, price: Price, is_last_chunk: bool) -> BookChunk {
-    let mut levels = [Level {
-        price: Price::from_mantissa(0),
-        qty: Qty::from_mantissa(0),
-    }; BOOK_CHUNK_LEVELS];
-    levels[0] = Level {
+    let mut chunk = BookChunk::new(InstrumentId(0), BookChunkKind::Snapshot, side);
+    chunk.push_levels(&[Level {
         price,
         qty: Qty::from_mantissa(1),
-    };
-    BookChunk {
-        instrument: InstrumentId(0),
-        kind: BookChunkKind::Snapshot,
-        side,
-        levels,
-        len: 1,
-        is_last_chunk,
-        update_id: 1,
-        exchange_ts_us: None,
-    }
+    }]);
+    chunk.is_last_chunk = is_last_chunk;
+    chunk.update_id = 1;
+    chunk
 }
 
 /// Tracker configured with intensity alone, its top of book already at BID/ASK.

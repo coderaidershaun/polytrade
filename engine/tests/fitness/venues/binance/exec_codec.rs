@@ -773,7 +773,7 @@ fn account_and_edge_case_decodes() {
         assert_eq!(chunks.len(), 1, "four assets fit one chunk");
         assert_eq!(chunks[0].kind, AccountChunkKind::Update);
         assert!(chunks[0].is_last_chunk);
-        assert_eq!(chunks[0].len, 4);
+        assert_eq!(chunks[0].active_balances().len(), 4);
 
         let balances = chunks[0].active_balances();
         assert_eq!(balances[0].asset, venue.assets().id("BTC"));

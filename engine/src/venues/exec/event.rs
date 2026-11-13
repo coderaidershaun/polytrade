@@ -118,24 +118,12 @@ pub(crate) fn account_chunks(
     balances: &[AssetBalance],
     stamps: ChunkStamps,
 ) -> Vec<AccountChunk> {
-    let empty = AccountChunk {
-        kind,
-        balances: [AssetBalance {
-            asset: AssetId::UNKNOWN,
-            free: 0,
-            locked: 0,
-        }; ACCOUNT_CHUNK_ASSETS],
-        len: 0,
-        is_last_chunk: false,
-        venue_update_ts_ms: stamps.venue_update_ts_ms,
-        exchange_ts_us: stamps.exchange_ts_us,
-    };
+    let empty = AccountChunk::new(kind, stamps.venue_update_ts_ms, stamps.exchange_ts_us);
     let mut chunks: Vec<AccountChunk> = balances
         .chunks(ACCOUNT_CHUNK_ASSETS)
         .map(|group| {
             let mut chunk = empty;
-            chunk.balances[..group.len()].copy_from_slice(group);
-            chunk.len = group.len() as u8;
+            chunk.push_balances(group);
             chunk
         })
         .collect();

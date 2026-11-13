@@ -490,10 +490,9 @@ fn balances(
     venue_update_ts_ms: u64,
     kind: AccountChunkKind,
 ) -> AccountChunk {
-    AccountChunk {
-        kind,
-        venue_update_ts_ms,
-        exchange_ts_us: VenueTs::from_micros(1),
-        ..account_chunk(&[(asset, free)], 0)
-    }
+    let mut chunk = account_chunk(&[(asset, free)], 0);
+    chunk.kind = kind;
+    chunk.venue_update_ts_ms = venue_update_ts_ms;
+    chunk.exchange_ts_us = VenueTs::from_micros(1);
+    chunk
 }
