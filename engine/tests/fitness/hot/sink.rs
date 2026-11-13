@@ -23,7 +23,6 @@ use engine::msg::run_state::{RunAssertion, RunState};
 use engine::msg::time::Stamper;
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
 use engine::runtime::config::{RecordedTables, TableKind};
-use engine::runtime::exposure::ExposureSnapshot;
 use engine::runtime::registry::InstrumentRow;
 use engine::runtime::shutdown::RunControlGate;
 use engine::venues::exec::open_orders_snapshot_end;
@@ -33,10 +32,10 @@ use proptest::test_runner::{Config, TestCaseError, TestRunner};
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
-    ONE, account_chunk, delta_chunk, detached_setup, exec_event, exposure_ring, instrument_row,
-    last_snapshot_chunk, partial_snapshot_chunk, persist_ring_for, run_control, snapshot_pair,
-    spin, strategy_log_ring, stream_ready, tracker_spec_all, trade, ts, ui_book_ring,
-    ui_event_ring, venue_ts,
+    ExposureLane, ONE, account_chunk, delta_chunk, detached_setup, exec_event, exposure_ring,
+    instrument_row, last_snapshot_chunk, partial_snapshot_chunk, persist_ring_for, run_control,
+    snapshot_pair, spin, strategy_log_ring, stream_ready, tracker_spec_all, trade, ts,
+    ui_book_ring, ui_event_ring, venue_ts,
 };
 use crate::exec_support::exec_settings;
 
@@ -166,7 +165,7 @@ struct Lanes {
     commands: Consumer<ExecLaneItem>,
     ui_books: Consumer<UiBookSnapshot>,
     ui_events: Consumer<UiEvent>,
-    exposure: Consumer<ExposureSnapshot>,
+    exposure: ExposureLane,
     strategy_log: Consumer<HotRecord>,
     strategy_log_drops: Arc<AtomicU64>,
     link: Consumer<OutboundLink>,
@@ -208,9 +207,9 @@ impl Lanes {
             .ui_books
             .extend(texts(take(&mut self.ui_books, at_most)));
         records.ui_events.extend(take(&mut self.ui_events, at_most));
-        records
-            .exposure
-            .extend(texts(take(&mut self.exposure, at_most)));
+        records.exposure.extend(texts(
+            std::iter::from_fn(|| self.exposure.pop()).take(at_most),
+        ));
         records
             .strategy_log
             .extend(take(&mut self.strategy_log, at_most).map(|record| rendered(&record)));
@@ -256,7 +255,7 @@ fn engine(capacity: usize) -> (HotEngine, Lanes) {
     let strategy_log_drops = strategy_log_sink.drops_handle();
     let (ui_book_sink, ui_books) = ui_book_ring(capacity);
     let (ui_event_sink, ui_events) = ui_event_ring(capacity);
-    let (exposure_sink, exposure) = exposure_ring(capacity);
+    let (exposure_sink, exposure) = exposure_ring(capacity, rows.len());
     let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(capacity);
     let (link_producer, link) = RingBuffer::<OutboundLink>::new(capacity);
     let engine = HotEngine::new(HotEngineSetup {

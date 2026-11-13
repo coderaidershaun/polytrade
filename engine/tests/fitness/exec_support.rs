@@ -141,7 +141,7 @@ pub(crate) fn built_quoting_engine(setup: QuotingSetup<'_>) -> QuotingEngine {
     let (persistence, _records) = persist_ring_for(1_024, setup.tables);
     let (ui_event_sink, ui_events) = ui_event_ring(256);
     let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(256);
-    let (exposure_sink, _exposure) = exposure_ring(64);
+    let (exposure_sink, _exposure) = exposure_ring(64, instruments.len());
     let engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),
         ui_event_sink,

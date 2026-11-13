@@ -11,7 +11,7 @@ mod telemetry;
 mod ui_emit;
 
 use derived::Derived;
-use exposure::{moves_position, restored_snapshot, warn_uncovered_instruments};
+use exposure::{moves_position, restored_snapshot};
 use gate::MarketGates;
 
 use crate::hot::book::Book;
@@ -26,12 +26,12 @@ use crate::hot::strategy::{Actions, ActionsSetup, DrainSinks, Strategy, Strategy
 use crate::log::hot_error;
 use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
-use crate::msg::inbound::{InboundMessage, MessageBody, SpinTick};
+use crate::msg::inbound::{InboundMessage, MessageBody, SpinTick, WriterFailure};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{FoldTime, LocalTs};
 use crate::msg::ui::{DomQuote, UI_QUOTE_LEVELS};
 use crate::runtime::config::RecordedTables;
-use crate::runtime::exposure::{ExposureSnapshot, MAX_EXPOSURE_INSTRUMENTS};
+use crate::runtime::exposure::ExposureSnapshot;
 use crate::runtime::shutdown::RunStateCell;
 
 pub use digest::StateDigest;
@@ -122,9 +122,6 @@ impl HotEngine {
             exec,
             exposure,
         } = setup;
-        if instruments.len() > MAX_EXPOSURE_INSTRUMENTS {
-            warn_uncovered_instruments(instruments.len());
-        }
         let (books, trackers, ewma) = per_instrument_state(instruments);
         let declarations = Declarations::resolve(strategy.as_mut(), instruments);
         let (persist_sink, tables) = match persistence {
@@ -145,7 +142,7 @@ impl HotEngine {
                     exposure.restored,
                 ),
                 exposure: exposure.sink,
-                published_exposure: restored_snapshot(exposure.restored),
+                published_exposure: restored_snapshot(instruments.len(), exposure.restored),
                 spin_seq: 0,
                 fold_time: FoldTime::BEFORE_FIRST,
                 gates: MarketGates::new(warmup, instruments.len()),
@@ -201,6 +198,7 @@ impl HotEngine {
             MessageBody::RunControl(control) => self.on_run_control(control, received_ts_us),
             MessageBody::Exec(event) => self.on_exec(event, received_ts_us),
             MessageBody::Account(chunk) => self.on_account(chunk),
+            MessageBody::WriterFailed(failure) => self.halt_on_writer_failure(failure),
         }
         if moves_position(message) {
             self.state.publish_exposure(received_ts_us);
@@ -322,6 +320,18 @@ impl HotEngine {
         );
         let at = self.state.fold_time.as_local();
         self.state.exec.halt(HaltReason::SealNotAccepted, at);
+    }
+
+    /// The message is the one point in the input where a writer gave up, so a replay halts at it.
+    #[cold]
+    fn halt_on_writer_failure(&mut self, failure: &WriterFailure) {
+        hot_error!(
+            "the {:?} writer failed {} writes in a row, so its file no longer follows the position — quoting halts",
+            failure.writer,
+            failure.consecutive_failures
+        );
+        let at = self.state.fold_time.as_local();
+        self.state.exec.halt(HaltReason::WriterFailed, at);
     }
 
     fn spin_strategy(&mut self, tick: &SpinTick, received_ts_us: LocalTs) {

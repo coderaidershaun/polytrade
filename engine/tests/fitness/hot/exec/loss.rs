@@ -837,7 +837,7 @@ fn markets(
         }),
         exposure: ExposureWiring {
             restored,
-            sink: exposure_ring(64).0,
+            sink: exposure_ring(64, rows.len()).0,
         },
         ..detached_setup(rows, strategy)
     });

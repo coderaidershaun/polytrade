@@ -54,6 +54,7 @@ pub enum MessageBody {
     RunControl(RunControl),
     Exec(ExecEvent),
     Account(AccountChunk),
+    WriterFailed(WriterFailure),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -68,6 +69,7 @@ pub enum MessageKind {
     RunControl,
     Exec,
     Account,
+    WriterFailed,
 }
 
 impl InboundMessage {
@@ -96,6 +98,7 @@ impl InboundMessage {
             MessageBody::RunControl(_) => MessageKind::RunControl,
             MessageBody::Exec(_) => MessageKind::Exec,
             MessageBody::Account(_) => MessageKind::Account,
+            MessageBody::WriterFailed(_) => MessageKind::WriterFailed,
         }
     }
 }
@@ -206,6 +209,21 @@ pub struct SpinTick {
 pub struct RunControl {
     pub desired: RunAssertion,
 }
+
+/// A file writer that failed its limit of writes in a row. It sends this once, and quoting halts at
+/// it, so a replay of the input halts at the same message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WriterFailure {
+    pub writer: FileWriter,
+    pub consecutive_failures: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FileWriter {
+    Exposure,
+}
+
+crate::log::fieldless_log_value!(FileWriter { Exposure });
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TappedMessage {

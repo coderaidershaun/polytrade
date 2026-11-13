@@ -4,7 +4,7 @@
 mod clock;
 mod config_guards;
 mod exit;
-mod exposure_boot;
+mod exposure;
 mod exposure_state;
 mod identity;
 mod latency_probe;

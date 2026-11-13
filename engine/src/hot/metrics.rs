@@ -120,7 +120,8 @@ fn body_stamps(body: &MessageBody) -> Option<BodyStamps> {
         | MessageBody::MarketRotation(_)
         | MessageBody::Link(_)
         | MessageBody::RunControl(_)
-        | MessageBody::Account(_) => return None,
+        | MessageBody::Account(_)
+        | MessageBody::WriterFailed(_) => return None,
     };
     Some(stamps)
 }
