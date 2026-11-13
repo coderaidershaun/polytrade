@@ -1,4 +1,5 @@
-//! Hot loop body: message -> state apply -> callback -> drain -> metrics. State = pure sequence function.
+//! The body of the hot loop: each message updates state, calls the strategy back, drains the
+//! actions and runs the execution pass. It reads no clock, so state depends on messages alone.
 
 mod exposure;
 mod gate;
@@ -13,18 +14,16 @@ use gate::Warmup;
 use crate::hot::book::Book;
 use crate::hot::dispatch::ui_emit::UiEmitter;
 use crate::hot::exec::{DesiredBook, ExecCallback, ExecEngine, QuoteLevel, SpinInput};
-use crate::hot::ingress::QueueSample;
 use crate::hot::ledger::PositionLedger;
-use crate::hot::metrics::{HotMetrics, message_meta};
 use crate::hot::quant::volatility::EwmaVol;
-use crate::hot::sink::{ExposureSink, LinkSink, MetricsSink, PersistSink, StrategyLogSink};
+use crate::hot::sink::{ExposureSink, LinkSink, PersistSink, StrategyLogSink};
 use crate::hot::strategy::{Actions, ActionsSetup, DrainSinks, Strategy, StrategyCtx, WindowInfo};
 use crate::hot::tracker::MicroTracker;
 use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
 use crate::msg::inbound::{InboundMessage, SpinTick};
 use crate::msg::run_state::RunAssertion;
-use crate::msg::time::{EngineClock, TsUs};
+use crate::msg::time::TsUs;
 use crate::msg::ui::{DomQuote, UI_QUOTE_LEVELS};
 use crate::runtime::config::RecordedTables;
 use crate::runtime::exposure::{ExposureSnapshot, MAX_EXPOSURE_INSTRUMENTS};
@@ -98,9 +97,6 @@ pub struct HotEngine {
     unretained_volume_bars: u64,
     warmup: Warmup,
     feature_names: Vec<&'static str>,
-    clock: EngineClock,
-    metrics: Box<HotMetrics>,
-    metrics_sink: MetricsSink,
     ui: UiEmitter,
 }
 
@@ -111,7 +107,6 @@ impl HotEngine {
             mut strategy,
             persistence,
             strategy_log_sink,
-            metrics_sink,
             ui_book_sink,
             ui_event_sink,
             link,
@@ -159,9 +154,6 @@ impl HotEngine {
             unretained_volume_bars: 0,
             warmup: Warmup::new(warmup),
             feature_names: declarations.feature_names,
-            clock: EngineClock::start(),
-            metrics: Box::new(HotMetrics::new()),
-            metrics_sink,
             ui: UiEmitter::new(ui_book_sink, ui_event_sink, instruments.len()),
         }
     }
@@ -170,18 +162,8 @@ impl HotEngine {
         &self.feature_names
     }
 
-    pub fn dispatch(&mut self, pop: QueueSample, message: &InboundMessage) {
-        let dequeued_at = self.clock.now();
-        self.metrics
-            .record_occupancy(pop.queue_id, pop.depth, dequeued_at);
-        if let Some(backlog) = pop.spin_backlog {
-            self.metrics
-                .record_spin_backlog(backlog, message.received_ts_us());
-        }
-        let meta = message_meta(message);
-        if let Some(meta) = meta {
-            self.record_ingress(meta, dequeued_at);
-        }
+    pub fn dispatch(&mut self, message: &InboundMessage) {
+        crate::log::set_message_time(message.received_ts_us());
         if self.warmup.observe(message.received_ts_us()) {
             self.log_warmup_complete();
         }
@@ -190,14 +172,9 @@ impl HotEngine {
             self.state.publish_exposure(message.received_ts_us());
         }
         self.drain_actions();
-        let processed_at = self.clock.now();
-        if let Some(meta) = meta {
-            self.record_processing(meta, dequeued_at, processed_at);
-        }
         if let InboundMessage::SpinTick(tick) = message {
             self.exec_spin(tick);
             self.emit_positions(tick.received_ts_us);
-            self.emit_snapshot(processed_at);
         }
     }
 

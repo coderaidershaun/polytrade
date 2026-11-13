@@ -9,21 +9,21 @@ use rtrb::RingBuffer;
 use tokio::sync::mpsc;
 
 use crate::hot::dispatch::ExecWiring;
-use crate::hot::exec::{
-    ExecLaneBudget, ExecLimits, ExecSettings, FeeModel, MAX_ORDER_INSTRUMENTS, exec_lane_capacity,
-};
-use crate::hot::sink::ExecSink;
+use crate::hot::exec::{ExecLimits, ExecSettings, FeeModel, MAX_ORDER_INSTRUMENTS};
+use crate::hot::sink::{ExecLaneBudget, ExecSink, SampleSink, exec_lane_capacity};
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::info;
 use crate::msg::exec::ExecLaneItem;
-use crate::msg::time::{DurationUs, EngineClock};
+use crate::msg::latency::WireSample;
+use crate::msg::time::{DurationUs, EngineClock, Stamper};
 use crate::runtime::config::{
-    DEFAULT_QUOTE_STOP_MARGIN_MS, ExecutionConfig, ExecutionMode, RunIdentity, validated_mantissa,
+    DEFAULT_QUOTE_STOP_MARGIN_MS, ExecutionConfig, ExecutionMode, RunIdentity, SendersConfig,
+    validated_mantissa,
 };
 use crate::runtime::registry::Registry;
 use crate::runtime::shutdown::{FatalSignal, RunStateCell};
 use crate::venues::edge::backoff::BackoffCaps;
-use crate::venues::edge::{EdgeInputs, EdgeSettings, EdgeSpawn, VenueEdge};
+use crate::venues::edge::{EdgeInputs, EdgeSettings, EdgeSpawn, SenderSettings, VenueEdge};
 use crate::venues::exec::{TeTag, VenueCapabilities};
 use crate::venues::venue::{ExecutionVenue, WindowAssignment};
 
@@ -70,6 +70,11 @@ pub(super) struct ExecBringUpSetup<'a> {
     /// venue that rotates markets reads.
     pub(super) window_assignments: mpsc::Receiver<WindowAssignment>,
     pub(super) clock: &'a EngineClock,
+    /// The latency counter the command bank reads when a command enters it, and the sender at the
+    /// pop and the wire of each command.
+    pub(super) stamper: &'a Stamper,
+    pub(super) wires: SampleSink<WireSample>,
+    pub(super) senders: &'a SendersConfig,
     pub(super) fatal: &'a FatalSignal,
     pub(super) desired_run_state: RunStateCell,
     pub(super) drain_deadline: Duration,
@@ -88,7 +93,8 @@ pub(super) fn exec_bring_up(mut setup: ExecBringUpSetup<'_>) -> Result<ExecBring
         return Ok(ExecBringUp::disabled());
     };
     let mode = execution.mode.as_str();
-    let Some(producer) = setup.producer.take() else {
+    let (Some(producer), Some(queue)) = (setup.producer.take(), setup.registry.exec_queue_id())
+    else {
         return Err(EngineError::ExecutionNotWired {
             mode,
             detail: "the registry allocated no execution input queue",
@@ -157,6 +163,13 @@ pub(super) fn exec_bring_up(mut setup: ExecBringUpSetup<'_>) -> Result<ExecBring
             lane_capacity,
             spin_interval: setup.spin_interval,
             input_capacity: setup.input_capacity,
+            sender: SenderSettings {
+                stamper: setup.stamper.clone(),
+                wires: setup.wires,
+                placement: setup.senders.placement,
+                tick: setup.senders.tick(),
+                queue,
+            },
         },
         setup.window_assignments,
     )?;
@@ -169,7 +182,7 @@ pub(super) fn exec_bring_up(mut setup: ExecBringUpSetup<'_>) -> Result<ExecBring
     );
     Ok(ExecBringUp {
         wiring: Some(ExecWiring {
-            sink: ExecSink::new(commands_producer),
+            sink: ExecSink::new(commands_producer, setup.stamper.clone()),
             settings: settings(execution, &capabilities),
             run_nonce,
         }),

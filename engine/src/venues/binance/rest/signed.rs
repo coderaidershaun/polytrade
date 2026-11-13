@@ -60,6 +60,10 @@ impl SignedRestClient {
     ///
     /// # Errors
     /// [`RestError::Transport`] if the TLS backend fails to initialise.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a venue REST client learns the venue's clock offset and paces its request weight"
+    )]
     pub fn new(
         credentials: Credentials,
         config: SignedRestConfig,
@@ -79,6 +83,10 @@ impl SignedRestClient {
 
     /// # Errors
     /// [`RestError`] if venue unreachable.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a venue REST client learns the venue's clock offset and paces its request weight"
+    )]
     pub async fn sync_clock(&mut self) -> Result<ClockOffset, RestError> {
         let server_time = self.rest.server_time().await?;
         // Read the clock after the await, at receipt, so the offset errs late rather than early:
@@ -176,6 +184,10 @@ impl SignedRestClient {
         decode(&fetched)
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a venue REST client learns the venue's clock offset and paces its request weight"
+    )]
     async fn send_signed(&mut self, request: &RestRequest) -> Result<Fetched, RestError> {
         let plan = request.plan(BinanceMarket::Spot);
         let mut attempt = 0;
@@ -220,6 +232,10 @@ impl SignedRestClient {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a venue REST client learns the venue's clock offset and paces its request weight"
+    )]
     async fn wait_before_retry(&mut self, failure: &RestError, endpoint: &str, attempt: u32) {
         if is_stale_timestamp(failure) {
             warn!("binance rejected {endpoint} stamp as stale — resyncing the venue clock");

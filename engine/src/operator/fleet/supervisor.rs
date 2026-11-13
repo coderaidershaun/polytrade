@@ -222,6 +222,10 @@ impl Fleet {
             })
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the operator fleet times the starts and stops of its children and holds no engine state"
+    )]
     async fn await_start_grace(
         &mut self,
         identity: &RunIdentity,
@@ -245,6 +249,10 @@ impl Fleet {
     }
 
     /// Signals every target first and only then waits, so N engines share one deadline.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the operator fleet times the starts and stops of its children and holds no engine state"
+    )]
     async fn stop_together(&mut self, identities: Vec<RunIdentity>) -> Vec<StopOutcome> {
         let began = Instant::now();
         let mut outcomes = Vec::with_capacity(identities.len());
@@ -381,6 +389,10 @@ impl Fleet {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the operator fleet times the starts and stops of its children and holds no engine state"
+)]
 fn stopped(identity: RunIdentity, settled: Settled, began: Instant) -> StopOutcome {
     let elapsed_ms = began.elapsed().as_millis();
     let result = Ok(Stopped {

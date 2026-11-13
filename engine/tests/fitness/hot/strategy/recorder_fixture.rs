@@ -8,15 +8,15 @@ use engine::msg::exec::{ExecCommand, ExecLaneItem};
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::persist::PersistRecord;
-use engine::msg::time::DurationUs;
+use engine::msg::time::{DurationUs, Stamper};
 use engine::runtime::config::{IntensitySpec, KlineInterval, TableKind};
 use engine::runtime::registry::InstrumentRow;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
     ONE, account_chunk, book_reset, delta_chunk, detached_setup, engine_view, instrument_row,
-    kline, persist_ring, pop, recorder_spec, snapshot_pair, spin, stream_ready, tracker_spec_all,
-    trade, ui_event_ring,
+    kline, persist_ring, recorder_spec, snapshot_pair, spin, stream_ready, tracker_spec_all, trade,
+    ui_event_ring,
 };
 use crate::exec_support::{drain_commands, exec_settings, open_orders_snapshot};
 use crate::micro_strategy::features::FEATURE_NAMES;
@@ -83,7 +83,7 @@ pub(crate) fn recorder_engine(
         persistence: Some(persistence),
         ui_event_sink: ui_event_ring(1_024).0,
         exec: Some(ExecWiring {
-            sink: ExecSink::new(commands_producer),
+            sink: ExecSink::new(commands_producer, Stamper::Off),
             settings: exec_settings(),
             run_nonce: 0,
         }),
@@ -95,15 +95,12 @@ pub(crate) fn recorder_engine(
 /// The stream is up and the open orders and balances are known. Without all three nothing is ever
 /// placed, and every assertion after this call would pass for the wrong reason.
 pub(crate) fn make_ready(engine: &mut HotEngine, when: i64) {
-    engine.dispatch(pop(0, 0), &stream_ready(INSTRUMENT, when));
+    engine.dispatch(&stream_ready(INSTRUMENT, when));
     open_orders_snapshot(engine, when);
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Account(account_chunk(
-            &[(BASE_ASSET, 1_000 * ONE), (QUOTE_ASSET, 1_000_000 * ONE)],
-            when,
-        )),
-    );
+    engine.dispatch(&InboundMessage::Account(account_chunk(
+        &[(BASE_ASSET, 1_000 * ONE), (QUOTE_ASSET, 1_000_000 * ONE)],
+        when,
+    )));
 }
 
 pub(crate) fn seed_book(engine: &mut HotEngine, base: i64, when: i64) {
@@ -120,7 +117,7 @@ pub(crate) fn seed_book(engine: &mut HotEngine, base: i64, when: i64) {
         InboundMessage::Book(bids),
         InboundMessage::Book(asks),
     ] {
-        engine.dispatch(pop(0, 0), &message);
+        engine.dispatch(&message);
     }
 }
 

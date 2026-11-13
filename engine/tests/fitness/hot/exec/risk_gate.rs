@@ -20,7 +20,7 @@ use engine::runtime::exposure::InstrumentExposure;
 use proptest::prelude::*;
 use rtrb::Consumer;
 
-use crate::engine_support::{ALL_TABLES, ONE, exec_event, pop};
+use crate::engine_support::{ALL_TABLES, ONE, exec_event};
 use crate::exec_support::{
     ASK, BID, CEILING, INSTRUMENT, QUOTE_QTY, QuotingEngine, QuotingSetup, TwoSidedQuoter,
     built_quoting_engine, drain_commands, exec_settings, has_halted, is_placing, make_ready,
@@ -331,25 +331,19 @@ fn fill_and_close(engine: &mut HotEngine, side: Side, price: i64, qty: i64, when
         qty: Qty(qty),
         ..exec_event(INSTRUMENT, client_id, side, price, when)
     };
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Exec(ExecEvent {
-            kind: ExecKind::SnapshotOrder,
-            ..base
-        }),
-    );
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Exec(ExecEvent {
-            kind: ExecKind::ReportTrade,
-            status: Some(VenueOrderStatus::Filled),
-            last_price: Price(price),
-            last_qty: Qty(qty),
-            cumulative_qty: Qty(qty),
-            cumulative_quote: Price(price).notional(Qty(qty)),
-            ..base
-        }),
-    );
+    engine.dispatch(&InboundMessage::Exec(ExecEvent {
+        kind: ExecKind::SnapshotOrder,
+        ..base
+    }));
+    engine.dispatch(&InboundMessage::Exec(ExecEvent {
+        kind: ExecKind::ReportTrade,
+        status: Some(VenueOrderStatus::Filled),
+        last_price: Price(price),
+        last_qty: Qty(qty),
+        cumulative_qty: Qty(qty),
+        cumulative_quote: Price(price).notional(Qty(qty)),
+        ..base
+    }));
 }
 
 /// The message sequence both engine-driven tests below share: come ready, take a long position by
@@ -365,7 +359,7 @@ fn quote_holding_one_unit(
         fill_and_close(&mut engine, side, MARK, ONE, 5);
     }
     for message in reseat_book(BID, ASK, 10) {
-        engine.dispatch(pop(0, 0), &message);
+        engine.dispatch(&message);
     }
     spin_at(&mut engine, 1, 20);
     drain_commands(&mut commands)
@@ -581,7 +575,7 @@ fn refused_reject(when: i64) -> ExecEvent {
 }
 
 fn dispatch_exec(engine: &mut HotEngine, event: ExecEvent) {
-    engine.dispatch(pop(0, 0), &InboundMessage::Exec(event));
+    engine.dispatch(&InboundMessage::Exec(event));
 }
 
 /// The kill switch as the workstation was last told it. The engine restates it every spin, so the

@@ -10,3 +10,5 @@ mod monitor;
 mod workstation_format;
 mod workstation_shell;
 mod workstation_support;
+
+pub(crate) use workstation_support::rust_sources;

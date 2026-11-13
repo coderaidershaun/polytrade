@@ -23,7 +23,7 @@ use engine::venues::exec::{MAX_RESYNC_ATTEMPTS, ResyncPass, ResyncStep, open_ord
 
 use proptest::prelude::*;
 
-use crate::engine_support::{local_refusals, pop, ts as at};
+use crate::engine_support::{local_refusals, ts as at};
 use crate::exec_support::{
     ASK, BID, CEILING, INSTRUMENT, drain_commands, is_placing, open_orders_snapshot,
     quoting_engine, quoting_engine_with_ui, reseat_book, spin_at, stream_and_balances,
@@ -103,7 +103,7 @@ fn a_cold_start_quotes_only_once_the_resync_marker_lands() {
     let (mut engine, mut commands) = quoting_engine(CEILING, &[]);
     stream_and_balances(&mut engine, 0);
     for message in reseat_book(BID, ASK, 10) {
-        engine.dispatch(pop(0, 0), &message);
+        engine.dispatch(&message);
     }
 
     spin_at(&mut engine, 1, 20);
@@ -241,7 +241,7 @@ fn a_refusal_is_reported_when_the_reason_changes_and_not_again() {
     // Ready and quoting: the latch clears and reports nothing, because the order is the evidence.
     open_orders_snapshot(&mut engine, 60);
     for message in reseat_book(BID, ASK, 60) {
-        engine.dispatch(pop(0, 0), &message);
+        engine.dispatch(&message);
     }
     spin_at(&mut engine, 5, 70);
     assert!(

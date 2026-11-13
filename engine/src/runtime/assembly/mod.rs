@@ -2,8 +2,8 @@
 //! under a watchdog deadline.
 //!
 //! Every submodule is either a PHASE of one run — `prepare`, `run`, `drain`, in that order — or the
-//! bring-up of ONE subsystem, named for it: `exec`, `link`, `persist`, `metrics`, `timer`,
-//! `queues`. The rest are leaves those two lean on: `error`, `exec_identity`. Which venue a run
+//! bring-up of ONE subsystem, named for it: `exec`, `link`, `persist`, `metrics`, `senders`,
+//! `timer`, `queues`. The rest are leaves those two lean on: `error`, `exec_identity`. Which venue a run
 //! talks to is decided by the adapters, never here.
 
 mod drain;
@@ -11,11 +11,12 @@ mod error;
 mod exec;
 mod exec_identity;
 mod link;
-mod metrics;
+pub mod metrics;
 mod persist;
 mod prepare;
 mod queues;
 mod run;
+mod senders;
 mod timer;
 
 use std::sync::Arc;
@@ -28,28 +29,30 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
 use crate::hot::dispatch::{ExposureWiring, HotEngine, HotEngineSetup, LinkWiring};
-use crate::hot::metrics::MetricsSnapshot;
-use crate::hot::sink::{LinkSink, MetricsSink, StrategyLogSink};
-use crate::hot::spawn::{HotThreadConfig, SimTapGate, spawn_hot_thread};
+use crate::hot::metrics::DriverSamples;
+use crate::hot::sink::{LinkSink, StrategyLogSink};
+use crate::hot::spawn::{HotThreadConfig, IdleWait, SimTapGate, spawn_hot_thread};
 use crate::hot::strategy::Strategy;
 use crate::link::{LinkActor, LinkActorSetup, OutboundLink};
-use crate::log::{self, LogConfig, LogHandle, LogRecord};
+use crate::log::{self, LaneReader, LogConfig, LogHandle};
 use crate::msg::persist::RotationRow;
-use crate::msg::time::{DurationUs, EngineClock};
+use crate::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, Stamper};
 use crate::msg::ui::UiCatalog;
 use crate::msg::ui::channel::{UiLifecycle, UiWiring, ui_channel};
-use crate::runtime::config::{Config, ExecutionMode, RunIdentity};
+use crate::runtime::config::{Config, ExecutionMode, IdleMode, RunIdentity, SenderPlacement};
 use crate::runtime::exposure::{ExposureHandle, ExposureWriter, ExposureWriterConfig};
 use crate::runtime::shutdown::{DrainSignal, FatalSignal, RunControlGate, TaskHandle};
 use crate::tape::PersistHandle;
 use crate::venues::exec::EdgeHandle;
 use crate::venues::venue::{MarketDataWiring, WindowAssignment, spawn_market_data, tap_heartbeat};
-use crate::{error, info};
+use crate::{error, info, warn};
 
 use drain::install_panic_hook;
 use exec::{ExecBringUp, ExecBringUpSetup, exec_bring_up};
 use link::link_bring_up;
-use metrics::MetricsHandle;
+use metrics::{
+    MetricsBringUp, MetricsBringUpSetup, MetricsThread, SampleProducers, metrics_bring_up,
+};
 use persist::{PersistBringUp, PersistBringUpSetup, persist_bring_up};
 use prepare::{Prepared, prepare};
 use queues::{InputQueues, build_input_queues};
@@ -63,14 +66,13 @@ pub use error::EngineError;
 pub use exec_identity::ExecutionLease;
 pub use prepare::check_symbol_order_capacity;
 pub use run::run_trading_engine;
+pub use senders::PinnedSenders;
 
-const METRICS_RING_CAPACITY: usize = 64;
 const ROTATIONS_CHANNEL_CAPACITY: usize = 256;
 
 /// One rotation binding every five minutes, drained on every edge select pass; the depth exists so
 /// a slow bring-up cannot lose the first window.
 const ASSIGNMENTS_CHANNEL_CAPACITY: usize = 8;
-const STRATEGY_LOG_RING_CAPACITY: usize = 65_536;
 const LINK_RING_CAPACITY: usize = 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,7 +101,9 @@ struct Engine {
     exec: Option<EdgeHandle>,
     /// Simulated venues only: the taps the venue matches against, held open across its sweep.
     exec_tap_gate: Option<Arc<SimTapGate>>,
-    metrics: MetricsHandle,
+    /// `None` unless `senders.placement` is pinned. Stopped after the edges and the link it runs.
+    senders: Option<PinnedSenders>,
+    metrics: MetricsThread,
     fatal: FatalSignal,
     drain: DrainSignal,
     lifecycle: SyncSender<UiLifecycle>,
@@ -108,15 +112,26 @@ struct Engine {
 
 impl Engine {
     /// Brings everything up in dependency order: logging, registry, runtime, persistence,
-    /// metrics, hot thread, timer, adapters.
+    /// metrics, the pinned senders' thread, hot thread, timer, adapters.
     ///
     /// # Errors
-    /// Invalid config, unavailable hot_core_id, runtime build failure, or failed preflights.
+    /// Invalid config, unavailable hot_core_id, runtime build failure, failed preflights, or a
+    /// pinned senders' thread that cannot pin.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the one clock of the process, started before any producer of message stamps"
+    )]
     fn start<P>(
         identity: RunIdentity,
         config: Config<P>,
         strategy: Box<dyn Strategy>,
     ) -> Result<Engine, EngineError> {
+        // The one clock of the process: every producer of message stamps reads it.
+        let clock = EngineClock::start();
+        let latency_clock = ClockSource::check(InvariantCounter::detect());
+        // The one counter of the process: every latency stamp reads it. Building it calibrates it.
+        let stamper = Stamper::Counter(quanta::Clock::new());
+
         // The workstation feed is built here. Its receiving end goes to the link actor, which is
         // the only reader.
         let (wiring, ui_channels) = ui_channel();
@@ -127,12 +142,27 @@ impl Engine {
         } = wiring;
 
         let mode = config.execution.as_ref().map(|execution| execution.mode);
-        let log_handle = log::init(&LogConfig {
-            dir: config.logging.dir.clone(),
-            file_stem: ExecutionMode::artifact_stem(mode, &identity).into(),
-        });
+        let log_handle = log::init(
+            &LogConfig {
+                dir: config.logging.dir.clone(),
+                file_stem: ExecutionMode::artifact_stem(mode, &identity).into(),
+                ring_capacity: config.logging.ring_capacity,
+                drain_deadline: Duration::from_millis(config.logging.drain_deadline_ms),
+                reopen_limit: config.logging.reopen_limit,
+                core_id: config.engine.housekeeping_core_id,
+            },
+            &clock,
+        )
+        .map_err(|refused| EngineError::HousekeepingPin {
+            core_id: refused.core_id,
+            thread: "log",
+        })?;
         log::register_thread("main");
         info!("polysim starting — trading engine {identity}");
+        match latency_clock {
+            Ok(source) => info!("latency stamps read the {} counter", source.label()),
+            Err(refusal) => warn!("{refusal}"),
+        }
 
         let Prepared {
             registry,
@@ -205,16 +235,34 @@ impl Engine {
             &restored_exposure,
         );
 
-        let (metrics_producer, metrics_consumer) =
-            RingBuffer::<MetricsSnapshot>::new(METRICS_RING_CAPACITY);
-        let metrics = {
-            let _guard = tokio_handle.enter();
-            MetricsHandle::spawn(metrics_consumer)
+        let MetricsBringUp {
+            thread: metrics,
+            samples,
+            reports: latency_reports,
+        } = match metrics_bring_up(MetricsBringUpSetup {
+            latency: &config.latency,
+            clock: &clock,
+            stamper: &stamper,
+            clock_source: latency_clock.unwrap_or_else(|refusal| refusal.fallback()),
+            queue_count: registry.input_queue_count(),
+            core_id: config.engine.housekeeping_core_id,
+        }) {
+            Ok(brought_up) => brought_up,
+            Err(error) => {
+                error!("startup failed before the hot thread spawned: {error}");
+                log_handle.drain();
+                return Err(error);
+            }
         };
+        let SampleProducers {
+            stages,
+            counters,
+            wires,
+        } = samples;
 
         // A dedicated ring isolates a telemetry flood from engine WARN/ERROR records.
         let (strategy_log_producer, strategy_log_consumer) =
-            RingBuffer::<LogRecord>::new(STRATEGY_LOG_RING_CAPACITY);
+            log::hot_ring(config.logging.ring_capacity);
         let strategy_log_sink = StrategyLogSink::new(strategy_log_producer);
         // Leaked exactly once, since the id is only known now; log::init panics on a
         // second call, so this never repeats.
@@ -222,8 +270,7 @@ impl Engine {
             Box::leak(identity.strategy_id.as_str().to_owned().into_boxed_str());
         log::register_external_ring(
             strategy_tag,
-            strategy_log_consumer,
-            strategy_log_sink.drops_handle(),
+            LaneReader::new(strategy_log_consumer, strategy_log_sink.drops_handle()),
         );
 
         let queues = build_input_queues(&registry, config.queues.input_capacity, &fatal);
@@ -235,9 +282,6 @@ impl Engine {
             exec: exec_producer,
         } = queues;
 
-        // One clock serves every edge producer's received/queued stamps; the hot engine
-        // keeps its own separate one.
-        let clock = EngineClock::start();
         let drain_deadline = Duration::from_millis(config.engine.drain_deadline_ms);
         let spin_interval = config.engine.spin_interval();
         // SMELL: this start refusal, the execution lease among them, comes after the log, Parquet,
@@ -258,6 +302,9 @@ impl Engine {
             groups: &mut group_producers,
             window_assignments: assignments_rx,
             clock: &clock,
+            stamper: &stamper,
+            wires,
+            senders: &config.senders,
             fatal: &fatal,
             desired_run_state: control.desired().clone(),
             drain_deadline,
@@ -273,6 +320,23 @@ impl Engine {
             }
         };
 
+        // Before the first edge spawns, so a sender that cannot pin refuses the start while no edge
+        // has connected.
+        let senders = match config.senders.placement {
+            SenderPlacement::Shared => None,
+            SenderPlacement::Pinned => match PinnedSenders::spawn(config.senders.core_id) {
+                Ok(senders) => Some(senders),
+                Err(error) => {
+                    error!("startup failed before the hot thread spawned: {error}");
+                    log_handle.drain();
+                    return Err(error);
+                }
+            },
+        };
+        let edge_runtime = senders
+            .as_ref()
+            .map_or_else(|| tokio_handle.clone(), |senders| senders.handle().clone());
+
         let (link_wiring, link_feed) = match &bound_link {
             None => (None, None),
             Some(_) => {
@@ -287,14 +351,12 @@ impl Engine {
             }
         };
 
-        let metrics_sink = MetricsSink::new(metrics_producer);
-        let mut hot_engine = HotEngine::new(HotEngineSetup {
+        let hot_engine = HotEngine::new(HotEngineSetup {
             exec: exec_wiring,
             instruments: registry.instruments(),
             strategy,
             persistence: persist_wiring,
             strategy_log_sink,
-            metrics_sink,
             ui_book_sink,
             ui_event_sink,
             link: link_wiring,
@@ -308,17 +370,26 @@ impl Engine {
             HotThreadConfig {
                 core_id: config.engine.hot_core_id,
                 tag: "hot",
+                samples: Some(DriverSamples {
+                    stamper: stamper.clone(),
+                    stages,
+                    counters,
+                }),
+                idle: match config.engine.idle {
+                    IdleMode::Spin => IdleWait::Spin,
+                    IdleMode::Park => IdleWait::Park(config.engine.park()),
+                },
             },
             ingress,
+            hot_engine,
             fatal.clone(),
             drain.clone(),
-            move |pop, message| hot_engine.dispatch(pop, &message),
         );
 
         let timer = spawn_timer(spin_interval, timer_producer, &clock, &tokio_handle);
         // This runs after the hot thread, so input-queue producers start only after their
         // consumer exists.
-        let exec = exec_spawn.map(|spawn| spawn(&tokio_handle));
+        let exec = exec_spawn.map(|spawn| spawn(&edge_runtime));
 
         let adapters = spawn_market_data(MarketDataWiring {
             registry: &registry,
@@ -361,14 +432,17 @@ impl Engine {
                     on_controller_loss,
                     inbound: link_producer.expect("a bound link always builds its input queue"),
                     outbound: link_feed.expect("a bound link always builds its outbound ring"),
+                    latency: latency_reports,
                     channels: ui_channels,
                     control,
                     clock: clock.clone(),
                     spin_interval,
                     topic_count: bound.topic_count,
                     feature_count: bound.feature_count,
+                    placement: config.senders.placement,
+                    flush_period: config.senders.link_flush(),
                 },
-                &tokio_handle,
+                &edge_runtime,
             )
         });
 
@@ -384,6 +458,7 @@ impl Engine {
             exposure,
             exec,
             exec_tap_gate,
+            senders,
             metrics,
             fatal,
             drain,

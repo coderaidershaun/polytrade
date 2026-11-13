@@ -19,6 +19,10 @@ use super::rest::{Lane, RestJob, RestPurpose};
 use super::{Actor, CLOSE_MARGIN, Writer};
 
 impl Actor {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) async fn on_housekeeping(&mut self, writer: &mut Writer) -> Option<SessionOutcome> {
         if let Some(reason) = self.control.wanted_new_exit() {
             self.plan_exit(reason, Some(writer)).await;
@@ -119,6 +123,10 @@ impl Actor {
     }
 
     /// A backstop that cancels resting orders on windows closing within CLOSE_MARGIN.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn sweep_expiring_windows(&mut self, writer: &mut Writer) -> Option<SessionOutcome> {
         let expiring = self
             .bindings

@@ -14,6 +14,10 @@
 //! `spin.rs`'s ladder pass and the matching one in `flatten.rs`. A second copy here would be a
 //! second place to get `max_orders_per_side` wrong.
 
+use core::fmt;
+use core::mem::discriminant;
+
+use crate::log::{LogValue, Spec};
 use crate::msg::exec::OrderStyle;
 use crate::msg::ids::{Price, Qty, Side};
 use crate::msg::time::{DurationUs, TsUs};
@@ -167,6 +171,61 @@ impl RejectReason {
             Self::OrderLimit => "order limit reached",
             Self::RateBudget => "order rate budget spent",
             Self::OutsideWindow => "outside the trading window",
+        }
+    }
+}
+
+/// Every kind of refusal, in the order whose place a hot log record carries. `NotReady` stands for
+/// each gap here, and the gap itself travels in the second word.
+const REJECT_KINDS: [RejectReason; 17] = [
+    RejectReason::QtyBelowMin,
+    RejectReason::NotionalBelowMin,
+    RejectReason::NotionalAboveMax,
+    RejectReason::WouldCross,
+    RejectReason::OutsideBand,
+    RejectReason::Underfunded,
+    RejectReason::StyleNotPermitted,
+    RejectReason::NotReady(ReadinessGap::Stream),
+    RejectReason::Halted,
+    RejectReason::SessionReducingOnly,
+    RejectReason::ExposureCeiling,
+    RejectReason::NoQuoteDeclared,
+    RejectReason::BookNotQuotable,
+    RejectReason::DuplicatePrice,
+    RejectReason::OrderLimit,
+    RejectReason::RateBudget,
+    RejectReason::OutsideWindow,
+];
+
+/// Prints what `{:?}` prints, `NotReady(Stream)` included, whatever the placeholder: the operator
+/// words live in [`RejectReason::label`], and log lines have always shown the variant.
+impl LogValue for RejectReason {
+    const WORDS: usize = 2;
+
+    fn to_words(self, words: &mut [u64]) {
+        let kind = REJECT_KINDS
+            .iter()
+            .position(|kind| discriminant(kind) == discriminant(&self));
+        debug_assert!(kind.is_some(), "{self:?} is missing from REJECT_KINDS");
+        words[0] = kind.map_or(u64::MAX, |kind| kind as u64);
+        match self {
+            Self::NotReady(gap) => gap.to_words(&mut words[1..]),
+            _ => words[1] = 0,
+        }
+    }
+
+    fn render(words: &[u64], _spec: Spec, out: &mut dyn fmt::Write) -> fmt::Result {
+        let kind = usize::try_from(words[0])
+            .ok()
+            .and_then(|kind| REJECT_KINDS.get(kind));
+        match kind {
+            Some(Self::NotReady(_)) => {
+                out.write_str("NotReady(")?;
+                ReadinessGap::render(&words[1..], Spec::Debug, out)?;
+                out.write_str(")")
+            }
+            Some(kind) => write!(out, "{kind:?}"),
+            None => out.write_str("?"),
         }
     }
 }

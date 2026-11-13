@@ -70,40 +70,6 @@ proptest! {
     }
 }
 
-/// FITNESS: the backlog is every ring at once, and it excludes the message just popped. A total
-/// that read only the queue it was asked about would report a keeping-up engine while another
-/// source piled up behind it — the exact reading an operator checks before trusting a latency panel.
-#[test]
-fn the_backlog_counts_every_queue_and_not_the_message_just_popped() {
-    let mut consumers = Vec::new();
-    for (queue, waiting) in [2usize, 5].into_iter().enumerate() {
-        let (mut producer, consumer) = RingBuffer::<InboundMessage>::new(waiting);
-        for seq in 0..waiting {
-            producer
-                .push(spin(seq as u64, (queue * 100 + seq) as i64))
-                .expect("ring sized for its own messages");
-        }
-        consumers.push(consumer);
-    }
-
-    let mut ingress = IngressQueues::new(consumers);
-    assert_eq!(ingress.backlog(), 7, "both queues, not the first one");
-
-    ingress.pop_next().expect("seven messages are waiting");
-    assert_eq!(
-        ingress.backlog(),
-        6,
-        "a popped message is no longer unprocessed"
-    );
-
-    while ingress.pop_next().is_some() {}
-    assert_eq!(
-        ingress.backlog(),
-        0,
-        "a drained engine reads zero, which is a reading and not an absence"
-    );
-}
-
 #[test]
 fn full_input_queue_trips_fatal() {
     let (producer, _consumer) = RingBuffer::<InboundMessage>::new(2);

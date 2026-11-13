@@ -377,23 +377,42 @@ source:
     }
 }
 
-/// A Linux engine with no hot core named would run its hot thread unpinned without a word, so the
-/// config refuses it there. macOS cannot pin a thread at all, so the same document loads.
+/// A Linux engine that spins with no hot core named would spin unpinned on a shared core without a
+/// word, so the config refuses it there and names both keys. A parking engine needs no core of its
+/// own, and macOS cannot pin a thread at all, so there both documents load.
 #[test]
-fn the_hot_core_is_required_on_linux_and_ignored_elsewhere() {
-    let unpinned = config_with_source(BINANCE_PERP_SOURCE).replace("  hot_core_id: 0\n", "");
+fn spin_without_hot_core_refuses_start() {
+    let spinning = config_with_source(BINANCE_PERP_SOURCE).replace("  hot_core_id: 0\n", "");
     assert!(
-        !unpinned.contains("hot_core_id"),
+        !spinning.contains("hot_core_id"),
         "the document under test must name no hot core"
     );
-    let loaded = engine::runtime::config::Config::<NoParams>::from_yaml(&unpinned);
+    let parking = spinning.replacen("engine:\n", "engine:\n  idle: park\n", 1);
+    assert!(
+        parking.contains("  idle: park\n"),
+        "the parking document parks"
+    );
+
+    let parked = engine::runtime::config::Config::<NoParams>::from_yaml(&parking)
+        .expect("a parking engine needs no hot core");
+    Registry::build(&parked).expect("and its registry builds");
+
+    let spun = engine::runtime::config::Config::<NoParams>::from_yaml(&spinning);
     if cfg!(target_os = "linux") {
+        let Err(refusal) = spun else {
+            panic!("linux must refuse an engine that spins with no hot core");
+        };
         assert!(
-            matches!(loaded, Err(ConfigError::MissingHotCoreId)),
-            "linux must refuse a document with no hot core, got {loaded:?}"
+            matches!(refusal, ConfigError::SpinWithoutHotCore),
+            "the refusal is the spin one, got {refusal}"
+        );
+        let message = refusal.to_string();
+        assert!(
+            message.contains("engine.idle") && message.contains("engine.hot_core_id"),
+            "the refusal names both keys: {message}"
         );
     } else {
-        let config = loaded.expect("a document with no hot core loads where nothing is pinned");
+        let config = spun.expect("a spinning engine loads where nothing is pinned");
         Registry::build(&config).expect("and its registry builds");
     }
 }
@@ -1133,4 +1152,40 @@ fn execution_numeric_fields_reject_out_of_range_values() {
             _ => panic!("{expected_field}: overflow must be refused by field, got {error}"),
         }
     }
+}
+
+/// The log gets its own share of the shutdown: a log deadline at or past the engine's would let
+/// the drain watchdog cut the last log lines off, so such a document is refused at load.
+#[test]
+fn log_deadline_at_or_above_the_engine_drain_deadline_refuses_start() {
+    let with_log_deadline = |log_ms: u64| {
+        config_with_source(BINANCE_PERP_SOURCE)
+            .replacen("engine:\n", "engine:\n  drain_deadline_ms: 5000\n", 1)
+            .replacen(
+                "logging:\n  dir: ./logs\n",
+                &format!("logging:\n  dir: ./logs\n  drain_deadline_ms: {log_ms}\n"),
+                1,
+            )
+    };
+    for log_ms in [5_000, 6_000] {
+        let refusal =
+            engine::runtime::config::Config::<NoParams>::from_yaml(&with_log_deadline(log_ms))
+                .expect_err("a log deadline at or past the engine's is refused");
+        let ConfigError::LogDeadline {
+            log_deadline_ms,
+            engine_deadline_ms,
+        } = &refusal
+        else {
+            panic!("expected LogDeadline, got {refusal:?}");
+        };
+        assert_eq!((*log_deadline_ms, *engine_deadline_ms), (log_ms, 5_000));
+        let message = refusal.to_string();
+        assert!(
+            message.contains("logging.drain_deadline_ms")
+                && message.contains("engine.drain_deadline_ms"),
+            "the refusal names both keys: {message}"
+        );
+    }
+    engine::runtime::config::Config::<NoParams>::from_yaml(&with_log_deadline(4_999))
+        .expect("a log deadline below the engine's loads");
 }

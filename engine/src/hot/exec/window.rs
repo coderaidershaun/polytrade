@@ -6,9 +6,9 @@
 
 use crate::hot::ledger::{PositionLedger, narrow};
 use crate::hot::strategy::Actions;
+use crate::log::hot_warn;
 use crate::msg::ids::{InstrumentId, Qty, Side};
 use crate::msg::time::TsUs;
-use crate::warn;
 
 use super::engine::ExecEngine;
 use super::spin::SpinInput;
@@ -100,26 +100,24 @@ impl ExecEngine {
 /// something to pull, which past the first pass means a cancel the venue refused.
 #[cold]
 fn report_window_sweep(instrument: InstrumentId, pulled: usize) {
-    warn!(
-        "instrument {} is inside the margin before its window closes — pulled {pulled} resting order(s)",
-        instrument.0
+    hot_warn!(
+        "instrument {} is inside the margin before its window closes — pulled {} resting order(s)",
+        instrument.0,
+        pulled
     );
 }
 
 /// A position still open when its market rotates is a loss with no upper bound: the contracts settle
 /// at nothing or at everything and no order can be placed against them any more.
 ///
-/// At WARN rather than ERROR for the reason the reconciliation sweep's own warning is, and it binds
-/// harder here. This carries the numbers an operator acts on and it repeats — every window that
-/// strands something strands something NEW, so it cannot be latched — while `error!` captures a
-/// backtrace by construction. A backtrace tells nobody anything the message has not already said,
-/// and capturing one on the hot thread every few minutes is a cost the hot path does not accept
-/// for a line that is already as loud as it needs to be.
+/// It stays at WARN, the level operators know it by. It repeats on purpose: every window that
+/// strands something strands something NEW, so it cannot be latched.
 #[cold]
 fn stranded_position_warning(instrument: InstrumentId, position: Qty) {
-    warn!(
+    hot_warn!(
         "instrument {} rotated to a new window still holding {} base — that position is stranded on \
          a market this engine can no longer trade",
-        instrument.0, position.0
+        instrument.0,
+        position.0
     );
 }

@@ -259,6 +259,10 @@ impl Probe {
 /// The one condition that can fail here — a host clock before 1970 — is exactly the condition the
 /// skew measurement exists to catch, so it is an error rather than a zero that would be reported as
 /// a fifty-year skew.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the venue probe reports the host clock's skew, before any message exists"
+)]
 fn local_unix_secs() -> Result<i64, ProbeError> {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

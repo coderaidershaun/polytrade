@@ -16,7 +16,7 @@ use engine::msg::ui::UiEvent;
 use engine::runtime::config::{RecordedTables, TableKind};
 use rtrb::Consumer;
 
-use crate::engine_support::{ONE, exec_event, pop};
+use crate::engine_support::{ONE, exec_event};
 use crate::exec_support::{
     BID, CEILING, INSTRUMENT, QuotingEngine, QuotingSetup, TwoSidedQuoter, built_quoting_engine,
     drain_commands, exec_settings, make_ready, reseat_book, row_with_ceiling, spin_at,
@@ -176,15 +176,12 @@ fn a_probe_refused_at_the_gateway_leaves_the_doubt_standing() {
 fn adopt_live(engine: &mut HotEngine, generation_offset: usize, side: Side, when: i64) {
     let slot = side_base(INSTRUMENT, side) + generation_offset;
     let client_id = ClientIdLayout { run_nonce: 0 }.encode(slot, 1);
-    engine.dispatch(
-        pop(0, 0),
-        &InboundMessage::Exec(ExecEvent {
-            kind: ExecKind::SnapshotOrder,
-            status: Some(VenueOrderStatus::New),
-            qty: Qty(ONE / 10),
-            ..exec_event(INSTRUMENT, client_id, side, BID, when)
-        }),
-    );
+    engine.dispatch(&InboundMessage::Exec(ExecEvent {
+        kind: ExecKind::SnapshotOrder,
+        status: Some(VenueOrderStatus::New),
+        qty: Qty(ONE / 10),
+        ..exec_event(INSTRUMENT, client_id, side, BID, when)
+    }));
 }
 
 fn halt_of(events: &mut Consumer<UiEvent>) -> Option<ExecHalt> {
@@ -206,7 +203,7 @@ fn conservative_occupancy_above_the_cap_halts_and_sweeps() {
     } = sweeping_engine_with(exec_settings());
     make_ready(&mut engine, 0);
     for message in reseat_book(BID, crate::exec_support::ASK, 10) {
-        engine.dispatch(pop(0, 0), &message);
+        engine.dispatch(&message);
     }
 
     adopt_live(&mut engine, 1, Side::Buy, 20);

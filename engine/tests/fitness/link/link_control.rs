@@ -21,8 +21,7 @@ use engine::runtime::config::{RecordedTables, TableKind};
 
 use crate::engine_support::{
     LinkedEngine, LinkedSetup, ONE, call_codes, delta_chunk, drain_persist, engine_with_link,
-    idle_at, instrument_row, pop, run_control, running_at, snapshot_pair, spin, tracker_spec_all,
-    trade,
+    idle_at, instrument_row, run_control, running_at, snapshot_pair, spin, tracker_spec_all, trade,
 };
 
 /// One `call` feature per callback, so the drained stream encodes exactly which callbacks fired —
@@ -101,7 +100,7 @@ fn run(sequence: &[InboundMessage]) -> Vec<PersistRecord> {
     );
     assert_eq!(linked.control.desired().state(), RunState::Idle);
     for message in sequence {
-        linked.engine.dispatch(pop(0, 0), message);
+        linked.engine.dispatch(message);
     }
     drain_persist(&mut linked)
 }
@@ -162,7 +161,7 @@ fn a_dropped_control_marker_self_corrects_on_the_next_heartbeat() {
     assert_eq!(pending, park);
     // The marker is never dispatched here, exactly as if its push had been dropped.
 
-    linked.engine.dispatch(pop(0, 0), &run_control(park, 10));
+    linked.engine.dispatch(&run_control(park, 10));
     assert_eq!(
         linked.control.pending(),
         None,
@@ -175,7 +174,7 @@ fn a_dropped_control_marker_self_corrects_on_the_next_heartbeat() {
     );
 
     // The heartbeat that raced the acknowledgement pushes the same marker again. Idempotent.
-    linked.engine.dispatch(pop(0, 0), &run_control(park, 11));
+    linked.engine.dispatch(&run_control(park, 11));
     assert_eq!(linked.control.pending(), None);
     assert_eq!(linked.control.acknowledged().load(), park);
 
@@ -241,7 +240,7 @@ fn resuming_resets_derived_state_and_rearms_warmup() {
         InboundMessage::Book(delta_chunk(0, Side::Buy, &[(100 * ONE, 9 * ONE)], 3)),
         InboundMessage::SpinTick(spin(1, 20)),
     ] {
-        linked.engine.dispatch(pop(0, 0), &message);
+        linked.engine.dispatch(&message);
     }
     assert!(
         has_vol(&drain_persist(&mut linked)),
@@ -253,7 +252,7 @@ fn resuming_resets_derived_state_and_rearms_warmup() {
         run_control(running_at(2), 40),
         InboundMessage::SpinTick(spin(2, 45)),
     ] {
-        linked.engine.dispatch(pop(0, 0), &message);
+        linked.engine.dispatch(&message);
     }
     assert!(
         call_codes(&drain_persist(&mut linked)).is_empty(),
@@ -262,7 +261,7 @@ fn resuming_resets_derived_state_and_rearms_warmup() {
 
     linked
         .engine
-        .dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(3, 60)));
+        .dispatch(&InboundMessage::SpinTick(spin(3, 60)));
     let past_warmup = drain_persist(&mut linked);
     assert_eq!(
         call_codes(&past_warmup),

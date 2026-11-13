@@ -1,18 +1,23 @@
-//! Hot-thread spawn + input producers. Full queue = fatal (engine stalled).
-//! [`LinkQueueProducer`] exception: drop+count (untrusted remote, not engine-fed).
+//! The hot thread, the driver that runs its loop, and the producers of its input queues. A full
+//! queue is fatal, except the link queue: an untrusted peer fills it, so it drops and counts.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use rtrb::Producer;
 
-use super::ingress::{IngressQueues, QueueSample};
+use super::dispatch::HotEngine;
+use super::ingress::IngressQueues;
+use super::metrics::{DriverSamples, Folded};
+use crate::log::{hot_error, hot_warn};
 use crate::msg::ids::{QueueId, SourceId};
 use crate::msg::inbound::{InboundMessage, MarketTapItem, TappedMessage, VenueMeta};
+use crate::msg::latency::CounterSample;
 use crate::msg::time::TsUs;
+use crate::runtime::pin::pin_current_thread;
 use crate::runtime::shutdown::{DrainSignal, FatalSignal};
-use crate::{error, warn};
 
 /// Keeps market taps open until the simulator finishes its final sweep.
 #[derive(Debug, Default)]
@@ -161,11 +166,21 @@ impl QueueProducer {
                 ("market tap ring for input queue", capacity, "simulator")
             }
         };
-        let queue = self.queue_id.0;
-        error!(
-            "{ring_name} {queue} (source {}) full at capacity {capacity} — {stalled} cannot keep up",
-            self.source_id.0
-        );
+        let (queue, source) = (self.queue_id.0, self.source_id.0);
+        match ring {
+            FullRing::Input => hot_error!(
+                "input queue {} (source {}) full at capacity {} — engine cannot keep up",
+                queue,
+                source,
+                capacity
+            ),
+            FullRing::MarketTap => hot_error!(
+                "market tap ring for input queue {} (source {}) full at capacity {} — simulator cannot keep up",
+                queue,
+                source,
+                capacity
+            ),
+        }
         self.fatal.trip(format!(
             "{ring_name} {queue} full at capacity {capacity} — {stalled} cannot keep up"
         ));
@@ -212,7 +227,7 @@ impl LinkQueueProducer {
     fn count_drop(&mut self) {
         self.dropped += 1;
         if self.dropped.is_power_of_two() {
-            warn!(
+            hot_warn!(
                 "link input queue {} full at capacity {} — dropped {} frames from remote peers",
                 self.queue_id.0,
                 self.producer.buffer().capacity(),
@@ -222,18 +237,108 @@ impl LinkQueueProducer {
     }
 }
 
+/// What the hot thread is built with. With no samples it reads no counter and pushes nothing, so a
+/// replay folds exactly what a live run folds.
 pub struct HotThreadConfig {
     pub core_id: Option<usize>,
     pub tag: &'static str,
+    pub samples: Option<DriverSamples>,
+    pub idle: IdleWait,
 }
 
-/// Spawn pinned hot loop: pop oldest, dispatch. Fatal stops immediately. Drain drains first.
+/// How the hot loop waits while every queue is empty. Either way the fold is the same: only when a
+/// message is popped changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IdleWait {
+    /// Spins on its core, so the next message is popped the moment it lands. It takes the core
+    /// whole.
+    Spin,
+    /// Sleeps this long and looks again, which leaves the core to other threads.
+    Park(Duration),
+}
+
+/// What one step of the hot loop did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Step {
+    /// The oldest message of all the queues was folded.
+    Folded,
+    /// Every queue was empty.
+    Idle,
+}
+
+/// The body of the hot loop. Each step pops the oldest message, folds it, and records what the
+/// samples ask for, on the caller's thread.
+pub struct HotDriver {
+    queues: IngressQueues,
+    engine: HotEngine,
+    samples: Option<DriverSamples>,
+    pops: u32,
+    parks: u64,
+}
+
+impl HotDriver {
+    pub fn new(
+        queues: IngressQueues,
+        engine: HotEngine,
+        samples: Option<DriverSamples>,
+    ) -> HotDriver {
+        HotDriver {
+            queues,
+            engine,
+            samples,
+            pops: 0,
+            parks: 0,
+        }
+    }
+
+    #[inline]
+    pub fn step(&mut self) -> Step {
+        let Some((queue, message)) = self.queues.pop_next() else {
+            return Step::Idle;
+        };
+        let Some(samples) = self.samples.as_mut() else {
+            self.engine.dispatch(&message);
+            return Step::Folded;
+        };
+        let pop_tick = samples.stamp();
+        self.engine.dispatch(&message);
+        let done_tick = samples.stamp();
+        samples.record_stage(&Folded {
+            message: &message,
+            queue,
+            pop_tick,
+            done_tick,
+            pop_seq: self.pops,
+        });
+        self.pops = self.pops.wrapping_add(1);
+        if let InboundMessage::SpinTick(tick) = &message {
+            samples.counters.push(CounterSample {
+                spin_ts_us: tick.received_ts_us,
+                spin_seq: tick.seq,
+                backlog: self.queues.backlog_by_queue(),
+                counters: self.engine.counters(),
+                idle_parks: self.parks,
+            });
+        }
+        Step::Folded
+    }
+
+    /// Sleeps while every queue is empty, and counts it: each counter sample carries the count.
+    #[cold]
+    fn park(&mut self, nap: Duration) {
+        self.parks += 1;
+        thread::sleep(nap);
+    }
+}
+
+/// The hot thread pins itself, builds its hot lane on that core, and steps the driver until a fatal
+/// stops it at once, or a drain request finds every queue empty.
 pub fn spawn_hot_thread(
     config: HotThreadConfig,
-    mut queues: IngressQueues,
+    queues: IngressQueues,
+    engine: HotEngine,
     fatal: FatalSignal,
     drain: DrainSignal,
-    mut dispatch: impl FnMut(QueueSample, InboundMessage) + Send + 'static,
 ) -> JoinHandle<()> {
     thread::Builder::new()
         .name("polysim-hot".to_owned())
@@ -242,46 +347,21 @@ pub fn spawn_hot_thread(
             if let Some(core_id) = config.core_id {
                 pin_current_thread(core_id, &fatal);
             }
+            crate::log::register_hot_lane(config.tag);
+            let mut driver = HotDriver::new(queues, engine, config.samples);
             loop {
                 if fatal.is_tripped() {
                     return;
                 }
-                let Some((queue_id, message)) = queues.pop_next() else {
-                    if drain.is_requested() {
-                        return;
-                    }
-                    std::hint::spin_loop();
-                    continue;
-                };
-                let spin_backlog =
-                    matches!(message, InboundMessage::SpinTick(_)).then(|| queues.backlog());
-                dispatch(
-                    QueueSample {
-                        queue_id,
-                        depth: queues.occupancy(queue_id),
-                        spin_backlog,
+                match driver.step() {
+                    Step::Folded => {}
+                    Step::Idle if drain.is_requested() => return,
+                    Step::Idle => match config.idle {
+                        IdleWait::Spin => std::hint::spin_loop(),
+                        IdleWait::Park(nap) => driver.park(nap),
                     },
-                    message,
-                );
+                }
             }
         })
         .expect("failed to spawn hot thread")
-}
-
-/// Linux: pinning mandatory (failure trips fatal). Other OS: best-effort, single WARN.
-fn pin_current_thread(core_id: usize, fatal: &FatalSignal) {
-    let pinned = core_affinity::set_for_current(core_affinity::CoreId { id: core_id });
-    if !cfg!(target_os = "linux") {
-        warn!(
-            "cpu pinning is best-effort on {} — hot thread may float",
-            std::env::consts::OS
-        );
-        return;
-    }
-    if !pinned {
-        error!("hot thread failed to pin to core {core_id} — pinning is mandatory on linux");
-        fatal.trip(format!(
-            "hot thread failed to pin to core {core_id} — pinning is mandatory on linux"
-        ));
-    }
 }

@@ -2,9 +2,9 @@
 
 use std::cmp::Ordering;
 
+use crate::log::hot_warn;
 use crate::msg::ids::{Price, Qty, Side};
 use crate::msg::inbound::{BookChunk, Level};
-use crate::warn;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BookState {
@@ -281,9 +281,9 @@ impl Book {
         if self.is_silent() {
             return;
         }
-        warn!(
+        hot_warn!(
             "snapshot chunk while valid: instrument {} implicitly reset (adapter sequencing breach)",
-            chunk.instrument.0
+            chunk.instrument
         );
     }
 
@@ -292,9 +292,9 @@ impl Book {
         if self.is_silent() {
             return;
         }
-        warn!(
+        hot_warn!(
             "delta chunk dropped: instrument {} awaiting snapshot (adapter sequencing breach)",
-            chunk.instrument.0
+            chunk.instrument
         );
     }
 
@@ -368,19 +368,28 @@ impl Book {
         self.trimmed_count += stats.trimmed;
         self.remove_missing_count += stats.remove_missing;
         if stats.opened_trim_episode {
-            self.warn_trim_episode(chunk, side_name);
+            self.warn_trim_episode(chunk);
         }
     }
 
     #[cold]
-    fn warn_trim_episode(&self, chunk: &BookChunk, side_name: &str) {
+    fn warn_trim_episode(&self, chunk: &BookChunk) {
         if self.is_silent() {
             return;
         }
-        warn!(
-            "book instrument {} {side_name} side at capacity {} — dropping deepest levels",
-            chunk.instrument.0, self.capacity_per_side
-        );
+        let (instrument, capacity) = (chunk.instrument.0, self.capacity_per_side);
+        match chunk.side {
+            Side::Buy => hot_warn!(
+                "book instrument {} bid side at capacity {} — dropping deepest levels",
+                instrument,
+                capacity
+            ),
+            Side::Sell => hot_warn!(
+                "book instrument {} ask side at capacity {} — dropping deepest levels",
+                instrument,
+                capacity
+            ),
+        }
     }
 
     /// Classify top: locked = count only, crossed = count + warn/episode.
@@ -407,9 +416,11 @@ impl Book {
         if self.is_silent() {
             return;
         }
-        warn!(
+        hot_warn!(
             "crossed book: instrument {} best bid {} > best ask {}",
-            chunk.instrument.0, bid.0, ask.0
+            chunk.instrument.0,
+            bid.0,
+            ask.0
         );
     }
 }

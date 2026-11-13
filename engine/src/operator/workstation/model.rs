@@ -3,9 +3,7 @@
 
 use crate::msg::ids::{FIXED_SCALE, InstrumentId, Price, Side};
 use crate::msg::time::{DurationUs, TsUs};
-use crate::msg::ui::{
-    DomQuote, UiBookSnapshot, UiCatalog, UiEvent, UiInstrument, UiLatencySummary,
-};
+use crate::msg::ui::{DomQuote, LatencyReport, UiBookSnapshot, UiCatalog, UiEvent, UiInstrument};
 
 use super::chart::model::{BookContinuity, ChartModel};
 use super::chart::position_model::PositionModel;
@@ -40,12 +38,15 @@ pub(crate) struct DomSource<'a> {
 /// How far a book may trail the engine's own clock before the ladder reads as stale.
 const BOOK_STALE_AFTER: DurationUs = DurationUs::from_millis(2_000);
 
+/// Three reports missed at the metrics thread's default cadence of one a second.
+const LATENCY_REPORT_STALE_AFTER: DurationUs = DurationUs::from_millis(3_000);
+
 /// One engine run's state. Per-instrument storage grows on demand.
 pub struct UiModel {
     catalog: Option<UiCatalog>,
     latest_book: Vec<Option<UiBookSnapshot>>,
     latest_quote: Vec<Option<(DomQuote, TsUs)>>,
-    latest_latency: Option<UiLatencySummary>,
+    latest_latency_report: Option<LatencyReport>,
     book_last_seq: Vec<Option<u64>>,
     selected: InstrumentId,
     chart_mode: ChartMode,
@@ -87,7 +88,7 @@ impl UiModel {
             catalog: None,
             latest_book: vec![None; instrument_count],
             latest_quote: vec![None; instrument_count],
-            latest_latency: None,
+            latest_latency_report: None,
             book_last_seq: vec![None; instrument_count],
             selected: InstrumentId(0),
             chart_mode: ChartMode::default(),
@@ -174,9 +175,6 @@ impl UiModel {
         self.chart.apply_event(&event);
         self.positions.apply_event(&event);
         self.exec.apply_event(&event);
-        if let UiEvent::Latency { summary, .. } = event {
-            self.latest_latency = Some(summary);
-        }
         let UiEvent::Quote {
             instrument,
             event_ts_us,
@@ -199,9 +197,21 @@ impl UiModel {
         *self.latest_quote.get(instrument.0 as usize)?
     }
 
-    /// `None` until the first spin after this workstation attached.
-    pub fn latency(&self) -> Option<UiLatencySummary> {
-        self.latest_latency
+    pub fn apply_latency_report(&mut self, report: LatencyReport) {
+        self.latest_latency_report = Some(report);
+    }
+
+    /// `None` until the first report after this workstation attached.
+    pub fn latency_report(&self) -> Option<&LatencyReport> {
+        self.latest_latency_report.as_ref()
+    }
+
+    /// How far the latency report trails the freshest stamp on the feed, once that is far enough
+    /// to say so. A metrics thread that stopped sends nothing, so only the feed can show its age.
+    pub fn latency_report_staleness(&self) -> Option<DurationUs> {
+        let report = self.latest_latency_report.as_ref()?;
+        let freshest = self.freshest_feed_ts?;
+        Some(freshest.diff(report.built_ts_us)).filter(|age| *age > LATENCY_REPORT_STALE_AFTER)
     }
 
     /// Live while the book is no more than two and a half spins newer than the quote, in event

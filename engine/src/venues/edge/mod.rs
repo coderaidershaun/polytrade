@@ -1,8 +1,9 @@
-//! The session chassis every venue edge runs on: dial, serve, back off, sweep, stop. A venue brings
-//! its own select! loop and its own idea of what can be sent while the socket is down; the ordering
-//! rules — which latch wins, how long blind before resting orders are pulled, when the settled
-//! signal is raised — live here once. Two copies of a safety rule drift, and the cost of the drift
-//! is an order left resting with nothing watching it.
+//! The session chassis every venue edge runs on: dial, serve, back off, sweep, stop, with the one
+//! sender that drains the command lane. A venue brings its own select! loop and its own idea of what
+//! can be sent while the socket is down; the ordering rules — which latch wins, how long blind
+//! before resting orders are pulled, when the settled signal is raised — live here once. Two copies
+//! of a safety rule drift, and the cost of the drift is an order left resting with nothing watching
+//! it.
 //!
 //! It sits beside the venue-neutral execution machinery rather than inside it. That machinery is
 //! scanned for clock reads, because hot state has to replay identically from a recorded tape,
@@ -18,6 +19,7 @@ pub mod decode;
 pub mod http;
 pub(crate) mod lane;
 pub mod rest_quiet;
+pub mod sender;
 pub(crate) mod socket;
 pub mod venue_clock;
 
@@ -27,24 +29,26 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 
+use crate::hot::sink::SampleSink;
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::msg::exec::{AccountChunk, CancelReason, ExecEvent, ExecLaneItem};
+use crate::msg::ids::QueueId;
 use crate::msg::inbound::InboundMessage;
+use crate::msg::latency::WireSample;
 use crate::msg::run_state::RunState;
-use crate::msg::time::{DurationUs, EngineClock, TsUs};
-use crate::runtime::config::ExecutionConfig;
+use crate::msg::time::{DurationUs, EngineClock, Stamper, TsUs};
+use crate::runtime::config::{ExecutionConfig, SenderPlacement};
 use crate::runtime::registry::Registry;
 use crate::runtime::shutdown::{FatalSignal, RunStateCell};
 use crate::venues::IDLE_POLL;
 use crate::venues::edge::backoff::BackoffCaps;
+use crate::venues::edge::sender::{SendWait, Sender, SenderSetup};
 use crate::venues::edge::socket::{Reader, Writer, connect};
 use crate::venues::exec::{
     EdgeHandle, EngineIdentity, EventSink, ExecStop, ExitPlan, SessionOutcome,
 };
 use crate::{info, warn};
 
-// Polling the command ring every millisecond costs a little latency but avoids waking on every push.
-pub(crate) const COMMAND_POLL: Duration = Duration::from_millis(1);
 // Checks the exit latches and deadlines often enough that a stop is acted on within milliseconds.
 pub(crate) const HOUSEKEEPING: Duration = Duration::from_millis(20);
 // Often enough to catch a missed fill quickly, slow enough to stay well inside venue rate limits.
@@ -84,6 +88,47 @@ pub(crate) struct EdgeInputs<'a> {
     pub(crate) lane_capacity: usize,
     pub(crate) spin_interval: DurationUs,
     pub(crate) input_capacity: usize,
+    /// A simulated venue reads its lane itself and has no sender.
+    pub(crate) sender: SenderSettings,
+}
+
+/// The sender of a live venue's edge, which wakes on the runtime's interval when it is shared.
+pub(crate) type EdgeSender = Sender<tokio::time::Interval>;
+
+/// How the runtime sets up the sender of the execution edge.
+pub(crate) struct SenderSettings {
+    pub(crate) stamper: Stamper,
+    pub(crate) wires: SampleSink<WireSample>,
+    pub(crate) placement: SenderPlacement,
+    pub(crate) tick: Duration,
+    pub(crate) queue: QueueId,
+}
+
+/// A live venue's command lane, with the settings of the sender that drains it.
+pub(crate) struct EdgeLane {
+    pub(crate) commands: rtrb::Consumer<ExecLaneItem>,
+    pub(crate) sender: SenderSettings,
+}
+
+impl EdgeLane {
+    /// Called inside the edge's own task, because the interval of a shared sender belongs to the
+    /// runtime that runs it.
+    fn into_sender(self) -> EdgeSender {
+        let SenderSettings {
+            stamper,
+            wires,
+            placement,
+            tick,
+            queue,
+        } = self.sender;
+        Sender::new(SenderSetup {
+            commands: self.commands,
+            stamper,
+            wires,
+            queue,
+            wait: SendWait::new(placement, tokio::time::interval(tick)),
+        })
+    }
 }
 
 /// The chosen venue's setup, held until the hot thread exists: an edge is decided during bring-up
@@ -180,6 +225,10 @@ impl EdgeControl {
 
     /// Opens the exit unless one is already under way, answering whether this call is the one that
     /// opened it — so the caller sweeps once rather than on every latch read.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the session chassis stamps queued time and paces reconnects by wall time"
+    )]
     pub(crate) fn open_exit(&mut self, reason: CancelReason) -> bool {
         if self.exit.is_some() {
             return false;
@@ -190,6 +239,10 @@ impl EdgeControl {
     }
 
     /// The next paced cancel attempt, once the retry interval allows and the sweep is unfinished.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the session chassis stamps queued time and paces reconnects by wall time"
+    )]
     pub(crate) fn claim_sweep_retry(&mut self) -> Option<CancelReason> {
         if self.is_swept {
             return None;
@@ -199,6 +252,10 @@ impl EdgeControl {
     }
 
     /// When a failed pass may be tried again, jittered by the same caps that pace reconnects.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the session chassis stamps queued time and paces reconnects by wall time"
+    )]
     pub(crate) fn next_attempt_at(&self, attempt: u32) -> TsUs {
         let delay = self.backoff.delay(attempt);
         self.clock.now() + DurationUs::from_micros(delay.as_micros() as i64)
@@ -223,6 +280,10 @@ impl EventFunnel {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the session chassis stamps queued time and paces reconnects by wall time"
+    )]
     pub(crate) fn send(&mut self, mut message: InboundMessage) {
         message.set_queued_ts_us(self.clock.now());
         self.producer.push(message);
@@ -259,8 +320,14 @@ pub(crate) trait EdgeDriver {
     /// Whatever has to be true before the first dial. A venue with nothing to do leaves it alone.
     async fn start(&mut self) {}
 
-    /// The venue's own loop, running until the connection ends one way or the other.
-    async fn serve(&mut self, writer: Writer, reader: Reader) -> SessionOutcome;
+    /// The venue's own loop, running until the connection ends one way or the other. Each wake
+    /// drains the command lane through `sender` first, whatever woke the loop.
+    async fn serve(
+        &mut self,
+        writer: Writer,
+        reader: Reader,
+        sender: &mut EdgeSender,
+    ) -> SessionOutcome;
 
     /// One servicing step with the socket down: wait for an answer until `deadline` and fold it in.
     /// Folding only — the sweep that answer may unblock is [`EdgeDriver::retry_sweep`]'s, and doing
@@ -283,7 +350,12 @@ pub(crate) trait EdgeDriver {
 }
 
 /// Dial, serve, back off, repeat — until a terminal exit has swept every order this run owns.
-pub(crate) async fn run_edge<D: EdgeDriver>(mut driver: D) {
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the session chassis stamps queued time and paces reconnects by wall time"
+)]
+pub(crate) async fn run_edge<D: EdgeDriver>(mut driver: D, lane: EdgeLane) {
+    let mut sender = lane.into_sender();
     driver.start().await;
 
     let mut attempt: u32 = 0;
@@ -302,7 +374,7 @@ pub(crate) async fn run_edge<D: EdgeDriver>(mut driver: D) {
                 down_since = None;
                 attempt = 0;
                 let (writer, reader) = socket.split();
-                if driver.serve(writer, reader).await == SessionOutcome::Swept {
+                if driver.serve(writer, reader, &mut sender).await == SessionOutcome::Swept {
                     complete_exit(&mut driver).await;
                 }
             }
@@ -347,6 +419,10 @@ async fn check_latches<D: EdgeDriver>(driver: &mut D) {
 }
 
 // While offline, answers are read rather than slept through, and each one carries the sweep forward.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the session chassis stamps queued time and paces reconnects by wall time"
+)]
 async fn settle_offline<D: EdgeDriver>(driver: &mut D, wait: Duration) {
     let deadline = tokio::time::Instant::now() + wait;
     while !(driver.control().is_swept && driver.control().exit.is_some()) {

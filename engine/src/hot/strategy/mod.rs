@@ -37,8 +37,8 @@ pub use crate::link::{LinkFrame, TopicId};
 pub use crate::msg::persist::FeatureId;
 pub use crate::runtime::registry::InstrumentRow;
 
+pub use actions::ClientOrderId;
 pub(crate) use actions::{Actions, ActionsSetup, DrainSinks};
-pub use actions::{ClientOrderId, LaneDrops};
 
 /// Callbacks default no-ops; override only events of interest. State pre-applied; read via ctx, don't re-derive.
 pub trait Strategy: Send {
@@ -215,44 +215,24 @@ pub fn resolve_filter(filter: &Instruments, instruments: &[InstrumentRow]) -> In
     InstrumentMask { selected }
 }
 
-/// Bank strategy INFO line (event time stamp). fmt! syntax; ctx is first arg.
+/// Banks a strategy INFO line, stamped with the time of the message under fold:
+/// `note!(ctx, "fit rejected: {} samples, {} needed", samples, needed)`. The template takes `{}`,
+/// `{:?}`, `{:x}` and `{:.N}`, and each argument is a [`LogValue`](crate::log::LogValue): the
+/// callback copies raw words, and the log drain makes the text.
 #[macro_export]
-macro_rules! strategy_info {
-    ($ctx:expr, $($arg:tt)*) => {
-        $ctx.log_record(
-            $crate::log::Level::Info,
-            ::core::module_path!(),
-            ::core::file!(),
-            ::core::line!(),
-            ::core::format_args!($($arg)*),
-        )
-    };
+macro_rules! note {
+    ($ctx:expr, $($arg:tt)*) => {{
+        let (callsite, args) = $crate::__hot_parts!(Info, $($arg)*);
+        $ctx.bank_log(callsite, args)
+    }};
 }
 
-/// Bank strategy WARN line (see strategy_info!).
+/// Banks a strategy WARN line. See `note!`. A strategy has no ERROR line: a broken invariant of its
+/// own is a bug, and a bug panics.
 #[macro_export]
-macro_rules! strategy_warn {
-    ($ctx:expr, $($arg:tt)*) => {
-        $ctx.log_record(
-            $crate::log::Level::Warn,
-            ::core::module_path!(),
-            ::core::file!(),
-            ::core::line!(),
-            ::core::format_args!($($arg)*),
-        )
-    };
-}
-
-/// Bank strategy ERROR line (file/line but no backtrace — capture allocs, priority).
-#[macro_export]
-macro_rules! strategy_error {
-    ($ctx:expr, $($arg:tt)*) => {
-        $ctx.log_record(
-            $crate::log::Level::Error,
-            ::core::module_path!(),
-            ::core::file!(),
-            ::core::line!(),
-            ::core::format_args!($($arg)*),
-        )
-    };
+macro_rules! alert {
+    ($ctx:expr, $($arg:tt)*) => {{
+        let (callsite, args) = $crate::__hot_parts!(Warn, $($arg)*);
+        $ctx.bank_log(callsite, args)
+    }};
 }

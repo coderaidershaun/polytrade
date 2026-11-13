@@ -1,20 +1,22 @@
-//! The latency grid at the top of the chart pane: mean stage times per flow and the input-queue
-//! backlog. Every cell is a number to scan, so it only paints, folding to one line on a short pane.
+//! The latency grid at the top of the chart pane: the 99th percentile of each stage per flow and
+//! the input-queue backlog. Every cell is a number to scan, so it only paints, folding to one line
+//! on a short pane.
 
 use eframe::egui;
 
-use crate::msg::ui::UiLatencySummary;
+use crate::msg::time::DurationUs;
+use crate::msg::ui::{LatencyFlow, LatencyReport};
 
 use super::theme::{self, DARK, METRICS};
 use crate::operator::workstation::chart::pane::{
     LATENCY_HEADER_HEIGHT, LATENCY_ROW_HEIGHT, LatencyBand,
 };
 use crate::operator::workstation::text::{
-    Column, Flow, LATENCY_ROWS, LATENCY_SHORT_TITLE, LATENCY_TITLE, summary_cells,
+    Column, LATENCY_ROWS, LATENCY_SHORT_TITLE, LATENCY_TITLE, latency_title, summary_cells,
 };
 
-/// Room for a three-letter row label after its inset and no more, so a 600 point pane still holds
-/// all seven columns.
+/// Room for a three-letter row label after its inset and no more, so a narrow pane still holds
+/// every column.
 const SHORT_LABEL_WIDTH: f32 = 40.0;
 
 /// The widest value is nine characters of the 12 point monospace face, about 65 points. With the
@@ -27,7 +29,9 @@ const MIN_COLUMN_WIDTH: f32 = 80.0;
 const MAX_COLUMN_WIDTH: f32 = 128.0;
 
 pub struct LatencyFrame {
-    pub summary: Option<UiLatencySummary>,
+    pub report: Option<LatencyReport>,
+    /// The report's age, once it is old enough to call stale.
+    pub staleness: Option<DurationUs>,
 }
 
 /// Splits a chart pane's body into the latency band at the top and the charts below it.
@@ -40,10 +44,9 @@ pub fn paint(ui: &mut egui::Ui, rect: egui::Rect, frame: &LatencyFrame) {
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 0.0, DARK.panel);
 
-    let summary = frame.summary.as_ref();
     match LatencyBand::fitting(rect.height()) {
-        LatencyBand::Grid => paint_grid(&painter, rect, summary),
-        LatencyBand::Summary => paint_summary(&painter, rect, summary),
+        LatencyBand::Grid => paint_grid(&painter, rect, frame),
+        LatencyBand::Summary => paint_summary(&painter, rect, frame),
     }
 
     painter.hline(
@@ -95,13 +98,14 @@ impl Fit {
     }
 }
 
-fn paint_grid(painter: &egui::Painter, rect: egui::Rect, summary: Option<&UiLatencySummary>) {
+fn paint_grid(painter: &egui::Painter, rect: egui::Rect, frame: &LatencyFrame) {
     let fit = Fit::for_width(rect.width());
     let grid = rect.with_max_y((rect.top() + LatencyBand::Grid.height()).min(rect.bottom()));
 
     let header = grid.with_max_y(grid.top() + LATENCY_HEADER_HEIGHT);
-    paint_header(painter, header, &fit);
-    paint_rows(painter, grid.with_min_y(header.bottom()), &fit, summary);
+    paint_header(painter, header, &fit, frame.staleness);
+    let report = frame.report.as_ref();
+    paint_rows(painter, grid.with_min_y(header.bottom()), &fit, report);
 
     // The slot column is a queue depth, not a latency, so a full-height divider stops a reader
     // comparing it with the microsecond columns beside it.
@@ -111,12 +115,22 @@ fn paint_grid(painter: &egui::Painter, rect: egui::Rect, summary: Option<&UiLate
     }
 }
 
-fn paint_header(painter: &egui::Painter, band: egui::Rect, fit: &Fit) {
+fn paint_header(
+    painter: &egui::Painter,
+    band: egui::Rect,
+    fit: &Fit,
+    staleness: Option<DurationUs>,
+) {
     painter.rect_filled(band, 0.0, DARK.panel_raised);
     let column = fit.column(band);
     let font = egui::FontId::proportional(METRICS.latency_header_font);
     let title = if fit.has_short_labels { LATENCY_SHORT_TITLE } else { LATENCY_TITLE };
-    paint_label(painter, column, title, font.clone());
+    paint_label(
+        painter,
+        column,
+        &latency_title(title, staleness),
+        font.clone(),
+    );
     for (position, shown) in Column::shown(fit.count).enumerate() {
         let cell = fit.cell(column, position);
         paint_value(
@@ -134,7 +148,7 @@ fn paint_rows(
     painter: &egui::Painter,
     band: egui::Rect,
     fit: &Fit,
-    summary: Option<&UiLatencySummary>,
+    report: Option<&LatencyReport>,
 ) {
     let separator = theme::hairline(painter, DARK.grid);
     let label_font = egui::FontId::proportional(METRICS.latency_row_font);
@@ -151,7 +165,7 @@ fn paint_rows(
         let row = fit.column(row_band);
         let label = if fit.has_short_labels { line.short_label } else { line.label };
         paint_label(painter, row, label, label_font.clone());
-        paint_values(painter, row, fit, line.flow, summary);
+        paint_values(painter, row, fit, line.flow, report);
     }
 }
 
@@ -159,12 +173,12 @@ fn paint_values(
     painter: &egui::Painter,
     row: egui::Rect,
     fit: &Fit,
-    flow: Flow,
-    summary: Option<&UiLatencySummary>,
+    flow: LatencyFlow,
+    report: Option<&LatencyReport>,
 ) {
     let font = egui::FontId::monospace(METRICS.latency_value_font);
     for (position, column) in Column::shown(fit.count).enumerate() {
-        let (text, tone) = column.cell(flow, summary);
+        let (text, tone) = column.cell(flow, report);
         let cell = fit.cell(row, position);
         paint_value(painter, cell, &text, font.clone(), DARK.tone(tone));
     }
@@ -173,7 +187,7 @@ fn paint_values(
 /// The folded band: the title, then as many of the three readings as the width holds, never
 /// painting past the right edge. It stays left-aligned instead of centred: it is one line of words
 /// that starts with its title, like the strip readout and the link bar.
-fn paint_summary(painter: &egui::Painter, rect: egui::Rect, summary: Option<&UiLatencySummary>) {
+fn paint_summary(painter: &egui::Painter, rect: egui::Rect, frame: &LatencyFrame) {
     let band = rect.with_max_y((rect.top() + LatencyBand::Summary.height()).min(rect.bottom()));
     painter.rect_filled(band, 0.0, DARK.panel_raised);
     theme::rules_h(painter, [band.bottom()], band.x_range());
@@ -181,7 +195,7 @@ fn paint_summary(painter: &egui::Painter, rect: egui::Rect, summary: Option<&UiL
     let label_font = egui::FontId::proportional(METRICS.latency_header_font);
     let value_font = egui::FontId::monospace(METRICS.latency_value_font);
     let title = painter.layout_no_wrap(
-        LATENCY_TITLE.to_owned(),
+        latency_title(LATENCY_TITLE, frame.staleness),
         label_font.clone(),
         DARK.text_secondary,
     );
@@ -190,7 +204,7 @@ fn paint_summary(painter: &egui::Painter, rect: egui::Rect, summary: Option<&UiL
     paint_galley(painter, band, left, title);
     left += title_width + METRICS.space_3;
 
-    for (label, text, tone) in summary_cells(summary) {
+    for (label, text, tone) in summary_cells(frame.report.as_ref()) {
         let label =
             painter.layout_no_wrap(label.to_owned(), label_font.clone(), DARK.text_secondary);
         let value = painter.layout_no_wrap(text, value_font.clone(), DARK.tone(tone));

@@ -25,8 +25,8 @@ use engine::msg::persist::FeatureId;
 use engine::msg::run_state::RunState;
 use engine::msg::time::{DurationUs, TsUs};
 use engine::msg::ui::{
-    DomQuote, UI_BOOK_LEVELS, UI_ORDER_SNAPSHOT_CAPACITY, UI_ORDER_SNAPSHOT_MAX_TOTAL,
-    UiBookSnapshot, UiBookState, UiEvent, UiLatencyCell, UiLatencyRow, UiLatencySummary,
+    DomQuote, LATENCY_REPORT_CELLS, LatencyCell, LatencyReport, UI_BOOK_LEVELS,
+    UI_ORDER_SNAPSHOT_CAPACITY, UI_ORDER_SNAPSHOT_MAX_TOTAL, UiBookSnapshot, UiBookState, UiEvent,
     UiWorkingOrder,
 };
 use engine::runtime::config::ExecutionMode;
@@ -387,58 +387,33 @@ fn arb_halt() -> impl Strategy<Value = ExecHalt> {
     ]
 }
 
-/// Counts stay inside `u32` because that is what the tail carries: the encoder saturates above it,
-/// and a generator that drew wider would be asserting a round-trip the wire never promised.
-fn arb_latency_cell() -> impl Strategy<Value = UiLatencyCell> {
-    (any::<u32>(), any::<i64>()).prop_map(|(count, sum_us)| UiLatencyCell {
-        count: u64::from(count),
-        sum_us,
+fn arb_report_cell() -> impl Strategy<Value = LatencyCell> {
+    any::<[u64; 5]>().prop_map(|[count, p50_ns, p99_ns, p999_ns, max_ns]| LatencyCell {
+        count,
+        p50_ns,
+        p99_ns,
+        p999_ns,
+        max_ns,
     })
 }
 
-fn arb_latency_row() -> impl Strategy<Value = UiLatencyRow> {
+fn arb_latency_report() -> impl Strategy<Value = LinkBody> {
     (
-        arb_latency_cell(),
-        arb_latency_cell(),
-        arb_latency_cell(),
-        arb_latency_cell(),
-        arb_latency_cell(),
-        arb_latency_cell(),
-    )
-        .prop_map(
-            |(
-                exchange_to_received,
-                received_to_queued,
-                queue_wait,
-                processing,
-                end_to_end,
-                order_round_trip,
-            )| UiLatencyRow {
-                exchange_to_received,
-                received_to_queued,
-                queue_wait,
-                processing,
-                end_to_end,
-                order_round_trip,
-            },
-        )
-}
-
-fn arb_latency() -> impl Strategy<Value = UiLatencySummary> {
-    (
-        arb_latency_row(),
-        arb_latency_row(),
-        arb_latency_row(),
+        any::<i64>(),
+        prop::array::uniform3(prop::option::of(any::<i64>())),
+        prop::collection::vec(arb_report_cell(), LATENCY_REPORT_CELLS),
         prop::option::of(arb_wire_f64()),
     )
-        .prop_map(
-            |(market_data, execution, hot_path, backlog_ema)| UiLatencySummary {
-                market_data,
-                execution,
-                hot_path,
+        .prop_map(|(built_ts_us, ages, cells, backlog_ema)| {
+            LinkBody::Latency(LatencyReport {
+                built_ts_us: TsUs::from_micros(built_ts_us),
+                ages: ages.map(|age| age.map(DurationUs::from_micros)),
+                cells: cells
+                    .try_into()
+                    .expect("the generator draws one cell for each slot"),
                 backlog_ema,
-            },
-        )
+            })
+        })
 }
 
 fn arb_event() -> impl Strategy<Value = LinkBody> {
@@ -570,13 +545,6 @@ fn arb_event() -> impl Strategy<Value = LinkBody> {
                 pnl_quote,
             }
         ),
-        (any::<u64>(), any::<i64>(), arb_latency()).prop_map(|(seq, stamp, summary)| {
-            UiEvent::Latency {
-                seq,
-                event_ts_us: TsUs::from_micros(stamp),
-                summary,
-            }
-        }),
     ]
     .prop_map(LinkBody::Event)
 }
@@ -707,6 +675,8 @@ fn arb_datagram() -> impl Strategy<Value = LinkDatagram> {
                     }
                 }
             ),
+        (arb_envelope(TopicId::LATENCY), arb_latency_report())
+            .prop_map(|(envelope, body)| LinkDatagram { envelope, body }),
         (
             arb_envelope(TopicId(LINK_MAX_TOPICS as u16)),
             any::<i64>(),
@@ -822,7 +792,7 @@ fn rejects_frames_with_distinct_causes() {
 
     let drifted = LinkHash::of_fields(&["microprice", "mid", "imbalance"]);
     let book_bytes = encode(&book_datagram());
-    let unknown_topic = TopicId(TopicId::LIFECYCLE.0 + 1);
+    let unknown_topic = TopicId(TopicId::LATENCY.0 + 1);
     let forged_field_count = LINK_MAX_FIELDS as u8 + 1;
     let forged_book_len = UI_BOOK_LEVELS as u16 + 1;
     let over_capacity = (UI_ORDER_SNAPSHOT_CAPACITY + 1) as u8;
@@ -1022,6 +992,7 @@ fn every_topic_the_engine_can_stamp_indexes_inside_its_sequence_array() {
             TopicId::CATALOG_INSTRUMENTS,
             TopicId::CATALOG_FEATURES,
             TopicId::LIFECYCLE,
+            TopicId::LATENCY,
         ] {
             assert!(
                 usize::from(engine.0) < slots,
@@ -1140,81 +1111,6 @@ fn every_event_body_survives_the_event_tail() {
             "case {name}: did not survive the event tail"
         );
     }
-}
-
-fn latency_cell(index: u64) -> UiLatencyCell {
-    UiLatencyCell {
-        count: index,
-        sum_us: -(index as i64) * 1_000,
-    }
-}
-
-fn latency_row(base: u64) -> UiLatencyRow {
-    UiLatencyRow {
-        exchange_to_received: latency_cell(base + 1),
-        received_to_queued: latency_cell(base + 2),
-        queue_wait: latency_cell(base + 3),
-        processing: latency_cell(base + 4),
-        end_to_end: latency_cell(base + 5),
-        order_round_trip: latency_cell(base + 6),
-    }
-}
-
-/// FITNESS: every self-timing cell keeps its own place in the tail, and an over-wide count saturates
-/// rather than wrapping.
-///
-/// Eighteen structurally identical cells encode as one flat run of bytes, which is where a crossed
-/// pair hides: a summary whose exec round-trip decoded into the market-data row still round-trips as
-/// a whole. [`round_trips_every_frame_kind`] generates this kind too, but as one arm of eleven
-/// inside one topic of seven — about one draw in seventy-seven, so a crossing would be caught on
-/// most runs and missed on some. Distinct values in all eighteen cells make it every run.
-#[test]
-fn every_latency_cell_keeps_its_place_in_the_event_tail() {
-    let event = UiEvent::Latency {
-        seq: u64::MAX,
-        event_ts_us: TsUs::from_micros(i64::MAX),
-        summary: UiLatencySummary {
-            market_data: latency_row(0),
-            execution: latency_row(10),
-            hot_path: latency_row(20),
-            backlog_ema: Some(3.5),
-        },
-    };
-    let decoded = round_trip(&event_datagram(event)).expect("a canonical event decodes");
-    assert_eq!(decoded.body, LinkBody::Event(event));
-
-    // A wrapped count would report a saturated ten-minute window as a nearly idle engine — the one
-    // reading an operator would act on backwards.
-    let overflowing = UiEvent::Latency {
-        seq: 1,
-        event_ts_us: TsUs::from_micros(1),
-        summary: UiLatencySummary {
-            market_data: UiLatencyRow {
-                processing: UiLatencyCell {
-                    count: u64::from(u32::MAX) + 5,
-                    sum_us: 7,
-                },
-                ..UiLatencyRow::default()
-            },
-            ..UiLatencySummary::default()
-        },
-    };
-    let LinkBody::Event(UiEvent::Latency { summary, .. }) =
-        round_trip(&event_datagram(overflowing))
-            .expect("a canonical event decodes")
-            .body
-    else {
-        panic!("the events topic decoded as another body");
-    };
-    assert_eq!(
-        summary.market_data.processing.count,
-        u64::from(u32::MAX),
-        "an over-wide count clamps to the tail's ceiling"
-    );
-    assert_eq!(
-        summary.market_data.processing.sum_us, 7,
-        "and the sum beside it is untouched"
-    );
 }
 
 /// A reused send buffer must not leak the previous datagram into an event frame's unused tail:
@@ -1593,36 +1489,41 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
             ),
         ),
         (
-            "event-latency",
-            event(
-                0x100e,
-                UiEvent::Latency {
-                    seq: 0x110e,
-                    event_ts_us: TsUs::from_micros(1_700_000_000_001_014),
-                    summary: UiLatencySummary {
-                        market_data: latency_row(0),
-                        execution: latency_row(10),
-                        hot_path: latency_row(20),
-                        backlog_ema: Some(0.312_5 + 1.0e-9),
-                    },
-                },
-            ),
+            "latency-report",
+            LinkDatagram {
+                envelope: envelope(TopicId::LATENCY, 0x1010),
+                body: LinkBody::Latency(LatencyReport {
+                    built_ts_us: TsUs::from_micros(1_700_000_000_001_016),
+                    ages: [
+                        Some(DurationUs::from_micros(0x0102_0304)),
+                        None,
+                        Some(DurationUs::from_micros(-0x0506)),
+                    ],
+                    cells: std::array::from_fn(|index| {
+                        let base = 0x0100_0000_0000 * (index as u64 + 1);
+                        LatencyCell {
+                            count: base + 1,
+                            p50_ns: base + 2,
+                            p99_ns: base + 3,
+                            p999_ns: base + 4,
+                            max_ns: base + 5,
+                        }
+                    }),
+                    backlog_ema: Some(0.312_5 + 1.0e-9),
+                }),
+            },
         ),
         (
-            "event-latency-no-backlog",
-            event(
-                0x100f,
-                UiEvent::Latency {
-                    seq: 0x110f,
-                    event_ts_us: TsUs::from_micros(1_700_000_000_001_015),
-                    summary: UiLatencySummary {
-                        market_data: latency_row(30),
-                        execution: latency_row(40),
-                        hot_path: latency_row(50),
-                        backlog_ema: None,
-                    },
-                },
-            ),
+            "latency-report-empty",
+            LinkDatagram {
+                envelope: envelope(TopicId::LATENCY, 0x1011),
+                body: LinkBody::Latency(LatencyReport {
+                    built_ts_us: TsUs::from_micros(1_700_000_000_001_017),
+                    ages: [None; 3],
+                    cells: [LatencyCell::EMPTY; LATENCY_REPORT_CELLS],
+                    backlog_ema: None,
+                }),
+            },
         ),
     ]
 }

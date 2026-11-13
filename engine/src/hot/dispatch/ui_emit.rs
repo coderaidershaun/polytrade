@@ -12,7 +12,7 @@ use crate::msg::inbound::{Level, MarketRotation, TradeEvent};
 use crate::msg::time::TsUs;
 use crate::msg::ui::{
     DomQuote, UI_BOOK_LEVELS, UI_ORDER_SNAPSHOT_CAPACITY, UI_ORDER_SNAPSHOT_MAX_TOTAL,
-    UiBookSnapshot, UiBookState, UiEvent, UiLatencySummary, UiWorkingOrder,
+    UiBookSnapshot, UiBookState, UiEvent, UiWorkingOrder,
 };
 
 pub(crate) struct UiEmitter {
@@ -203,16 +203,6 @@ impl UiEmitter {
                     locked: balance.locked,
                 });
         }
-    }
-
-    /// Re-stated each spin off the snapshot the metrics lane already built — no second clock read.
-    pub(crate) fn emit_latency(&mut self, summary: UiLatencySummary, event_ts: TsUs) {
-        self.event_sink
-            .push_stamped(&mut self.event_seq, |seq| UiEvent::Latency {
-                seq,
-                event_ts_us: event_ts,
-                summary,
-            });
     }
 
     pub(crate) fn emit_execution(&mut self, halt: ExecHalt, event_ts: TsUs) {

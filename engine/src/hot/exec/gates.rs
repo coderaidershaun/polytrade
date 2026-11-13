@@ -2,10 +2,10 @@
 //! latch, and why a side is not quoting. Each verdict is a pure function, testable without an engine.
 
 use crate::hot::ledger::{PositionLedger, narrow};
+use crate::log::hot_warn;
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::time::TsUs;
-use crate::warn;
 
 use super::engine::ExecEngine;
 use super::order::MAX_ORDER_INSTRUMENTS;
@@ -318,12 +318,15 @@ impl ExecEngine {
         }
     }
 
-    /// Numbers at WARN not ERROR (no second backtrace per event).
+    /// At WARN, the level operators know this line by.
     #[cold]
     fn warn_duplicate_resting(&self, instrument: InstrumentId, side: Side, resting: usize) {
-        warn!(
-            "instrument {} holds {resting} resting {side:?} orders against a limit of {}",
-            instrument.0, self.settings.max_orders_per_side
+        hot_warn!(
+            "instrument {} holds {} resting {:?} orders against a limit of {}",
+            instrument.0,
+            resting,
+            side,
+            self.settings.max_orders_per_side
         );
     }
 
@@ -412,8 +415,10 @@ impl ExecEngine {
 
 #[cold]
 fn refusal_warning(instrument: InstrumentId, side: Side, reason: RejectReason) {
-    warn!(
-        "quote refused locally on instrument {} {side:?}: {reason:?}",
-        instrument.0
+    hot_warn!(
+        "quote refused locally on instrument {} {:?}: {:?}",
+        instrument.0,
+        side,
+        reason
     );
 }

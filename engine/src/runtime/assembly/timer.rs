@@ -13,6 +13,10 @@ use crate::warn;
 
 /// Pushes `SpinTick`s onto `producer`'s input queue, each stamped with its scheduled fire time
 /// as `received_ts_us` (the timer is the venue), spaced by `interval`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the timer actor schedules the spin ticks, so time enters the engine as a message"
+)]
 pub(super) fn spawn_timer(
     interval: DurationUs,
     mut producer: QueueProducer,

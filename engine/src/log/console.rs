@@ -6,27 +6,38 @@ use core::fmt::Arguments;
 use web_sys::console;
 use web_sys::wasm_bindgen::JsValue;
 
-use super::record::Level;
+use super::record::{Callsite, Level, WORDS_PER_RECORD};
+use super::render::{self, LogArgs};
 
 pub fn register_thread(_tag: &'static str) {}
 
-#[doc(hidden)]
-pub fn info_message(module: &'static str, file: &'static str, line: u32, args: Arguments<'_>) {
-    emit(Level::Info, module, file, line, args);
-}
+pub(crate) fn register_hot_lane(_tag: &'static str) {}
 
 #[doc(hidden)]
-pub fn warn_message(module: &'static str, file: &'static str, line: u32, args: Arguments<'_>) {
-    emit(Level::Warn, module, file, line, args);
+pub fn text_message(callsite: &'static Callsite, args: Arguments<'_>) {
+    emit(callsite, &args.to_string());
 }
 
+/// Renders at once with the drain's own renderer, so a line reads the same in the page and in a file.
 #[doc(hidden)]
-pub fn error_message(module: &'static str, file: &'static str, line: u32, args: Arguments<'_>) {
-    emit(Level::Error, module, file, line, args);
+pub fn hot_message<A: LogArgs>(callsite: &'static Callsite, args: A) {
+    let mut words = [0; WORDS_PER_RECORD];
+    args.write_words(&mut words);
+    let mut text = String::new();
+    // A String accepts every write, so rendering into it cannot fail.
+    render::render(callsite, &words, &mut text).ok();
+    emit(callsite, &text);
 }
 
-fn emit(level: Level, module: &str, file: &str, line: u32, args: Arguments<'_>) {
-    let message = format!("{:<5} {module} ({file}:{line}) {args}", level.as_str());
+fn emit(callsite: &Callsite, text: &str) {
+    let level = callsite.level();
+    let message = format!(
+        "{:<5} {} ({}:{}) {text}",
+        level.as_str(),
+        callsite.module(),
+        callsite.file(),
+        callsite.line()
+    );
     let text = JsValue::from_str(&message);
     match level {
         Level::Info => console::info_1(&text),

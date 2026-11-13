@@ -52,6 +52,7 @@ impl Attachment {
             Delivery::Book(snapshot) => self.model.apply_book(snapshot),
             Delivery::Event(event) => self.model.apply_event(event),
             Delivery::Catalog(catalog) => self.adopt_catalog(catalog),
+            Delivery::Latency(report) => self.model.apply_latency_report(report),
         }
         true
     }

@@ -15,7 +15,9 @@ pub(crate) use dom::{
     Ring, grouping_label, grouping_table, mid_tone, offscreen_of, order_tone, ring, row_price,
     status_pill,
 };
-pub(crate) use latency::{LATENCY_ROWS, LATENCY_SHORT_TITLE, LATENCY_TITLE, summary_cells};
+pub(crate) use latency::{
+    LATENCY_ROWS, LATENCY_SHORT_TITLE, LATENCY_TITLE, latency_title, summary_cells,
+};
 pub(crate) use link::{
     ChipWords, NO_ENGINE, PEER_HOVER, button_label, confirm_label, connection_words, control_words,
     is_peer_clickable, peer_words, phase_words, run_words,
@@ -31,7 +33,7 @@ pub(crate) use tone::Tone;
 
 // Only the painters name these types.
 #[cfg(target_arch = "wasm32")]
-pub(crate) use latency::{Column, Flow};
+pub(crate) use latency::Column;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use rows::TagColumn;
 #[cfg(target_arch = "wasm32")]

@@ -1,5 +1,6 @@
-//! The link's sending half. It drains the hot thread's UI rings to subscribers, repeats the catalog
-//! and lifecycle every heartbeat so a late subscriber catches up, and renews its own subscriptions.
+//! The link's sending half. It drains the hot thread's UI rings and the metrics thread's reports to
+//! subscribers, repeats the catalog and lifecycle every heartbeat so a late subscriber catches up,
+//! and renews its own subscriptions.
 
 use std::net::SocketAddr;
 
@@ -24,6 +25,9 @@ impl Actor {
         }
         while let Ok(event) = self.channels.events.pop() {
             self.send(TopicId::EVENTS, LinkBody::Event(event), now);
+        }
+        while let Ok(report) = self.latency.pop() {
+            self.send(TopicId::LATENCY, LinkBody::Latency(report), now);
         }
     }
 

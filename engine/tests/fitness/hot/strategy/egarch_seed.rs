@@ -11,9 +11,8 @@ use engine::msg::time::DurationUs;
 use engine::runtime::config::{KlineInterval, TableKind};
 
 use crate::engine_support::{
-    NOMINAL_SPIN, ONE, engine_view, engine_with_ui, instrument_row, kline, metrics_ring,
-    persist_ring, pop, recorder_feature_id, recorder_spec, snapshot_pair, spin, strategy_log_ring,
-    tracker_spec_all,
+    NOMINAL_SPIN, ONE, engine_view, engine_with_ui, instrument_row, kline, persist_ring,
+    recorder_feature_id, recorder_spec, snapshot_pair, spin, strategy_log_ring, tracker_spec_all,
 };
 use crate::micro_strategy::MicroRecorder;
 
@@ -34,7 +33,6 @@ fn egarch_seeds_from_backfill_absorbed_during_warmup() {
 
     let (sink, mut consumer) = persist_ring(4096);
     let (log_sink, _log_consumer) = strategy_log_ring(64);
-    let (metrics_sink, _metrics_consumer) = metrics_ring(64);
     let strategy = Box::new(MicroRecorder::from_spec(
         &recorder_spec(vec![TableKind::Features]),
         engine_view(NOMINAL_SPIN),
@@ -44,35 +42,31 @@ fn egarch_seeds_from_backfill_absorbed_during_warmup() {
         strategy,
         sink,
         log_sink,
-        metrics_sink,
         DurationUs::from_secs(10),
     );
 
     // The first message anchors warmup at ts 0; a valid book so the spin has a mid.
     let (bids, asks) = snapshot_pair(0, &[(100 * ONE, ONE)], &[(101 * ONE, ONE)], 0);
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(bids));
-    engine.dispatch(pop(0, 0), &InboundMessage::Book(asks));
+    engine.dispatch(&InboundMessage::Book(bids));
+    engine.dispatch(&InboundMessage::Book(asks));
 
     // 310 closed 1m candles, all stamped inside the 10s warmup span: the tracker absorbs them while
     // the strategy's on_kline stays suppressed, exactly like a boot backfill burst.
     for candle in 0..310i64 {
         let when = candle * 30_000; // the last lands at 9.27s, still inside warmup
-        engine.dispatch(
-            pop(0, 0),
-            &InboundMessage::Kline(kline(
-                0,
-                KlineInterval::OneMinute,
-                (100 * ONE, 101 * ONE, 99 * ONE, (100 + candle % 5) * ONE),
-                true,
-                when,
-            )),
-        );
+        engine.dispatch(&InboundMessage::Kline(kline(
+            0,
+            KlineInterval::OneMinute,
+            (100 * ONE, 101 * ONE, 99 * ONE, (100 + candle % 5) * ONE),
+            true,
+            when,
+        )));
     }
     while consumer.pop().is_ok() {}
 
     // A spin past the warmup span completes warmup and delivers itself — the strategy's first live
     // callback. It must seed closes_1m from the tracker and fit, emitting egarch_vol_lt this tick.
-    engine.dispatch(pop(0, 0), &InboundMessage::SpinTick(spin(0, 10_000_000)));
+    engine.dispatch(&InboundMessage::SpinTick(spin(0, 10_000_000)));
 
     let emitted: std::collections::HashSet<FeatureId> = std::iter::from_fn(|| consumer.pop().ok())
         .filter_map(|record| match record {

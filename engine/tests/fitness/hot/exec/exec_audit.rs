@@ -16,7 +16,7 @@ use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
 
 use crate::engine_support::{
     FillPen, Idle, ONE, drain_orders_and_fills, engine_without_warmup, instrument_row,
-    metrics_ring, persist_ring_for, pop, strategy_log_ring,
+    persist_ring_for, strategy_log_ring,
 };
 
 #[test]
@@ -27,14 +27,12 @@ fn a_fill_banks_an_order_row_beside_it_and_a_redelivery_banks_neither() {
         RecordedTables::new(&[TableKind::Orders, TableKind::Fills]),
     );
     let (log_sink, _logs) = strategy_log_ring(64);
-    let (metrics, _metrics) = metrics_ring(64);
-    let mut engine =
-        engine_without_warmup(&instruments, Box::new(Idle), persistence, log_sink, metrics);
+    let mut engine = engine_without_warmup(&instruments, Box::new(Idle), persistence, log_sink);
 
     let mut pen = FillPen::new(0);
     let batch = pen.fill(Side::Buy, 100 * ONE, ONE, 10);
     for message in &batch {
-        engine.dispatch(pop(0, 0), message);
+        engine.dispatch(message);
     }
 
     let banked = drain_orders_and_fills(&mut records);
@@ -89,7 +87,7 @@ fn a_fill_banks_an_order_row_beside_it_and_a_redelivery_banks_neither() {
     }
 
     for message in &batch {
-        engine.dispatch(pop(0, 0), message);
+        engine.dispatch(message);
     }
     let redelivered = drain_orders_and_fills(&mut records);
     assert!(

@@ -32,6 +32,10 @@ pub(super) struct BoundLink {
 /// [`ConfigError`] via [`EngineError::Config`] for an unresolvable or over-long peer topic list.
 ///
 /// [`ConfigError`]: crate::runtime::config::ConfigError
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the link boot stamp tells peers that this engine restarted, and is never message time"
+)]
 pub(super) fn link_bring_up<P>(
     config: &Config<P>,
     identity: &RunIdentity,

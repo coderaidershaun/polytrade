@@ -1,11 +1,11 @@
-//! Banked execution commands and progress watermarks for the edge.
+//! Banked execution commands and progress watermarks for the edge. Each command keeps the latency
+//! tick of the moment it entered the bank, so a wait in the bank shows in its stage.
 
 use rtrb::Producer;
 
+use crate::hot::exec::{MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS};
 use crate::msg::exec::{ExecCommand, ExecLaneItem, StampedExecCommand};
-use crate::msg::time::{DurationUs, TsUs};
-
-use super::order::{MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS};
+use crate::msg::time::{DurationUs, Stamper, Tick, TsUs};
 
 /// Commands one spin can produce for an instrument beyond the order table itself: an open-orders
 /// request, a flatten, one action per side, the sweep a halt issues, and a prior-run cancel.
@@ -41,24 +41,36 @@ pub fn exec_lane_capacity(budget: ExecLaneBudget) -> usize {
 
 pub struct ExecSink {
     producer: Producer<ExecLaneItem>,
+    /// The latency counter that the bank reads when a command enters it.
+    stamper: Stamper,
 }
 
 impl ExecSink {
-    pub fn new(producer: Producer<ExecLaneItem>) -> Self {
-        Self { producer }
+    pub fn new(producer: Producer<ExecLaneItem>, stamper: Stamper) -> Self {
+        Self { producer, stamper }
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct BankedCommand {
+    command: ExecCommand,
+    issue_tick: Tick,
+}
+
 pub(crate) struct PendingCommands {
-    banked: Vec<ExecCommand>,
+    banked: Vec<BankedCommand>,
     banked_total: u64,
+    stamper: Stamper,
 }
 
 impl PendingCommands {
-    pub(crate) fn new() -> Self {
+    /// The bank reads the counter of the sink it drains into. With no sink no command is ever sent,
+    /// so it reads none.
+    pub(crate) fn for_sink(sink: Option<&ExecSink>) -> Self {
         Self {
             banked: Vec::with_capacity(COMMAND_BANK_CAPACITY),
             banked_total: 0,
+            stamper: sink.map_or(Stamper::Off, |sink| sink.stamper.clone()),
         }
     }
 
@@ -69,9 +81,23 @@ impl PendingCommands {
         if self.banked.len() == self.banked.capacity() {
             return false;
         }
-        self.banked.push(command);
+        self.banked.push(BankedCommand {
+            command,
+            issue_tick: self.issue_tick(),
+        });
         self.banked_total += 1;
         true
+    }
+
+    /// The one counter read of the bank. It lives apart from `bank`, so a clock read added to the
+    /// bank's own logic fails the clock lint.
+    #[inline]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the command sink stamps each banked command for its latency, and the fold gets nothing back"
+    )]
+    fn issue_tick(&self) -> Tick {
+        self.stamper.stamp()
     }
 
     /// Pushes FIFO and appends a watermark only when every command was accepted.
@@ -79,10 +105,11 @@ impl PendingCommands {
         let items = self
             .banked
             .iter()
-            .map(|command| {
+            .map(|banked| {
                 ExecLaneItem::Command(StampedExecCommand {
-                    command: *command,
+                    command: banked.command,
                     issued_ts_us: at,
+                    issue_tick: banked.issue_tick,
                 })
             })
             .chain(std::iter::once(ExecLaneItem::Watermark(at)));

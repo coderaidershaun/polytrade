@@ -15,6 +15,10 @@ pub(super) struct WeightBudget {
 }
 
 impl WeightBudget {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a venue REST client learns the venue's clock offset and paces its request weight"
+    )]
     pub(super) fn new(limit_per_minute: u32) -> Self {
         Self {
             limit_per_minute,
@@ -24,6 +28,10 @@ impl WeightBudget {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a venue REST client learns the venue's clock offset and paces its request weight"
+    )]
     pub(super) fn charge(&mut self, weight: u32, endpoint: &str) {
         if self.window_start.elapsed() >= Duration::from_secs(60) {
             self.window_start = Instant::now();

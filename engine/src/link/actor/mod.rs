@@ -1,6 +1,7 @@
 //! The link actor: one tokio task that owns the UDP socket, the subscriber table and the sequence
 //! gate. Inbound frames are validated and pushed to the engine like any other input, and outbound
-//! frames are drained on timers from the hot thread's UI rings, which nothing else reads.
+//! frames are drained from the hot thread's UI rings, which nothing else reads, each time the wait
+//! of the senders' placement wakes it.
 
 mod outbound;
 
@@ -17,9 +18,13 @@ use crate::hot::spawn::LinkQueueProducer;
 use crate::msg::inbound::{InboundMessage, RunControl};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{DurationUs, EngineClock, TsUs};
+use crate::msg::ui::LatencyReport;
 use crate::msg::ui::channel::UiChannels;
-use crate::runtime::config::{ConfigError, ControllerLoss, ExecutionMode, PeerSubscription};
+use crate::runtime::config::{
+    ConfigError, ControllerLoss, ExecutionMode, PeerSubscription, SenderPlacement,
+};
 use crate::runtime::shutdown::{RunControlGate, TaskHandle};
+use crate::venues::edge::sender::SendWait;
 use crate::{info, warn, warn_repeating};
 
 use super::control::{LINK_MAX_TOPICS, RunPhase, Subscribe, TopicSet};
@@ -31,9 +36,6 @@ use super::subscribers::{
     LINK_MAX_SUBSCRIBERS, LINK_SUBSCRIPTION_TTL, RefreshOutcome, SequenceGate, SubscriberTable,
 };
 use crate::msg::run_state::RunState;
-
-/// Not awaitable; 10ms keeps DOM responsive vs blocking socket's latency+2000 idle syscalls/s.
-const FLUSH_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Catalog, lifecycle, staleness, control repair. 1s granularity for display state.
 const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(1);
@@ -108,12 +110,17 @@ pub(crate) struct LinkActorSetup {
     pub inbound: LinkQueueProducer,
     pub outbound: Consumer<OutboundLink>,
     pub channels: UiChannels,
+    /// The metrics thread's reports, about one a second.
+    pub latency: Consumer<LatencyReport>,
     /// Link writes desired, reads acknowledged; dispatch does reverse, never reads desired.
     pub control: RunControlGate,
     pub clock: EngineClock,
     pub spin_interval: DurationUs,
     pub topic_count: usize,
     pub feature_count: u16,
+    pub placement: SenderPlacement,
+    /// How often frames go out while the senders are shared. Pinned, they go out on each pass.
+    pub flush_period: Duration,
 }
 
 pub(crate) struct LinkActor;
@@ -160,10 +167,13 @@ struct Actor {
     inbound: LinkQueueProducer,
     outbound: Consumer<OutboundLink>,
     channels: UiChannels,
+    latency: Consumer<LatencyReport>,
     control: RunControlGate,
     clock: EngineClock,
     spin_interval: DurationUs,
     feature_count: u16,
+    placement: SenderPlacement,
+    flush_period: Duration,
     phase: RunPhase,
     /// `None` until the run announces its execution mode.
     execution_mode: Option<ExecutionMode>,
@@ -198,10 +208,13 @@ impl Actor {
             inbound: setup.inbound,
             outbound: setup.outbound,
             channels: setup.channels,
+            latency: setup.latency,
             control: setup.control,
             clock: setup.clock,
             spin_interval: setup.spin_interval,
             feature_count: setup.feature_count,
+            placement: setup.placement,
+            flush_period: setup.flush_period,
             phase: RunPhase::Starting,
             execution_mode: None,
             catalog_frames: Vec::new(),
@@ -215,16 +228,20 @@ impl Actor {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the link actor stamps each peer frame and marker with message time before the tape records it"
+    )]
     async fn run(mut self) {
         let socket = Arc::clone(&self.socket);
-        let mut flush = tokio::time::interval(FLUSH_INTERVAL);
+        let mut flush = SendWait::new(self.placement, tokio::time::interval(self.flush_period));
         let mut announce = tokio::time::interval(ANNOUNCE_INTERVAL);
         let mut refresh = tokio::time::interval(SUBSCRIBE_INTERVAL);
         let mut inbox = [0u8; LINK_MAX_DATAGRAM];
         loop {
             let wake = tokio::select! {
                 received = socket.recv_from(&mut inbox) => Wake::Datagram(received),
-                _ = flush.tick() => Wake::Flush,
+                () = flush.wait() => Wake::Flush,
                 _ = announce.tick() => Wake::Announce,
                 _ = refresh.tick() => Wake::Refresh,
             };
@@ -260,6 +277,10 @@ impl Actor {
     }
 
     /// Peer frame -> hot path: stamped engine's clock, not sender's (cross-region skew -> reordering).
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the link actor stamps each peer frame and marker with message time before the tape records it"
+    )]
     fn on_payload(&mut self, origin: LinkOrigin, payload: LinkPayload, received_ts_us: TsUs) {
         self.inbound.push(InboundMessage::Link(InboundLink {
             frame: LinkFrame { origin, payload },

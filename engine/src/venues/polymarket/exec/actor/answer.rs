@@ -220,6 +220,10 @@ impl Actor {
     }
 
     /// The only answer that mints a mapping. All downstream flows depend on this record.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     fn on_place_answer(
         &mut self,
         request: ExecRequest,
@@ -296,6 +300,10 @@ impl Actor {
 
     /// The request's bytes may have already reached the venue, so resync adoption is the
     /// recovery path here rather than a blind retry.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     fn on_transport_failure(&mut self, request: ExecRequest) {
         self.session
             .mark_in_doubt(request, self.control.clock.now());
@@ -304,6 +312,10 @@ impl Actor {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     pub(super) fn decode_context(&self) -> DecodeContext<'_> {
         DecodeContext {
             tokens: &self.tokens,

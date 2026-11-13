@@ -63,6 +63,10 @@ impl Actor {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn on_response(
         &mut self,
         request_id: RequestId,
@@ -106,6 +110,10 @@ impl Actor {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn on_decoded(
         &mut self,
         decoded: DecodedResponse,
@@ -162,6 +170,10 @@ impl Actor {
         None
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn on_stream_frame(&mut self, text: &str, writer: &mut Writer) -> Option<SessionOutcome> {
         let now = self.control.clock.now();
         match decode_stream_event(text, &self.decode_context(now)) {

@@ -31,7 +31,7 @@ use engine::msg::exec::{
 use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BookChunk, InboundMessage};
 use engine::msg::persist::{FeatureId, PersistRecord};
-use engine::msg::time::DurationUs;
+use engine::msg::time::{DurationUs, Stamper};
 use engine::msg::ui::{DomQuote, UiEvent};
 use engine::runtime::config::{
     Instruments, IntensitySpec, PolySeries, RecordedTables, StrategySpec, Subscriptions, TableKind,
@@ -44,7 +44,7 @@ use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
     FillPen, LinkedSetup, account_chunk, detached_setup, engine_view, engine_with_link, exec_event,
-    instrument_row, persist_ring, pop, recorder_spec, rotation, snapshot_pair, spin, stream_ready,
+    instrument_row, persist_ring, recorder_spec, rotation, snapshot_pair, spin, stream_ready,
     tracker_spec_all, trade, ts, ui_event_ring,
 };
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
@@ -226,7 +226,7 @@ fn snapshot_chunks(slot: u16, bid: i64, ask: i64, when: i64) -> (BookChunk, Book
 }
 
 fn dispatch(linked: &mut crate::engine_support::LinkedEngine, message: InboundMessage) {
-    linked.engine.dispatch(pop(0, 0), &message);
+    linked.engine.dispatch(&message);
 }
 
 /// The one frame the publisher banked on this spin.
@@ -920,7 +920,7 @@ impl Maker {
         let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(1_024);
         let engine = HotEngine::new(HotEngineSetup {
             exec: Some(ExecWiring {
-                sink: ExecSink::new(commands_producer),
+                sink: ExecSink::new(commands_producer, Stamper::Off),
                 settings: maker_settings(),
                 // Zero because [`FillPen`] addresses this engine's slots with that constant.
                 run_nonce: 0,
@@ -938,7 +938,7 @@ impl Maker {
     }
 
     fn dispatch(&mut self, message: InboundMessage) {
-        self.engine.dispatch(pop(0, 0), &message);
+        self.engine.dispatch(&message);
     }
 
     /// One spin at `now`, reporting only what that spin produced. The sequence number advances every

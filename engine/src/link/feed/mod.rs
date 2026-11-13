@@ -16,7 +16,7 @@ use crate::msg::ui::{
 use super::envelope::{ByteReader, ByteWriter, ENVELOPE_LEN, LINK_MAX_DATAGRAM, LinkDecodeError};
 use super::wire::{OPTIONAL_LEVEL_LEN, WireField, wire_array, wire_enum, wire_struct};
 use exec::{HALT_LEN, REJECT_ORIGIN_LEN};
-use latency::LATENCY_LEN;
+pub(super) use latency::REPORT_BODY_LEN;
 
 const LEVEL_LEN: usize = 16;
 
@@ -38,6 +38,7 @@ const POSITION_LEN: usize = 2 + 8 + 8;
 // UI_BOOK_LEVELS bump -> compiles fail (not runtime fragmentation). Atomic snapshot width; new field -> tail overrun fails.
 const _: () = assert!(ENVELOPE_LEN + BOOK_BODY_LEN <= LINK_MAX_DATAGRAM);
 const _: () = assert!(ENVELOPE_LEN + EVENT_BODY_LEN <= LINK_MAX_DATAGRAM);
+const _: () = assert!(ENVELOPE_LEN + REPORT_BODY_LEN <= LINK_MAX_DATAGRAM);
 const _: () = assert!(QUOTE_LEN <= EVENT_TAIL_LEN);
 const _: () = assert!(ORDER_UPDATE_LEN <= EVENT_TAIL_LEN);
 const _: () = assert!(ORDER_SNAPSHOT_LEN <= EVENT_TAIL_LEN);
@@ -46,7 +47,6 @@ const _: () = assert!(BALANCE_LEN <= EVENT_TAIL_LEN);
 const _: () = assert!(REJECT_LEN <= EVENT_TAIL_LEN);
 const _: () = assert!(EXECUTION_LEN <= EVENT_TAIL_LEN);
 const _: () = assert!(POSITION_LEN <= EVENT_TAIL_LEN);
-const _: () = assert!(LATENCY_LEN <= EVENT_TAIL_LEN);
 
 // Discriminants 1-based: all-zero invalid.
 wire_enum! {
@@ -204,7 +204,6 @@ ui_events! {
         total_working after validate_order_snapshot_counts(detail_len, total_working)?,
         orders after validate_order_snapshot_detail(detail_len, &orders)?,
     },
-    Latency = 12 { summary },
 }
 
 fn validate_order_snapshot_counts(

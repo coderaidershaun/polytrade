@@ -272,6 +272,10 @@ impl Worker {
         }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     fn venue_seconds(&self) -> i64 {
         (self.clock.now() + self.venue_clock_offset).micros() / 1_000_000
     }

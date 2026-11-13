@@ -9,7 +9,6 @@
 mod account;
 mod audit;
 mod budget;
-pub(crate) mod command;
 mod desired;
 mod engine;
 mod event;
@@ -27,7 +26,6 @@ pub use crate::runtime::config::MAX_QUOTE_LEVELS;
 
 pub use account::{AccountTable, AccountWatermark, Balance, ReleaseOutcome};
 pub use budget::{MAX_ORDER_BUDGET_WINDOWS, OrderBudget, OrderBudgetWindow};
-pub use command::{ExecLaneBudget, exec_lane_capacity};
 pub use desired::{DesiredBook, DesiredQuote, QuoteLevel};
 pub use engine::{ExecEngine, ExecEngineSetup, ExecSettings};
 pub use flatten::{FeeModel, FlattenInput, FlattenOutcome, plan_flatten};

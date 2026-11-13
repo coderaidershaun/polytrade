@@ -40,6 +40,7 @@ impl Engine {
             exposure,
             exec,
             exec_tap_gate,
+            senders,
             metrics,
             fatal,
             drain,
@@ -74,9 +75,11 @@ impl Engine {
                 Some(handle) => handle.drain().await,
                 None => Ok(()),
             };
-            metrics.abort();
             (exposure, persist)
         });
+        // Each edge and the link actor that ran on the pinned senders' thread has stopped above.
+        drop(senders);
+        metrics.stop();
         let exposure_failure = report_drain_failure("exposure", exposure_result);
         let persist_failure = report_drain_failure("persistence", persist_result);
         // Exposure first: position is what the next run inherits, so it names the exit.

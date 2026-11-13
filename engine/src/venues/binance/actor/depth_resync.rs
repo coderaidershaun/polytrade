@@ -102,6 +102,10 @@ impl Actor {
         if ready { state.pending_snapshot.take() } else { None }
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
+    )]
     async fn fetch_depth_snapshot(&mut self, instrument: InstrumentId) {
         if self.rest_quiet.is_active(Instant::now()) {
             return;
