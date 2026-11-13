@@ -1,7 +1,7 @@
 //! Engine assembly and lifecycle: wired in dependency order, torn down via one drain
 //! under a watchdog deadline.
 //!
-//! Every submodule is either a PHASE of one run — `prepare`, `run`, `drain`, in that order — or the
+//! Every submodule is either a PHASE of one run — `preflight`, `run`, `drain`, in that order — or the
 //! bring-up of ONE subsystem, named for it: `exec`, `link`, `persist`, `metrics`, `senders`,
 //! `timer`, `queues`. The rest are leaves those two lean on: `error`, `exec_identity`, `exit`. Which
 //! venue a run talks to is decided by the adapters, never here.
@@ -14,7 +14,7 @@ mod exit;
 mod link;
 pub mod metrics;
 mod persist;
-mod prepare;
+mod preflight;
 mod queues;
 mod run;
 mod senders;
@@ -55,7 +55,7 @@ use metrics::{
     MetricsBringUp, MetricsBringUpSetup, MetricsThread, SampleProducers, metrics_bring_up,
 };
 use persist::{PersistBringUp, PersistBringUpSetup, persist_bring_up};
-use prepare::{Prepared, prepare};
+use preflight::{Prepared, prepare};
 use queues::{InputQueues, QueueCapacities, build_input_queues};
 use timer::spawn_timer;
 
@@ -66,7 +66,7 @@ pub use exit::{DrainDeadline, DrainFailure, DrainOutcome, Exit, Trigger};
 // SMELL: `check_symbol_order_capacity` is public only because the fitness suite calls it. A test is
 // not a reason to make an item public, so its check should move onto a public entry point and it
 // should go back to crate visibility.
-pub use prepare::check_symbol_order_capacity;
+pub use preflight::check_symbol_order_capacity;
 pub use run::run_trading_engine;
 pub use senders::PinnedSenders;
 
