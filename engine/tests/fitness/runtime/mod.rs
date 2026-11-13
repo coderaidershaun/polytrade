@@ -11,4 +11,3 @@ mod exposure_state;
 mod latency_probe;
 pub(crate) mod metrics;
 mod pin;
-mod runtime_exit;

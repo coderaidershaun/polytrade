@@ -16,6 +16,5 @@ mod assembly;
 #[cfg(not(target_arch = "wasm32"))]
 pub use assembly::{
     DrainDeadline, DrainFailure, DrainOutcome, DrainWatchdog, EngineError, ExecutionLease, Exit,
-    ExitReport, ForcedExit, PinnedSenders, Trigger, check_symbol_order_capacity, decide_exit,
-    metrics, run_trading_engine,
+    ForcedExit, PinnedSenders, Trigger, check_symbol_order_capacity, metrics, run_trading_engine,
 };

@@ -59,7 +59,7 @@ use prepare::{Prepared, prepare};
 use queues::{InputQueues, build_input_queues};
 use timer::spawn_timer;
 
-pub use drain::{DrainWatchdog, ForcedExit, decide_exit};
+pub use drain::{DrainWatchdog, ForcedExit};
 pub use error::EngineError;
 pub use exec_identity::ExecutionLease;
 pub use exit::{DrainDeadline, DrainFailure, DrainOutcome, Exit, Trigger};
@@ -76,12 +76,6 @@ const ROTATIONS_CHANNEL_CAPACITY: usize = 256;
 /// a slow bring-up cannot lose the first window.
 const ASSIGNMENTS_CHANNEL_CAPACITY: usize = 8;
 const LINK_RING_CAPACITY: usize = 1_024;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExitReport {
-    pub graceful: bool,
-    pub reason: Box<str>,
-}
 
 struct Engine {
     /// One trading engine per host: while this is held, no second process under the same TE

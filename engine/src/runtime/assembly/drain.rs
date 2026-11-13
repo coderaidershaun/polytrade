@@ -283,32 +283,3 @@ fn report_drain_failure<E: core::fmt::Display>(what: &str, result: Result<(), E>
     error!("{what} drain failed: {error}");
     Some(error)
 }
-
-pub fn decide_exit(
-    signal_name: Option<&str>,
-    fatal_reason: Option<Box<str>>,
-    drain_error: Option<Box<str>>,
-) -> super::ExitReport {
-    if let Some(reason) = fatal_reason {
-        return super::ExitReport {
-            graceful: false,
-            reason,
-        };
-    }
-    if let Some(reason) = drain_error {
-        return super::ExitReport {
-            graceful: false,
-            reason,
-        };
-    }
-    match signal_name {
-        Some(name) => super::ExitReport {
-            graceful: true,
-            reason: format!("received {name}").into(),
-        },
-        None => super::ExitReport {
-            graceful: false,
-            reason: "fatal signal tripped".into(),
-        },
-    }
-}
