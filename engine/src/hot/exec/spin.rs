@@ -61,11 +61,16 @@ impl ExecEngine {
     #[cold]
     fn chase_timed_out(&mut self, index: usize, stamps: FoldStamps, bank: &mut Actions) {
         let now = stamps.fold;
-        let slot = self.orders.slot_mut(index);
-        slot.last_event_ts_us = now;
+        let previous = self.orders.mark_timed_out(index, now);
+        self.bank_moved(
+            index,
+            previous,
+            OrderTransition::Timeout,
+            stamps.received,
+            bank,
+        );
+        let slot = self.orders.slot(index);
         let (instrument, client_id) = (slot.instrument, slot.client_id);
-        let next = OrderState::Unknown;
-        self.move_slot(index, next, OrderTransition::Timeout, stamps.received, bank);
         self.recon_seq += 1;
         let command = ExecCommand::ReconcileOrder {
             instrument,

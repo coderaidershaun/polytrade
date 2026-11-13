@@ -13,4 +13,5 @@ mod exec_resync;
 mod exec_sweep;
 mod exec_window;
 mod loss_gate;
+mod order_table;
 mod risk_gate;

@@ -11,7 +11,7 @@ use super::audit::bank_engine_driven;
 use super::desired::QuoteLevel;
 use super::engine::{ExecEngine, FoldStamps};
 use super::gates::HaltReason;
-use super::order::{CloseReason, OrderClaim, OrderState};
+use super::order::{OrderClaim, OrderState};
 use super::reconcile::{PlaceIntent, ReconcileOutcome};
 use super::spin::SpinInput;
 
@@ -47,15 +47,9 @@ impl ExecEngine {
                     qty,
                 };
                 if self.bank_or_halt(command, at) {
-                    let next = OrderState::AmendInFlight;
-                    let received = stamps.received;
-                    self.move_slot(
-                        index,
-                        next,
-                        OrderTransition::AmendSent,
-                        received,
-                        input.bank,
-                    );
+                    let previous = self.orders.mark_amend_sent(index);
+                    let transition = OrderTransition::AmendSent;
+                    self.bank_moved(index, previous, transition, stamps.received, input.bank);
                 }
             }
         }
@@ -88,30 +82,24 @@ impl ExecEngine {
         };
         let is_sent = self.bank_or_halt(command, at);
         if is_sent {
-            let next = OrderState::CancelInFlight;
-            self.move_slot(
-                index,
-                next,
-                OrderTransition::CancelSent,
-                stamps.received,
-                bank,
-            );
+            let previous = self.orders.mark_cancel_sent(index);
+            let transition = OrderTransition::CancelSent;
+            self.bank_moved(index, previous, transition, stamps.received, bank);
         }
         is_sent
     }
 
-    pub(super) fn move_slot(
-        &mut self,
+    /// Banks the row of a transition that the engine drove and the order table has made.
+    pub(super) fn bank_moved(
+        &self,
         index: usize,
-        next: OrderState,
+        previous: OrderState,
         transition: OrderTransition,
         received: LocalTs,
         bank: &mut Actions,
     ) {
-        let slot = self.orders.slot_mut(index);
-        let previous = OrderLifecycle::from(slot.state);
-        slot.state = next;
-        bank_engine_driven(bank, slot, transition, previous, received);
+        let slot = self.orders.slot(index);
+        bank_engine_driven(bank, slot, transition, previous.into(), received);
     }
 
     /// Every placement the engine mints passes through here, so every one of them spends the venue
@@ -179,9 +167,7 @@ impl ExecEngine {
         let asset = self.instruments[usize::from(instrument.0)].spend_asset(side);
         let amount = side.spend(intent.price, intent.qty);
         let reserved_at = self.account.reserve(asset, amount);
-        let slot = self.orders.slot_mut(index);
-        slot.reserved_amount = Some(amount).filter(|amount| amount.mantissa() != 0);
-        slot.reserved_at = reserved_at;
+        self.orders.hold_reservation(index, amount, reserved_at);
         Some((index, client_id))
     }
 
@@ -189,10 +175,9 @@ impl ExecEngine {
     fn unwind(&mut self, index: usize, stamps: FoldStamps, bank: &mut Actions) {
         let at = stamps.fold;
         self.release_unsent_reservation(index);
-        self.orders.slot_mut(index).closed_ts_us = at;
-        let next = OrderState::Closed(CloseReason::Rejected);
-        let received = stamps.received;
-        self.move_slot(index, next, OrderTransition::SendAbandoned, received, bank);
+        let previous = self.orders.abandon(index, at);
+        let transition = OrderTransition::SendAbandoned;
+        self.bank_moved(index, previous, transition, stamps.received, bank);
         self.halt(HaltReason::CommandBankOverflow, at);
     }
 

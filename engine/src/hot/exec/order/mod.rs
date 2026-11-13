@@ -12,10 +12,11 @@ use std::ops::Range;
 
 use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::msg::exec::{ExecEvent, OrderStyle};
-use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
+use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side, Spend};
 use crate::msg::time::{DurationUs, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 
+use super::account::AccountWatermark;
 use super::capacity::ExecCapacity;
 use super::desired::QuoteLevel;
 
@@ -280,6 +281,66 @@ impl OrderTable {
             slot.state = OrderState::Unknown;
             invalidated(slot, previous);
         }
+    }
+
+    /// Folds one venue event into the slot at `index`.
+    #[inline]
+    pub fn apply(&mut self, index: usize, event: &ExecEvent, now: LocalTs) -> Applied {
+        apply_exec_event(&mut self.slots[index], event, now)
+    }
+
+    /// The cancel of the order at `index` is banked. Returns the state it left.
+    #[inline]
+    pub fn mark_cancel_sent(&mut self, index: usize) -> OrderState {
+        self.move_to(index, OrderState::CancelInFlight)
+    }
+
+    /// The amend of the order at `index` is banked. Returns the state it left.
+    #[inline]
+    pub fn mark_amend_sent(&mut self, index: usize) -> OrderState {
+        self.move_to(index, OrderState::AmendInFlight)
+    }
+
+    /// The venue gave no answer in time, so the order is unknown until the venue is asked about it.
+    /// Returns the state it left.
+    #[cold]
+    pub fn mark_timed_out(&mut self, index: usize, now: LocalTs) -> OrderState {
+        self.slots[index].last_event_ts_us = now;
+        self.move_to(index, OrderState::Unknown)
+    }
+
+    /// A claim whose placement the bank refused: the venue never heard of it. Returns the state it
+    /// left.
+    #[cold]
+    pub(crate) fn abandon(&mut self, index: usize, at: LocalTs) -> OrderState {
+        self.slots[index].closed_ts_us = at;
+        self.move_to(index, OrderState::Closed(CloseReason::Rejected))
+    }
+
+    /// A zero amount holds nothing, so it is kept as `None`.
+    #[inline]
+    pub(crate) fn hold_reservation(
+        &mut self,
+        index: usize,
+        amount: Spend,
+        reserved_at: AccountWatermark,
+    ) {
+        let slot = &mut self.slots[index];
+        slot.reserved_amount = Some(amount).filter(|amount| amount.mantissa() != 0);
+        slot.reserved_at = reserved_at;
+    }
+
+    #[inline]
+    pub(crate) fn clear_reservation(&mut self, index: usize) {
+        self.slots[index].reserved_amount = None;
+    }
+
+    #[inline]
+    fn move_to(&mut self, index: usize, next: OrderState) -> OrderState {
+        let slot = &mut self.slots[index];
+        let previous = slot.state;
+        slot.state = next;
+        previous
     }
 
     #[inline]

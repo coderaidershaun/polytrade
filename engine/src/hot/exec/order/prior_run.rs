@@ -6,7 +6,7 @@ use crate::msg::exec::ExecEvent;
 use crate::msg::ids::{ClientOrderId, InstrumentId, Side};
 use crate::msg::time::LocalTs;
 
-use super::{OrderSlot, OrderState, free_or_oldest_closed};
+use super::{Applied, OrderSlot, OrderState, apply_exec_event, free_or_oldest_closed};
 
 /// Orders an EARLIER run of this trading engine left resting on the venue. They are cancelled on
 /// sight, but the cancel takes hundreds of milliseconds and whatever rests fills in the meantime.
@@ -49,8 +49,13 @@ impl PriorRunOrders {
     }
 
     #[inline]
-    pub(in crate::hot::exec) fn slot_mut(&mut self, index: usize) -> &mut OrderSlot {
-        &mut self.slots[index]
+    pub(in crate::hot::exec) fn apply(
+        &mut self,
+        index: usize,
+        event: &ExecEvent,
+        now: LocalTs,
+    ) -> Applied {
+        apply_exec_event(&mut self.slots[index], event, now)
     }
 
     pub(in crate::hot::exec) fn working(

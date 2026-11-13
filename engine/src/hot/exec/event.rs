@@ -13,7 +13,7 @@ use super::account::ReleaseOutcome;
 use super::audit::{bank_engine_driven, bank_event_rows};
 use super::engine::{ExecEngine, FoldStamps, view_of};
 use super::gates::HaltReason;
-use super::order::{FillDelta, OrderSlot, OrderState, ReconcilePass, Unseated, apply_exec_event};
+use super::order::{FillDelta, OrderSlot, OrderState, ReconcilePass, Unseated};
 use super::view::{ExecCallback, Fill, OrderReject, RejectOrigin};
 
 impl ExecEngine {
@@ -78,7 +78,7 @@ impl ExecEngine {
     ) -> ExecCallback {
         let (now, received) = (stamps.fold, stamps.received);
         let previous_state = OrderLifecycle::from(self.orders.slot(index).state);
-        let applied = apply_exec_event(self.orders.slot_mut(index), event, now);
+        let applied = self.orders.apply(index, event, now);
         if applied.is_resurrection {
             self.resurrection_error(event);
         }
@@ -145,7 +145,7 @@ impl ExecEngine {
             Err(Unseated::NoInstrument) => return self.prior_run_without_instrument_error(event),
         };
         let previous_state = OrderLifecycle::from(self.prior_orders.slot(index).state);
-        let applied = apply_exec_event(self.prior_orders.slot_mut(index), event, now);
+        let applied = self.prior_orders.apply(index, event, now);
         let slot = *self.prior_orders.slot(index);
         self.book_fill(&slot, event, applied.fill, ledger);
         bank_event_rows(
@@ -251,7 +251,7 @@ impl ExecEngine {
         };
         let outcome = self.account.release(asset, amount, slot.reserved_at);
         if outcome == ReleaseOutcome::Released {
-            self.orders.slot_mut(index).reserved_amount = None;
+            self.orders.clear_reservation(index);
         }
     }
 
@@ -262,7 +262,7 @@ impl ExecEngine {
         };
         let asset = self.instruments[usize::from(slot.instrument.0)].spend_asset(slot.side);
         self.account.release_unsent(asset, amount);
-        self.orders.slot_mut(index).reserved_amount = None;
+        self.orders.clear_reservation(index);
     }
 
     /// A venue answer ends the reject streak, extends it, or leaves it alone. `Refused` leaves it

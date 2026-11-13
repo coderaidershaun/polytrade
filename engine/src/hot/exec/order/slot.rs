@@ -1,13 +1,12 @@
 //! An order slot: the state of one order of this run, and what a venue event moved in it.
 
+use crate::hot::exec::{AccountWatermark, QuoteLevel};
 use crate::msg::exec::{ExecEvent, OrderStyle};
 use crate::msg::ids::{
     ClientOrderId, InstrumentId, Notional, Price, Qty, Side, Spend, VenueOrderId,
 };
 use crate::msg::persist::OrderLifecycle;
 use crate::msg::time::LocalTs;
-
-use crate::hot::exec::{AccountWatermark, QuoteLevel};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CloseReason {
@@ -92,6 +91,86 @@ pub struct OrderSlot {
     pub seen_recon_seq: u64,
     pub last_event_ts_us: LocalTs,
     pub closed_ts_us: LocalTs,
+}
+
+/// What a reader outside the order table sees of a slot. Only a named transition of the table writes
+/// one.
+impl OrderSlot {
+    #[inline]
+    pub fn client_id(&self) -> ClientOrderId {
+        self.client_id
+    }
+
+    #[inline]
+    pub fn venue_order_id(&self) -> Option<VenueOrderId> {
+        self.venue_order_id
+    }
+
+    #[inline]
+    pub fn state(&self) -> OrderState {
+        self.state
+    }
+
+    #[inline]
+    pub fn side(&self) -> Side {
+        self.side
+    }
+
+    #[inline]
+    pub fn level(&self) -> QuoteLevel {
+        self.level
+    }
+
+    /// `None` for an order adopted from a venue snapshot, whose style the engine never chose.
+    #[inline]
+    pub fn style(&self) -> Option<OrderStyle> {
+        self.style
+    }
+
+    #[inline]
+    pub fn instrument(&self) -> InstrumentId {
+        self.instrument
+    }
+
+    #[inline]
+    pub fn price(&self) -> Price {
+        self.price
+    }
+
+    #[inline]
+    pub fn qty(&self) -> Qty {
+        self.qty
+    }
+
+    #[inline]
+    pub fn filled_base(&self) -> Qty {
+        self.filled_base
+    }
+
+    #[inline]
+    pub fn filled_quote(&self) -> Notional {
+        self.filled_quote
+    }
+
+    #[inline]
+    pub fn amends_used(&self) -> u8 {
+        self.amends_used
+    }
+
+    #[inline]
+    pub fn reserved_amount(&self) -> Option<Spend> {
+        self.reserved_amount
+    }
+
+    #[inline]
+    pub fn reserved_at(&self) -> AccountWatermark {
+        self.reserved_at
+    }
+
+    #[inline]
+    pub fn last_event_ts_us(&self) -> LocalTs {
+        self.last_event_ts_us
+    }
 }
 
 impl OrderSlot {
