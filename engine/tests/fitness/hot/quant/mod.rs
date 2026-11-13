@@ -15,6 +15,7 @@ mod markouts;
 mod microprice;
 mod obi;
 mod optimise;
+mod options;
 mod orderbook_resilience;
 mod vpin;
 

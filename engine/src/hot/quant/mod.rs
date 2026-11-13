@@ -20,6 +20,7 @@ pub mod intensity;
 pub mod liquidity;
 pub mod micro;
 pub mod optimise;
+pub mod options;
 pub mod pricing;
 pub mod toxicity;
 pub mod volatility;
