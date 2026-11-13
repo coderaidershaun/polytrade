@@ -8,6 +8,7 @@ mod driver;
 mod exec;
 mod ingress;
 mod ingress_order;
+mod lanes;
 mod money;
 mod position_ledger;
 /// The quant calculator pins. They live here rather than beside the calculators because `src/`
