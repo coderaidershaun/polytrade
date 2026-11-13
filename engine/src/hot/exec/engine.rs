@@ -265,8 +265,7 @@ impl ExecEngine {
     ) -> impl Iterator<Item = WorkingOrderView> + '_ {
         let current = self
             .orders
-            .side_slots(instrument, side)
-            .iter()
+            .side_in_use(instrument, side)
             .filter(|slot| slot.state().is_working())
             .map(|slot| working_view_of(slot, Some(slot.level())));
         let prior = self

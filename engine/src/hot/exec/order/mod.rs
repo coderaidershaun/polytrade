@@ -4,6 +4,7 @@
 //! The table never reads what an event means: it finds the slot, and a separate transition table
 //! decides what happens to it.
 
+mod occupancy;
 mod prior_run;
 mod slot;
 mod transition;
@@ -20,6 +21,7 @@ use super::account::AccountWatermark;
 use super::capacity::ExecCapacity;
 use super::desired::QuoteLevel;
 
+use occupancy::SlotsInUse;
 pub(super) use prior_run::{PriorRunOrders, Unseated};
 pub use slot::{CloseReason, FillDelta, OrderSlot, OrderState};
 pub use transition::Applied;
@@ -81,6 +83,12 @@ fn level_base(instrument: InstrumentId, side: Side, level: QuoteLevel) -> usize 
 }
 
 #[inline]
+fn level_range(instrument: InstrumentId, side: Side, level: QuoteLevel) -> Range<usize> {
+    let base = level_base(instrument, side, level);
+    base..base + SLOTS_PER_LEVEL
+}
+
+#[inline]
 pub fn level_of_slot(slot_index: usize) -> QuoteLevel {
     let within_side = slot_index % SLOTS_PER_SIDE;
     QuoteLevel::new((within_side / SLOTS_PER_LEVEL) as u8)
@@ -122,16 +130,25 @@ pub struct ReconcilePass {
 
 pub struct OrderTable {
     slots: Box<[OrderSlot]>,
+    in_use: SlotsInUse,
     layout: ClientIdLayout,
 }
 
 digest_by_hash!(ClientIdLayout, OrderSlot);
-digest_fields! { OrderTable { slots, layout } }
+digest_fields! {
+    OrderTable { slots, layout }
+    not_state {
+        // Which slots are not free: a function of the slots, which the digest holds.
+        in_use,
+    }
+}
 
 impl OrderTable {
     pub fn new(capacity: &ExecCapacity, run_nonce: u32) -> Self {
+        let slots = capacity.order_slots();
         Self {
-            slots: vec![OrderSlot::EMPTY; capacity.order_slots()].into_boxed_slice(),
+            slots: vec![OrderSlot::EMPTY; slots].into_boxed_slice(),
+            in_use: SlotsInUse::with_slots(slots),
             layout: ClientIdLayout { run_nonce },
         }
     }
@@ -141,10 +158,28 @@ impl OrderTable {
         &self.slots[index]
     }
 
-    /// Each slot index of the table, for a pass that visits every slot by index.
+    /// Each slot that is not free, in ascending order.
     #[inline]
-    pub(super) fn slot_indices(&self) -> Range<usize> {
-        0..self.slots.len()
+    pub fn slots_in_use(&self) -> impl Iterator<Item = usize> + '_ {
+        self.in_use.iter()
+    }
+
+    /// The first slot that is not free at or after `from`, for a pass that changes slots as it
+    /// walks.
+    #[inline]
+    pub(super) fn next_in_use(&self, from: usize) -> Option<usize> {
+        self.in_use.next_from(from)
+    }
+
+    /// The slots of one side that are not free, in ascending order.
+    #[inline]
+    pub(super) fn side_in_use(
+        &self,
+        instrument: InstrumentId,
+        side: Side,
+    ) -> impl Iterator<Item = &OrderSlot> + '_ {
+        let range = self.side_slot_range(instrument, side);
+        self.in_use.within(range).map(|index| &self.slots[index])
     }
 
     #[inline]
@@ -174,8 +209,7 @@ impl OrderTable {
         side: Side,
         level: QuoteLevel,
     ) -> &[OrderSlot] {
-        let base = level_base(instrument, side, level);
-        &self.slots[base..base + SLOTS_PER_LEVEL]
+        &self.slots[level_range(instrument, side, level)]
     }
 
     /// The working order OCCUPYING a ladder level. A marketable order is stored in the same slots
@@ -188,22 +222,21 @@ impl OrderTable {
         side: Side,
         level: QuoteLevel,
     ) -> Option<&OrderSlot> {
-        self.level_slots(instrument, side, level)
-            .iter()
+        self.in_use
+            .within(level_range(instrument, side, level))
+            .map(|index| &self.slots[index])
             .find(|slot| slot.state.is_working() && slot.style != Some(OrderStyle::Immediate))
     }
 
     #[inline]
     pub fn is_awaiting_answer(&self, instrument: InstrumentId, side: Side) -> bool {
-        self.side_slots(instrument, side)
-            .iter()
+        self.side_in_use(instrument, side)
             .any(|slot| slot.state.is_in_flight())
     }
 
     #[inline]
     pub fn possibly_live_count(&self, instrument: InstrumentId, side: Side) -> usize {
-        self.side_slots(instrument, side)
-            .iter()
+        self.side_in_use(instrument, side)
             .filter(|slot| slot.state.is_working())
             .count()
     }
@@ -236,6 +269,7 @@ impl OrderTable {
             placed_recon_seq: claim.recon_seq,
             ..OrderSlot::EMPTY
         };
+        self.in_use.insert(index);
         Ok((index, client_id))
     }
 
@@ -259,6 +293,7 @@ impl OrderTable {
             placed_recon_seq: event.recon_seq,
             ..OrderSlot::EMPTY
         };
+        self.in_use.insert(index);
         Some(index)
     }
 
@@ -291,7 +326,10 @@ impl OrderTable {
 
     #[cold]
     pub fn invalidate_all(&mut self, invalidated: &mut impl FnMut(&OrderSlot, OrderState)) {
-        for slot in self.slots.iter_mut() {
+        let mut next = self.in_use.next_from(0);
+        while let Some(index) = next {
+            next = self.in_use.next_from(index + 1);
+            let slot = &mut self.slots[index];
             if !slot.state.is_working() {
                 continue;
             }
@@ -361,7 +399,10 @@ impl OrderTable {
     }
 
     pub fn reap(&mut self, now: LocalTs, window: DurationUs) {
-        for slot in self.slots.iter_mut() {
+        let mut next = self.in_use.next_from(0);
+        while let Some(index) = next {
+            next = self.in_use.next_from(index + 1);
+            let slot = &mut self.slots[index];
             let is_reapable = matches!(slot.state, OrderState::Closed(_))
                 && now.diff(slot.closed_ts_us) >= window;
             if is_reapable {
@@ -369,6 +410,7 @@ impl OrderTable {
                     generation: slot.generation,
                     ..OrderSlot::EMPTY
                 };
+                self.in_use.remove(index);
             }
         }
     }

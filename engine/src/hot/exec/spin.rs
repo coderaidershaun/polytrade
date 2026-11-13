@@ -46,7 +46,9 @@ impl ExecEngine {
     }
 
     fn sweep_timeouts(&mut self, stamps: FoldStamps, bank: &mut Actions) {
-        for index in self.orders.slot_indices() {
+        let mut next = self.orders.next_in_use(0);
+        while let Some(index) = next {
+            next = self.orders.next_in_use(index + 1);
             if self
                 .orders
                 .is_timed_out(index, stamps.fold, self.settings.inflight_timeout)
@@ -85,7 +87,7 @@ impl ExecEngine {
         let is_silent = self.spins_since_exec_event >= self.settings.exec_silence_spins;
         let has_working = self
             .orders
-            .slot_indices()
+            .slots_in_use()
             .any(|index| self.orders.slot(index).state().is_working());
         if is_silent && has_working {
             self.request_open_orders(now);

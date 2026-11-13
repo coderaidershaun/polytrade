@@ -57,9 +57,12 @@ impl ExecEngine {
         ExecCallback::None
     }
 
-    /// Retry releases that beat account update. Fixed-slot scan, no alloc.
+    /// Retries each release that beat its account update. A free slot holds no reservation, so the
+    /// pass walks the slots in use.
     pub(super) fn retry_reservation_releases(&mut self) {
-        for index in self.orders.slot_indices() {
+        let mut next = self.orders.next_in_use(0);
+        while let Some(index) = next {
+            next = self.orders.next_in_use(index + 1);
             let slot = self.orders.slot(index);
             if slot.reserved_amount().is_none() || slot.state() == OrderState::PendingNew {
                 continue;

@@ -20,6 +20,7 @@ use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::{RecordedTables, TableKind};
+use proptest::prelude::*;
 use rtrb::Consumer;
 
 use crate::engine_support::{
@@ -1051,4 +1052,200 @@ fn occupancy_above_the_cap_halts_and_sweeps() {
             .iter()
             .any(|command| matches!(command, ExecCommand::CancelOurs { .. }))
     );
+}
+
+/// One write of the order table, through its public transitions. A `pick` names the n-th slot in
+/// use, so an answer or a mark lands on an order that exists.
+#[derive(Debug, Clone)]
+enum Operation {
+    Claim { instrument: u16, side: Side, at: u8 },
+    Answer { pick: usize, answer: usize },
+    CancelSent { pick: usize },
+    AmendSent { pick: usize },
+    TimedOut { pick: usize },
+    Adopt { slot: usize, generation: u16 },
+    Sweep { instrument: u16, recon_seq: u64 },
+    Invalidate,
+    Reap { after_us: i64 },
+}
+
+/// Each kind of venue answer, with the status and the class that change what it does.
+const ANSWERS: [(ExecKind, Option<VenueOrderStatus>, Option<RejectClass>); 17] = [
+    (ExecKind::AckPlaced, None, None),
+    (ExecKind::ReportNew, None, None),
+    (ExecKind::PlaceNotSent, None, None),
+    (ExecKind::AmendNotSent, None, None),
+    (ExecKind::AckFailed, None, Some(RejectClass::StillLive)),
+    (ExecKind::AckFailed, None, Some(RejectClass::Gone)),
+    (ExecKind::AckFailed, None, Some(RejectClass::Ambiguous)),
+    (ExecKind::ReportTrade, Some(VenueOrderStatus::Filled), None),
+    (
+        ExecKind::ReportTrade,
+        Some(VenueOrderStatus::PartiallyFilled),
+        None,
+    ),
+    (
+        ExecKind::ReportCanceled,
+        Some(VenueOrderStatus::Canceled),
+        None,
+    ),
+    (ExecKind::AckCanceled, None, None),
+    (
+        ExecKind::ReportExpired,
+        Some(VenueOrderStatus::Expired),
+        None,
+    ),
+    (
+        ExecKind::ReportRejected,
+        Some(VenueOrderStatus::Rejected),
+        None,
+    ),
+    (ExecKind::AckAmended, None, None),
+    (ExecKind::SnapshotOrder, Some(VenueOrderStatus::New), None),
+    (
+        ExecKind::SnapshotOrder,
+        Some(VenueOrderStatus::Canceled),
+        None,
+    ),
+    (ExecKind::SnapshotEnd, None, None),
+];
+
+fn an_operation() -> impl Strategy<Value = Operation> {
+    let side = prop_oneof![Just(Side::Buy), Just(Side::Sell)];
+    prop_oneof![
+        4 => (0u16..2, side, 0u8..8)
+            .prop_map(|(instrument, side, at)| Operation::Claim { instrument, side, at }),
+        4 => (any::<usize>(), 0..ANSWERS.len())
+            .prop_map(|(pick, answer)| Operation::Answer { pick, answer }),
+        1 => any::<usize>().prop_map(|pick| Operation::CancelSent { pick }),
+        1 => any::<usize>().prop_map(|pick| Operation::AmendSent { pick }),
+        1 => any::<usize>().prop_map(|pick| Operation::TimedOut { pick }),
+        1 => (0..2 * 64usize, 1..u16::MAX)
+            .prop_map(|(slot, generation)| Operation::Adopt { slot, generation }),
+        1 => (0u16..2, 0u64..4)
+            .prop_map(|(instrument, recon_seq)| Operation::Sweep { instrument, recon_seq }),
+        1 => Just(Operation::Invalidate),
+        2 => (0i64..2 * REAP_WINDOW.micros()).prop_map(|after_us| Operation::Reap { after_us }),
+    ]
+}
+
+/// The slots that are not `Free`, read one by one through the public getters: the model the index
+/// must equal.
+fn scanned_in_use(orders: &OrderTable, slots: usize) -> Vec<usize> {
+    (0..slots)
+        .filter(|index| orders.slot(*index).state() != OrderState::Free)
+        .collect()
+}
+
+fn operate(orders: &mut OrderTable, operation: &Operation, slots: usize, clock_us: i64) {
+    let now = LocalTs::from_micros(clock_us);
+    let in_use = scanned_in_use(orders, slots);
+    let picked = |pick: usize| (!in_use.is_empty()).then(|| in_use[pick % in_use.len()]);
+    match *operation {
+        Operation::Claim {
+            instrument,
+            side,
+            at,
+        } => {
+            // A refused claim is a legal outcome here: the index must hold either way.
+            orders
+                .claim(OrderClaim {
+                    instrument: InstrumentId(instrument),
+                    side,
+                    claimed_ts_us: now,
+                    ..buy_claim(level(at), 100, 1)
+                })
+                .ok();
+        }
+        Operation::Answer { pick, answer } => {
+            let Some(index) = picked(pick) else { return };
+            let (kind, status, reject) = ANSWERS[answer];
+            let slot = orders.slot(index);
+            let event = ExecEvent {
+                kind,
+                status,
+                reject,
+                qty: Qty::from_mantissa(1),
+                recon_seq: 2,
+                ..exec_event(
+                    slot.instrument(),
+                    slot.client_id(),
+                    slot.side(),
+                    100,
+                    clock_us,
+                )
+            };
+            orders.apply(index, &event, now);
+        }
+        Operation::CancelSent { pick } => {
+            if let Some(index) = picked(pick) {
+                orders.mark_cancel_sent(index);
+            }
+        }
+        Operation::AmendSent { pick } => {
+            if let Some(index) = picked(pick) {
+                orders.mark_amend_sent(index);
+            }
+        }
+        Operation::TimedOut { pick } => {
+            if let Some(index) = picked(pick) {
+                orders.mark_timed_out(index, now);
+            }
+        }
+        Operation::Adopt { slot, generation } => {
+            let id = ClientIdLayout {
+                run_nonce: RUN_NONCE,
+            }
+            .encode(slot, generation);
+            let instrument = InstrumentId(u16::try_from(slot / 64).expect("two instruments"));
+            let restated = ExecEvent {
+                kind: ExecKind::SnapshotOrder,
+                status: Some(VenueOrderStatus::New),
+                qty: Qty::from_mantissa(1),
+                ..exec_event(instrument, id, Side::Buy, 100, clock_us)
+            };
+            orders.adopt(&restated, now);
+        }
+        Operation::Sweep {
+            instrument,
+            recon_seq,
+        } => orders.sweep_unseen(
+            ReconcilePass {
+                instrument: InstrumentId(instrument),
+                recon_seq,
+                recon_ts_us: now,
+            },
+            &mut |_, _| {},
+        ),
+        Operation::Invalidate => orders.invalidate_all(&mut |_, _| {}),
+        Operation::Reap { after_us } => {
+            orders.reap(LocalTs::from_micros(clock_us + after_us), REAP_WINDOW);
+        }
+    }
+}
+
+proptest! {
+    /// FITNESS: the index of slots in use lists exactly the slots that are not free, in ascending
+    /// order, after each write of the table. The passes of a spin walk that index in place of every
+    /// slot, so a slot that it missed would be an order that no timeout, reap or release ever visits
+    /// again, and a slot out of order would change the order of the commands that a pass banks.
+    #[test]
+    fn working_index_equals_working_slots(
+        operations in prop::collection::vec(an_operation(), 1..80),
+    ) {
+        let slots = exec_capacity(2).order_slots();
+        let mut orders = table(2);
+        for (step, operation) in operations.iter().enumerate() {
+            let clock_us = 1_000 * (i64::try_from(step).expect("a short run") + 1);
+            operate(&mut orders, operation, slots, clock_us);
+            let indexed: Vec<usize> = orders.slots_in_use().collect();
+            prop_assert_eq!(
+                indexed,
+                scanned_in_use(&orders, slots),
+                "after step {} ({:?}) the index and the slots differ",
+                step,
+                operation
+            );
+        }
+    }
 }

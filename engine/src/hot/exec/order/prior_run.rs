@@ -6,6 +6,7 @@ use crate::msg::exec::ExecEvent;
 use crate::msg::ids::{ClientOrderId, InstrumentId, Side};
 use crate::msg::time::LocalTs;
 
+use super::occupancy::SlotsInUse;
 use super::{Applied, OrderSlot, OrderState, apply_exec_event, free_or_oldest_closed};
 
 /// Orders an EARLIER run of this trading engine left resting on the venue. They are cancelled on
@@ -20,9 +21,17 @@ use super::{Applied, OrderSlot, OrderState, apply_exec_event, free_or_oldest_clo
 /// keeps a cancel answered "unknown order", this path's ordinary outcome, out of the reject streak.
 pub(in crate::hot::exec) struct PriorRunOrders {
     slots: Box<[OrderSlot]>,
+    /// A seat reuses a closed entry and nothing reaps one, so its bits only rise.
+    in_use: SlotsInUse,
 }
 
-digest_fields! { PriorRunOrders { slots } }
+digest_fields! {
+    PriorRunOrders { slots }
+    not_state {
+        // Which entries are not free: a function of the slots, which the digest holds.
+        in_use,
+    }
+}
 
 /// Why an order of an earlier run has no slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,8 +42,10 @@ pub(in crate::hot::exec) enum Unseated {
 
 impl PriorRunOrders {
     pub(in crate::hot::exec) fn new(capacity: &ExecCapacity) -> Self {
+        let slots = capacity.prior_run_slots();
         Self {
-            slots: vec![OrderSlot::EMPTY; capacity.prior_run_slots()].into_boxed_slice(),
+            slots: vec![OrderSlot::EMPTY; slots].into_boxed_slice(),
+            in_use: SlotsInUse::with_slots(slots),
         }
     }
 
@@ -63,9 +74,12 @@ impl PriorRunOrders {
         instrument: InstrumentId,
         side: Side,
     ) -> impl Iterator<Item = &OrderSlot> {
-        self.slots.iter().filter(move |slot| {
-            slot.instrument == instrument && slot.side == side && slot.state.is_working()
-        })
+        self.in_use
+            .iter()
+            .map(|index| &self.slots[index])
+            .filter(move |slot| {
+                slot.instrument == instrument && slot.side == side && slot.state.is_working()
+            })
     }
 
     pub(in crate::hot::exec) fn find_or_seat(
@@ -89,12 +103,14 @@ impl PriorRunOrders {
             last_event_ts_us: now,
             ..OrderSlot::EMPTY
         };
+        self.in_use.insert(index);
         Ok(index)
     }
 
     fn find(&self, id: ClientOrderId) -> Option<usize> {
-        self.slots
-            .iter()
-            .position(|slot| slot.client_id == id && slot.state != OrderState::Free)
+        self.in_use.iter().find(|index| {
+            let slot = &self.slots[*index];
+            slot.client_id == id && slot.state != OrderState::Free
+        })
     }
 }
