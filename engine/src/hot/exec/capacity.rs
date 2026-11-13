@@ -41,7 +41,7 @@ impl ExecCapacity {
 
     /// The sizes with no check: the start checks the same rows with [`ExecCapacity::of`], and a
     /// client order id past the addressable slots still panics where it is minted.
-    pub(super) fn sized_for(rows: &[InstrumentRow]) -> Self {
+    pub(crate) fn sized_for(rows: &[InstrumentRow]) -> Self {
         let assets = rows
             .iter()
             .map(|row| usize::from(row.base_asset.0.max(row.quote_asset.0)) + 1)

@@ -3,22 +3,30 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine::hot::dispatch::HotEngine;
-use engine::hot::exec::{ClientIdLayout, side_base};
+use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
+use engine::hot::exec::{ClientIdLayout, HaltReason, side_base};
+use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{Fill, Strategy, StrategyCtx};
-use engine::msg::exec::{ExecEvent, ExecKind, VenueOrderStatus};
+use engine::msg::exec::{ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus};
 use engine::msg::ids::{AssetId, InstrumentId, Notional, Price, Qty, Side, TradeId};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
-use engine::msg::persist::PersistRecord;
+use engine::msg::persist::{IncidentKind, IncidentRow, PersistRecord};
+use engine::msg::time::Stamper;
+use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
+use engine::runtime::registry::InstrumentRow;
 use proptest::prelude::*;
 use proptest::strategy::Strategy as _;
 use proptest::test_runner::{Config, TestCaseError, TestRunner};
-use rtrb::Consumer;
+use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
-    FillPen, ONE, engine_without_warmup, exec_event, instrument_row, persist_ring,
-    persist_ring_for, spin, strategy_log_ring, ts,
+    FillPen, ONE, detached_setup, engine_without_warmup, exec_event, instrument_row, persist_ring,
+    persist_ring_for, spin, strategy_log_ring, ts, ui_event_ring, venue_ts,
+};
+use crate::exec_support::{
+    ASK, BID, INSTRUMENT, TwoSidedQuoter, drain_commands, exec_settings, is_placing, make_ready,
+    spin_at,
 };
 use crate::hot::position_ledger::{
     Phase, bare_row, dispatch_all, probe_engine, reseat_book, spin_reading, take_readings,
@@ -26,6 +34,14 @@ use crate::hot::position_ledger::{
 
 /// The price of each fill of the generated runs, so the quote of a run is its quantity times it.
 const PRICE: i64 = 100;
+
+/// A tenth of a base unit, and the fee of 0.0001 that each case below counts in.
+const TENTH: i64 = ONE / 10;
+const FEE: i64 = ONE / 10_000;
+
+/// The assets of [`instrument_row`]: its base and its quote.
+const BASE: AssetId = AssetId(0);
+const QUOTE: AssetId = AssetId(1);
 
 /// Keeps each fill a callback hands it, with the position that the ledger shows inside that
 /// callback, and the position and cash of instrument 0 at the last spin.
@@ -52,15 +68,15 @@ impl Strategy for FillProbe {
     }
 }
 
-/// An engine over instrument 0 that records fill rows, with one resting buy of 1.0 at 100 that
-/// the venue named.
+/// An engine over `instruments` that records fill rows, with one resting buy of 1.0 at 100 on
+/// instrument 0 that the venue named.
 fn engine_with_resting_buy(
+    instruments: &[InstrumentRow],
     strategy: Box<dyn Strategy>,
 ) -> (HotEngine, Consumer<PersistRecord>, ExecEvent) {
-    let instruments = [instrument_row(0, TrackerSpec::default(), 64)];
     let (persistence, rows) = persist_ring_for(4_096, RecordedTables::new(&[TableKind::Fills]));
     let (log_sink, _logs) = strategy_log_ring(64);
-    let mut engine = engine_without_warmup(&instruments, strategy, persistence, log_sink);
+    let mut engine = engine_without_warmup(instruments, strategy, persistence, log_sink);
     dispatch_all(&mut engine, &reseat_book(0, 99 * ONE, 101 * ONE, 0));
     let client_id =
         ClientIdLayout { run_nonce: 0 }.encode(side_base(InstrumentId(0), Side::Buy), 1);
@@ -91,10 +107,13 @@ fn trade_report(order: ExecEvent, trade: i64, last: i64, cumulative: i64) -> Exe
 
 fn fold_reports(steps: &[i64], copies: &[(usize, usize)]) -> Result<(), TestCaseError> {
     let (fills, at_spin) = (Arc::new(Mutex::new(Vec::new())), Arc::new(Mutex::new(None)));
-    let (mut engine, mut rows, order) = engine_with_resting_buy(Box::new(FillProbe {
-        fills: Arc::clone(&fills),
-        at_spin: Arc::clone(&at_spin),
-    }));
+    let (mut engine, mut rows, order) = engine_with_resting_buy(
+        &[instrument_row(0, TrackerSpec::default(), 64)],
+        Box::new(FillProbe {
+            fills: Arc::clone(&fills),
+            at_spin: Arc::clone(&at_spin),
+        }),
+    );
     let mut reports = Vec::new();
     let mut cumulative = 0;
     for (trade, step) in (1..).zip(steps) {
@@ -169,6 +188,245 @@ fn redelivered_and_reordered_reports_move_money_once() {
             fold_reports(&steps, &copies)
         })
         .expect("each report moves the money of its trade once");
+}
+
+/// One engine of the fee cases: the resting buy, the reports folded into it one stamp apart, and
+/// the position and cash that a spin reads.
+struct FeeRun {
+    engine: HotEngine,
+    rows: Consumer<PersistRecord>,
+    order: ExecEvent,
+    at_spin: Arc<Mutex<Option<(Qty, i64)>>>,
+    when: i64,
+    spins: u64,
+}
+
+impl FeeRun {
+    fn new(instruments: &[InstrumentRow]) -> Self {
+        let at_spin = Arc::new(Mutex::new(None));
+        let (engine, rows, order) = engine_with_resting_buy(
+            instruments,
+            Box::new(FillProbe {
+                fills: Arc::default(),
+                at_spin: Arc::clone(&at_spin),
+            }),
+        );
+        Self {
+            engine,
+            rows,
+            order,
+            at_spin,
+            when: 1_000,
+            spins: 0,
+        }
+    }
+
+    /// A report of `trade` with its own quantity `last`, the order's total `cumulative`, and a fee
+    /// of `fee` in `asset`.
+    fn report(
+        &self,
+        trade: i64,
+        (last, cumulative): (i64, i64),
+        (asset, fee): (AssetId, i64),
+    ) -> ExecEvent {
+        ExecEvent {
+            commission: fee,
+            commission_asset: asset,
+            ..trade_report(self.order, trade, last, cumulative)
+        }
+    }
+
+    /// Folds `report` and answers its received stamp.
+    fn fold(&mut self, report: ExecEvent) -> i64 {
+        self.when += 1_000;
+        self.engine.dispatch(&InboundMessage::new(
+            ts(self.when),
+            MessageBody::Exec(report),
+        ));
+        self.when
+    }
+
+    /// The position and the cash of instrument 0, read at a spin.
+    fn read(&mut self) -> (Qty, i64) {
+        self.when += 1_000;
+        self.spins += 1;
+        self.engine.dispatch(&spin(self.spins, self.when));
+        self.at_spin
+            .lock()
+            .expect("spin mutex poisoned")
+            .take()
+            .expect("the spin ran the strategy")
+    }
+
+    fn incidents(&mut self) -> Vec<IncidentRow> {
+        incidents(&mut self.rows)
+    }
+}
+
+/// The incident rows on the tape since the last read. The other rows go.
+fn incidents(rows: &mut Consumer<PersistRecord>) -> Vec<IncidentRow> {
+    std::iter::from_fn(|| rows.pop().ok())
+        .filter_map(|record| match record {
+            PersistRecord::Incident(row) => Some(row),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The incident row that `report`, folded at `at`, should leave.
+fn incident(kind: IncidentKind, report: &ExecEvent, qty: i64, amount: i64, at: i64) -> IncidentRow {
+    IncidentRow {
+        kind,
+        instrument: InstrumentId(0),
+        client_id: Some(report.client_id),
+        trade_id: report.trade_id,
+        qty: Qty::from_mantissa(qty),
+        amount,
+        window_close_ts_us: None,
+        exchange_ts_us: report.exchange_ts_us,
+        received_ts_us: ts(at),
+    }
+}
+
+/// FITNESS: each fee folds once for each trade, whatever the venue repeats, reorders or loses. A
+/// report whose quantity step its own trade does not explain leaves a fee-gap record, and the late
+/// report of the lost trade books its fee and closes the gap. A fee that the engine cannot book, in
+/// an asset with no row or of a trade it cannot tell from one booked before, leaves a record with
+/// its amount. A fee booked twice, or lost with no record, is money that the ledger reports and the
+/// venue never charged, or the reverse, and no later state shows it.
+#[test]
+fn two_trades_in_one_report_give_both_fees_or_a_gap_record() {
+    a_lost_trade_leaves_a_gap_that_its_late_report_closes();
+    a_repeat_that_the_full_memory_no_longer_holds_is_unbooked();
+    a_fee_goes_to_the_row_of_its_asset();
+}
+
+/// R1 (trade 101, 0.4) and R3 (trade 103, 0.3, total 1.0) arrive, and R2 (trade 102, 0.3) is lost,
+/// then comes late. A repeat of R1 comes last.
+fn a_lost_trade_leaves_a_gap_that_its_late_report_closes() {
+    let mut run = FeeRun::new(&[instrument_row(0, TrackerSpec::default(), 64)]);
+    let r1 = run.report(101, (4 * TENTH, 4 * TENTH), (QUOTE, 4 * FEE));
+    let r2 = run.report(102, (3 * TENTH, 7 * TENTH), (QUOTE, 3 * FEE));
+    let r3 = run.report(103, (3 * TENTH, 10 * TENTH), (QUOTE, 3 * FEE));
+
+    run.fold(r1);
+    let r3_at = run.fold(r3);
+    assert_eq!(
+        run.read(),
+        (Qty::from_mantissa(ONE), -(100 * ONE) - 7 * FEE),
+        "R1 and R3 book the whole total, and only their own two fees"
+    );
+    assert_eq!(
+        run.incidents(),
+        [incident(IncidentKind::FeeGap, &r3, 3 * TENTH, 0, r3_at)],
+        "R3 raised the total by 0.6 and its own trade explains 0.3 of it"
+    );
+    assert_eq!(run.engine.counters().fee_gaps, 1);
+
+    run.fold(r2);
+    run.fold(r1);
+    assert_eq!(
+        run.read(),
+        (Qty::from_mantissa(ONE), -(100 * ONE) - 10 * FEE),
+        "the late R2 books its fee once and moves no quantity, and the repeat of R1 books nothing"
+    );
+    assert_eq!(
+        run.incidents(),
+        [],
+        "a late report and a repeat leave no record"
+    );
+    let counters = run.engine.counters();
+    assert_eq!((counters.fee_gaps, counters.unbooked_fees), (1, 0));
+}
+
+/// Nine trades, each its own step with a fee of 0.0001, then a repeat of the first. The memory holds
+/// the ids of eight trades, so the ninth pushes the first out.
+fn a_repeat_that_the_full_memory_no_longer_holds_is_unbooked() {
+    let mut run = FeeRun::new(&[instrument_row(0, TrackerSpec::default(), 64)]);
+    let reports: Vec<ExecEvent> = (1..=9)
+        .map(|trade| run.report(trade, (TENTH, trade * TENTH), (QUOTE, FEE)))
+        .collect();
+    for report in &reports {
+        run.fold(*report);
+    }
+    let after_nine = (Qty::from_mantissa(9 * TENTH), -(90 * ONE) - 9 * FEE);
+    assert_eq!(
+        run.read(),
+        after_nine,
+        "each of nine trades books its own fee, the ninth with the memory full"
+    );
+    assert_eq!(run.incidents(), []);
+
+    let repeat_at = run.fold(reports[0]);
+    assert_eq!(
+        run.read(),
+        after_nine,
+        "a repeat that the memory cannot tell from a new trade books nothing"
+    );
+    assert_eq!(
+        run.incidents(),
+        [incident(
+            IncidentKind::UnbookedFee,
+            &reports[0],
+            TENTH,
+            FEE,
+            repeat_at
+        )],
+        "the fee that was not booked leaves its amount on the tape"
+    );
+    assert_eq!(run.engine.counters().unbooked_fees, 1);
+}
+
+/// One buy of 0.4 at 100 with a fee of 0.0004 in each asset that is not the quote asset.
+fn a_fee_goes_to_the_row_of_its_asset() {
+    let other = InstrumentRow {
+        base_asset: AssetId(2),
+        ..instrument_row(1, TrackerSpec::default(), 64)
+    };
+    let instruments = [instrument_row(0, TrackerSpec::default(), 64), other];
+    let cases = [
+        (
+            BASE,
+            4 * TENTH - 4 * FEE,
+            false,
+            "a fee in the base asset is base that the venue keeps: the position holds that much \
+             less, and the cash pays only the notional",
+        ),
+        (
+            AssetId(2),
+            4 * TENTH,
+            false,
+            "a fee in another asset that the registry names goes to the row of that asset, never \
+             to this instrument's position or cash",
+        ),
+        (
+            AssetId::UNKNOWN,
+            4 * TENTH,
+            true,
+            "a fee in an asset that the registry does not name moves nothing, and leaves a record \
+             with its amount",
+        ),
+    ];
+    for (asset, position, is_unbooked, why) in cases {
+        let mut run = FeeRun::new(&instruments);
+        let report = run.report(1, (4 * TENTH, 4 * TENTH), (asset, 4 * FEE));
+        let at = run.fold(report);
+        assert_eq!(
+            run.read(),
+            (Qty::from_mantissa(position), -(40 * ONE)),
+            "{why}"
+        );
+        let unbooked: Vec<IncidentRow> = is_unbooked
+            .then(|| incident(IncidentKind::UnbookedFee, &report, 4 * TENTH, 4 * FEE, at))
+            .into_iter()
+            .collect();
+        assert_eq!(run.incidents(), unbooked, "{why}");
+        assert_eq!(
+            run.engine.counters().unbooked_fees,
+            u64::from(is_unbooked),
+            "{why}"
+        );
+    }
 }
 /// Reports the engine's own position and PnL each spin, so an assertion can be made against the
 /// MONEY rather than against an enum.
@@ -392,5 +650,120 @@ fn a_fill_moves_cash_the_way_its_side_and_its_commission_say() {
         let (_, cash_after) = latest.lock().expect("poisoned").expect("the spin ran");
         assert_eq!(cash_after - cash_before, cash_gain - 100 * ONE, "{why}");
         cash_before = cash_after;
+    }
+}
+
+/// Quotes both sides at the touch, as the shared quoter does, and keeps the position that it reads
+/// at each spin.
+struct QuotingProbe {
+    position: Arc<Mutex<Option<Qty>>>,
+}
+
+impl Strategy for QuotingProbe {
+    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, tick: &SpinTick) {
+        TwoSidedQuoter.on_spin(ctx, tick);
+        *self.position.lock().expect("position mutex poisoned") =
+            Some(ctx.position_base(INSTRUMENT));
+    }
+}
+
+/// CONTRACT: an event of one of this run's own orders that no slot holds halts quoting when it
+/// carries a fill, and leaves one incident record with the order and its filled quantity, while the
+/// ledger books nothing that it would have to place by a guess. With no fill the event is counted,
+/// and quoting goes on. The tape takes the record with no table named for it.
+#[test]
+fn orphan_fill_halts_and_keeps_state() {
+    const RUN_NONCE: u32 = 7;
+    let client_id = ClientIdLayout {
+        run_nonce: RUN_NONCE,
+    }
+    .encode(12, 3);
+    for (cumulative, is_halted) in [(5 * TENTH, true), (0, false)] {
+        let instruments = [instrument_row(0, TrackerSpec::default(), 64)];
+        let (persistence, mut rows) = persist_ring_for(1_024, RecordedTables::default());
+        let (commands_producer, mut commands) = RingBuffer::<ExecLaneItem>::new(256);
+        let (ui_event_sink, mut ui_events) = ui_event_ring(1_024);
+        let position = Arc::new(Mutex::new(None));
+        let probe = QuotingProbe {
+            position: Arc::clone(&position),
+        };
+        let mut engine = HotEngine::new(HotEngineSetup {
+            persistence: Some(persistence),
+            ui_event_sink,
+            exec: Some(ExecWiring {
+                sink: ExecSink::new(commands_producer, Stamper::Off),
+                settings: exec_settings(),
+                run_nonce: RUN_NONCE,
+            }),
+            ..detached_setup(&instruments, Box::new(probe))
+        });
+        make_ready(&mut engine, 0);
+        dispatch_all(&mut engine, &reseat_book(0, BID, ASK, 1));
+        let filled = Qty::from_mantissa(cumulative);
+        let orphan = ExecEvent {
+            kind: ExecKind::ReportTrade,
+            status: Some(VenueOrderStatus::PartiallyFilled),
+            trade_id: Some(TradeId(77)),
+            qty: Qty::from_mantissa(ONE),
+            last_price: Price::from_mantissa(BID),
+            last_qty: filled,
+            cumulative_qty: filled,
+            cumulative_quote: Price::from_mantissa(BID).notional(filled),
+            ..exec_event(INSTRUMENT, client_id, Side::Buy, BID, 2)
+        };
+        engine.dispatch(&InboundMessage::new(ts(2), MessageBody::Exec(orphan)));
+        spin_at(&mut engine, 1, 3);
+
+        let halt = std::iter::from_fn(|| ui_events.pop().ok())
+            .filter_map(|event| match event {
+                UiEvent::Execution { halt, .. } => Some(halt),
+                _ => None,
+            })
+            .last();
+        let reason = match halt {
+            Some(UiHalt::Halted { reason, .. }) => Some(reason),
+            _ => None,
+        };
+        assert_eq!(
+            reason,
+            is_halted.then_some(HaltReason::OrphanFill),
+            "a fill on an order with no slot halts quoting, and an event with no fill does not"
+        );
+        let sent = drain_commands(&mut commands);
+        assert_eq!(
+            is_placing(&sent, Side::Buy) || is_placing(&sent, Side::Sell),
+            !is_halted,
+            "no quote goes out after the halt, and quoting goes on after an event with no fill: \
+             {sent:?}"
+        );
+        let orphan_fill = IncidentRow {
+            kind: IncidentKind::OrphanFill,
+            instrument: INSTRUMENT,
+            client_id: Some(client_id),
+            trade_id: Some(TradeId(77)),
+            qty: filled,
+            amount: 0,
+            window_close_ts_us: None,
+            exchange_ts_us: venue_ts(2),
+            received_ts_us: ts(2),
+        };
+        let expected: Vec<IncidentRow> = is_halted.then_some(orphan_fill).into_iter().collect();
+        assert_eq!(
+            incidents(&mut rows),
+            expected,
+            "a fill on an order with no slot leaves one record with the order and its filled \
+             quantity, whatever tables the config names"
+        );
+        assert_eq!(
+            *position.lock().expect("position mutex poisoned"),
+            Some(Qty::from_mantissa(0)),
+            "the ledger books no fill that it would have to place by a guess"
+        );
+        let counters = engine.counters();
+        assert_eq!(
+            (counters.orphan_fills, counters.orphan_events_without_fill),
+            if is_halted { (1, 0) } else { (0, 1) },
+            "an orphan fill counts as an incident, and an event with no fill as a refusal"
+        );
     }
 }

@@ -1,8 +1,10 @@
-//! The position, cash and cost basis of each instrument, so the engine can value its own PnL: a
-//! strategy's counters drop the fill prices. Each amount is an exact mantissa, never a float.
+//! The position, cash and cost basis of each instrument, and the fees paid in each asset, so the
+//! engine can value its own PnL: a strategy's counters drop the fill prices. Each amount is an exact
+//! mantissa, never a float.
 
 use crate::hot::digest::{digest_by_hash, digest_fields};
-use crate::msg::ids::{InstrumentId, Notional, Price, Qty, Side};
+use crate::hot::exec::ExecCapacity;
+use crate::msg::ids::{AssetId, InstrumentId, Notional, Price, Qty, Side};
 use crate::runtime::exposure::InstrumentExposure;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -11,8 +13,22 @@ pub(crate) struct LedgerFill {
     pub(crate) side: Side,
     pub(crate) base: Qty,
     pub(crate) notional_quote: Notional,
-    pub(crate) commission_quote: Notional,
 }
+
+/// The fee of one report, by the asset that the venue charged it in. A rebate is negative.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum FillFee {
+    /// It leaves the instrument's cash.
+    Quote(Notional),
+    /// The venue keeps that much of the base it delivers, so the position holds that much less.
+    Base { asset: AssetId, qty: Qty },
+    /// Only the fee row of its asset holds it.
+    Other { asset: AssetId, amount: i64 },
+}
+
+/// The fee is in an asset that no instrument row names, so no row can hold it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NoFeeRow;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub(crate) struct LedgerRow {
@@ -95,13 +111,17 @@ impl LedgerRow {
 #[derive(Debug)]
 pub(crate) struct PositionLedger {
     rows: Vec<LedgerRow>,
+    /// The fees paid in each asset other than an instrument's quote asset, by asset id, for the
+    /// whole run: a rotation resets an instrument's row and never these.
+    fees: Box<[i64]>,
 }
 
 digest_by_hash!(LedgerRow);
-digest_fields! { PositionLedger { rows } }
+digest_fields! { PositionLedger { rows, fees } }
 
 impl PositionLedger {
-    pub(crate) fn new(instrument_count: usize, restored: &[InstrumentExposure]) -> Self {
+    pub(crate) fn new(capacity: &ExecCapacity, restored: &[InstrumentExposure]) -> Self {
+        let instrument_count = capacity.instruments();
         assert!(
             instrument_count <= usize::from(u16::MAX),
             "{instrument_count} instrument rows exceed the u16 instrument-id space"
@@ -122,7 +142,10 @@ impl PositionLedger {
                  measures a previous run's result"
             );
         }
-        Self { rows }
+        Self {
+            rows,
+            fees: vec![0; capacity.assets()].into_boxed_slice(),
+        }
     }
 
     #[inline]
@@ -169,15 +192,39 @@ impl PositionLedger {
             i128::from(row.position_base.mantissa()) + base_delta,
             "position_base",
         ));
-        // The commission is a cost whichever way the fill went, and only ever reaches here already
-        // filtered to the instrument's own quote asset — a fee paid in some other asset belongs to
-        // that asset's balance, not to this instrument's PnL. It never touches the basis: a fee is
-        // realised the moment it is paid, and burying it in the cost of an open position would let
-        // the kill switch ignore the one cost a maker pays on every single fill.
-        row.cash_quote = narrow_quote(
-            wide(row.cash_quote) - cost_delta - wide(fill.commission_quote),
-            "cash_quote",
-        );
+        row.cash_quote = narrow_quote(wide(row.cash_quote) - cost_delta, "cash_quote");
+    }
+
+    /// A fee never touches the basis: it is realised the moment it is paid, and burying it in the
+    /// cost of an open position would let the kill switch ignore the one cost that a maker pays on
+    /// each fill. A fee in the base asset leaves the basis at the full cost of what was bought.
+    ///
+    /// # Errors
+    /// [`NoFeeRow`] when the fee is in an asset that has no row. Nothing moves.
+    pub(crate) fn book_fee(
+        &mut self,
+        instrument: InstrumentId,
+        fee: FillFee,
+    ) -> Result<(), NoFeeRow> {
+        let row = &mut self.rows[usize::from(instrument.0)];
+        match fee {
+            FillFee::Quote(amount) => {
+                row.cash_quote = narrow_quote(wide(row.cash_quote) - wide(amount), "cash_quote");
+            }
+            FillFee::Base { asset, qty } => {
+                let fees = self.fees.get_mut(usize::from(asset.0)).ok_or(NoFeeRow)?;
+                *fees = narrow(i128::from(*fees) + i128::from(qty.mantissa()), "fees");
+                row.position_base = Qty::from_mantissa(narrow(
+                    i128::from(row.position_base.mantissa()) - i128::from(qty.mantissa()),
+                    "position_base",
+                ));
+            }
+            FillFee::Other { asset, amount } => {
+                let fees = self.fees.get_mut(usize::from(asset.0)).ok_or(NoFeeRow)?;
+                *fees = narrow(i128::from(*fees) + i128::from(amount), "fees");
+            }
+        }
+        Ok(())
     }
 
     #[inline]

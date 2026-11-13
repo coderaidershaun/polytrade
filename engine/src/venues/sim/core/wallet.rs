@@ -361,9 +361,8 @@ impl SimWallet {
         funds.free = free;
     }
 
-    /// A rebate is always paid in the quote asset: paid in base it rounds away on a small order
-    /// and never reaches PnL, which only counts quote commissions. A charge comes out of what
-    /// the fill received.
+    /// A rebate is always paid in the quote asset, because paid in base it rounds away on a small
+    /// order. A charge comes out of what the fill received.
     fn fee_slot(&self, received: WalletSlot) -> WalletSlot {
         match self.maker_fee_bps.is_rebate() {
             true => WalletSlot::Quote,

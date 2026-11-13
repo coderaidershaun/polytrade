@@ -17,7 +17,8 @@ use gate::MarketGates;
 use crate::hot::book::Book;
 use crate::hot::dispatch::ui_emit::UiEmitter;
 use crate::hot::exec::{
-    DesiredBook, ExecCallback, ExecEngine, FoldStamps, HaltReason, QuoteLevel, SpinInput,
+    DesiredBook, ExecCallback, ExecCapacity, ExecEngine, FoldStamps, HaltReason, QuoteLevel,
+    SpinInput,
 };
 use crate::hot::ledger::PositionLedger;
 use crate::hot::sink::{ExposureSink, LinkSink, PersistSink, StrategyLogSink};
@@ -139,7 +140,10 @@ impl HotEngine {
                 books,
                 derived: Derived { trackers, ewma },
                 windows: vec![None; instruments.len()],
-                ledger: PositionLedger::new(instruments.len(), exposure.restored),
+                ledger: PositionLedger::new(
+                    &ExecCapacity::sized_for(instruments),
+                    exposure.restored,
+                ),
                 exposure: exposure.sink,
                 published_exposure: restored_snapshot(exposure.restored),
                 spin_seq: 0,

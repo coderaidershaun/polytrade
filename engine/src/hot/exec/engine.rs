@@ -319,7 +319,7 @@ impl ExecEngine {
             }
             Provenance::Mine => {}
         }
-        let Some(index) = self.locate(event, now) else {
+        let Some(index) = self.locate(event, stamps, bank) else {
             return ExecCallback::None;
         };
         self.apply_to_slot(index, event, stamps, ledger, bank)
@@ -366,28 +366,22 @@ impl ExecEngine {
 
     /// Finds the slot an event belongs to, adopting one the venue knows about that this
     /// table does not.
-    fn locate(&mut self, event: &ExecEvent, now: LocalTs) -> Option<usize> {
+    fn locate(
+        &mut self,
+        event: &ExecEvent,
+        stamps: FoldStamps,
+        bank: &mut Actions,
+    ) -> Option<usize> {
         if let Some(index) = self.orders.find(event.client_id) {
             return Some(index);
         }
         if event.kind == ExecKind::SnapshotOrder
-            && let Some(index) = self.orders.adopt(event, now)
+            && let Some(index) = self.orders.adopt(event, stamps.fold)
         {
             return Some(index);
         }
-        // Ours by tag and nonce, but no slot claims it: the reap window is too short, or the state
-        // machine leaked. Either way it is a bug, and a silent one costs a fill.
-        self.orphan_error(event);
+        self.on_orphan(event, stamps, bank);
         None
-    }
-
-    #[cold]
-    fn orphan_error(&self, event: &ExecEvent) {
-        hot_error!(
-            "execution event {:?} for client id {:x} matches no slot — reaped too early, or a state-machine leak",
-            event.kind,
-            event.client_id.0
-        );
     }
 
     /// The latch records that the cancel WENT OUT, so it is set after the bank accepts it and never

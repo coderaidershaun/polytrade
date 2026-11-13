@@ -14,6 +14,7 @@
 use crate::msg::exec::{ExecEvent, ExecKind, RejectClass, VenueOrderStatus};
 use crate::msg::time::LocalTs;
 
+use super::fees::{FeeMemory, FeeVerdict};
 use super::{CloseReason, FillDelta, OrderSlot, OrderState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,14 +22,21 @@ pub struct Applied {
     pub fill: FillDelta,
     pub state: OrderState,
     pub is_resurrection: bool,
+    pub(crate) fee: FeeVerdict,
 }
 
-pub(super) fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent, now: LocalTs) -> Applied {
+pub(super) fn apply_exec_event(
+    slot: &mut OrderSlot,
+    fees: &mut FeeMemory,
+    event: &ExecEvent,
+    now: LocalTs,
+) -> Applied {
     if slot.state == OrderState::Free {
         return Applied {
             fill: FillDelta::NONE,
             state: OrderState::Free,
             is_resurrection: false,
+            fee: FeeVerdict::UNBOOKABLE,
         };
     }
     // Bound before anything mutates the slot, because the tail below has to ask what the state was
@@ -36,6 +44,7 @@ pub(super) fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent, now: Loc
     // would answer that only for as long as the assignment stayed at the very bottom.
     let previous_state = slot.state;
     let fill = slot.fold_fill(event);
+    let fee = fees.fold(event, fill.base);
     let mut is_resurrection = false;
     let next = match event.kind {
         ExecKind::AckPlaced | ExecKind::ReportNew => match previous_state {
@@ -133,6 +142,7 @@ pub(super) fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent, now: Loc
         fill,
         state: next,
         is_resurrection,
+        fee,
     }
 }
 

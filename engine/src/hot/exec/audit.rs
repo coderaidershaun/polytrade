@@ -4,7 +4,9 @@
 use crate::hot::digest::digest_by_hash;
 use crate::hot::strategy::Actions;
 use crate::msg::exec::{ExecEvent, ExecKind, Provenance, RejectClass};
-use crate::msg::persist::{FillRow, OrderLifecycle, OrderRow, OrderTransition, PersistRecord};
+use crate::msg::persist::{
+    FillRow, IncidentKind, IncidentRow, OrderLifecycle, OrderRow, OrderTransition, PersistRecord,
+};
 use crate::msg::time::{LocalTs, VenueTs};
 
 use super::order::{FillDelta, OrderSlot};
@@ -33,6 +35,18 @@ pub(crate) struct IncidentCounts {
 }
 
 digest_by_hash!(IncidentCounts);
+
+/// Counts the incident whether or not the tape has room for its row.
+pub(super) fn bank_incident(bank: &mut Actions, counts: &mut IncidentCounts, row: IncidentRow) {
+    let count = match row.kind {
+        IncidentKind::FeeGap => &mut counts.fee_gaps,
+        IncidentKind::StrandedPosition => &mut counts.stranded_positions,
+        IncidentKind::OrphanFill => &mut counts.orphan_fills,
+        IncidentKind::UnbookedFee => &mut counts.unbooked_fees,
+    };
+    *count += 1;
+    bank.push_persist(PersistRecord::Incident(row));
+}
 
 /// A transition the engine made on its own, so there is no venue answer, no reject and no exchange
 /// stamp.
@@ -104,7 +118,7 @@ pub(super) fn bank_fill(
         last_qty: event.last_qty,
         booked_qty: delta.base,
         booked_quote: delta.quote.mantissa(),
-        commission: delta.commission,
+        commission: event.commission,
         commission_asset: event.commission_asset,
         exchange_ts_us: event.exchange_ts_us,
         received_ts_us,

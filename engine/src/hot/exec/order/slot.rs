@@ -218,28 +218,22 @@ impl OrderSlot {
         FillDelta {
             base: Qty::from_mantissa(delta_base),
             quote: delta_quote,
-            // SMELL: the quantity above comes from the venue's running totals, but the fee comes
-            // from this one report. A report that carries the fee of only one of its trades, or a
-            // fee paid in another asset, which counts as zero, leaves the fee total wrong. The fee
-            // needs to be folded once for each trade id.
-            commission: event.commission,
         }
     }
 }
 
+/// What a report added to an order's filled totals. The fee of the report is not part of it: the
+/// fee memory of the order decides whether that fee is owed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FillDelta {
     pub base: Qty,
     pub quote: Notional,
-    pub commission: i64,
 }
 
 impl FillDelta {
     pub const NONE: FillDelta = FillDelta {
         base: Qty::from_mantissa(0),
         quote: Notional::ZERO,
-
-        commission: 0,
     };
 
     #[inline]

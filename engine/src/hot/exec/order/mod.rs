@@ -4,6 +4,7 @@
 //! The table never reads what an event means: it finds the slot, and a separate transition table
 //! decides what happens to it.
 
+mod fees;
 mod occupancy;
 mod prior_run;
 mod slot;
@@ -21,6 +22,8 @@ use super::account::AccountWatermark;
 use super::capacity::ExecCapacity;
 use super::desired::QuoteLevel;
 
+pub(crate) use fees::FeeFold;
+use fees::FeeMemory;
 use occupancy::SlotsInUse;
 pub(super) use prior_run::{PriorRunOrders, Unseated};
 pub use slot::{CloseReason, FillDelta, OrderSlot, OrderState};
@@ -130,13 +133,15 @@ pub struct ReconcilePass {
 
 pub struct OrderTable {
     slots: Box<[OrderSlot]>,
+    /// One for each slot, beside the slots rather than in them, so a copy of a slot stays small.
+    fees: Box<[FeeMemory]>,
     in_use: SlotsInUse,
     layout: ClientIdLayout,
 }
 
-digest_by_hash!(ClientIdLayout, OrderSlot);
+digest_by_hash!(ClientIdLayout, OrderSlot, FeeMemory);
 digest_fields! {
-    OrderTable { slots, layout }
+    OrderTable { slots, fees, layout }
     not_state {
         // Which slots are not free: a function of the slots, which the digest holds.
         in_use,
@@ -148,6 +153,7 @@ impl OrderTable {
         let slots = capacity.order_slots();
         Self {
             slots: vec![OrderSlot::EMPTY; slots].into_boxed_slice(),
+            fees: vec![FeeMemory::EMPTY; slots].into_boxed_slice(),
             in_use: SlotsInUse::with_slots(slots),
             layout: ClientIdLayout { run_nonce },
         }
@@ -269,6 +275,7 @@ impl OrderTable {
             placed_recon_seq: claim.recon_seq,
             ..OrderSlot::EMPTY
         };
+        self.fees[index] = FeeMemory::EMPTY;
         self.in_use.insert(index);
         Ok((index, client_id))
     }
@@ -293,6 +300,7 @@ impl OrderTable {
             placed_recon_seq: event.recon_seq,
             ..OrderSlot::EMPTY
         };
+        self.fees[index] = FeeMemory::EMPTY;
         self.in_use.insert(index);
         Some(index)
     }
@@ -341,7 +349,7 @@ impl OrderTable {
 
     #[inline]
     pub fn apply(&mut self, index: usize, event: &ExecEvent, now: LocalTs) -> Applied {
-        apply_exec_event(&mut self.slots[index], event, now)
+        apply_exec_event(&mut self.slots[index], &mut self.fees[index], event, now)
     }
 
     /// The cancel of the order at `index` is banked. Returns the state it left.
@@ -410,6 +418,7 @@ impl OrderTable {
                     generation: slot.generation,
                     ..OrderSlot::EMPTY
                 };
+                self.fees[index] = FeeMemory::EMPTY;
                 self.in_use.remove(index);
             }
         }

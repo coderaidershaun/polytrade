@@ -6,6 +6,7 @@ use crate::msg::exec::ExecEvent;
 use crate::msg::ids::{ClientOrderId, InstrumentId, Side};
 use crate::msg::time::LocalTs;
 
+use super::fees::FeeMemory;
 use super::occupancy::SlotsInUse;
 use super::{Applied, OrderSlot, OrderState, apply_exec_event, free_or_oldest_closed};
 
@@ -21,12 +22,13 @@ use super::{Applied, OrderSlot, OrderState, apply_exec_event, free_or_oldest_clo
 /// keeps a cancel answered "unknown order", this path's ordinary outcome, out of the reject streak.
 pub(in crate::hot::exec) struct PriorRunOrders {
     slots: Box<[OrderSlot]>,
+    fees: Box<[FeeMemory]>,
     /// A seat reuses a closed entry and nothing reaps one, so its bits only rise.
     in_use: SlotsInUse,
 }
 
 digest_fields! {
-    PriorRunOrders { slots }
+    PriorRunOrders { slots, fees }
     not_state {
         // Which entries are not free: a function of the slots, which the digest holds.
         in_use,
@@ -45,6 +47,7 @@ impl PriorRunOrders {
         let slots = capacity.prior_run_slots();
         Self {
             slots: vec![OrderSlot::EMPTY; slots].into_boxed_slice(),
+            fees: vec![FeeMemory::EMPTY; slots].into_boxed_slice(),
             in_use: SlotsInUse::with_slots(slots),
         }
     }
@@ -66,7 +69,7 @@ impl PriorRunOrders {
         event: &ExecEvent,
         now: LocalTs,
     ) -> Applied {
-        apply_exec_event(&mut self.slots[index], event, now)
+        apply_exec_event(&mut self.slots[index], &mut self.fees[index], event, now)
     }
 
     pub(in crate::hot::exec) fn working(
@@ -103,6 +106,7 @@ impl PriorRunOrders {
             last_event_ts_us: now,
             ..OrderSlot::EMPTY
         };
+        self.fees[index] = FeeMemory::EMPTY;
         self.in_use.insert(index);
         Ok(index)
     }
