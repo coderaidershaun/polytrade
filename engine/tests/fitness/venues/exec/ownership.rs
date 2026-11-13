@@ -116,6 +116,11 @@ proptest! {
         })
         .expect("a foreign order asks nothing of the mirror");
         prop_assert!(core.mirror().is_empty(), "mirrored: {:?}", core.mirror());
+        prop_assert_eq!(
+            core.foreign_orders(),
+            2,
+            "the stream event and the read each count the foreign order once"
+        );
 
         core.begin_sweep(CancelReason::Fatal, None, &mut |effect| effects.push(effect));
         let sent: Vec<_> = effects

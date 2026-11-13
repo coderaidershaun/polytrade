@@ -5,11 +5,12 @@ use tokio_tungstenite::tungstenite::{Error as ProtocolError, Message};
 
 use crate::msg::exec::ExecEvent;
 use crate::msg::time::LocalTs;
-use crate::runtime::shutdown::{AnswerPart, FatalReason};
+use crate::runtime::shutdown::AnswerPart;
 use crate::venues::binance::ws;
 use crate::venues::edge::EdgeDriver;
 use crate::venues::exec::{
-    EventSink, ExecRequest, InFlightRequest, RequestId, SessionOutcome, TimeoutFallout,
+    EventSink, ExecRequest, ExecSessionError, InFlightRequest, RequestId, SessionOutcome,
+    TimeoutFallout,
 };
 use crate::{error, warn};
 
@@ -90,7 +91,7 @@ impl Actor {
             Err(error) if error.is_fatal() => {
                 error!("binance execution fatal decode: {error}");
                 self.session.mark_in_doubt(entry.request, now);
-                self.control.fatal.trip(FatalReason::UndecodableAnswer {
+                self.control.fail(ExecSessionError::UndecodableAnswer {
                     venue: self.venue(),
                     part: AnswerPart::Response,
                 });
@@ -134,7 +135,9 @@ impl Actor {
                 ..*event
             };
             self.note_event(&event);
-            self.session.fold(&event, entry.recon_seq, &mut outgoing);
+            if let Err(error) = self.session.fold(&event, entry.recon_seq, &mut outgoing) {
+                self.control.fail(error);
+            }
             // An order-status probe, not a full snapshot, is what settles an ambiguous cancel here.
             if matches!(
                 entry.request,
@@ -162,7 +165,7 @@ impl Actor {
                     "binance execution could not subscribe to the account stream {} times — refusing to quote without one",
                     self.subscribe_failures
                 );
-                self.control.fatal.trip(FatalReason::SubscribeRefused {
+                self.control.fail(ExecSessionError::SubscribeRefused {
                     venue: self.venue(),
                     failures: self.subscribe_failures,
                 });
@@ -189,7 +192,9 @@ impl Actor {
             Ok(StreamEvent::Exec(event)) => {
                 let mut outgoing = Vec::new();
                 self.note_event(&event);
-                self.session.fold(&event, 0, &mut outgoing);
+                if let Err(error) = self.session.fold(&event, 0, &mut outgoing) {
+                    self.control.fail(error);
+                }
                 self.session.events.send_exec(now, event);
                 let ended = self.dispatch(outgoing, Some(writer)).await;
                 self.session.arm_readiness(self.control.clock.now());
@@ -213,7 +218,7 @@ impl Actor {
             }
             Err(error) if error.is_fatal() => {
                 error!("binance execution fatal stream decode: {error}");
-                self.control.fatal.trip(FatalReason::UndecodableAnswer {
+                self.control.fail(ExecSessionError::UndecodableAnswer {
                     venue: self.venue(),
                     part: AnswerPart::Stream,
                 });

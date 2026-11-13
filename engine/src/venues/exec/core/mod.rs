@@ -42,6 +42,7 @@ pub struct ExecCore {
     max_orders_per_side: usize,
     sweep: Option<CancelReason>,
     has_opened_quoting: bool,
+    foreign_orders: u64,
 }
 
 #[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -69,7 +70,18 @@ impl ExecCore {
             max_orders_per_side,
             sweep: None,
             has_opened_quoting: false,
+            foreign_orders: 0,
         }
+    }
+
+    /// How many times a read or the stream showed an order that this engine did not place. Each is
+    /// left alone, and the count is the only trace that one was seen.
+    pub fn foreign_orders(&self) -> u64 {
+        self.foreign_orders
+    }
+
+    pub(crate) fn count_foreign_order(&mut self) {
+        self.foreign_orders += 1;
     }
 
     pub fn phase(&self) -> Phase {

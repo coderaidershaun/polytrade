@@ -7,11 +7,10 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::msg::exec::{CancelReason, ExecEvent};
 use crate::msg::ids::{ClientOrderId, Side};
 use crate::msg::time::{DurationUs, LocalTs};
-use crate::runtime::shutdown::FatalReason;
 use crate::venues::edge::EdgeDriver;
 use crate::venues::exec::{
-    EventSink, ExecEffect, ExecRequest, InFlightRequest, Outgoing, PlaceNotSentReason, RequestId,
-    SessionOutcome, SkipReason, stream_ready,
+    EventSink, ExecEffect, ExecRequest, ExecSessionError, InFlightRequest, Outgoing,
+    PlaceNotSentReason, RequestId, SessionOutcome, SkipReason, stream_ready,
 };
 use crate::{error, info, warn};
 
@@ -49,7 +48,9 @@ impl Actor {
                 }
                 ExecEffect::Skipped { client_id, reason } => self.on_skipped(client_id, reason),
                 ExecEffect::PlaceNotSent { .. } | ExecEffect::AmendNotSent { .. } => {
-                    self.session.on_unsent(&effect, self.control.clock.now());
+                    if let Err(error) = self.session.on_unsent(&effect, self.control.clock.now()) {
+                        self.control.fail(error);
+                    }
                 }
                 ExecEffect::SweepComplete { reason } => self.on_sweep_complete(reason),
             }
@@ -72,8 +73,12 @@ impl Actor {
             return self.subscribe(writer).await;
         }
         if let Some(refusal) = self.decide_send(&request) {
-            self.session
+            let refused = self
+                .session
                 .refuse(request, refusal, self.control.clock.now());
+            if let Err(error) = refused {
+                self.control.fail(error);
+            }
             return None;
         }
         if let Some(release_at) = self.cancel_hold(&request) {
@@ -98,11 +103,13 @@ impl Actor {
             Ok(encoded) => encoded,
             Err(error) => {
                 warn!("polymarket execution could not build a request: {error}");
-                self.session.refuse(
+                if let Err(error) = self.session.refuse(
                     request,
                     PlaceNotSentReason::Encoding,
                     self.control.clock.now(),
-                );
+                ) {
+                    self.control.fail(error);
+                }
                 return None;
             }
         };
@@ -133,11 +140,13 @@ impl Actor {
             place,
         };
         if self.submit(lane, RestJob::signed(purpose, encoded)) == Submitted::LaneFull {
-            self.session.refuse(
+            if let Err(error) = self.session.refuse(
                 request,
                 PlaceNotSentReason::NoTransport,
                 self.control.clock.now(),
-            );
+            ) {
+                self.control.fail(error);
+            }
             return None;
         }
         self.session.inflight.record(InFlightRequest {
@@ -171,7 +180,7 @@ impl Actor {
                 Ok(frame) => frame,
                 Err(error) => {
                     error!("polymarket execution cannot build its stream subscription: {error}");
-                    self.control.fatal.trip(FatalReason::SubscribeUnbuildable {
+                    self.control.fail(ExecSessionError::SubscribeUnbuildable {
                         venue: self.venue(),
                     });
                     return Some(SessionOutcome::Reconnect);

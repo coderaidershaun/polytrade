@@ -18,7 +18,7 @@ use crate::runtime::shutdown::FatalSignal;
 use crate::venues::binance::exec::{DecodeContext, ResponseContext};
 use crate::venues::exec::{
     ExecCore, ExecEffect, ExecRequest, ExecSession, InFlightRequest, Outgoing, RequestId,
-    SessionSetup, place_not_sent, stream_reset,
+    SessionSetup, halt_on_session_error, place_not_sent, stream_reset,
 };
 
 use super::core::schedule::{
@@ -48,6 +48,7 @@ impl EffectStamp {
 
 pub struct SimExecDriver {
     session: ExecSession<Vec<InboundMessage>>,
+    fatal: FatalSignal,
     venue: SimVenue,
     schedule: DeliverySchedule,
     wire: VenueWire,
@@ -66,9 +67,9 @@ impl SimExecDriver {
                 core: setup.core,
                 instruments: vec![setup.instrument],
                 events: Vec::new(),
-                fatal: setup.fatal,
                 inflight_timeout: setup.inflight_timeout,
             }),
+            fatal: setup.fatal,
             venue: setup.venue,
             schedule: setup.schedule,
             wire: setup.wire,
@@ -177,7 +178,9 @@ impl SimExecDriver {
                     request,
                 } => self.send(request_id, request, recon_seq, stamp.effective_ts_us),
                 ExecEffect::PlaceNotSent { .. } | ExecEffect::AmendNotSent { .. } => {
-                    self.session.on_unsent(&effect, stamp.reported_ts_us);
+                    if let Err(error) = self.session.on_unsent(&effect, stamp.reported_ts_us) {
+                        halt_on_session_error(&error, &self.fatal);
+                    }
                 }
                 ExecEffect::SweepComplete { .. } => self.has_swept = true,
                 ExecEffect::Skipped { .. } => {}
@@ -211,7 +214,9 @@ impl SimExecDriver {
             let MessageBody::Exec(event) = &message.body else {
                 continue;
             };
-            self.session.fold(event, 0, &mut outgoing);
+            if let Err(error) = self.session.fold(event, 0, &mut outgoing) {
+                halt_on_session_error(&error, &self.fatal);
+            }
         }
         self.apply(&outgoing, stamp);
     }
