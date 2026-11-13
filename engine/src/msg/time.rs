@@ -1,6 +1,6 @@
-//! Microsecond time types, the engine's monotonic clock, and the counter ticks of latency stamps.
-//! A timestamp is microseconds since the Unix epoch in a typed wrapper; a tick becomes a time only
-//! through the scale between two anchors.
+//! Microsecond time types, the engine's monotonic clock, the spin schedule, and the counter ticks
+//! of latency stamps. A timestamp is microseconds since the Unix epoch in a typed wrapper; a tick
+//! becomes a time only through the scale between two anchors.
 
 use core::ops::{Add, Sub};
 #[cfg(not(target_arch = "wasm32"))]
@@ -111,6 +111,47 @@ impl Sub<DurationUs> for TsUs {
     #[inline]
     fn sub(self, rhs: DurationUs) -> TsUs {
         TsUs(self.0 - rhs.0)
+    }
+}
+
+/// The grid of spin slots: slot `n` is due at `start + n * interval`. Each stamp is counted from
+/// the start, never from the stamp before it, so a late wake cannot move a later slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SpinSchedule {
+    start: TsUs,
+    interval: DurationUs,
+}
+
+impl SpinSchedule {
+    /// # Panics
+    /// When `interval` is not positive.
+    pub fn new(start: TsUs, interval: DurationUs) -> SpinSchedule {
+        assert!(
+            interval.0 > 0,
+            "a spin schedule needs a positive interval, got {} us",
+            interval.0
+        );
+        SpinSchedule { start, interval }
+    }
+
+    /// The latest slot that is due at `at`, so a late wake gets the newest slot and not the
+    /// oldest one it missed. A time before the start gives slot 0.
+    pub fn slot_at(&self, at: TsUs) -> u64 {
+        let elapsed = at.diff(self.start).0.max(0);
+        (elapsed / self.interval.0) as u64
+    }
+
+    pub fn stamp_of(&self, slot: u64) -> TsUs {
+        self.start + DurationUs((slot as i64).saturating_mul(self.interval.0))
+    }
+
+    /// The slot to fire for a wake at `at` once slot `last_sent` is sent, and how many slots
+    /// between the two get no tick. A late wake fires only the newest slot that is due, and a
+    /// wake before the next slot is due still fires that slot, so no slot fires twice.
+    pub fn slot_to_fire(&self, last_sent: u64, at: TsUs) -> (u64, u64) {
+        let first_unsent = last_sent + 1;
+        let slot = self.slot_at(at).max(first_unsent);
+        (slot, slot - first_unsent)
     }
 }
 

@@ -318,8 +318,7 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 114] = [
         &[
             "engine::msg::time::EngineClock::now",
             "engine::msg::time::EngineClock::now",
-            "tokio::time::Instant::elapsed",
-            "tokio::time::Instant::now",
+            "engine::msg::time::EngineClock::now",
         ],
     ),
     (
