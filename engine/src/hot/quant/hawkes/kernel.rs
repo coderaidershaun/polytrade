@@ -2,6 +2,7 @@
 //! in for the whole event history, so each event and each intensity query costs constant time.
 
 use super::HawkesEvents;
+use crate::hot::quant::options::exp;
 use crate::msg::time::LocalTs;
 
 /// Exponential kernel parameters, every rate per second.
@@ -78,15 +79,19 @@ impl UnivariateHawkes {
         self.last_ts = Some(last_ts);
     }
 
+    /// A stamp before the last one counts at the last one, as the event window clamps it, so the
+    /// sum never decays twice over the same span.
     #[inline]
     pub fn on_event(&mut self, ts: LocalTs) {
-        self.excitation = match self.last_ts {
-            Some(last) => {
-                (-self.params.beta * ts.diff(last).to_secs().max(0.0)).exp() * self.excitation + 1.0
-            }
-            None => 1.0,
+        let Some(last) = self.last_ts else {
+            self.excitation = 1.0;
+            self.last_ts = Some(ts);
+            return;
         };
-        self.last_ts = Some(ts);
+        let kept = ts.max(last);
+        self.excitation =
+            exp(-self.params.beta * kept.diff(last).to_secs()) * self.excitation + 1.0;
+        self.last_ts = Some(kept);
     }
 
     #[inline]

@@ -42,3 +42,37 @@ fn known_worked_example_reads_back_from_the_accessors() {
     assert!((params.branching_ratio() - 0.375).abs() < 1e-12);
     assert!((params.half_life_secs() - 0.1733).abs() < 1e-4);
 }
+
+#[test]
+fn a_late_stamp_reads_the_intensity_of_a_reseed() {
+    let params = HawkesParams::new(0.5, 0.8, 2.0);
+    let mut live = UnivariateHawkes::new(params);
+    let mut events = HawkesEvents::new(16);
+    for secs in [10.0, 10.5, 10.2] {
+        live.on_event(ts(secs));
+        events.push(ts(secs));
+    }
+    assert_eq!(events.out_of_order_count(), 1, "the window clamps 10.2 s");
+
+    let now = ts(11.0);
+    let mut reseeded = UnivariateHawkes::new(params);
+    reseeded.reseed_from(&events);
+    let reseed = reseeded.intensity(now);
+    let late = live.intensity(now);
+    assert!(
+        ((late - reseed) / reseed).abs() < 1e-12,
+        "live {late} vs reseed {reseed}"
+    );
+
+    // The window holds the late event at 10.5 s, so its kernel decays once, from there.
+    let direct = params.mu
+        + params.alpha
+            * [10.0, 10.5, 10.5]
+                .iter()
+                .map(|time| (-params.beta * (11.0 - time)).exp())
+                .sum::<f64>();
+    assert!(
+        ((late - direct) / direct).abs() < 1e-12,
+        "live {late} vs direct {direct}"
+    );
+}
