@@ -6,6 +6,7 @@ use rtrb::Producer;
 use crate::hot::digest::{Digest, Digester, digest_fields};
 use crate::hot::exec::{MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS};
 use crate::msg::exec::{ExecCommand, ExecLaneItem, StampedExecCommand};
+use crate::msg::failure::{FailureClass, Halt};
 use crate::msg::time::{DurationUs, LocalTs, Stamper, Tick};
 
 /// Commands one spin can produce for an instrument beyond the order table itself: an open-orders
@@ -47,6 +48,9 @@ pub struct ExecSink {
 }
 
 impl ExecSink {
+    /// A full lane keeps each command in the bank, in order, for the next spin.
+    pub const WHEN_FULL: FailureClass = FailureClass::Retry;
+
     pub fn new(producer: Producer<ExecLaneItem>, stamper: Stamper) -> Self {
         Self { producer, stamper }
     }
@@ -61,6 +65,9 @@ impl Digest for ExecSink {
 #[derive(Debug, Clone, Copy)]
 struct BankedCommand {
     command: ExecCommand,
+    /// The fold time of the banking. The bank is first in, first out, so the stamps on the lane
+    /// never decrease.
+    banked_ts_us: LocalTs,
     issue_tick: Tick,
 }
 
@@ -82,6 +89,13 @@ digest_fields! {
 }
 
 impl PendingCommands {
+    /// A full bank halts quoting with `HaltReason::CommandBankOverflow`.
+    #[expect(
+        dead_code,
+        reason = "the class is named beside the type, and the halt of a refused command is its one reaction"
+    )]
+    pub(crate) const WHEN_FULL: FailureClass = FailureClass::Halt(Halt::Quoting);
+
     /// The bank reads the counter of the sink it drains into. With no sink no command is ever sent,
     /// so it reads none.
     pub(crate) fn for_sink(sink: Option<&ExecSink>) -> Self {
@@ -95,12 +109,13 @@ impl PendingCommands {
     /// False = bank full; caller must unwind (command not sent).
     #[inline]
     #[must_use]
-    pub(crate) fn bank(&mut self, command: ExecCommand) -> bool {
-        if self.banked.len() == self.banked.capacity() {
+    pub(crate) fn bank(&mut self, command: ExecCommand, at: LocalTs) -> bool {
+        if self.banked.len() == COMMAND_BANK_CAPACITY {
             return false;
         }
         self.banked.push(BankedCommand {
             command,
+            banked_ts_us: at,
             issue_tick: self.issue_tick(),
         });
         self.banked_total += 1;
@@ -126,7 +141,7 @@ impl PendingCommands {
             .map(|banked| {
                 ExecLaneItem::Command(StampedExecCommand {
                     command: banked.command,
-                    issued_ts_us: at,
+                    issued_ts_us: banked.banked_ts_us,
                     issue_tick: banked.issue_tick,
                 })
             })
