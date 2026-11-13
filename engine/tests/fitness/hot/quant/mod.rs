@@ -114,6 +114,12 @@ fn window(stamps: &[LocalTs]) -> HawkesEvents {
 
 /// The exponential path the fitter is scored on: truth, its event window, and the fit time.
 fn exponential_fixture() -> (HawkesParams, HawkesEvents, LocalTs) {
+    let (truth, path, now) = exponential_path();
+    (truth, window(&path), now)
+}
+
+/// The stamps of that path, for a reader that takes one arrival at a time.
+fn exponential_path() -> (HawkesParams, Vec<LocalTs>, LocalTs) {
     let truth = HawkesParams::new(0.5, 0.8, 2.0);
     let horizon = DurationUs::from_secs(6000);
     let path = ExpSimulation {
@@ -125,5 +131,5 @@ fn exponential_fixture() -> (HawkesParams, HawkesEvents, LocalTs) {
     }
     .run();
     assert!(path.len() > 3000, "thin path: {} events", path.len());
-    (truth, window(&path), START + horizon)
+    (truth, path, START + horizon)
 }

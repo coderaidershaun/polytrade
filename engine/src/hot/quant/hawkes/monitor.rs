@@ -127,24 +127,17 @@ impl HawkesSide {
     }
 
     /// A full simplex search whose objective is one pass over the window, so it runs only when a
-    /// fit is due.
-    ///
-    /// A fresh fit re-anchors the resident: seed it once from the buffered window, then only nudge
-    /// its params — the excitation carries across a param change, decaying the mismatch away.
+    /// fit is due. Each fresh fit reseeds the live sum from the window under its own params, so no
+    /// excitation that was summed under an older decay stays.
     fn refit(&mut self, now: LocalTs) {
         self.arrivals_since_fit = 0;
         self.fit = self.fitter.fit(&self.events, now);
         let Some(estimate) = self.fit.and_then(HawkesFit::fresh) else {
             return;
         };
-        match self.live.as_mut() {
-            Some(live) => live.set_params(estimate.params),
-            None => {
-                let mut live = UnivariateHawkes::new(estimate.params);
-                live.reseed_from(&self.events);
-                self.live = Some(live);
-            }
-        }
+        let mut live = UnivariateHawkes::new(estimate.params);
+        live.reseed_from(&self.events);
+        self.live = Some(live);
     }
 
     /// Refits when a fit is due, then gives the fresh fit in force. A fit is due before the first

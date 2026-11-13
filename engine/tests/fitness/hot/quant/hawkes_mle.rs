@@ -2,11 +2,11 @@
 //! seed, or a warm start that silently re-does the cold search, costs nothing at run time and
 //! everything in the research columns downstream.
 
-use super::{ExpSimulation, START, exponential_fixture, window};
+use super::{ExpSimulation, START, exponential_fixture, exponential_path, window};
 use engine::hot::quant::hawkes::{
-    HawkesChoice, HawkesChoiceError, HawkesFit, HawkesMle, HawkesParams,
+    HawkesChoice, HawkesChoiceError, HawkesFit, HawkesMle, HawkesParams, HawkesSide,
 };
-use engine::msg::time::DurationUs;
+use engine::msg::time::{DurationUs, VenueTs};
 
 #[test]
 fn fit_recovers_exponential_params_and_warm_starts() {
@@ -133,4 +133,53 @@ fn each_bad_hawkes_choice_is_refused_by_name() {
             "({max_events}, {min_events}, {refit_arrivals}) refused"
         );
     }
+}
+
+#[test]
+fn intensity_after_a_refit_equals_the_direct_sum() {
+    let (_, path, _) = exponential_path();
+    let (max_events, min_events, refit_arrivals) = (1024, 100, 128);
+    let mut side = HawkesSide::new(
+        HawkesChoice::new(max_events, min_events, refit_arrivals).expect("a valid choice"),
+    );
+    let first_fit = min_events - 1;
+    let refit = first_fit + refit_arrivals;
+    assert!(
+        refit < max_events,
+        "the window must hold each arrival up to the refit"
+    );
+    assert!(
+        path[..=refit].windows(2).all(|pair| pair[0] < pair[1]),
+        "an arrival with the stamp of the one before it would be dropped"
+    );
+
+    let mut fits = Vec::new();
+    for (index, &stamp) in path[..=refit].iter().enumerate() {
+        side.on_arrival(VenueTs::from_micros(stamp.micros()), stamp);
+        if let Some(estimate) = side.estimate(stamp) {
+            fits.push((index, estimate));
+        }
+    }
+    let (first_index, first) = fits[0];
+    let (refit_index, refitted) = fits[fits.len() - 1];
+    assert_eq!(
+        (first_index, refit_index),
+        (first_fit, refit),
+        "the first fit and the refit come at the floor and after the cadence"
+    );
+    assert_ne!(refitted.params, first.params, "the refit gives new params");
+
+    let now = path[refit];
+    let params = refitted.params;
+    let direct = params.mu_per_sec()
+        + params.alpha_per_sec()
+            * path[..=refit]
+                .iter()
+                .map(|&time| (-params.beta_per_sec() * now.diff(time).to_secs()).exp())
+                .sum::<f64>();
+    let live = side.intensity(now).expect("a fresh fit seeds the live sum");
+    assert!(
+        ((live - direct) / direct).abs() < 1e-12,
+        "live {live} vs direct {direct}"
+    );
 }

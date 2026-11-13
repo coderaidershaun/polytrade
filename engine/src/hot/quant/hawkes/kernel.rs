@@ -78,10 +78,6 @@ impl UnivariateHawkes {
         }
     }
 
-    pub fn set_params(&mut self, params: HawkesParams) {
-        self.params = params;
-    }
-
     /// Walks the whole window, so it runs once per refit and never once per event.
     pub fn reseed_from(&mut self, events: &HawkesEvents) {
         let Some(last_ts) = events.last_ts() else {
