@@ -128,7 +128,7 @@ fn exp_nll(params: &[f64; PARAMS], times: &[f64], end: f64) -> f64 {
     }
     let tail = (-beta * (end - previous)).exp() * (excitation + 1.0);
     let compensator = mu * (end - times[0]) + (alpha / beta) * (times.len() as f64 - tail);
-    penalised(compensator - log_sum)
+    compensator - log_sum
 }
 
 fn bounded(value: f64, bound: (f64, f64)) -> f64 {
@@ -139,8 +139,4 @@ fn bounded(value: f64, bound: (f64, f64)) -> f64 {
     } else {
         bound.0
     }
-}
-
-fn penalised(nll: f64) -> f64 {
-    if nll.is_finite() { nll } else { f64::MAX }
 }
