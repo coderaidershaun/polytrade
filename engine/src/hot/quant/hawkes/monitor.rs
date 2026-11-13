@@ -13,6 +13,60 @@ pub struct HawkesChoice {
     pub refit_arrivals: usize,
 }
 
+impl HawkesChoice {
+    /// # Errors
+    /// The first rule that the choice breaks, in this order: an empty window, a fit floor below
+    /// two events, a fit floor above the window, no refit cadence.
+    pub const fn new(
+        max_events: usize,
+        min_events: usize,
+        refit_arrivals: usize,
+    ) -> Result<Self, HawkesChoiceError> {
+        if max_events == 0 {
+            return Err(HawkesChoiceError::EmptyWindow);
+        }
+        if min_events < 2 {
+            return Err(HawkesChoiceError::TooFewEvents { min_events });
+        }
+        if min_events > max_events {
+            return Err(HawkesChoiceError::FloorAboveWindow {
+                min_events,
+                max_events,
+            });
+        }
+        if refit_arrivals == 0 {
+            return Err(HawkesChoiceError::NoRefitCadence);
+        }
+        Ok(Self {
+            max_events,
+            min_events,
+            refit_arrivals,
+        })
+    }
+}
+
+/// A Hawkes choice that no side could run, named by the rule it breaks, with the values seen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum HawkesChoiceError {
+    #[error("hawkes max_events is 0, so the event window could hold no event")]
+    EmptyWindow,
+    #[error(
+        "hawkes min_events = {min_events} is below 2, and a fit needs at least one gap between \
+         two events"
+    )]
+    TooFewEvents { min_events: usize },
+    #[error(
+        "hawkes min_events = {min_events} exceeds max_events = {max_events}, so the window could \
+         never hold the fit floor; lower min_events or raise max_events"
+    )]
+    FloorAboveWindow {
+        min_events: usize,
+        max_events: usize,
+    },
+    #[error("hawkes refit_arrivals is 0, so a refit would run on every read; set it to 1 or more")]
+    NoRefitCadence,
+}
+
 /// Aggressor side Hawkes monitor: rolling event window, warm-start fitter, current fit, O(1) live intensity.
 /// Buy -> ask, sells -> bid (intensity convention).
 pub struct HawkesSide {

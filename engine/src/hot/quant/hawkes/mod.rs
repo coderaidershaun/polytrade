@@ -9,4 +9,4 @@ mod monitor;
 pub use events::HawkesEvents;
 pub use fit::{HawkesEstimate, HawkesMle};
 pub use kernel::{HawkesParams, UnivariateHawkes};
-pub use monitor::{HawkesChoice, HawkesSide};
+pub use monitor::{HawkesChoice, HawkesChoiceError, HawkesSide};

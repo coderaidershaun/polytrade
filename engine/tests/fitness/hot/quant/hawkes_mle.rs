@@ -3,7 +3,7 @@
 //! everything in the research columns downstream.
 
 use super::{ExpSimulation, START, exponential_fixture, window};
-use engine::hot::quant::hawkes::{HawkesMle, HawkesParams};
+use engine::hot::quant::hawkes::{HawkesChoice, HawkesChoiceError, HawkesMle, HawkesParams};
 use engine::msg::time::DurationUs;
 
 #[test]
@@ -83,4 +83,45 @@ fn direct_log_likelihood(times: &[f64], end: f64, params: HawkesParams) -> f64 {
         .map(|&time| (alpha / beta) * (1.0 - (-beta * (end - time)).exp()))
         .sum();
     log_sum - (mu * (end - times[0]) + kernel_mass)
+}
+
+#[test]
+fn each_bad_hawkes_choice_is_refused_by_name() {
+    use HawkesChoiceError::{EmptyWindow, FloorAboveWindow, NoRefitCadence, TooFewEvents};
+    let refusals = [
+        (HawkesChoice::new(0, 2, 1), EmptyWindow, "max_events"),
+        (
+            HawkesChoice::new(100, 1, 1),
+            TooFewEvents { min_events: 1 },
+            "min_events",
+        ),
+        (
+            HawkesChoice::new(100, 120, 1),
+            FloorAboveWindow {
+                min_events: 120,
+                max_events: 100,
+            },
+            "min_events = 120 exceeds max_events = 100",
+        ),
+        (
+            HawkesChoice::new(100, 2, 0),
+            NoRefitCadence,
+            "refit_arrivals",
+        ),
+        (HawkesChoice::new(0, 1, 0), EmptyWindow, "max_events"),
+    ];
+    for (choice, refusal, field) in refusals {
+        assert_eq!(choice, Err(refusal));
+        assert!(
+            refusal.to_string().contains(field),
+            "{refusal} names no {field}"
+        );
+    }
+
+    for (max_events, min_events, refit_arrivals) in [(2, 2, 1), (1024, 100, 128)] {
+        assert!(
+            HawkesChoice::new(max_events, min_events, refit_arrivals).is_ok(),
+            "({max_events}, {min_events}, {refit_arrivals}) refused"
+        );
+    }
 }
