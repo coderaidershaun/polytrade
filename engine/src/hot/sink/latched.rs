@@ -25,8 +25,8 @@ enum Seal {
     Waiting {
         tries: u32,
     },
-    /// The ring refused each try that the cap allows. The seal still goes when room returns, and
-    /// the fold hears of the cap one time.
+    /// The ring refused each try that the cap allows. The seal gets no further push until the fold
+    /// hears of the cap, one time. After that it still goes when room returns.
     PastCap {
         tries: u32,
         is_reported: bool,
@@ -51,7 +51,7 @@ impl PersistSink {
     }
 
     pub(crate) fn push(&mut self, record: PersistRecord) {
-        if self.is_seal_pending() {
+        if self.can_push_seal() {
             self.send_seal();
         }
         // A row pushed ahead of a pending seal lands in the wrong file, so the seal goes first.
@@ -67,14 +67,19 @@ impl PersistSink {
         self.try_seal();
     }
 
-    /// Tries a waiting seal again. Gives the count of tries one time: at the first retry that finds
-    /// the seal past its cap.
+    /// Tries a waiting seal again. A seal at its cap gets no try here: the first retry that finds it
+    /// there gives the count of tries, one time.
     #[inline]
     pub(crate) fn retry_pending_seal(&mut self) -> Option<u32> {
         match self.seal {
             Seal::Sent => return None,
             Seal::Waiting { .. } => self.try_seal(),
-            Seal::PastCap { .. } => self.send_seal(),
+            Seal::PastCap {
+                is_reported: true, ..
+            } => self.send_seal(),
+            Seal::PastCap {
+                is_reported: false, ..
+            } => {}
         }
         self.take_past_cap()
     }
@@ -85,6 +90,19 @@ impl PersistSink {
 
     fn is_seal_pending(&self) -> bool {
         self.seal != Seal::Sent
+    }
+
+    /// No push between the cap and the halt: one there would make the cap one more than the config
+    /// says.
+    fn can_push_seal(&self) -> bool {
+        matches!(
+            self.seal,
+            Seal::Waiting { .. }
+                | Seal::PastCap {
+                    is_reported: true,
+                    ..
+                }
+        )
     }
 
     #[cold]

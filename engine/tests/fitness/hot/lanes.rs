@@ -11,6 +11,7 @@ use engine::hot::spawn::spawn_hot_thread;
 use engine::hot::spawn::{
     HotDriver, HotLoop, HotThreadConfig, IdleWait, LinkQueueProducer, QueueProducer, SimTapGate,
 };
+use engine::log::open_hot_lane;
 use engine::msg::failure::{FailureClass, Halt};
 use engine::msg::ids::{QueueId, Side, SourceId};
 use engine::msg::inbound::{InboundMessage, MarketTapItem, MessageBody, SpinTick, VenueMeta};
@@ -276,5 +277,48 @@ fn seal_retry_reaches_cap_then_halts() {
             [PersistRecord::LinkFrame(_), PersistRecord::LinkFrame(_)]
         ),
         "no row lands behind a seal that was not sent: {tape:?}"
+    );
+
+    // A cap of 1: the request is the one try, so the next spin pushes nothing and halts, though
+    // the writer has made room by then.
+    let mut hot_log = open_hot_lane(64);
+    let mut parked = Parked::with_seal_try_limit(1);
+    let first = parked.tape.pop().expect("the writer takes one row");
+    assert!(matches!(first, PersistRecord::LinkFrame(_)), "{first:?}");
+    let halt = parked.spin(1, 4_000);
+    assert!(
+        matches!(
+            halt,
+            Some(ExecHalt::Halted {
+                reason: HaltReason::SealNotAccepted,
+                ..
+            })
+        ),
+        "try 1 of 1 failed at the request, so the next spin halts: {halt:?}"
+    );
+    let tape = parked.tape();
+    assert!(
+        matches!(tape.as_slice(), [PersistRecord::LinkFrame(_)]),
+        "no seal is pushed between its cap and the halt: {tape:?}"
+    );
+    let refusals: Vec<String> = std::iter::from_fn(|| hot_log.pop())
+        .map(|record| {
+            let mut line = String::new();
+            record
+                .render(&mut line)
+                .expect("a string takes every write");
+            line
+        })
+        .filter(|line| line.starts_with("persistence seal refused"))
+        .collect();
+    assert!(
+        matches!(refusals.as_slice(), [line] if line.contains("each of its 1 tries")),
+        "one log record, with the true count of tries: {refusals:?}"
+    );
+    parked.spin(2, 5_000);
+    let tape = parked.tape();
+    assert!(
+        matches!(tape.as_slice(), [PersistRecord::SealAll]),
+        "after the halt the seal still goes when room returns: {tape:?}"
     );
 }
