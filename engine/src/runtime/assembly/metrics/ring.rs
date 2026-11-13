@@ -29,6 +29,19 @@ labelled_enum! {
     pub fn label;
 }
 
+impl SampleRing {
+    /// What an operator can do about a full ring: enlarge the one ring that config sizes, or look
+    /// for a stall of the metrics thread behind a ring whose size is fixed.
+    pub(super) const fn remedy(self) -> &'static str {
+        match self {
+            SampleRing::Stages => "enlarge latency.sample_ring",
+            SampleRing::Counters | SampleRing::Wires => {
+                "its size is fixed in code, so the metrics thread fell behind"
+            }
+        }
+    }
+}
+
 /// The write ends of every sample ring: the driver takes the stage and counter rings, a sender the
 /// wire ring.
 pub struct SampleProducers {

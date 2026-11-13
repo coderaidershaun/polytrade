@@ -1,7 +1,7 @@
 //! Mode `step`: times the public step of the hot loop's driver over a real input ring that a
-//! producer thread fills at a fixed rate. The timed region holds the whole of the measurement under
-//! test: both stamps, the build of the sample and its push, and the bank stamps of the fold. Run it
-//! with stamps off and with stamps on, and compare.
+//! producer thread fills at a fixed rate. The timed region holds the driver's part of the
+//! measurement under test: both stamps, the build of the sample and its push. Its engine has no
+//! command sink, so no bank stamp is timed. Run it with stamps off and with stamps on, and compare.
 
 use std::hint::black_box;
 use std::sync::Arc;
