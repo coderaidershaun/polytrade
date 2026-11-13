@@ -1,6 +1,5 @@
-//! The workstation's fold of the execution feed: which of this engine's orders exist and in what
-//! state, what the account holds, the last refusal and the kill switch. The ladder and the account
-//! band both read this one model, so they can never disagree about what is resting.
+//! The workstation's fold of the execution feed: this engine's orders and their states, the
+//! account, the last refusal, and the halt. The ladder and the account band read this one model.
 //!
 //! The newest update replaces an order's cell, which is correct only because events arrive in
 //! order. A lost event shows as a gap in their sequence, which the model counts and the monitor

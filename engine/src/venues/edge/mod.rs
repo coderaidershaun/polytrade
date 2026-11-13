@@ -1,9 +1,5 @@
-//! The session chassis every venue edge runs on: dial, serve, back off, sweep, stop, with the one
-//! sender that drains the command lane. A venue brings its own select! loop and its own idea of what
-//! can be sent while the socket is down; the ordering rules — which latch wins, how long blind
-//! before resting orders are pulled, when the settled signal is raised — live here once. Two copies
-//! of a safety rule drift, and the cost of the drift is an order left resting with nothing watching
-//! it.
+//! The session loop that each venue edge runs on: dial, serve, back off, sweep, and stop. Its
+//! safety rules live here once, since two copies drift and strand an order.
 //!
 //! It sits beside the venue-neutral execution machinery rather than inside it. That machinery is
 //! scanned for clock reads, because hot state has to replay identically from a recorded tape,

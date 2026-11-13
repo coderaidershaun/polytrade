@@ -1,4 +1,4 @@
-//! Simulated Binance Spot execution behind the same edge contract as the live adapter.
+//! Simulated Binance Spot execution, run by the same execution machinery as a live venue edge.
 
 mod actor;
 mod bringup;

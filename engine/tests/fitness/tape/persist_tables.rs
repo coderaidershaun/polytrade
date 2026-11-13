@@ -1,8 +1,5 @@
-//! `strategy.tables` is the LIB's authority over which tables a run has, not advice a strategy may
-//! forget: a row for a table the config never named reaches no ring and gets no sink, so no
-//! directory of it can appear on disk. Gating that lived only in strategy code would let a strategy
-//! that skipped its own check silently record tables the operator never asked for — the quietest
-//! kind of wrong, because a file nobody expects still reads back perfectly.
+//! The config alone decides which tables a run writes: a row for a table that the config never
+//! named reaches no ring, so no such file appears.
 //!
 //! The empty set is also how persistence-off is expressed (a config with no `persistence:` block
 //! cannot name tables), so this is the same test for both configurations.

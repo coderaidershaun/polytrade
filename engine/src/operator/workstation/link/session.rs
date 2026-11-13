@@ -1,6 +1,5 @@
-//! The workstation's link loop as a state machine with no socket, clock, thread or channel:
-//! datagram bytes and the caller's time go in, deliveries, status and subscribe bytes come out. The
-//! browser page and a native test drive it the same way.
+//! The workstation's link loop as a state machine with no socket, clock or thread: bytes and time
+//! go in, deliveries and status come out, so the page and a native test drive it the same way.
 
 use std::net::SocketAddr;
 

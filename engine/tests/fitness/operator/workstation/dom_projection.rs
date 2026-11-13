@@ -1,11 +1,5 @@
-//! DOM projection fitness: the pure map from a book snapshot + simulated quote to a
-//! fixed-center tick ladder. Anchors are exact integer math on tick indices at both mid parities;
-//! empty ticks keep their rows as `None` (never a fabricated zero); off-grid prices are invalid, not
-//! rounded; the quote highlights exactly one row per side or reports a directional off-screen delta.
-//! The model half asserts latest-per-instrument retention, sequence-gap counting, and event-time
-//! quote liveness; the formatters render the tick-unit convention, a mid of 65991.5 ticks reading
-//! as `65991.5`. The fit half pins the one geometry rule that can fail silently: asking for more
-//! rows than the panel holds costs rows, never legibility.
+//! The ladder around a fixed centre: exact tick maths at both mid parities, an empty tick is no row
+//! of zero, an off-grid price is invalid, and the quote marks one row of each side.
 
 use engine::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty};
 use engine::msg::time::{DurationUs, VenueTs};

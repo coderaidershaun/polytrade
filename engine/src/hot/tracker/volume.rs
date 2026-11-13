@@ -1,6 +1,5 @@
-//! The volume clock: trades cut into equal-notional bars. A trade's notional is split exactly at
-//! each target, so a closed bar always holds its target and the excess pours into the next bar —
-//! the equal-volume buckets toxicity measures (VPIN) are defined over.
+//! The volume clock: trades cut into bars of equal notional, split exactly at each target, so a
+//! closed bar holds its target. Toxicity measures such as VPIN are defined over these bars.
 
 use super::sampling::{FieldSeries, TradeAggregates, notional_i128};
 use super::{BACKING_MULTIPLE, CandleSeries, Latest};

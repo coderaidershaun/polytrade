@@ -1,7 +1,5 @@
-//! Volume-bar fitness: the traded-notional clock cuts every closed bar to exactly its target and
-//! loses neither notional nor trades doing it, exactly rather than approximately; a klines target
-//! arms only on a trailing average it can stand behind and never moves under an open bar; and the
-//! dispatch fan-out hands the strategy exactly the bars that closed, oldest first.
+//! The notional clock cuts each closed bar exactly to its target and loses nothing, a kline target
+//! never moves under an open bar, and the strategy gets the closed bars, oldest first.
 
 use engine::hot::quant::toxicity::VolumeBar;
 use engine::hot::strategy::{Registration, Strategy, StrategyCtx};

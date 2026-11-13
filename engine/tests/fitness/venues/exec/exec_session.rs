@@ -1,9 +1,5 @@
-//! Execution-session fitness: what every venue's edge does when a request cannot be sent, may have
-//! been sent, or never gets an answer, and when a connection drops or comes back. Each rule keeps a
-//! hot order slot from waiting forever or an order from being sent twice, and each one fails
-//! SILENTLY if broken: a swallowed refusal has the strategy quoting around an order nobody placed,
-//! a resent request can leave two live orders where one was meant, and an inherited order taken for
-//! this run's own is never cancelled.
+//! What each venue edge does when a request cannot be sent, may have been sent, or gets no answer,
+//! and when a connection drops or comes back, so no slot waits forever and nothing is sent twice.
 
 use engine::msg::exec::{
     CancelReason, ExecCommand, ExecEvent, ExecKind, OrderStyle, Provenance, RejectClass,

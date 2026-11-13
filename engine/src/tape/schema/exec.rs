@@ -1,5 +1,5 @@
-//! Schemas for real-money outcomes: order-lifecycle transitions + fills (audit trail, statement reconciliation).
-//! Venue IDs are nullable (sent order never acked = no venue id, sentinel would misread).
+//! The schemas of real-money outcomes: order transitions and fills, the audit trail. A venue id is
+//! nullable, because an order that was never acknowledged has none.
 
 use crate::msg::exec::{Liquidity, OrderStyle, RejectClass};
 use crate::msg::persist::{FillRow, OrderRow};

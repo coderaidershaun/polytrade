@@ -1,6 +1,5 @@
-//! Binance parse goldens: normalised output pinned against real venue payloads — the recorded
-//! aggTrade replays, the venue-stamp clamp over the whole i64 space, the perp depth pu/T
-//! normalisation, and the REST-kline structural tail rule.
+//! Binance parsing against recorded payloads: trades, the clamp of venue stamps, perp depth, and
+//! the tail rule of REST klines.
 //!
 //! No recorder tool exists for `fixtures/`, so these committed goldens are the sole source of
 //! truth: to change them, re-record by hand from the live venue.

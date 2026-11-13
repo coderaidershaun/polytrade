@@ -1,5 +1,5 @@
-//! The start checks of a run, each before any thread: a refused start has nothing to stop, spends no
-//! run nonce, and writes no file. The lease is the last check.
+//! The start checks of a run, each before any thread: a refused start has nothing to stop, spends
+//! no run nonce, and writes no file. The lease is the last check.
 
 use crate::hot::strategy::Strategy;
 use crate::info;

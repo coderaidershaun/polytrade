@@ -1,7 +1,5 @@
-//! Standing a simulated venue up from a run's configuration: the market taps it matches against,
-//! the matching model, the delivery schedule, the wire and the lifecycle core are assembled here
-//! rather than by the caller, so the runtime hands over its inputs and never learns how the venue
-//! is put together.
+//! Builds a simulated venue from the run's config: its taps, matching model, schedule, wire and
+//! core, so the runtime hands over its inputs and never learns how the venue is built.
 
 use crate::hot::exec::MAX_ORDER_INSTRUMENTS;
 use crate::info;

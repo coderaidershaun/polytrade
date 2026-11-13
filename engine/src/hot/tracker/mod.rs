@@ -1,4 +1,5 @@
-//! Per-instrument state hub: preallocate config-declared series, handlers only push (zero steady alloc).
+//! Per-instrument state hub: preallocate config-declared series, handlers only push (zero steady
+//! alloc).
 
 mod candles;
 mod sampling;

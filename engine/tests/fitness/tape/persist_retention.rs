@@ -1,6 +1,5 @@
-//! The writer deletes Parquet files older than the configured age while it runs, and removes the
-//! date folders it empties. A wrong deletion loses data silently, so everything else must survive:
-//! fresh files, files it does not target, and the whole tree of the other execution mode.
+//! The writer deletes Parquet files past their age, and the folders it empties, while each other
+//! file survives, since a wrong deletion loses data with no sign.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};

@@ -1,5 +1,5 @@
-//! The hot thread, which pins first and is built on its own core, the driver that runs its loop,
-//! and the producers of its input queues. A full queue is fatal, except the link queue, which drops.
+//! The hot thread, which pins first and is built on its own core, its driver, and the producers of
+//! its input queues. A full queue halts the engine, except the link queue, which drops.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};

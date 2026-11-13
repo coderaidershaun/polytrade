@@ -1,6 +1,5 @@
-//! Polymarket parse + normalise goldens: the ascending-order trap (venue best = last, engine best =
-//! first), absolute-size delta application vs a `BTreeMap` model, decimal exactness, the ms→µs
-//! stamp clamp, and that control text never masquerades as a data frame.
+//! Polymarket parsing and normalising: the venue's best level is last and the engine's is first,
+//! sizes are absolute, decimals are exact, and control text is never data.
 
 use std::collections::BTreeMap;
 

@@ -1,7 +1,5 @@
-//! The simulated venue's Binance-shaped payloads. Production mints every one of them through the
-//! timestamped wire, so that is the only path on which the book-versus-wallet check can protect a
-//! run: a fill report whose settlement totals disagree with the order it names is money invented
-//! between the matching model and the wallet.
+//! The simulator's Binance-shaped payloads, all minted through its stamped wire, where the check of
+//! book against wallet stops a fill that invents money.
 
 use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, Notional, Price, Qty, Side, TradeId, VenueOrderId,

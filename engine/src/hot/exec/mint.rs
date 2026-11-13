@@ -1,7 +1,5 @@
-//! Turning a decision into a command: claim the slot, reserve the money, bank the command, record
-//! the transition. Split from the spin loop because deciding WHAT to do and committing to it are
-//! separate jobs — everything here runs after the argument is over, and every path through it must
-//! leave the slot, the reservation and the audit trail agreeing.
+//! Turns a decision into a command: claim the slot, reserve the money, bank the command, and record
+//! the change, so that each path leaves the slot, the reservation and the audit rows agreeing.
 
 use crate::hot::strategy::Actions;
 use crate::msg::exec::ExecCommand;

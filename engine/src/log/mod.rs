@@ -1,6 +1,5 @@
-//! Logging that never blocks a producer: a lock-free ring per thread feeds one drain thread, and
-//! the hot thread hands over raw records that only the drain turns into text. In the browser build
-//! the same macros print straight to the console instead.
+//! Logging that never blocks a producer: a ring for each thread feeds one drain thread, which alone
+//! turns the hot thread's raw records into text. In the browser the macros print to the console.
 
 #[cfg(target_arch = "wasm32")]
 mod console;

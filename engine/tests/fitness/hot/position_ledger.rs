@@ -1,10 +1,5 @@
-//! Position-ledger fitness: the engine folds every REAL venue fill into exact per-instrument
-//! position, cash and mark-to-market, and hands it back through `ctx`. Three ways this breaks are
-//! all silent. Arithmetic that drifts from the fills that produced it yields PnL nobody can audit
-//! against the tape. A venue that redelivers a report — and Binance does — would move the money
-//! twice, and the second move looks exactly like a real fill. And a mark invented from half a book,
-//! or carried across a window rotation into a market whose prices mean something else, values a
-//! position at a number no venue ever showed.
+//! The ledger folds each real fill into exact position, cash and mark for each instrument. Each way
+//! it can break is silent: drift, a redelivered report, or a mark from half a book.
 //!
 //! Every position here opens through the real inbound path ([`FillPen`]), so a strategy cannot
 //! assert a fill into existence. The fold therefore lands on the fill's OWN message, ahead of the

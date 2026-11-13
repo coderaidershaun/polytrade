@@ -1,7 +1,5 @@
-//! One declaration per wire record: writer and reader are generated from the same field list, so no
-//! edit can teach one half a layout the other never learned. Every number rides little-endian.
-//! Rustfmt skips the bodies of brace-delimited item macros, so the macro bodies here are formatted by
-//! hand.
+//! One declaration for each wire record generates its writer and its reader, so the two halves
+//! cannot learn different layouts. Rustfmt skips these macro bodies, so they are formatted by hand.
 
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty};
 use crate::msg::persist::FeatureId;

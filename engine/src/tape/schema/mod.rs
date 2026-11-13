@@ -1,5 +1,5 @@
-//! Arrow schema + footer metadata: one [`TableRow`] impl per row type; mantissas as `i64`, enums as strings.
-//! Split by subject: `market` (what venue did), `exec` (what engine did).
+//! Arrow schema + footer metadata: one [`TableRow`] impl per row type; mantissas as `i64`, enums as
+//! strings. Split by subject: `market` (what venue did), `exec` (what engine did).
 
 mod column;
 mod exec;

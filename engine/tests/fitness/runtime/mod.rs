@@ -1,6 +1,5 @@
-//! Tests of one engine process from start to stop: the clock check, config guards, the execution
-//! lease, exposure at boot, the metrics thread, the pins of its threads, the exit report, and the
-//! timing harness's refusal of a live engine.
+//! Tests of one engine process from start to stop: clocks, config, the lease, exposure, metrics,
+//! pins, the exit, and the timing harness's refusal of a live engine.
 
 mod clock;
 mod config_guards;

@@ -1,5 +1,5 @@
-//! Entry point: `run_trading_engine::<S>(strategy_id, te_id)`. Headless, owns main thread, opens no window.
-//! Workstation is separate process. Terminal: prints failures.
+//! Entry point: `run_trading_engine::<S>(strategy_id, te_id)`. Headless, owns main thread, opens no
+//! window. Workstation is separate process. Terminal: prints failures.
 
 use std::path::PathBuf;
 

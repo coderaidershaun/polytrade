@@ -1,4 +1,5 @@
-//! Writer thread: drain ring to newest snapshot, write to disk on change. Dedicated thread (blocks on fsync).
+//! Writer thread: drain ring to newest snapshot, write to disk on change. Dedicated thread (blocks
+//! on fsync).
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

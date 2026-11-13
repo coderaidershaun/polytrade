@@ -1,6 +1,5 @@
-//! Folding venue responses into mirror state. Order leaves only when venue confirms it's gone;
-//! an ambiguous answer (a venue "no such order" that also spells "already filled", or no answer at
-//! all) triggers reconciliation, never a guess.
+//! Folds the venue's answers into the mirror. An order leaves only when the venue confirms it gone,
+//! and an ambiguous answer or no answer leads to a read, never a guess.
 
 use crate::msg::exec::{ExecCommand, ExecEvent, Provenance, RejectClass};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Qty};

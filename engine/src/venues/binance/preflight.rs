@@ -1,7 +1,5 @@
-//! Startup scale preflight for Binance: confirm each instrument's max price and quantity fit the
-//! i64 1e-8 range, stamp the tick/step grid and the order floors and counts onto the registry, and
-//! read the account's ORDERS budget, which the hot side paces against without knowing whose buckets
-//! they are. Anything out of range, unlisted, absent or unreadable refuses the start loudly.
+//! The start check of Binance scales: each instrument must fit the fixed-point range, and its grid,
+//! limits and order budget go onto the registry. A value out of range refuses the start.
 
 use crate::hot::exec::{MAX_ORDER_BUDGET_WINDOWS, OrderBudget, OrderBudgetWindow};
 use crate::info;

@@ -1,4 +1,5 @@
-//! Per-instrument book: two sorted vecs (bids desc, asks asc), fixed capacity. Adapter sequencing; book counts/warns quirks.
+//! Per-instrument book: two sorted vecs (bids desc, asks asc), fixed capacity. Adapter sequencing;
+//! book counts/warns quirks.
 
 use std::cmp::Ordering;
 

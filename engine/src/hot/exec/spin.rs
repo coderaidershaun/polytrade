@@ -1,9 +1,5 @@
-//! Main spin loop: expire stale orders, timeout unanswered requests, reconcile, decide quotes,
-//! and drain the action bank. Split from engine.rs so venue-event folding and engine-cadence scheduling
-//! stay separately readable. All deadlines derive from message timestamps for replay determinism.
-//! No clock reads (enforced by fitness scan). Window and flatten passes live in separate files; their
-//! order is load-bearing. Committing a decision to a command lives in mint.rs, which the flatten
-//! pass reaches too — deciding and committing have different callers.
+//! The execution pass of each spin, in an order that each step relies on: expire, chase timeouts,
+//! sweep closing windows, flatten, then quote. Each deadline reads message time, never a clock.
 
 use crate::hot::book::{Book, BookState};
 use crate::hot::dispatch::StrategyGate;

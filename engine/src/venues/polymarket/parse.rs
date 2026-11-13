@@ -1,6 +1,5 @@
-//! The Polymarket quarantine boundary: venue JSON dies here, leaving via `i64@1e-8` mantissas
-//! (overflow fatal). Structs stay permissive (the venue may append fields). The venue delivers each
-//! book side best-last (inverse of Binance); `parse_book` normalises to engine best-first.
+//! Where Polymarket JSON stops: it leaves as exact mantissas, and an overflow is fatal. The venue
+//! sends each book side best last, so the book is turned to best first here.
 
 use serde::Deserialize;
 use serde_json::Value;

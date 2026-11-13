@@ -1,6 +1,5 @@
-//! The balance sweep, and the answers to the reads the driver asks for rather than causes:
-//! balances, fills, the two public calls a rotation binding needs, the allowance cache, and the
-//! dead man's switch.
+//! The balance sweep, and the answers to the reads that the driver asks for: balances, fills, the
+//! public calls of a rotation binding, the allowance cache, and the dead man's switch.
 //!
 //! None of these answer an order. They are what makes an order possible — which token this leg is
 //! trading, whether its sell side is even reachable, and whether the venue still believes this

@@ -1,7 +1,5 @@
-//! FITNESS: the keyed ladder's two safety rules at the real HOT boundary — whole-side single
-//! flight, and cancel-confirm-place replacement — and the reservation-release policy that rides the
-//! same boundary, in both directions, on a venue that locks an order's funds and on one that
-//! does not.
+//! The two safety rules of the keyed ladder, one request in flight for each side and cancel before
+//! place, with the release of reservations on venues that lock funds and that do not.
 
 use engine::runtime::config::TrackerSpec;
 use std::sync::{Arc, Mutex};

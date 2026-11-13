@@ -1,9 +1,5 @@
-//! Startup scale check: using the committed exchangeInfo fixtures, it passes a real symbol —
-//! pinning the exact `tickSize`/`stepSize` mantissas it returns — and REFUSES one whose price/qty
-//! bounds or trading grid are absent, non-positive, or unparseable, so a venue schema rename can
-//! never make the fixed-point guard vacuously pass. The Polymarket arm pins the same taxonomy:
-//! both venue ticks (0.01 and the 0.001 endgame tick) pass, a drifted tick or absent min size
-//! refuses. `check_symbol_scale` and `check_poly_market` are pure.
+//! The start check of scales on recorded exchangeInfo: a real symbol passes with its exact grid,
+//! and a missing or bad bound refuses, so a renamed field never lets a range pass.
 
 use engine::hot::exec::{MAX_ORDER_BUDGET_WINDOWS, OrderBudgetWindow};
 use engine::msg::ids::{AssetId, Notional, Price, Qty};

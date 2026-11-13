@@ -1,5 +1,5 @@
-//! A hot log call copies raw words on the hot thread, and only the drain turns them into the line an
-//! operator reads, with the same words that line has always had.
+//! A hot log call copies raw words on the hot thread, and only the drain turns them into the line
+//! an operator reads, with the same words that line has always had.
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};

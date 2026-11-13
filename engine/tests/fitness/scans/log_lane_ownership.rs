@@ -1,10 +1,5 @@
-//! `log::register_thread` scopes a log lane to the calling OS THREAD, and no Rust signature can
-//! stop a tokio task body from calling it. Tasks share the multi-worker pool, so two landing on one
-//! worker overwrite each other's tag, and a task migrating at an `.await` pushes into whichever
-//! ring that worker had last registered, so a Binance REST warning could be filed under
-//! `[polymarket-exec]`. One log file carries engine and strategy records
-//! alike, and the tag column is the only thing distinguishing their origin, so the attribution is
-//! load-bearing rather than cosmetic.
+//! A log lane belongs to an OS thread, and a tokio task that registered one would file its lines
+//! under the tag of another task, so only the threads that own a lane may register one.
 //!
 //! The rule is invisible at the call site, so the threads are named here one at a time. A new call
 //! site fails until someone states which OS thread it owns, and a task author is pointed at

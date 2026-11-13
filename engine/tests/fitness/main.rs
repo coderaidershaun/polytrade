@@ -1,6 +1,5 @@
-//! Fitness suite: the only CI tests. Proptest properties over recorded invariants, plus a
-//! counting global allocator so the zero-allocation guarantees can be asserted rather than
-//! trusted. Grouped as one test target so plain `cargo test` runs every area.
+//! The fitness suite, the only CI tests: properties over recorded invariants, and a counting
+//! allocator, so the zero-allocation promises are asserted rather than trusted.
 //!
 //! Every module on disk is declared here or in the root file of its folder. A suite that compiles
 //! but is not listed runs nowhere, so a missing `mod` line is the one way coverage can be lost

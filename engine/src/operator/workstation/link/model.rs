@@ -1,8 +1,5 @@
-//! The workstation's view of the engine it is attached to: which run its frames come from, whether
-//! the heartbeat is still arriving, what run state the engine reports against the one this
-//! workstation asserts, and the run catalog rebuilt from the loose per-item frames the link
-//! announces. No socket and no clock of its own, so the link session and the link bar read one
-//! source of truth rather than two.
+//! The workstation's view of its attached engine: its run, its heartbeat, its reported run state,
+//! and its catalog, in one model, so the link session and the link bar agree.
 
 use std::net::SocketAddr;
 

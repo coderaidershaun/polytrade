@@ -1,6 +1,5 @@
-//! One declaration per Parquet column: name, arrow type, and the value it pulls out of a row.
-//! Schema and batch are built from the same list, so a column cannot appear in one and not the
-//! other — the failure that writes a file whose header lies about its contents.
+//! One declaration for each Parquet column, from which the schema and the batch are both built, so
+//! no file can carry a header that does not match its columns.
 
 use std::sync::Arc;
 

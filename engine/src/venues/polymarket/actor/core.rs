@@ -1,6 +1,5 @@
-//! Pure driver core: two A/B slots, each an FSM + Up/Down legs. Schedules prefetch + subscribe,
-//! routes frames by token, translates actions → effects. No sockets/REST/clock — replays identically.
-//! Async shell performs effects and feeds results back.
+//! The pure core of the Polymarket market-data driver: two window slots with their legs, which turn
+//! frames and times into effects. It has no socket and no clock, so it replays the same way.
 
 use std::sync::Arc;
 

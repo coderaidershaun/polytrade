@@ -1,6 +1,5 @@
-//! Polymarket discovery arithmetic: the 300s grid and A/B slot parity are the identity the whole
-//! rotation machine rests on — a misplaced window boundary or a wrong slot silently mints the wrong
-//! market or double-books a slot — plus the T-60s handover the zero-gap rotation subscribes on.
+//! The 300 s window grid and the parity of its two slots, on which the rotation rests, and the
+//! handover 60 s before a window opens.
 
 use engine::venues::polymarket::discovery::{PolySchedule, Slot};
 use proptest::prelude::*;

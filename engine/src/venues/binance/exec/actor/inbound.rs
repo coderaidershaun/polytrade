@@ -1,6 +1,5 @@
-//! Inbound traffic arrives on two correlation paths: a request answer echoes the request's `id`,
-//! while an account event correlates by CLIENT ORDER ID. The two are routed apart before parsing,
-//! because a stream event that answered a request would be an unasked-for state change.
+//! Routes what the venue sends: a request's answer by its id, an account event by its client order
+//! id. They part before parsing, so a stream event can never answer a request.
 
 use tokio_tungstenite::tungstenite::{Error as ProtocolError, Message};
 

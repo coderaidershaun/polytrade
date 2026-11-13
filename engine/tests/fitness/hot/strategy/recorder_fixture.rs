@@ -1,5 +1,5 @@
-//! The engine, tape and readers the shipped recorder's seam tests share. Each test file owns its
-//! price level and lot step, because those are what its claim is about.
+//! The engine, tape and readers that the tests of the shipped recorder share. Each test file owns
+//! its price level and lot step, because those are what its claim is about.
 
 use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
 use engine::hot::sink::ExecSink;

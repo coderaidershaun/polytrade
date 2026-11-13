@@ -1,5 +1,5 @@
-//! The execution lease's host lock and on-disk nonce history must be keyed correctly. A wrong key
-//! lets a second process arm the same account, or re-mint client order ids a venue has already seen.
+//! The host lock and the nonce history of the execution lease must have the right keys, or a second
+//! process arms the same account, or client ids repeat at the venue.
 
 use std::ops::Deref;
 use std::path::{Path, PathBuf};

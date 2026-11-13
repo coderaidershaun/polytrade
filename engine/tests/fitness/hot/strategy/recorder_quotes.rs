@@ -1,5 +1,5 @@
-//! The shipped recorder's declaration seam: what it RECORDS as its quote and what it actually asks
-//! the venue for must be the same number.
+//! What the shipped recorder records as its quote and what it asks the venue for must be the same
+//! number.
 //!
 //! The recorder snaps its Guéant level to the NEAREST tick and then clamps it outside the
 //! minimum-distance band, while the engine snaps a bid down and an ask up. The two agree only

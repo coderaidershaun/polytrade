@@ -1,6 +1,5 @@
-//! Signs every private Binance call with HMAC-SHA256. Parameters become the exact signed bytes,
-//! which REST sends in the URL and the WebSocket API sends as JSON, so nothing private reaches the
-//! wire unsigned.
+//! Signs each private Binance call with HMAC-SHA256 over the exact bytes that go on the wire, so
+//! nothing private leaves unsigned.
 
 use std::fmt;
 

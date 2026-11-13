@@ -1,6 +1,5 @@
-//! HTTP answers. Every request this engine makes is answered here, and the placement answer is the
-//! only place an order's venue id ever appears — so this is also where correlation is established
-//! and where the frames held waiting for it are released.
+//! The HTTP answers of each request. A placement's answer is the only place where an order's venue
+//! id appears, so the correlation is made here and the frames that wait for it are released.
 
 use crate::msg::exec::ExecEvent;
 use crate::msg::time::LocalTs;

@@ -1,6 +1,5 @@
-//! Markout fill model: which prints fill our resting quote, and what the mid does afterwards. A
-//! wrong fill gate is silent — it produces a full research column of markouts for fills that never
-//! happened, and no run ever errors.
+//! The markout fill model: which prints fill our resting quote, and how the mid moves after. A
+//! wrong fill rule fills a research column with markouts of fills that never happened.
 
 use engine::hot::quant::toxicity::{
     ForwardHorizon, MarkoutFill, MarkoutSide, MarkoutSpec, MarkoutTracker,

@@ -1,6 +1,5 @@
-//! FITNESS: what the Polymarket preflight stamps on a row is what every execution gate downstream
-//! believes about the venue, and an unstamped field is not a missing number — it is a gate that
-//! silently passes.
+//! What the Polymarket start check writes on a row is what each execution gate believes about the
+//! venue, and a field left empty is a gate that passes with no sign.
 //!
 //! The four stamps here each close one of those. A `min_qty` of zero admits an order below the
 //! venue's floor. A `max_num_orders` of zero sizes the edge's order mirror at nothing, and the FIRST

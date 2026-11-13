@@ -1,6 +1,5 @@
-//! The engine itself: construction, the readers a strategy sees, and the entry point every venue
-//! event folds through. Apply is ungated — a fill during warmup is money — and only the callback
-//! a strategy receives is gated.
+//! The execution engine: its construction, what a strategy reads of it, and the fold of each venue
+//! event. A fill always moves money, warmup or not, and only the strategy's callback waits.
 
 use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::hot::ledger::PositionLedger;

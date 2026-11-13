@@ -1,6 +1,5 @@
-//! Exit lifecycle shared by all venue edges: the handle the runtime holds, the latches that handle
-//! trips, and the plan a sweep executes under. Ordering and pacing are safety rules that must not
-//! drift between implementations.
+//! The exit of each venue edge: the handle the runtime holds, the latches it trips, and the plan of
+//! a sweep. Order and pacing are safety rules that must not differ between venues.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};

@@ -1,5 +1,5 @@
-//! The workstation's model of the engine feed: the catalog and each instrument's latest book and
-//! quote, plus the panels' own models. It folds events in event time and never reads the wall clock.
+//! The workstation's model of the engine feed: the catalog, each instrument's latest book and
+//! quote, and the models of the panels, folded in event time with no wall clock.
 
 use crate::msg::ids::{FIXED_SCALE, InstrumentId, Price, Side};
 use crate::msg::time::{DurationUs, VenueTs};

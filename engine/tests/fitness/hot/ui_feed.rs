@@ -1,9 +1,5 @@
-//! Hot-to-UI feed fitness: the engine emits a book snapshot at every commit boundary (and on
-//! reset/rotation) with a per-instrument monotonic sequence, and tees the ordered event lane —
-//! quotes, per-print trades, real order transitions, feature rows, REAL venue fills and rotations —
-//! each stamped with one lane-wide sequence so a consumer counts ring-drop gaps across every kind.
-//! Both rings and every lane drop and count rather than stall the hot thread. All of it is a pure
-//! function of the message sequence, so replay reproduces the feed byte for byte.
+//! The feed to the workstation: a book snapshot at each commit, reset and rotation, and one event
+//! lane with one sequence across each kind, so a reader counts the gaps of a dropped record.
 //!
 //! A fill is a venue message the engine tees directly, on the fill's own message rather than on the
 //! print that inspired it. Every test below that wanted a position drives [`FillPen`] for that

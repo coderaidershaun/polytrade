@@ -1,6 +1,5 @@
-//! The polymarket publisher trading engine: one frame per spin carrying both up legs, each written
-//! into the block named for the ROLE it plays — `cur` hosts the open window, `next` the one not yet
-//! open.
+//! The Polymarket publisher: one frame for each spin with both up legs, each in the block of the
+//! role it plays: the open window, or the next one.
 //!
 //! Worth pinning because every way of getting it wrong is SILENT. Window N's close IS window N+1's
 //! open, so an inclusive comparison puts two legs in the current block for one microsecond; a `>`

@@ -1,8 +1,5 @@
-//! EGARCH seeding across warmup: the REST kline backfill lands inside the warmup span, where the
-//! engine feeds the tracker but suppresses the strategy callback (state warms with the strategy
-//! unaware). The strategy must still seed its fit history from the tracker on the first live spin —
-//! otherwise `egarch_vol_lt` would take hours of live 1m candles to reach its 300 floor. Regression
-//! for that ordering bug.
+//! Klines that arrive during warmup feed the tracker while the strategy waits, and the strategy
+//! seeds its EGARCH history from the tracker at its first live spin, not hours later.
 
 use engine::hot::strategy::StrategyConfig;
 use engine::msg::inbound::{InboundMessage, MessageBody};

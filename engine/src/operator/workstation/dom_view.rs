@@ -1,7 +1,5 @@
-//! The ladder as a pure projection, in exact integer tick maths around the mid, with N ticks to a
-//! row. One bucket ladder places the public levels, the desired quote and the real orders, so they
-//! agree on rows, and the desired quote and the real orders never merge. How many rows fit is
-//! projection too, so [`fit_rows`] lives here and takes its row floor as an argument.
+//! The ladder as a pure projection in exact integer ticks around the mid, so the public levels, the
+//! desired quote and the real orders agree on their rows and never merge.
 
 use super::exec_model::{OrderCell, OrderStatus};
 use super::format::BASIS_POINTS_PER_UNIT;

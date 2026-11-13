@@ -1,4 +1,5 @@
-//! Driver actor: socket/tick/ping/REST shell. Single-owner loop → monotone input. 5m rotation: T-60s subscribe, 404 probe teardown.
+//! Driver actor: socket/tick/ping/REST shell. Single-owner loop → monotone input. 5m rotation:
+//! T-60s subscribe, 404 probe teardown.
 
 mod core;
 mod effects;

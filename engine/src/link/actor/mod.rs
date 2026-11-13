@@ -1,7 +1,5 @@
-//! The link actor: one tokio task that owns the UDP socket, the subscriber table and the sequence
-//! gate. Inbound frames are validated and pushed to the engine like any other input, and outbound
-//! frames are drained from the hot thread's UI rings, which nothing else reads, each time the wait
-//! of the senders' placement wakes it.
+//! The link actor: one task that owns the UDP socket, the subscriber table and the sequence gate.
+//! It pushes checked frames to the engine and sends the hot thread's UI rings.
 
 mod outbound;
 

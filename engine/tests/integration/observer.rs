@@ -1,8 +1,5 @@
-//! Reconstructs every slot leg's book from the hot ring and watches the rotation lifecycle, so the
-//! live test can assert on physics the adapter never states outright: zero-gap handover (a new
-//! window's book reaches Valid while the old still streams) and teardown latency (the old window's
-//! final `BookReset` relative to its nominal close). The adapter surfaces neither on the ring; both
-//! are inferred from the message sequence here, off any production path.
+//! Rebuilds each leg's book from the hot ring and watches each rotation, so the live test can
+//! assert the handover with no gap and the delay of each teardown.
 
 use engine::hot::book::{Book, BookState};
 use engine::msg::inbound::{BookChunkKind, InboundMessage, Level, MessageBody};

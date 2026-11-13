@@ -1,4 +1,5 @@
-//! Slot transitions -> orders/fills rows. Banks all transitions incl. engine-driven (send/timeout/recon). Gate + drop counter via strategy bank.
+//! Slot transitions -> orders/fills rows. Banks all transitions incl. engine-driven
+//! (send/timeout/recon). Gate + drop counter via strategy bank.
 
 use crate::hot::strategy::Actions;
 use crate::msg::exec::{ExecEvent, ExecKind, Provenance, RejectClass};

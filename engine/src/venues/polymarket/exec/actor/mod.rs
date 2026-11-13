@@ -1,9 +1,5 @@
-//! What only this venue can answer: core decides, driver applies. The connect, serve and back-off
-//! loop around it belongs to the shared edge chassis. The transport model is unique: no request
-//! socket exists. All placements, cancels, and reads use HTTP across three lanes ([`rest`]). The
-//! user stream receives events only and never replays after disconnect — reconnects trigger a full
-//! state re-read. Polymarket mints the order id in the placement answer, making correlation
-//! straightforward.
+//! What only Polymarket can answer, inside the shared session loop: all orders and reads go by
+//! HTTP, and the user stream only pushes events and replays nothing after a reconnect.
 
 mod answer;
 mod apply;

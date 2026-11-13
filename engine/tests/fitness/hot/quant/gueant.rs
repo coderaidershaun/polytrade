@@ -1,7 +1,5 @@
-//! Guéant–Lehalle–Fernandez-Tapia quoting. Two things must never drift: the closed-form
-//! coefficients against a hand-worked example, and the grid rounding, which is what stands between
-//! a computed depth and an order that crosses the book. A quote rounded the wrong way is not an
-//! error anywhere — it is a marketable order the venue happily fills.
+//! The quoting model's closed-form terms against a worked example, and its rounding onto the grid,
+//! which stops a computed depth from becoming an order that crosses the book.
 
 use engine::hot::quant::pricing::{GueantParams, Objective, QuoteCoefficients, QuoteInputs};
 use engine::msg::ids::Price;

@@ -1,6 +1,5 @@
-//! Order-book imbalance inside a price band around the mid. A level on the edge of the band counts,
-//! and each side always counts its best level, so a book whose best levels sit outside the band
-//! never reads as empty.
+//! Order-book imbalance in a band around the mid: a level on the edge of the band counts, and each
+//! side counts its best level, so a book never reads as empty.
 
 use engine::hot::quant::micro::{PriceBand, banded_imbalance};
 use engine::msg::ids::{Price, Qty};

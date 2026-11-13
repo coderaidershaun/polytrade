@@ -1,7 +1,5 @@
-//! Kline sequencing: REST backfill + live WS -> gap-free dedup series by open time. Holes
-//! reported (driver backfills). Anchor never jumps hole -> contiguous prefix. Repair-boundary
-//! stamp clamp: gap-fill lands AFTER live close it repairs -> received_ts_us non-decreasing.
-//! Pure (fixtures replay without socket).
+//! Puts REST backfill and live klines into one series by open time, with no gap or duplicate. It
+//! reports each hole, and keeps received stamps from running back across a repair.
 
 use crate::msg::inbound::{InboundMessage, KlineEvent, MessageBody};
 use crate::msg::time::{DurationUs, LocalTs, VenueTs};

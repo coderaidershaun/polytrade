@@ -1,5 +1,5 @@
-//! One table's Parquet files: sealed and rolled as rows arrive, so a reader never waits for shutdown. Seals on row cap, parent interval, record hour, or drain.
-//! Names carry boot stamp + per-writer sequence -> no overwrites within an hour.
+//! The Parquet files of one table, sealed and rolled as rows arrive, so a reader never waits for
+//! shutdown. Each name carries the boot stamp and a sequence, so no file is overwritten.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};

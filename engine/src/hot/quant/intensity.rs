@@ -1,6 +1,5 @@
-//! Trade-intensity (A, k) estimator — feeds Guéant-Lehalle-Fernandez-Tapia quoting.
-//! Hot thread: [`IntensityCounts`] (in-place, zero alloc). Strategy: [`IntensityFit`] (warm-started Poisson MLE).
-//! Depth in ticks behind same-side best; A in /sec, k in /tick.
+//! Estimates how often trades reach each depth (A per second, k per tick) for the quoting model:
+//! the hot thread counts in place, and the strategy fits by Poisson likelihood.
 
 use crate::hot::digest::digest_fields;
 use crate::hot::quant::MIN_RATE;

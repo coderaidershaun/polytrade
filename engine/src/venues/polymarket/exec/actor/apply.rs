@@ -1,10 +1,5 @@
-//! Turns effects into HTTP requests; the socket is only ever used to open the user stream.
-//! Three withholding policies live here, each preventing a request from being sent under a
-//! specific condition. A placement is withheld when the venue reports unavailability, since a
-//! 425 or 503 describes the venue's own state, not a problem with the order. A cancel is
-//! withheld during the venue's taker hold window, to avoid a refusal or a hard reject. A sell
-//! is withheld until its token's allowance cache is warm, because the venue treats a cold
-//! cache as an empty wallet.
+//! Turns effects into HTTP requests, and holds a request back while the venue says it is
+//! unavailable, while its taker hold runs, or until the allowance cache of a sell is warm.
 
 use futures_util::SinkExt;
 use tokio_tungstenite::tungstenite::Message;

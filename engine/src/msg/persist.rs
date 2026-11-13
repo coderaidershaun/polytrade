@@ -1,4 +1,5 @@
-//! Persistence records: POD Copy union (i64 mantissas, _ts_us stamps, no strings). Plus RotationRow (owned, strings, off hot path).
+//! Persistence records: POD Copy union (i64 mantissas, _ts_us stamps, no strings). Plus RotationRow
+//! (owned, strings, off hot path).
 
 use crate::hot::exec::QuoteLevel;
 use crate::msg::exec::{Liquidity, OrderStyle, Provenance, RejectClass};

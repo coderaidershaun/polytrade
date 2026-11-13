@@ -1,7 +1,5 @@
-//! Binding market window facts to execution. The tradeable token id rotates every five minutes,
-//! so it comes from the market-data actor at window assignment, not configuration.
-//! Two additional facts must be fetched: tick size from /clob-markets and the neg-risk flag from /neg-risk
-//! per token. /clob-markets does not publish neg-risk; wrong contract signatures fail silently.
+//! Binds the facts of a market window to execution. The token id rotates every five minutes, so it
+//! comes from the market-data actor, with the tick size and the neg-risk flag read for it.
 
 use std::sync::Arc;
 

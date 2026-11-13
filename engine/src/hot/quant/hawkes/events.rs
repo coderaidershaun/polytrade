@@ -1,6 +1,5 @@
-//! The rolling window of event times that the fitter and the live evaluator both read. Its push
-//! clamps a late stamp to the one before it, because every recursion here assumes time never runs
-//! backwards.
+//! The rolling window of event times that the fitter and the live evaluator both read. A late stamp
+//! is clamped to the one before it, because each recursion here needs time that never runs back.
 
 use crate::hot::series::FastQueue;
 use crate::msg::time::{DurationUs, LocalTs};

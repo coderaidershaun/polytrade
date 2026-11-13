@@ -1,6 +1,5 @@
-//! Venue-neutral execution machinery that every venue edge and the simulator compose: the phase
-//! machine and its order mirror, the session that applies their decisions, the in-flight table,
-//! resync policy and exit lifecycle. Written once so no venue spells a money rule its own way.
+//! The venue-neutral execution machinery that each venue edge and the simulator build on, written
+//! once so that no venue spells a money rule its own way.
 
 mod capabilities;
 mod core;

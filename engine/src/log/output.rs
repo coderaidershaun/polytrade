@@ -1,6 +1,5 @@
-//! Where log lines go: one writer for each UTC day of record time, reopened when a write fails,
-//! and given up for a fallback once reopening keeps failing. Engine and strategy lines share it;
-//! the tag column tells them apart.
+//! Where log lines go: one file for each UTC day of record time, reopened when a write fails, and a
+//! fallback to stderr once reopening keeps failing.
 
 use std::fmt::Write as _;
 use std::fs::{self, File, OpenOptions};

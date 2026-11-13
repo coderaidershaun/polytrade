@@ -1,7 +1,5 @@
-//! Credential + signing fitness: a signed Binance request must reproduce the venue's documented
-//! HMAC vector, must build the same payload no matter what order the caller set the params in, and
-//! must never carry a secret into a log line. Every failure here is silent — a wrong payload order
-//! reads as a rejected order, and a leaked secret reads as nothing at all until the account drains.
+//! A signed Binance request matches the venue's documented HMAC vector, signs the same bytes
+//! whatever the order of its parameters, and never puts a secret in a log line.
 
 use std::fs;
 use std::path::PathBuf;

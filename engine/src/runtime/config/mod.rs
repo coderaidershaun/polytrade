@@ -1,8 +1,5 @@
-//! Turns YAML into a validated config. An unknown-field typo becomes a named startup
-//! error rather than silent data loss. Defaults live in code, not in the file.
-//! Each larger block a config file can carry has its own submodule, beside `error` and `identity`.
-//! The root schema and the small blocks that only name a directory live here, so a caller writes
-//! `config::LinkConfig` and never names a submodule.
+//! Turns YAML into a validated config, so a misspelt key is a named start error, not a lost
+//! setting. Defaults live in code, and a caller names each block from this module.
 
 mod engine;
 mod error;

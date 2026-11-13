@@ -1,6 +1,5 @@
-//! Turns an engine request into a WebSocket API method and its parameters. The hot side names what
-//! it wants and this picks the method. Only the signer adds `apiKey`, `recvWindow`, `timestamp` and
-//! `signature`, so nothing here sets them.
+//! Turns an engine request into a method of the WebSocket API with its parameters. Only the signer
+//! adds the key, the receive window, the timestamp and the signature.
 
 use crate::msg::exec::OrderStyle;
 use crate::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId};

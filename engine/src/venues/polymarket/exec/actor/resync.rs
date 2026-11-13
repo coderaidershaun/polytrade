@@ -1,6 +1,5 @@
-//! The quoting admission gate, and the only thing that rebuilds state after a disconnect: this
-//! venue's stream replays nothing, so what is resting and what is held is re-read rather than
-//! resumed.
+//! The quoting admission gate, and the one place that rebuilds state after a disconnect: the stream
+//! of this venue replays nothing, so what rests is read again.
 //!
 //! The hard question this file answers is what to do with an open order the run cannot name. At
 //! BOOT every such order predates the process and is swept, which is the binance cold-start rule.

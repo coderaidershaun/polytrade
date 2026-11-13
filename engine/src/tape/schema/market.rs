@@ -1,4 +1,5 @@
-//! Schemas for venue public data: features, trades, book events, klines, link tape, rotation lineage.
+//! Schemas for venue public data: features, trades, book events, klines, link tape, rotation
+//! lineage.
 
 use crate::msg::ids::Side;
 use crate::msg::persist::{

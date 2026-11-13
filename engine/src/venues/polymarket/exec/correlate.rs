@@ -1,8 +1,5 @@
-//! Correlation of engine orders to venue order ids. Polymarket mints the order id in the placement
-//! answer, so between request and answer, the order exists at the venue under an unknown name.
-//! Stream frames naming unknown orders are held (not dropped) pending the mapping. Cancels are
-//! withheld during the delayed hold window (venue + wire latency) to avoid refusals. Held frames
-//! with no mapping eventually trigger a loud alert (fill not yet seen in the ledger).
+//! Matches engine orders to venue order ids, which the venue names only in its answer. Stream
+//! frames for an order not yet named wait here, and an alert fires when one waits too long.
 
 use crate::msg::exec::{ExecEvent, ExecKind, Provenance};
 use crate::msg::ids::ClientOrderId;

@@ -1,6 +1,5 @@
-//! The strategy payload frame and its datagram. A slot's meaning comes from the sender's
-//! `link_fields()` declaration and never from the wire itself, so two senders whose field lists
-//! differ do not agree about what a given slot index holds.
+//! The strategy payload frame and its datagram. The sender's field list gives each slot its
+//! meaning, never the wire, so two senders with different field lists disagree about a slot.
 
 use crate::msg::time::VenueTs;
 use crate::msg::ui::{LatencyReport, UiBookSnapshot, UiEvent};

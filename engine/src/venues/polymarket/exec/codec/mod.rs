@@ -1,9 +1,5 @@
-//! Translates Polymarket JSON to and from `ExecEvent` and `AccountChunk`, holding no socket, clock
-//! or state. Three venue quirks are normalised here and nowhere else, because each yields a
-//! silently wrong answer rather than a parse failure: order status has three spellings (`live`,
-//! `LIVE`, `ORDER_STATUS_LIVE`) and trade status two; the read surfaces send decimal strings where
-//! the write surface sends 6-decimal integers; and three payloads report fills, of which only two
-//! can be trusted.
+//! Translates Polymarket JSON to and from the execution vocabulary, with no socket, clock or state.
+//! The venue quirks that give a wrong answer, not a parse error, are normalised here only.
 
 mod correlation;
 mod read;

@@ -1,4 +1,5 @@
-//! Records microstructure columns + quotes Guéant levels each spin. Per-instrument state in models/features/params siblings.
+//! Records microstructure columns + quotes Guéant levels each spin. Per-instrument state in
+//! models/features/params siblings.
 
 use engine::hot::quant::hawkes::HawkesChoice;
 use engine::hot::quant::liquidity::KylesLambdaSpec;

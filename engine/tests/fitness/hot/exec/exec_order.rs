@@ -1,6 +1,5 @@
-//! FITNESS: the order table's two money invariants — that a passive quote is never snapped into
-//! aggression, and that a venue event stream which duplicates, reorders and arrives late can never
-//! move our filled totals twice or lose a fill that was really paid.
+//! The two money rules of the order table: a passive quote never snaps into aggression, and a
+//! duplicated, reordered or late event stream never books a fill twice or loses one.
 //!
 //! Both failures are silent by construction. An inverted snap still compiles, still produces a legal
 //! order, and every layer downstream agrees with it; a double-folded fill produces a ledger that is

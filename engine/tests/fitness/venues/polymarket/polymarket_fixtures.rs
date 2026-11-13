@@ -1,10 +1,5 @@
-//! Golden replay of the committed live capture. Two invariants on real venue bytes: every book
-//! snapshot normalises so that best_bid is the highest bid and best_ask the lowest ask (the venue
-//! sends prices ascending, so its best level is last), and the delta-reconstructed touch tracks the
-//! venue's own inline best_bid and best_ask. The inline touch leads its removal deltas by 1-2
-//! frames (there are no sequence numbers), so a handful of transient leads occur and converge,
-//! which the shadow-book validator re-baselines. The collapse fixture is asserted to carry the
-//! teardown burst.
+//! A replay of the recorded live capture: each snapshot becomes best first, and the touch rebuilt
+//! from deltas follows the venue's own best bid and ask.
 
 use std::collections::HashMap;
 

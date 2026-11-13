@@ -1,15 +1,5 @@
-//! DOM grouping fitness: a ladder row may cover N consecutive ticks, and the projection stays exact
-//! integer work on the venue's own tick grid however wide the bucket. The invariants a wider row must
-//! never break: a bucket's quantity is the exact sum of its members (a grouped ladder that loses or
-//! double-counts depth misprices the book silently), the two sides never pool their levels even when
-//! they share a bucket, bucket edges stay grid-aligned so a row keeps covering the same ticks as the
-//! book moves, and grouping 1 is bit-for-bit the plain ungrouped ladder. The bps unit is pinned as a
-//! SIZING input — it resolves to a whole tick count once per frame and never becomes a second price
-//! grid. The label half pins the venue-price convention the DOM separator renders a mid at,
-//! including the half-tick mid that must widen its decimals rather than round. The model half pins
-//! the state the controls write: the workstation opens on a twentieth of a basis point, which is
-//! deliberately NOT the projection's identity default, and each unit remembers its own grouping
-//! across a flip.
+//! A ladder row can cover several ticks and stay exact on the venue's grid: a bucket's size is the
+//! exact sum of its levels, the sides never pool, and a grouping of one is the plain ladder.
 
 use std::collections::HashMap;
 

@@ -1,7 +1,5 @@
-//! The execution vocabulary: order-lifecycle events, inbound account balances, and outbound
-//! commands. All fixed-size plain data. Venue-neutral, since the edge normalizes wire
-//! spellings before anything reaches here. Absence is spelled two ways: an identity or
-//! classification that may be missing is an `Option`; a missing number is zero.
+//! The execution vocabulary in fixed-size plain data: order events, account balances, and commands
+//! to the edge. Each venue spelling is normalised at the edge, before it reaches here.
 
 use crate::msg::ids::{
     AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, TradeId, VenueOrderId,

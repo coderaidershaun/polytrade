@@ -1,12 +1,5 @@
-//! Workstation link fitness: what the workstation does with the datagrams an engine sends it,
-//! driven only through the session's public seam (bytes and time in; deliveries, status and
-//! subscribe bytes out). Each invariant is a silent-corruption risk rather than a crash. The catalog
-//! is announced as loose per-item frames, so an assembly that completed early or adopted a stale
-//! epoch would label every DOM row and feature value with the wrong name. The feed rides UDP, so
-//! loss must read as a counted gap and never as a book that travelled backwards. The control epoch
-//! decides whether this workstation can stop an engine at all, or seizes one another controller
-//! holds. And a frame from the wrong engine, the wrong run or the wrong peer must never reach a
-//! model that is showing another one.
+//! What the workstation does with the datagrams of an engine: a loss reads as a counted gap, the
+//! catalog never takes a stale epoch, and no frame of another engine or run reaches the model.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

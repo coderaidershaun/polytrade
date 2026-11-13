@@ -1,5 +1,5 @@
-//! Durable cost basis (one JSON per engine, written off hot path). Only basis durable, not mark (recomputes on boot).
-//! Position keyed by VENUE SYMBOL, not InstrumentId (index reordering would silently swap markets).
+//! The durable cost basis, one JSON file for each engine, written off the hot path. Position is
+//! keyed by venue symbol, because an instrument id can change between runs.
 
 mod file;
 mod writer;

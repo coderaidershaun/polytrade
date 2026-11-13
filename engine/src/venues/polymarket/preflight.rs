@@ -1,6 +1,5 @@
-//! Startup scale preflight for Polymarket: resolve the current and next window through Gamma,
-//! confirm each quotes on a tick the engine accepts with a positive minimum size, and stamp that
-//! grid and the order limits onto every Polymarket row. Any failure refuses the start loudly.
+//! The start check of Polymarket scales: the current and next windows must quote on a tick the
+//! engine accepts, and their grid and limits go onto the registry. A failure refuses the start.
 
 use crate::info;
 use crate::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty};

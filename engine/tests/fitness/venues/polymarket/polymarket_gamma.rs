@@ -1,6 +1,5 @@
-//! Gamma discovery parse goldens: the clobTokenIds double-parse (JSON array inside a JSON string),
-//! window bounds taken from the slug's grid timestamp (never `startDate`/`end_date_iso`), and the
-//! no-chrono `end_date_min` ISO formatter pinned against a real capture value.
+//! Gamma discovery against recorded payloads: the token ids nested in a string, window bounds from
+//! the slug, and the date formatter with no calendar crate.
 
 use engine::msg::ids::{Price, Qty};
 use engine::msg::time::VenueTs;

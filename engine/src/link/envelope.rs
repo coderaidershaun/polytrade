@@ -1,5 +1,5 @@
-//! The envelope every datagram opens with, checked in a fixed order so version skew is caught before
-//! a book body is misread, and the byte cursors every record is written and read through.
+//! The envelope every datagram opens with, checked in a fixed order so version skew is caught
+//! before a book body is misread, and the byte cursors every record is written and read through.
 
 use crate::msg::time::VenueTs;
 

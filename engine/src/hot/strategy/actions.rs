@@ -1,8 +1,5 @@
-//! Per-message instruction buffer: callbacks bank into fixed-capacity lanes (features, persist,
-//! logs, link), drained after callback. One message fans out to multiple callbacks all banking to
-//! same buffer before any drain. No resize, pure function of message sequence → replay-exact.
-//! Order load-bearing: UI tee + engine tees need consistent sequence.
-//! No ORDER/QUOTE lane: strategy declares desired quote into engine-owned level-triggered state.
+//! What the callbacks of one message bank, in lanes of a fixed size, drained after the callbacks in
+//! a fixed order. A strategy declares quotes into engine state, so no lane carries an order.
 
 use crate::hot::digest::digest_fields;
 use crate::hot::sink::{LinkSink, PersistSink, StrategyLogSink, UiEventSink};

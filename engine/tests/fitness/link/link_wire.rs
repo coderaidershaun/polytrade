@@ -1,9 +1,5 @@
-//! Link wire fitness: every frame kind survives an encode-then-decode round trip unchanged,
-//! every envelope rejection reports a distinct cause, and the sequence gate drops duplicates
-//! and reorders while letting a restarted peer back in. A fixed frame of every kind also
-//! encodes to the exact bytes checked in as `link_frames.txt`, which no round trip can pin.
-//! The failure this suite exists to prevent is silent: a trading engine and a separately built
-//! UI misdecoding each other's bytes into a plausible-looking book ladder.
+//! Each link frame survives encode and decode, each rejection names its cause, and the sequence
+//! gate drops repeats and lets a restarted peer in, so two builds never misread each other.
 
 use std::net::SocketAddr;
 

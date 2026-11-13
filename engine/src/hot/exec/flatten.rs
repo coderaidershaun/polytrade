@@ -1,5 +1,5 @@
-//! The flatten planner translates position (what is held) into a single marketable order that closes
-//! it. Purely functional: takes position and market state, returns an order or a reason to refuse.
+//! The flatten planner: it turns a position into one marketable order that closes it, as a pure
+//! function of position and market state, or gives the reason that it refuses.
 //!
 //! Separate from the quote reconciler because it answers a different question. The reconciler asks
 //! what the book should look like; flatten asks how to stop holding a position. Both are pure:

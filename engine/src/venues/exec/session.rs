@@ -1,6 +1,5 @@
-//! The rules every execution edge applies to its core, in-flight table, resync pass and event sink,
-//! written once so no venue can spell a safety rule its own way. Each instant is a parameter,
-//! because nothing under this directory may read a clock.
+//! The rules that each execution edge applies to its core, its in-flight table, its resync pass and
+//! its event sink, written once. Each instant is a parameter, so nothing here reads a clock.
 
 use crate::msg::exec::{CancelReason, ExecEvent};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Side};

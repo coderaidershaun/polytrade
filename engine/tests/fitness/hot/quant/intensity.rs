@@ -1,7 +1,5 @@
-//! Guéant fill-intensity estimator (A, k) over the exponentially-decayed reach histogram. Driven
-//! through `MicroTracker`, because the histogram is anchored on the tracker's PRE-trade top of book
-//! and that anchoring is half the calculation: an estimator fed the post-trade book reports a fill
-//! intensity that is wrong in one direction all day and errors nowhere.
+//! The fill-intensity estimator, driven through the tracker, because it must read the top of book
+//! from before the trade: the book after the trade gives an error that no test would see.
 //!
 //! The reach histograms are private with no accessor, so only the two anomaly counters are pinned
 //! directly, and buy-to-ask routing is pinned through `estimate.bid.is_none()`. The bucket

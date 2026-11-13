@@ -1,12 +1,5 @@
-//! Monitor projection fitness: the pure map from the ordered UI event lane to the center
-//! panel's state. The quote summary reads unsigned tick distances from the book mid at both mid
-//! parities and blanks each cell independently; the feature store folds latest-per-(instrument,
-//! feature) in catalog order, separating a genuine value change from a re-emission and a stale feed
-//! from a legitimate zero; the bounded channel histories evict oldest-first and iterate newest-first
-//! with a monotonic appended total behind the unseen count; the System channel synthesizes rows from
-//! book-state transitions, rotations, gap counts and lifecycle notes. All of it is event-time
-//! only, so replay reproduces the state exactly. The formatters render the time, delta and
-//! feature-value conventions the panel paints.
+//! The monitor folds the UI event lane into its panel state in event time alone, so a replay gives
+//! the same state, and a real change is told apart from a repeat or a stale feed.
 
 use proptest::prelude::*;
 

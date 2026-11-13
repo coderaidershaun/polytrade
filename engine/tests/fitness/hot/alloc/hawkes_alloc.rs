@@ -1,7 +1,5 @@
-//! Zero-allocation fitness for the Hawkes monitor's live path: once the event window and the
-//! fitter's warm-start cache exist, streaming events into the window and refitting touches the
-//! allocator not at all. The cold fit is primed OUTSIDE the measured window, because a cold fit is
-//! an initialisation event, not steady state.
+//! The live path of the Hawkes monitor allocates nothing: once the window and the warm-start cache
+//! exist, events and refits never reach the allocator. The cold fit runs before the measure.
 //!
 //! Liveness counters ride alongside the allocation assertion: a fitter that quietly stopped
 //! producing estimates would satisfy "allocated nothing" perfectly, so it must be shown to have

@@ -1,7 +1,5 @@
-//! The time-driven arms: the exit latches, the request deadlines and the periodic reconcile reads.
-//! A timeout goes to reconcile rather than to a retry, because the command may already have
-//! executed and the safe move is to ask. A refusal is resent instead, because it is proof that
-//! nothing happened.
+//! The arms of the loop that time drives: exit latches, request deadlines, and periodic reads. A
+//! timeout leads to a read, never a resend, because the command may already have run.
 
 use crate::msg::time::LocalTs;
 use crate::venues::edge::EdgeDriver;

@@ -1,5 +1,5 @@
-//! The fixed-size records that cross a log lane. A hot record carries raw words that the drain turns
-//! into text, so the hot thread never formats; a text record carries text its own thread made.
+//! The fixed-size records of a log lane. A hot record carries raw words that only the drain turns
+//! into text, and a text record carries the text that its own thread made.
 
 use core::cell::Cell;
 use core::fmt;

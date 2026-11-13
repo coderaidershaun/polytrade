@@ -1,4 +1,5 @@
-//! Adapter actor: transport + parse + sequencers. Owns read loop (REST resync), stamps queued_ts_us.
+//! Adapter actor: transport + parse + sequencers. Owns read loop (REST resync), stamps
+//! queued_ts_us.
 
 mod depth_resync;
 mod kline_backfill;

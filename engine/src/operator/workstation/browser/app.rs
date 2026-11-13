@@ -1,6 +1,5 @@
-//! The eframe application and the station behind it. The station owns what the page shares with the
-//! browser: the clock, the relay socket, the attached engine, and the one `pump` that every trigger
-//! (a message, a frame, a one-second timer) runs.
+//! The browser application and the station behind it, which owns the clock, the relay socket, the
+//! attached engine, and the one update that each event of the page runs.
 
 use core::time::Duration;
 use std::cell::RefCell;

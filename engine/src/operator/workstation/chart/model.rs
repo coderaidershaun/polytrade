@@ -1,7 +1,5 @@
-//! One rolling five-minute mid series per instrument, bucketed by spin interval, with this engine's
-//! fills marked on it. Prices stay the exact half-tick integers the ladder and the monitor show,
-//! and a bucket's index comes from event time alone, so a spin with no trustworthy mid leaves a
-//! hole rather than an invented sample.
+//! A rolling five-minute series of mids for each instrument, one bucket for each spin, with this
+//! engine's fills on it. A spin with no mid it can trust leaves a hole, never an invented point.
 
 use std::mem;
 

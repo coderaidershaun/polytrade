@@ -1,6 +1,5 @@
-//! Strategy seam: hot-path market-state consumer via StrategyCtx (post-event, no wall clock → replay-safe).
-//! Output gated by strategy.tables: config is sole authority (read once, checked at dispatch).
-//! emit() exception: features tee to UI regardless of tables (only Parquet half gated).
+//! The strategy interface: a strategy reads market state after each event and reads no clock, so a
+//! replay calls it the same way. The config decides which tables it writes.
 
 mod actions;
 mod ctx;

@@ -1,6 +1,5 @@
-//! Resync policy: read orders + balances before quoting (mirror + hot-side need them). Fails are
-//! state transitions (retry + converge or give up connection). Pure + clock-free: caller provides
-//! now + retry deadline (testable without socket).
+//! The reads of orders and balances that each edge does before it quotes. A failed read retries or
+//! gives up the connection, and the caller passes each time in, so no clock is read.
 
 use crate::msg::time::LocalTs;
 

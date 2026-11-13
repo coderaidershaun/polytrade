@@ -1,5 +1,5 @@
-//! Actor-side soft state: fixed-capacity subscriber table + sequence gate (drop dupes/reorder at edge).
-//! Both take current time parameter (neither reads clock, no wall-clock drag inward).
+//! Actor-side soft state: fixed-capacity subscriber table + sequence gate (drop dupes/reorder at
+//! edge). Both take current time parameter (neither reads clock, no wall-clock drag inward).
 
 use std::net::SocketAddr;
 

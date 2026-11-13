@@ -1,5 +1,5 @@
-//! The link's engine seam: a peer frame crossing the edge into `on_link`, the tape dispatch tees on
-//! the way past, and a payload a strategy banks on its way out.
+//! A peer frame on its way into `on_link`, the tape row that the fold writes for it, and a payload
+//! that a strategy banks on its way out.
 //!
 //! The edge pipeline is exercised without a socket, which is deliberate: the wire format and the
 //! gate LOGIC belong in this suite, while socket behaviour belongs to contract-seam and

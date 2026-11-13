@@ -1,6 +1,5 @@
-//! Decodes the venue's answers to order requests, from the WebSocket API and from REST reads alike,
-//! so that both transports judge ownership and status the same way. An error answer names no order,
-//! so the request it answers supplies the client id.
+//! Decodes the venue's answers to order requests from both transports, so both judge ownership and
+//! status alike. An error answer names no order, so its request gives the client id.
 
 use crate::msg::exec::{ExecEvent, ExecKind};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Side, VenueOrderId};

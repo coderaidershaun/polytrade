@@ -1,8 +1,5 @@
-//! MicroTracker fitness: the volume clock samples its configured field once per closed bar; a fixed
-//! event replay produces byte-identical tracker state across runs against hand-computed
-//! microprice/imbalance/candle/sample values; and `on_rotation` wipes the tracker back to fresh.
-//! Also pins `realised_vol_per_sec`, which reads those candle closes — its 1/sqrt(Δt) scaling is
-//! what makes venues sampled on different bucket sizes comparable.
+//! The tracker replays to the same state against hand-computed values, the volume clock samples
+//! once for each closed bar, a rotation resets the tracker, and realised volatility scales by time.
 
 use engine::hot::book::{Book, SnapshotOutcome};
 use engine::hot::quant::volatility::{Returns, realised_vol_per_sec};

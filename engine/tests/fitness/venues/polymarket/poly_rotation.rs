@@ -1,7 +1,5 @@
-//! Rotation FSM replay: the slot lifecycle must fold a fixed input sequence into fixed actions and a
-//! fixed final state. These synthetic sequences pin the load-bearing behaviours —
-//! per-instrument rotation/reset fan-out, probe-fallback teardown that never needs the collapse
-//! burst, armed-cadence probing, and force-teardown on an occupied slot.
+//! The slot state machine folds a fixed input sequence into fixed actions and a fixed end state:
+//! fan-out, teardown by probe, probe cadence, and a forced teardown.
 
 use std::sync::Arc;
 

@@ -1,6 +1,5 @@
-//! Time-driven arms: the exit latches, request expiry, the correlation buffer's TTL, the
-//! delayed-cancel release, the heartbeat, and the rotation bindings arriving from the market-data
-//! actor.
+//! The arms of the loop that time drives: exit latches, request expiry, the hold of the correlation
+//! buffer, delayed cancels, the heartbeat, and new rotation bindings.
 
 use std::sync::Arc;
 

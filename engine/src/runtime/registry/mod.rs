@@ -1,7 +1,5 @@
-//! Frozen identity: turns a `Config` into a `Registry` — dense instrument ids, producer
-//! grouping, input queues. Submodules are stages of that one build (`rows`, `assets`,
-//! `grouping`, `validate`), so the `Registry` and the vocabulary it answers in stay here
-//! and callers never name a stage.
+//! Turns a config into a frozen registry of dense instrument ids, producer groups and input queues.
+//! Its submodules are stages of that one build, so callers never name a stage.
 
 mod assets;
 mod grouping;

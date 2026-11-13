@@ -1,8 +1,5 @@
-//! Driver-level replay: the pure `PolyDriverCore` must fold a fixed event sequence into fixed
-//! effects, so a recorded rotation replays without sockets. These synthetic sequences pin
-//! the load-bearing driver behaviours — the subscribe-time rotation slot sequence, the zero-gap
-//! handover (the next window subscribes + snapshots while the old one still streams), reconnect
-//! re-baseline, and force-teardown of an occupied slot.
+//! The pure Polymarket driver folds a fixed event sequence into fixed effects, so a recorded
+//! rotation replays with no socket, handover and teardown included.
 
 use std::sync::Arc;
 

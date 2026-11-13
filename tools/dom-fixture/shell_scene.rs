@@ -1,6 +1,5 @@
-//! The fixture's share of the shell: the catalog the top bar reads, the halt latch, the view on
-//! show and the HUD switch. The query string sets each and a key flips it, so every size class and
-//! every badge can be seen on fixed scenes.
+//! The fixture's share of the shell: the catalog, the halt latch, the view, and the HUD switch,
+//! each set by the query string, so each size and badge shows on fixed scenes.
 
 use eframe::egui;
 

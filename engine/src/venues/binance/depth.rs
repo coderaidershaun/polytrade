@@ -1,4 +1,5 @@
-//! State machine; Spot: u seq, Perp: pu seq. Broken -> BookReset. Timestamp clamped to high-water (prevent backward queue).
+//! State machine; Spot: u seq, Perp: pu seq. Broken -> BookReset. Timestamp clamped to high-water
+//! (prevent backward queue).
 
 use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::{BookChunkKind, BookReset, InboundMessage, MessageBody, VenueMeta};

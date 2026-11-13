@@ -1,7 +1,5 @@
-//! The fixed replay scenario the e2e persistence test drives: two epochs an hour apart, each opening
-//! with a market rotation and exercising every message category. Split from the harness so the input
-//! definitions read on their own. Determinism makes this one sequence the whole basis of
-//! the read-back assertions.
+//! The fixed sequence that the end-to-end tape test drives: two epochs an hour apart, each with a
+//! rotation and each kind of message.
 
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody};

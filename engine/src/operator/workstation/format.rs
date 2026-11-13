@@ -1,6 +1,5 @@
-//! Bounded number formatting into a caller-owned `String`, so the ladder painter can reuse one
-//! buffer for every cell it draws instead of allocating per cell. The axis tick generator lives
-//! here because it chooses the numbers these writers then render.
+//! Number formatting into a buffer that the caller owns, so the ladder reuses one buffer for each
+//! cell. The axis ticks live here because they choose the numbers to render.
 //!
 //! Prices read as venue prices at the instrument's tick precision, so a 0.01-tick book shows
 //! `118000.005` rather than a tick count. Distances follow the ladder's unit toggle: tick counts

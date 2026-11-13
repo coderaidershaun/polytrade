@@ -1,8 +1,5 @@
-//! Collapse detector: at resolution the venue removes every level in
-//! a single-timestamp burst of size-0 updates, then goes silent. This pure machine spots the burst —
-//! a same-venue-ts run of removals that drives a two-sided book to an empty side. The following
-//! silence (and the definitive `/book` 404) are the rotation FSM's to weigh; the burst alone is the
-//! fast path it is allowed to miss.
+//! Spots the burst of removals at one venue time with which the venue empties a resolved market,
+//! the fast sign of a teardown. The silence after it is for the rotation to weigh.
 
 use crate::msg::ids::{Price, Qty, Side};
 use crate::msg::time::VenueTs;

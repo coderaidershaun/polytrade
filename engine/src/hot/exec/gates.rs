@@ -1,5 +1,5 @@
-//! Safety gates and what they report: readiness, the loss and exposure limits, the one-way halt
-//! latch, and why a side is not quoting. Each verdict is a pure function, testable without an engine.
+//! The safety gates and what they report: readiness, the loss and exposure limits, the halt latch,
+//! and why a side does not quote. Each verdict is a pure function.
 
 use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::hot::ledger::{PositionLedger, narrow_quote, wide};

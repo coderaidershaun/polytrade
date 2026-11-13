@@ -1,10 +1,5 @@
-//! FITNESS: ctx.flatten is the only liquidity-taking path. All safeguards against overuse
-//! are tested here. Flatten is a DECLARATION (level-triggered like quotes), not a command:
-//! market orders outliving intent should not exist. The engine plans a new order each spin
-//! based on current position. The flatten lane is separate from ctx.quote by design: a quote
-//! declared Immediate is still refused by the reconciler, because a strategy that meant to rest
-//! but crossed the spread has made a mistake. Both halves are pinned together to prevent
-//! convergence on the easiest path.
+//! Flatten is the one path that takes liquidity, declared each spin like a quote. These tests hold
+//! its safeguards, and that a quote that would cross is still refused.
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{

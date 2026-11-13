@@ -1,5 +1,5 @@
-//! Shared fixture for the execution tests: a quoting engine on a two-sided book, the three readiness
-//! legs, the helpers that read its command stream, and the sink that a session test reads.
+//! The shared fixture of the execution tests: a quoting engine on a two-sided book, its readiness,
+//! the readers of its command stream, and the sink that a session test reads.
 
 use std::ops::{Deref, DerefMut};
 

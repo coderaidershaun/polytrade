@@ -1,7 +1,5 @@
-//! One cutting rule for every venue's book. A `BookChunk` carries a fixed-width level array, so
-//! where a side splits and which chunk closes it are decisions the hot book depends on — they must
-//! not be taken twice. Venue metadata never reaches here: the caller's sink attaches it, which is
-//! where the continuity evidence is known.
+//! One rule that cuts each venue's book into chunks of a fixed size, so where a side splits is
+//! decided once. The caller's sink adds the venue's continuity data.
 
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
 use crate::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, Level};

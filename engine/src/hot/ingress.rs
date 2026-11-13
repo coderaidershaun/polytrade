@@ -1,6 +1,5 @@
-//! The hot thread's intake coordinator. Pops the oldest among the queue heads present now, ties
-//! broken by lowest `QueueId`. Per-producer FIFO is exact; cross-producer order is best-effort — a
-//! straggler on a then-empty queue arrives late by design, since waiting for it would stall the path.
+//! Picks the next message of the hot thread: the oldest head among the queues that hold one now.
+//! Order is exact within one queue, and a message that is late to an empty queue stays late.
 
 use rtrb::Consumer;
 

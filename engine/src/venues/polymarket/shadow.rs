@@ -1,8 +1,5 @@
-//! Shadow book + validator: the venue re-emits a full `book` frame ~every 150ms. Only
-//! the first after a (re)subscribe forwards as a Snapshot; the rest are consumed here as validation.
-//! A shadow book, built from the messages actually forwarded to the hot path, is compared level-for-
-//! level against each venue book; because the cut carries no sequence number, a lone mismatch is a
-//! timing artefact — re-baseline waits for several consecutive disagreements (a real desync).
+//! Checks the books that the venue sends about every 150 ms against a shadow of what reached the
+//! engine. A cut carries no sequence, so only several mismatches in a row mean a desync.
 //!
 //! Neutral types only (Price/Qty/`Level`) — no venue wire structs cross into this module.
 

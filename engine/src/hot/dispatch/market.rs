@@ -1,4 +1,5 @@
-//! Market handlers: trade/book/reset/rotation/kline state transitions. Separate from dispatch loop body for readability.
+//! Market handlers: trade/book/reset/rotation/kline state transitions. Separate from dispatch loop
+//! body for readability.
 
 use crate::hot::book::{BookState, SnapshotOutcome};
 use crate::hot::strategy::WindowInfo;

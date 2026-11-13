@@ -1,6 +1,5 @@
-//! The link's sending half. It drains the hot thread's UI rings and the metrics thread's reports to
-//! subscribers, repeats the catalog and lifecycle every heartbeat so a late subscriber catches up,
-//! and renews its own subscriptions.
+//! The sending half of the link: it drains the UI rings and the latency reports to subscribers, and
+//! repeats the catalog every heartbeat, so a subscriber that joins late catches up.
 
 use std::net::SocketAddr;
 

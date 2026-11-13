@@ -1,6 +1,5 @@
-//! The requests that have left and are still owed an answer. One that passes its deadline is
-//! reconciled and never re-sent: the venue may have executed it and only the answer was lost, so a
-//! second copy could double the order.
+//! The requests that left and are still owed an answer. One past its deadline is read back, never
+//! sent again, because the venue may have run it and only the answer was lost.
 
 use crate::msg::time::{DurationUs, LocalTs};
 use crate::warn;

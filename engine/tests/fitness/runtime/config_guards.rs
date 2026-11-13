@@ -1,9 +1,5 @@
-//! Config/registry venue-generalisation shape: one trading engine carries exactly one source, and
-//! that source's fan-out to instruments, producer groups and input queues is asserted through the
-//! real `from_yaml`/`build` path — one binance source is three connections onto one instrument, one
-//! polymarket source is one connection onto the four fixed A/B-by-up/down slots. The shipped
-//! reference config is asserted here too, since `deny_unknown_fields` makes it brittle to any
-//! schema change.
+//! One trading engine carries one source, and its fan-out to instruments, producer groups and input
+//! queues is asserted through the real config path, with the shipped configs.
 
 use std::path::Path;
 

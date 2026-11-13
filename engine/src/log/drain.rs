@@ -1,6 +1,5 @@
-//! The log drain: reads each lane in batches into one output, reports drops, and at shutdown
-//! drains every lane under a deadline. The text of each hot record is made here, never on the
-//! thread that logged it.
+//! The log drain: it reads each lane in batches into one output, reports drops, and drains each
+//! lane under a deadline at shutdown. Only here does a hot record become text.
 
 use std::fmt;
 use std::sync::Arc;

@@ -1,6 +1,5 @@
-//! Dispatch replay fitness: a fixed synthetic sequence through the real dispatch loop is
-//! deterministic — identical emitted records and callback order across runs, warmup included —
-//! and a one-sided book (no microprice) must never fold a stale value into the persisted EwmaVol.
+//! A fixed sequence through the real fold writes the same records on each run, and a one-sided book
+//! never folds a stale value into the EWMA volatility.
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};

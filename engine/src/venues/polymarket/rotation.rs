@@ -1,7 +1,5 @@
-//! Per-slot lifecycle FSM: `Idle → Prefetched → Subscribed → Active → Grace →
-//! TornDown → Idle`. Consumes ticks, gamma assignments, frame liveness, collapse signals and `/book`
-//! probe results; emits subscribe/unsubscribe ops, the rotation + reset messages, probe requests and
-//! force-teardown facts. Pure: every input carries `now`, the machine never reads a clock.
+//! The life of one window slot as a state machine, from prefetch to teardown. Each input carries
+//! its time, so the machine never reads a clock.
 //!
 //! A slot hosts BOTH outcome instruments (up + down) of one window — the registry registers
 //! `{a,b}×{up,down}` and `MarketRotation`/`BookReset` are per-instrument (msg.rs), so every handover

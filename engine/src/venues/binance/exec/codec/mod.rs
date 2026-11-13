@@ -1,6 +1,5 @@
-//! Translates Binance JSON to and from [`ExecEvent`] and [`AccountChunk`], resolving symbols,
-//! assets and client ids in one place. It holds no socket, clock or state: every stamp arrives as a
-//! parameter, so a replay decodes identically.
+//! Translates Binance JSON to and from the execution vocabulary in one place, with no socket, clock
+//! or state: each stamp is a parameter, so a replay decodes the same way.
 
 mod client_id;
 mod reject;

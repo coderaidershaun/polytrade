@@ -1,8 +1,5 @@
-//! Execution windows for markets that expire. This module handles three aspects: when a window admits
-//! quotes, what happens to resting orders as the window closes, and how rotation into the next market
-//! affects accounting. All three relate to the same fundamental fact: each instrument slot points to
-//! a market that rotates periodically. Instruments without rotation (like Binance) are unaffected.
-//! Every deadline derives from message timestamps, so replays close and rotate at exact sequence points.
+//! Markets that expire: when a window admits quotes, which orders a closing window pulls, and what
+//! a rotation carries. Deadlines read message time, so a replay closes at the same point.
 
 use crate::hot::ledger::{PositionLedger, narrow_quote, wide};
 use crate::hot::strategy::Actions;

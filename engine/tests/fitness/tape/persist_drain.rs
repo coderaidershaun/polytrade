@@ -1,7 +1,5 @@
-//! Persistence sealing: research data must be READABLE while the engine runs, not only after
-//! shutdown, and a per-table failure must not abandon the other tables' footers. Faults one of
-//! two real tables and checks the healthy one still seals; separately drives a table past its row
-//! cap and reads the sealed files back mid-run.
+//! Research data can be read while the engine runs, and a fault of one table does not stop the
+//! other tables from sealing.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};

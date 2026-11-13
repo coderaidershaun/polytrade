@@ -1,6 +1,5 @@
-//! Pure projections from the model to what the monitor shows, free of egui so they test natively:
-//! quote distances, feature freshness, channel histories and names, and the tab and scroll state a
-//! caller owns.
+//! Pure projections from the model to what the monitor shows, free of the window toolkit so that
+//! they are tested natively.
 
 use super::model::FeatureCell;
 use crate::hot::exec::ExecHalt;

@@ -1,8 +1,5 @@
-//! Collapse detector + shadow-book validator: silent book corruption is the failure mode both guard.
-//! The detector must fire only on a genuine same-ts removal burst, and the validator must catch any
-//! divergence between the forwarded stream and the venue's authoritative book. The comparison is
-//! deliberately order-sensitive — it expects the venue's native ascending-by-price arrays, so
-//! callers reverse best-first bids before validating.
+//! The collapse detector fires only on a real burst of removals, and the shadow check catches each
+//! divergence between the forwarded stream and the venue's own book.
 
 use engine::msg::ids::{Price, Qty, Side};
 use engine::msg::time::VenueTs;

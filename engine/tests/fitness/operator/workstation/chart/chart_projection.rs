@@ -1,9 +1,5 @@
-//! Chart projection fitness: the pure map from the ordered book and event lanes to the
-//! rolling five-minute mid series, and the screen transform over it. Buckets are folded in event time
-//! alone, so a spin carrying no trustworthy mid stays a real hole the line splits across rather
-//! than an invented sample, and replay reproduces the series exactly. Prices never leave exact
-//! half-tick integers until the final `0..=1` fraction. The domain grows from left to right before it
-//! slides; the bounds cover fills as well as mids, so an off-mid marker can never be invisible.
+//! The mid chart: event time alone places each bucket, so a spin with no mid stays a hole, a replay
+//! gives the same series, and prices stay exact integers until the screen.
 
 use engine::msg::exec::Liquidity;
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};

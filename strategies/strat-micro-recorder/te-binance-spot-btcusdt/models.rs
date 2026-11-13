@@ -1,5 +1,5 @@
-//! Per-instrument state + emission plumbing: volatility, model feeds (EGARCH, intensity, Guéant, markouts, Kyle, Hawkes),
-//! per-side emit helpers. Strategy owns callbacks; this module owns folded state.
+//! The recorder's state for each instrument and the helpers that emit it: volatility and the feeds
+//! of each model. The strategy owns the callbacks, and this module owns the folded state.
 
 use engine::hot::quant::hawkes::{HawkesChoice, HawkesSide};
 use engine::hot::quant::intensity::{PacedIntensity, SideEstimate};

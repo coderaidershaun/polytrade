@@ -1,9 +1,5 @@
-//! Live integration: one 12-minute capture of the REAL Polymarket adapter,
-//! spanning ≥2 full rotations, asserting the physics the fitness suite cannot reach with recorded
-//! fixtures — zero-gap handover, teardown latency, and the streamed book cross-checked against a
-//! live CLOB `/book` REST snapshot. The adapter feeds a real hot ring (an [`RotationObserver`]
-//! reconstructs the books) AND a real [`PersistWriter`] via the rotations side-channel, so the
-//! run also proves the live lineage parquet lands and reads back per leg.
+//! A 12-minute live capture of the Polymarket market-data actor across two rotations, for what
+//! recorded fixtures cannot show: the handover, the teardown delay, and the live book.
 //!
 //! This capture runs far longer than a quick live smoke test, because rotation physics set the
 //! span. Confirming a NEW window's book goes Valid while the OLD still streams, then measuring how

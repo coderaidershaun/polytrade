@@ -1,6 +1,5 @@
-//! REST cross-validation: independently fetch a live window's CLOB `/book` snapshot and compare its
-//! touch to the streamed book the observer reconstructed. The window's token is resolved via Gamma
-//! (the same public path the adapter uses), so the check shares no state with the adapter under test.
+//! Compares the touch of the streamed book with a live REST snapshot of the same window, resolved
+//! by a path that shares no state with the actor under test.
 
 use std::collections::BTreeSet;
 

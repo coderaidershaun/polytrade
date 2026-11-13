@@ -1,8 +1,5 @@
-//! Execution-core fitness: the phase gate, the cancel policy and the sweep. These are the rules
-//! standing between a strategy bug and money, and every one of them fails SILENTLY if broken — an
-//! order placed while resyncing rests against state the engine has not verified, a cancelled
-//! `Foreign` order is a human's order destroyed, and a sweep that reports complete while an order
-//! still rests leaves a position nobody is watching after the process exits.
+//! The phase gate, the cancel rule and the sweep of the execution core, the rules between a
+//! strategy bug and money, each of which fails with no sign if broken.
 
 use engine::msg::exec::{CancelReason, ExecCommand, OrderStyle, Provenance};
 use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};

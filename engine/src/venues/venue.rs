@@ -1,7 +1,5 @@
-//! The one place a run's per-venue choices are made: which scale preflight runs, which startup gate
-//! a live run must pass, which execution edge it brings up, and which market-data actor serves each
-//! producer group. A new venue adds one arm to each dispatch here, and the runtime stays unaware of
-//! which venue it is running.
+//! The one place where a run's choices of venue are made: which scale check and probe run, which
+//! execution edge starts, and which actor serves each producer group.
 
 use std::time::Duration;
 

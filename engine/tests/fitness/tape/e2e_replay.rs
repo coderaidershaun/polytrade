@@ -1,7 +1,5 @@
-//! End-to-end replay fitness: the real runtime below the binary — input rings, hot
-//! thread, `PersistWriter` — driven by one fixed sequence through a single queue (so order is
-//! deterministic), drained like a SIGTERM, and read back. Covers schema, footer, rotation,
-//! drain-flush completeness, and cross-run determinism.
+//! The real runtime below the binary, driven by one fixed sequence, drained as on SIGTERM, and read
+//! back: schema, footer, rotation, a complete flush, and equal tables across runs.
 
 use std::path::Path;
 use std::time::Duration;

@@ -1,8 +1,5 @@
-//! Spin-sampling fitness: the time clock samples committed state (`latest`), never the live book
-//! (a tick can pop mid-update). Holds through one-sided stretches, skips after a reset until commit.
-//! The per-side trade counts are per-tick aggregates, so they must zero at every sample point.
-//! The last case carries the other half of the contract — a strategy derives its windows from the
-//! configured spin, so they must track a change to it.
+//! The spin clock samples committed state, never the live book, and the trade counts of each side
+//! reset at each sample. A strategy's windows follow a change of the spin interval.
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::quant::micro;

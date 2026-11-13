@@ -1,8 +1,5 @@
-//! The audit trail must survive the round trip. `orders` and `fills` are the only durable record of
-//! what this engine did with real money, and the only thing a venue statement can be reconciled
-//! against — so every column has to come back out of a real Parquet file byte-identical, and the
-//! columns that answer "which asset was the fee in" and "did the venue ever accept this order" have
-//! to come back as themselves rather than as a zero.
+//! The orders and fills tables come back from a real Parquet file byte for byte, because they are
+//! the only record of what this engine did with real money.
 //!
 //! Three properties, each pinning a way the trail goes silently wrong:
 //!  - the round trip, cell for cell, over rows chosen to cover every absent-value path;
