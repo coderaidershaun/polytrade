@@ -15,5 +15,6 @@ mod position_ledger;
 /// source path.
 mod quant;
 mod series;
+mod sink;
 mod strategy;
 mod ui_feed;

@@ -755,7 +755,7 @@ const RECORDED: [(Shipped, [Digest; 8]); 2] = [
 
 const RECORDER_OUTPUTS: [Digest; 8] = [
     recorded("tape rows", 46_415, 0x6a6d_77e4_2f76_4512),
-    recorded("commands", 241, 0xa5c3_8b1f_1c6d_e8ff),
+    recorded("commands", 241, 0x60ea_828f_819b_c86e),
     recorded("ui books", 601, 0xd1ca_5f6f_2e33_bab2),
     recorded("ui events", 48_281, 0x24ad_47c2_3baf_320e),
     recorded("exposure", 2, 0x27cc_3d45_433e_2022),
@@ -766,7 +766,7 @@ const RECORDER_OUTPUTS: [Digest; 8] = [
 
 const PUBLISHER_OUTPUTS: [Digest; 8] = [
     recorded("tape rows", 11, 0x22fa_8faf_4d66_cae5),
-    recorded("commands", 80, 0xad4e_f8d5_f78b_5301),
+    recorded("commands", 80, 0xc4c1_7609_303b_edd7),
     recorded("ui books", 1_734, 0x4116_b312_52d1_9732),
     recorded("ui events", 1_245, 0xc5fe_6b6d_338d_87c0),
     recorded("exposure", 2, 0xe632_e3fd_5bf1_4ad7),

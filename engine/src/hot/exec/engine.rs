@@ -318,11 +318,11 @@ impl ExecEngine {
     /// half of the same promise: an order outliving the engine that placed it is the one failure
     /// with no upper bound on its cost.
     #[cold]
-    pub(super) fn cancel_all(&mut self, reason: CancelReason) {
+    pub(super) fn cancel_all(&mut self, reason: CancelReason, at: LocalTs) {
         for index in 0..self.instruments.len() {
             let instrument = InstrumentId(index as u16);
             let command = ExecCommand::CancelOurs { instrument, reason };
-            if !self.pending.bank(command) {
+            if !self.pending.bank(command, at) {
                 unswept_error(instrument);
             }
         }
@@ -343,7 +343,7 @@ impl ExecEngine {
             reason,
             halted_ts_us: at,
         };
-        self.cancel_all(CancelReason::Halt);
+        self.cancel_all(CancelReason::Halt, at);
     }
 
     /// Finds the slot an event belongs to, adopting one the venue knows about that this

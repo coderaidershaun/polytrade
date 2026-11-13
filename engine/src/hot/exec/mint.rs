@@ -111,14 +111,17 @@ impl ExecEngine {
         let Some((index, client_id)) = self.claim(instrument, side, level, intent, at) else {
             return;
         };
-        let is_banked = self.pending.bank(ExecCommand::Place {
-            instrument,
-            client_id,
-            side,
-            price: intent.price,
-            qty: intent.qty,
-            style: intent.style,
-        });
+        let is_banked = self.pending.bank(
+            ExecCommand::Place {
+                instrument,
+                client_id,
+                side,
+                price: intent.price,
+                qty: intent.qty,
+                style: intent.style,
+            },
+            at,
+        );
         if !is_banked {
             self.unwind(index, at, bank);
             return;
@@ -179,7 +182,7 @@ impl ExecEngine {
     /// to escalate to and says so out loud.
     #[inline]
     pub(super) fn bank_or_halt(&mut self, command: ExecCommand, at: LocalTs) -> bool {
-        let is_banked = self.pending.bank(command);
+        let is_banked = self.pending.bank(command, at);
         if !is_banked {
             self.halt(HaltReason::CommandBankOverflow, at);
         }

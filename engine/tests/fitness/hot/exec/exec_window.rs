@@ -16,8 +16,8 @@
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
-    DesiredQuote, ExecHalt, ExecSettings, HaltReason, MAX_ORDER_SLOTS, OrderSlot, OrderState,
-    QuoteLevel, RejectReason,
+    DesiredQuote, ExecHalt, ExecSettings, HaltReason, MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS,
+    OrderSlot, OrderState, QuoteLevel, RejectReason,
 };
 use engine::hot::strategy::{Strategy, StrategyCtx, WindowInfo};
 use engine::msg::exec::{
@@ -252,21 +252,21 @@ fn a_sweep_pulls_resting_quotes_and_never_a_marketable_order() {
 /// outlasts both.
 const JAM_SPINS: i64 = 2 * MAX_ORDER_SLOTS as i64;
 
-/// FITNESS: a full command bank halts the engine, and a cancel it refuses leaves the order `Live`.
-///
-/// The bank fills only when the edge has stopped draining, and the halt that follows is exactly when
-/// the reconciler and the closing window both try to pull every resting quote, so those cancels are
-/// refused too. A slot marked cancel-in-flight is one the engine waits on rather than retries, so a
-/// cancel that never left would leave the quote resting on the venue with nothing asking again.
+/// The bank holds the order table and six commands for each instrument it can quote.
+const COMMAND_BANK_CAPACITY: usize = MAX_ORDER_SLOTS + 6 * MAX_ORDER_INSTRUMENTS;
+
+/// CONTRACT: a bank that holds its whole capacity refuses the next command and halts quoting, and a
+/// cancel that it refuses never reaches the lane, so the order it would have pulled stays `Live`,
+/// also when the window closes after the halt. A cancel marked as sent but never banked would leave
+/// a quote resting with nothing asking again.
 #[test]
-fn a_full_command_bank_halts_and_leaves_the_order_it_could_not_cancel_live() {
+fn full_command_bank_halts_and_leaves_the_order_live() {
     let built = built_quoting_engine(QuotingSetup {
         row: row_with_ceiling(CEILING),
         strategy: Box::new(TwoSidedQuoter),
         restored: &[],
         settings: ExecSettings {
             quote_stop_margin: MARGIN,
-            // A reconciliation request every spin, into a lane this test never drains.
             exec_silence_spins: 1,
             ..exec_settings()
         },
@@ -284,7 +284,7 @@ fn a_full_command_bank_halts_and_leaves_the_order_it_could_not_cancel_live() {
     assert_eq!(
         places(&placed),
         2,
-        "both sides must be resting before the lane jams: {placed:?}"
+        "both sides rest before the lane jams: {placed:?}"
     );
     ack_placed(&mut engine, &placed, OPEN + 1_100_000);
 
@@ -306,13 +306,12 @@ fn a_full_command_bank_halts_and_leaves_the_order_it_could_not_cancel_live() {
                 ..
             })
         ),
-        "{JAM_SPINS} spins into an undrained lane must halt on the full bank: {halt:?}"
+        "the bank refuses a command and quoting halts: {halt:?}"
     );
     assert_eq!(
         working,
         [OrderState::Live; 2],
-        "the halted reconciler tried to pull both quotes and the bank refused, so neither may read \
-         as cancel-in-flight"
+        "the refused cancels leave both orders live"
     );
 
     spin_at(&mut engine, 2 + JAM_SPINS as u64, CLOSE - MARGIN.micros());
@@ -321,6 +320,21 @@ fn a_full_command_bank_halts_and_leaves_the_order_it_could_not_cancel_live() {
         working,
         [OrderState::Live; 2],
         "the closing window's cancels were refused too, so both quotes still read as resting"
+    );
+
+    let lane = drain_commands(&mut commands);
+    assert!(
+        !lane.iter().any(|command| matches!(
+            command,
+            ExecCommand::Cancel { .. } | ExecCommand::CancelOurs { .. }
+        )),
+        "no cancel reached the lane: {lane:?}"
+    );
+    let banked = engine.counters().orders_submitted as usize;
+    assert_eq!(
+        banked - placed.len() - lane.len(),
+        COMMAND_BANK_CAPACITY,
+        "the bank refused only once it held its whole capacity"
     );
 }
 
