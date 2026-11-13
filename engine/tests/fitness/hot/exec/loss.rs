@@ -768,7 +768,7 @@ const USDT: AssetId = AssetId(1);
 const USDC: AssetId = AssetId(2);
 
 /// The most instruments that a generated run quotes or trades.
-const MAX_INSTRUMENTS: u16 = 1;
+const MAX_INSTRUMENTS: u16 = 3;
 
 fn runner(cases: u32) -> TestRunner {
     TestRunner::new(Config {
@@ -1180,5 +1180,47 @@ fn adding_side_is_refused_at_the_exposure_ceiling() {
         at_ceiling(Side::Buy, 10 * ONE, ONE, false),
         refused,
         "no mark is not flat"
+    );
+}
+
+/// A budget of 100 in the quote asset.
+const HUNDRED: i64 = 100 * ONE;
+
+/// FITNESS: two instruments of one quote asset that each lose 60 of a budget of 100 halt quoting.
+/// An engine that judged each instrument alone against the whole budget would let each of N
+/// instruments lose most of it. A loss still open on one instrument withdraws only the side that
+/// would add to it, on that instrument alone.
+#[test]
+fn two_instruments_at_60_percent_loss_halt() {
+    let mut trades = markets(&[row(0, USDT), row(1, USDT)], &[], HUNDRED, Box::new(Idle));
+    round_trip(&mut trades, 0, -60 * ONE, 10);
+    let (_, is_halted) = spin_outcome(&mut trades, 1, 100);
+    assert!(!is_halted, "60 of 100 is within the budget");
+    round_trip(&mut trades, 1, -60 * ONE, 200);
+    let (_, is_halted) = spin_outcome(&mut trades, 2, 300);
+    assert!(
+        is_halted,
+        "120 of 100 is lost in one quote asset over two instruments"
+    );
+
+    let restored = [InstrumentExposure {
+        instrument: InstrumentId(0),
+        position_base: Qty::from_mantissa(ONE),
+        cash_quote: -150 * ONE,
+        basis_quote: 150 * ONE,
+    }];
+    let quoter = Box::new(EachMarketQuoter { instruments: 2 });
+    let mut quoting = markets(&[row(0, USDT), row(1, USDT)], &restored, HUNDRED, quoter);
+    make_ready(&mut quoting.engine, 0);
+    seat(&mut quoting.engine, 0, 150 * ONE, 1);
+    seat(&mut quoting.engine, 1, 100 * ONE, 1);
+    spin_outcome(&mut quoting, 1, 10);
+    seat(&mut quoting.engine, 0, 50 * ONE, 20);
+    let (placed, is_halted) = spin_outcome(&mut quoting, 2, 30);
+    assert!(!is_halted, "a loss still open never halts");
+    assert_eq!(
+        placed,
+        vec![(0, Side::Sell), (1, Side::Buy), (1, Side::Sell)],
+        "an open loss of 100 on instrument 0 withdraws its buy, and only its buy"
     );
 }
