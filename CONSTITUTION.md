@@ -338,11 +338,19 @@ Failure classes:
   HALT names its kind: quoting, engine, or start refused.
 - [ ] Each error enum that reaches a supervisor has `failure_class()`. Its `match` has no catch-all
   arm, so a new variant does not compile until it has a class.
+  - Amended 2026-11-13, as built: only `StartError`, `ConfigError`, and `FatalReason` have
+    `failure_class()`. Four error enums reach the drain of the start code with none:
+    `PersistError`, `ExposureError`, `SweepFailure`, and `DrainFailure`. The next part of the plan,
+    part 3 (money), closes the gap. Until then this clause is the rule, not yet a fact of the code.
 - [ ] An error that wraps another error gives the class of the inner error, or a higher class.
   Never a lower one.
 - [ ] One supervisor acts on the class at each thread root: the driver of the hot thread, the
   session chassis of a venue edge, the root of each writer thread, and the start code. Lower code
   returns the error.
+  - Amended 2026-11-13, as built: no supervisor reads `failure_class()` yet, and only fitness tests
+    read it. Each of the 19 sites that trip the fatal latch trips it itself, where the error is
+    found. The next part of the plan, part 3 (money), closes the gap. Until then this clause is the
+    rule, not yet a fact of the code.
 - [ ] An internal invariant violation has no failure class. It is a bug, and it panics (top of §6).
 
 Lanes:
