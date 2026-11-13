@@ -1,6 +1,5 @@
-//! Normalised inbound messages: fixed-size plain data, the only currency into the hot path. Each
-//! message is a header of its two local stamps and a body of one kind, so every kind is ordered by
-//! the same received stamp.
+//! Normalised inbound messages, the only data into the hot path: a header of the two local stamps,
+//! so each kind is ordered by one received stamp, and a fixed-size body of one kind.
 
 // SMELL: the plain message data imports the link and the runtime config here, and other message
 // files import the hot thread, its sinks, and the runtime registry, so the vocabulary depends on
@@ -127,8 +126,8 @@ pub struct BookChunk {
     pub len: u8,
     pub is_last_chunk: bool,
     pub update_id: u64,
-    /// Anchor varies by venue (send/transact/publish); `None` for REST. The 384-byte message has
-    /// room for only one such field.
+    /// The moment this stamps differs by venue: the send, the transaction, or the publication. It is
+    /// `None` for a REST snapshot. The message has room for only one such field.
     pub exchange_ts_us: Option<VenueTs>,
 }
 

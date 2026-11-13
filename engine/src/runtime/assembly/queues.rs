@@ -1,4 +1,4 @@
-//! Input-queue fabric: one SPSC ring per queue id. The plan is read on the start thread, and the
+//! One input ring for each queue id, sized by its kind. The start thread reads the layout, and the
 //! hot thread builds and touches each ring on its own core before any producer runs.
 
 use rtrb::Consumer;

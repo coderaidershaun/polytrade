@@ -1,6 +1,5 @@
-//! The clock domains and the clock parts of latency measurement: a venue stamp and a local stamp
-//! that no operator mixes, a counter tick that no code can decide by, and a start check that names
-//! the clock the stamps really read.
+//! The clock domains and the latency clock: no operator mixes a venue stamp with a local stamp, no
+//! code decides by a counter tick, and the start check names the clock that the stamps read.
 
 use engine::msg::time::{
     ClockError, ClockSource, DurationUs, InvariantCounter, LocalTs, Stamper, Tick, VenueTs,

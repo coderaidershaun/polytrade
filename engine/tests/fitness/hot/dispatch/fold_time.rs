@@ -1,6 +1,5 @@
-//! The fold time is the latest received stamp of the messages folded so far. A tick stamped at its
-//! slot can pop after a newer message, and then the strategy and each deadline still read a time
-//! that never steps back, while the rows of that tick keep its own stamp.
+//! Fold time never steps back: a tick that pops after a newer message leaves the strategy and each
+//! deadline at the later time, while the rows of that tick keep the tick's own stamp.
 
 use std::sync::{Arc, Mutex};
 

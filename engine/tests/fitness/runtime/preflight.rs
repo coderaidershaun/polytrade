@@ -175,8 +175,8 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         .expect("the test takes the lease of this engine identity");
     let nonce_before = fs::read(the_nonce_file(&state)).expect("the nonce file reads");
 
-    // The trace: config, registry, core id, scale read, order capacity and exposure pass, and the
-    // lease, the last check, is refused.
+    // Config, registry, core id, scale read, order capacity and exposure pass, and the lease, the
+    // last check, is refused.
     let lease = refusal(&sim_document(&state, ""), stamped, &state);
     let StartError::ExecutionIdentityInUse { path } = &lease else {
         panic!("a held lease refuses with its own variant, got {lease}");
@@ -313,7 +313,7 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         assert!(is_expected(&error), "{case}: wrong refusal {error}");
     }
 
-    // E1: the config refusal of part 1, an engine that spins with no hot core. Only Linux refuses.
+    // A config refusal: an engine that spins with no hot core. Only Linux refuses it.
     let spinning = config_with_source(BINANCE_PERP_SOURCE).replace("  hot_core_id: 0\n", "");
     let spun = Config::<NoParams>::from_yaml(&spinning);
     if cfg!(target_os = "linux") {

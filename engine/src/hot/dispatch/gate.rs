@@ -1,7 +1,5 @@
-//! When the strategy hears a market: each market warms for its own span of message time from its
-//! own first message, never by the clock, so a replay calls back at the same points and a market
-//! that connects late quotes from no cold estimator. Peer link frames are recorded here rather than
-//! at the link actor, so a frame dropped on a full ring never reaches the tape.
+//! When the strategy hears a market: each market warms for its own span of message time, so a
+//! replay calls back at the same points. A peer frame is recorded only once the fold takes it.
 
 use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::hot::sink::LinkSink;
@@ -158,10 +156,11 @@ fn opened_market(body: &MessageBody) -> Option<InstrumentId> {
     }
 }
 
-/// Link wiring (paired facts: engine without link has no outbound ring or run-state reporter).
+/// What the fold needs when the run has a link. An engine with no link has neither part.
 pub struct LinkWiring {
     pub sink: LinkSink,
-    /// Dispatch publishes applied run state (link reads to check marker landed + report real state). Write-only.
+    /// The fold writes the run state that it applied here, and the link reads it to learn whether
+    /// its marker landed.
     pub acknowledged: RunStateCell,
 }
 

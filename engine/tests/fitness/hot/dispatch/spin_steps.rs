@@ -1,6 +1,5 @@
-//! The steps of a spin run in one order, and each step relies on the one before it: the trackers
-//! sample before the strategy reads them, the execution pass sees the bid of the same spin, and
-//! the execution state and the positions go out after the drain of what the strategy banked.
+//! The steps of a spin run in one fixed order, because each relies on the one before it: the
+//! strategy reads sampled trackers, and the execution pass sees the bids of the same spin.
 
 use std::sync::{Arc, Mutex};
 

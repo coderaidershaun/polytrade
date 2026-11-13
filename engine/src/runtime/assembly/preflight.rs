@@ -170,7 +170,8 @@ pub fn check_symbol_order_capacity(
     })
 }
 
-/// Report what was carried in per asset. Cold start says so explicitly: silence = failed load.
+/// Reports the position carried in for each asset. A cold start says so, so that a silent log never
+/// hides a failed load.
 fn report_restored(exposure: &ExposureState, registry: &Registry) {
     if exposure.is_empty() {
         info!("exposure: cold start — no position carried in from a previous run");

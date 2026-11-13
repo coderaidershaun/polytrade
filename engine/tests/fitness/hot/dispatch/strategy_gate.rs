@@ -1,7 +1,5 @@
-//! A market's warmup holds the callbacks of that market by message time, never by the clock, so a
-//! replay calls back at the same points. Only callbacks wait: state, the tracker, the ledger and the
-//! feed of the workstation fold from the first message. A market that starts late waits for its own
-//! span, and no order of it goes out before.
+//! Each market warms for its own span of message time, so a replay calls back at the same points,
+//! state folds from the first message, and a market that starts late places no order before it.
 
 use std::sync::{Arc, Mutex};
 

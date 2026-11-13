@@ -1,6 +1,5 @@
-//! Microsecond time types of two clock domains, the engine's monotonic clock, the spin schedule,
-//! and the counter ticks of latency stamps. A venue stamp and a local stamp are two types, so a
-//! span across the two clocks needs a named method; a tick becomes a time only through the scale.
+//! Time in two clock domains, so a span across the venue clock and the local clock needs a named
+//! method, with the engine's clock, the spin schedule, and the ticks of latency stamps.
 
 use core::ops::{Add, Sub};
 #[cfg(not(target_arch = "wasm32"))]

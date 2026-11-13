@@ -1,6 +1,5 @@
-//! The fold is a pure function of its messages. Two folds of one sequence from one start hold the
-//! same state after each message and write the same records to each output lane, whether or not
-//! the engine measures its own latency.
+//! The fold is a pure function of its messages: two folds of one sequence hold the same state after
+//! each message and write the same records, whether or not the engine measures its latency.
 
 use std::cell::Cell;
 

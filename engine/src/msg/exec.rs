@@ -293,8 +293,8 @@ impl ExecCommand {
     }
 }
 
-/// A command on its way to the edge, stamped with the message time of the spin whose drain sent it,
-/// for a replay to reproduce.
+/// A command on its way to the edge, stamped with the fold time of its banking, so a replay gives
+/// the same stamp however long the command waited in the bank.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StampedExecCommand {
     pub command: ExecCommand,

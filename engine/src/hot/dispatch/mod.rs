@@ -242,8 +242,8 @@ impl HotEngine {
         });
     }
 
-    /// Apply ungated (fills during warmup = money). The callback waits for the gate of the market of
-    /// the order.
+    /// The event always moves money and order state, warmup or not. Only the callback waits for the
+    /// gate of the market of the order.
     fn on_exec(&mut self, event: &ExecEvent, received_ts_us: LocalTs) {
         let HotState {
             exec,

@@ -1,6 +1,5 @@
-//! A park and a resume leave no estimator value across the hole: after the resume, a run writes
-//! what a cold run of the same suffix writes, for each shipped strategy and for a probe of the
-//! engine's own derived state, whatever the length of the park. Only the position is carried.
+//! After a park and a resume, each shipped strategy and a probe of the derived state write what a
+//! cold run of the same suffix writes, whatever the length of the park: only the position carries.
 
 use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
 use engine::msg::ids::{InstrumentId, Price, Side};
@@ -111,7 +110,7 @@ impl Strategy for GapProbe {
 /// publisher its role for the whole suffix.
 const WINDOW_US: i64 = 36_000_000_000;
 
-/// The strategies that F26 holds to a cold run.
+/// The strategies whose resumed run must equal a cold run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Subject {
     BinanceRecorder,

@@ -1,5 +1,5 @@
-//! The start checks start no thread: preflight and the venue port name no thread spawn, except the
-//! one current-thread runtime of the network port, which ends with the port.
+//! The start checks start no thread: preflight and its venue reads name no thread spawn, except the
+//! one current-thread runtime of `NetworkPort`, which ends with it.
 
 use std::path::Path;
 

@@ -159,8 +159,8 @@ pub(crate) fn fixed_mantissa(units: f64) -> Option<i64> {
     (scaled >= i64::MIN as f64 && scaled < i64::MAX as f64).then_some(scaled as i64)
 }
 
-/// A mantissa at [`FIXED_SCALE`]. An adapter refuses a magnitude above `i64::MAX / 1e8` (about
-/// 9.2e10) and never truncates.
+/// A mantissa at [`FIXED_SCALE`]. A venue's parser refuses a magnitude above `i64::MAX / 1e8`
+/// (about 9.2e10) and never truncates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Price(i64);
 

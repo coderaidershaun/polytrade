@@ -1,4 +1,4 @@
-//! The venue reads of a start check, behind one trait: the network port asks the venues, and a
+//! The venue reads of the start checks, behind one trait: `NetworkPort` asks the venues, and a
 //! stand-in answers a test with no network, no key, and no `.env`.
 
 use std::io;
@@ -60,8 +60,8 @@ pub trait VenuePort {
     ) -> Result<ProbedVenue, VenueError>;
 }
 
-/// The venues themselves, read on one current-thread runtime that ends with the port, so a start
-/// check leaves no thread behind. Its probe reads the keys of `.env`.
+/// The venues themselves, read on one current-thread runtime that ends with this value, so a
+/// start check leaves no thread behind. Its probe reads the keys of `.env`.
 pub(crate) struct NetworkPort {
     runtime: Runtime,
 }
