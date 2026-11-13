@@ -281,6 +281,8 @@ fn settings(fee_model: FeeModel, holds_reservations_until_settled: bool) -> Exec
         inflight_timeout: DurationUs::from_secs(5),
         max_status_probes: 3,
         exec_silence_spins: u32::MAX,
+        stream_silence: DurationUs::from_micros(i64::MAX),
+        max_stream_resets: 2,
         order_reap_window: DurationUs::from_secs(3_600),
         quote_stop_margin: DurationUs::from_millis(3_000),
         flatten_slack_ticks: 2,

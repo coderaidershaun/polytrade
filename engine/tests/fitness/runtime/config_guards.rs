@@ -1026,7 +1026,7 @@ fn the_base_floor_may_be_zero_and_the_quote_floor_may_not() {
 #[test]
 fn execution_numeric_fields_reject_out_of_range_values() {
     let max = u64::MAX.to_string();
-    let cases: [(&str, String, Option<&str>); 7] = [
+    let cases: [(&str, String, Option<&str>); 9] = [
         (
             "execution.max_book_age_ms",
             execution_block_overriding("live", "max_book_age_ms", &max),
@@ -1063,6 +1063,16 @@ fn execution_numeric_fields_reject_out_of_range_values() {
         (
             "execution.max_status_probes",
             format!("{}  max_status_probes: 0\n", execution_block("live")),
+            Some("0"),
+        ),
+        (
+            "execution.stream_silence_ms",
+            format!("{}  stream_silence_ms: 0\n", execution_block("live")),
+            Some("0"),
+        ),
+        (
+            "execution.max_stream_resets",
+            format!("{}  max_stream_resets: 0\n", execution_block("live")),
             Some("0"),
         ),
     ];

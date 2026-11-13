@@ -117,6 +117,14 @@ pub struct ExecutionConfig {
     /// Inert on Polymarket.
     #[serde(default = "default_exec_silence_spins")]
     pub exec_silence_spins: u32,
+    /// A span of message time with no event of the order stream while an order works. Then one read
+    /// of open orders asks the venue what the stream may have missed.
+    #[serde(default = "default_stream_silence_ms")]
+    pub stream_silence_ms: u64,
+    /// Reads that show a change the order stream never reported, each followed by a new
+    /// subscription, with no stream event between. One more halts quoting.
+    #[serde(default = "default_max_stream_resets")]
+    pub max_stream_resets: u32,
     /// Must exceed the venue's redelivery window, to avoid a collision between tenants.
     #[serde(default = "default_order_reap_secs")]
     pub order_reap_secs: u64,
@@ -207,6 +215,11 @@ impl ExecutionConfig {
         check_non_zero(
             "execution.max_status_probes",
             u64::from(self.max_status_probes),
+        )?;
+        check_positive_milliseconds("execution.stream_silence_ms", self.stream_silence_ms)?;
+        check_non_zero(
+            "execution.max_stream_resets",
+            u64::from(self.max_stream_resets),
         )?;
         check_positive_milliseconds("execution.quote_stop_margin_ms", self.quote_stop_margin_ms)?;
         if self.flatten_slack_ticks > MAX_FLATTEN_SLACK_TICKS {
@@ -366,6 +379,14 @@ fn default_max_status_probes() -> u8 {
 
 fn default_exec_silence_spins() -> u32 {
     30
+}
+
+fn default_stream_silence_ms() -> u64 {
+    30_000
+}
+
+fn default_max_stream_resets() -> u32 {
+    2
 }
 
 fn default_disconnect_sweep_secs() -> u64 {

@@ -45,6 +45,11 @@ pub struct ExecSettings {
     /// Probes of one unanswered order before the read of open orders, then the halt.
     pub max_status_probes: u8,
     pub exec_silence_spins: u32,
+    /// Message time with no event of the order stream while an order works, before one read of
+    /// open orders.
+    pub stream_silence: DurationUs,
+    /// Reads that show what the stream missed, each with a new subscription, before quoting halts.
+    pub max_stream_resets: u32,
     pub order_reap_window: DurationUs,
     // How much margin before a closing window the engine stops quoting. Inert on venues
     // whose instruments never rotate.
@@ -81,6 +86,9 @@ impl ExecSettings {
             // The most that the key allows, so an engine with no limits halts on probes last.
             max_status_probes: u8::MAX,
             exec_silence_spins: 0,
+            stream_silence: DurationUs::ZERO,
+            // The most that the key allows, so an engine with no limits halts on silence last.
+            max_stream_resets: u32::MAX,
             order_reap_window: DurationUs::ZERO,
             quote_stop_margin: DurationUs::ZERO,
             flatten_slack_ticks: 0,
