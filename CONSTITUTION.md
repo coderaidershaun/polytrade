@@ -888,14 +888,23 @@ test, or sits in a module that is a concept in its own right, and each clause na
   `engine/src/lib.rs`). It states the stamp that each `SpinTick` carries. The timing harness names
   `engine::msg::time` (`tools/latency-probe/clock.rs`, `tools/latency-probe/rig.rs`).
 - [ ] `Preflight`, `StartPlan`, `Engine::start`, the pin parameter of `Engine::start`, and the venue
-  port trait that `Preflight::run_with` takes are `pub`. Merit: the engine binaries of package
-  `strat-micro-recorder`, another compile root, start the engine through them
+  port trait that `Preflight::run_with` takes are `pub` by a ruling of §12 (2026-11-13 ruling on
+  the start seam, in the section on seams that change). The engine binaries of package
+  `strat-micro-recorder` reach them only through `run_trading_engine`
   (`strategies/strat-micro-recorder/te-binance-spot-btcusdt/main.rs`,
-  `strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/main.rs`).
-  - Amended 2026-11-13, as built: the binaries start the engine through `run_trading_engine`,
+  `strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/main.rs`). The pin call
+  `pin_to_core` keeps its merit: the timing harness passes it (`tools/latency-probe/rig.rs`,
+  `tools/latency-probe/idle.rs`, `tools/latency-probe/sender.rs`).
+  - Replaced 2026-11-13: "`Preflight`, `StartPlan`, `Engine::start`, the pin parameter of
+    `Engine::start`, and the venue port trait that `Preflight::run_with` takes are `pub`. Merit:
+    the engine binaries of package `strat-micro-recorder`, another compile root, start the engine
+    through them (`strategies/strat-micro-recorder/te-binance-spot-btcusdt/main.rs`,
+    `strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/main.rs`)." With its line
+    "Amended 2026-11-13, as built: the binaries start the engine through `run_trading_engine`,
     which runs `Preflight` and `Engine::start` in the crate. The timing harness passes the pin call
     `pin_to_core` (`tools/latency-probe/rig.rs`, `tools/latency-probe/idle.rs`,
-    `tools/latency-probe/sender.rs`).
+    `tools/latency-probe/sender.rs`)." WHY: the binaries call only `run_trading_engine`, so the
+    merit that the clause named did not hold as built.
 - [ ] `Exit`, the decision that gives it, the forced-exit parameter, and `FatalReason` are `pub`.
   Merit: the same binaries give the forced-exit function and map `Exit` to the exit code.
   `FatalReason` is the value of an `Exit` that halted.
@@ -1532,6 +1541,17 @@ drives both. A seam that a change reshapes and that no test drives can break wit
   - WHY: each is a seam that changes. In a run the watchdog ends the process, so no test can drive
     it with the real forced exit. The chassis runs only inside a live venue edge, and a test cannot
     start one with no key.
+- [ ] Ruling, 2026-11-13: the start seam has no caller outside the tests, and it is `pub` by this
+  ruling. It is `Preflight` with `run` and `run_with`, `StartPlan`, `StartError`, `Engine` and
+  `Engine::start` with its pin parameter (`engine::runtime`), and the venue port trait `VenuePort`
+  with its values `VenueScales` and `ProbedVenue` (`engine::venues::port`). Tests:
+  `each_refusal_starts_no_thread_and_spends_no_nonce`,
+  `pin_failure_refuses_start_before_any_producer`.
+  - WHY: a refused start can be driven only with a stand-in venue port and a stand-in pin. The real
+    start path, `run_trading_engine`, reads the arguments and a config path, and it is the path by
+    which an engine loads `.env`, so no test may drive it.
+  - The pin call keeps its own merit (§8, 2026-11-13 section on the fold, start, and exit seams):
+    the timing harness passes `pin_to_core`, of type `PinCall`, which returns `PinRefused`.
 - [ ] Each other item of 2026-11-13 that a contract test reaches has a caller outside the tests,
   and §8 names it (2026-11-13 section on the fold, start, and exit seams).
 - [ ] This ruling makes no other item `pub`. The ban of 2026-07-28 on `pub(crate) -> pub` for a
