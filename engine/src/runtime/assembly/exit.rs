@@ -3,6 +3,7 @@
 
 use std::fmt;
 
+use crate::msg::failure::{FailureClass, Halt};
 use crate::runtime::shutdown::FatalReason;
 use crate::venues::exec::SweepFailure;
 
@@ -30,6 +31,19 @@ pub enum DrainFailure {
     Exposure { cause: Box<str> },
     #[error("persistence drain failed: {cause}")]
     Persistence { cause: Box<str> },
+}
+
+impl DrainFailure {
+    /// A running engine tries a failed write of the position file again, but the drain has no try
+    /// left, and the next start would restore a stale position, so here it halts the engine.
+    pub const fn failure_class(&self) -> FailureClass {
+        match self {
+            DrainFailure::Sweep(failure) => failure.failure_class(),
+            DrainFailure::Exposure { .. } | DrainFailure::Persistence { .. } => {
+                FailureClass::Halt(Halt::Engine)
+            }
+        }
+    }
 }
 
 /// What the drain saw, which is all that the exit is decided from.
@@ -64,6 +78,8 @@ impl Exit {
             failures,
             deadline,
         } = outcome;
+        // Each failure is read by its class, even when a fatal or the deadline names the exit.
+        let failed_steps: Vec<Exit> = failures.into_iter().map(Exit::of_failed_step).collect();
         let name = match trigger {
             Trigger::Fatal(reason) => return Exit::Halted(reason),
             Trigger::Request(name) => name,
@@ -74,9 +90,28 @@ impl Exit {
         if deadline == DrainDeadline::Passed {
             return Exit::DeadlinePassed;
         }
-        match failures.into_iter().next() {
-            Some(failure) => Exit::DrainFailed(failure),
-            None => Exit::Graceful { trigger: name },
+        let first_failed_step = failed_steps.into_iter().next();
+        first_failed_step.unwrap_or(Exit::Graceful { trigger: name })
+    }
+
+    /// A failed step of the drain halts the engine. The drain has no reaction to another class, so
+    /// one here is a bug of the drain.
+    fn of_failed_step(failure: DrainFailure) -> Self {
+        match failure.failure_class() {
+            FailureClass::Halt(Halt::Engine) => Exit::DrainFailed(failure),
+            other => unreachable!("the drain failure {failure} has class {other:?}, and no exit"),
+        }
+    }
+
+    /// The exit of a start that its own check refused, from the class of the error.
+    ///
+    /// # Panics
+    /// If the class is not a refused start: a start error of another class is a bug of the start
+    /// code.
+    pub fn refused(class: FailureClass) -> Self {
+        match class {
+            FailureClass::Halt(Halt::Start) => Exit::StartRefused,
+            other => panic!("a start error of class {other:?} has no exit"),
         }
     }
 
