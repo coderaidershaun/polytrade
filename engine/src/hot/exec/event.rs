@@ -140,12 +140,9 @@ impl ExecEngine {
         bank: &mut Actions,
     ) {
         let now = stamps.fold;
-        // SMELL: when every prior-run slot is taken, this event is logged and dropped, so a fill of
-        // an order from the earlier run never reaches the ledger and the position stays wrong. A
-        // full table should halt the engine instead.
         let index = match self.prior_orders.find_or_seat(event, now) {
             Ok(index) => index,
-            Err(Unseated::TableFull) => return self.prior_run_overflow_error(event),
+            Err(Unseated::TableFull) => return self.on_prior_run_overflow(event, stamps, bank),
             Err(Unseated::NoInstrument) => return self.prior_run_without_instrument_error(event),
         };
         let previous_state = OrderLifecycle::from(self.prior_orders.slot(index).state());
@@ -174,21 +171,39 @@ impl ExecEngine {
             return;
         }
         orphan_fill_error(event);
-        if let Some(instrument) = event.instrument {
-            let orphan_fill = IncidentRow {
-                kind: IncidentKind::OrphanFill,
-                instrument,
-                client_id: Some(event.client_id),
-                trade_id: event.trade_id,
-                qty: event.cumulative_qty,
-                amount: 0,
-                window_close_ts_us: None,
-                exchange_ts_us: event.exchange_ts_us,
-                received_ts_us: stamps.received,
-            };
-            bank_incident(bank, &mut self.incidents, orphan_fill);
-        }
+        self.record_orphan_fill(event, stamps.received, bank);
         self.halt(HaltReason::OrphanFill, stamps.fold);
+    }
+
+    /// Each entry of the prior-run table holds a working order, so this one has nowhere to fold.
+    /// The ledger would have to guess, so quoting halts with the table as it is, and the tape keeps
+    /// the fill.
+    #[cold]
+    fn on_prior_run_overflow(&mut self, event: &ExecEvent, stamps: FoldStamps, bank: &mut Actions) {
+        self.prior_run_overflow_error(event);
+        self.record_orphan_fill(event, stamps.received, bank);
+        self.halt(HaltReason::PriorRunOverflow, stamps.fold);
+    }
+
+    /// The fill of an own order that holds no slot, as the venue's running total.
+    #[cold]
+    fn record_orphan_fill(&mut self, event: &ExecEvent, received: LocalTs, bank: &mut Actions) {
+        let Some(instrument) = event.instrument else { return };
+        if event.cumulative_qty.mantissa() <= 0 {
+            return;
+        }
+        let orphan_fill = IncidentRow {
+            kind: IncidentKind::OrphanFill,
+            instrument,
+            client_id: Some(event.client_id),
+            trade_id: event.trade_id,
+            qty: event.cumulative_qty,
+            amount: 0,
+            window_close_ts_us: None,
+            exchange_ts_us: event.exchange_ts_us,
+            received_ts_us: received,
+        };
+        bank_incident(bank, &mut self.incidents, orphan_fill);
     }
 
     /// The quantity of a report moves by the venue's running totals, and its fee by the fee memory
@@ -265,7 +280,7 @@ impl ExecEngine {
     #[cold]
     fn prior_run_overflow_error(&self, event: &ExecEvent) {
         hot_error!(
-            "prior-run order {:x} has nowhere to fold — all {} entries are still working, so its fills cannot reach the ledger",
+            "prior-run order {:x} has nowhere to fold — all {} entries are still working, so quoting halts and its fill stays on the tape",
             event.client_id.0,
             self.prior_orders.capacity()
         );
