@@ -1,22 +1,19 @@
 //! Folding a venue event: a stream reset, the end of an open-orders snapshot, or the transition of
 //! an order of this run or an earlier one, with its money, reservation release and audit rows.
 
-use crate::hot::digest::digest_fields;
 use crate::hot::ledger::{LedgerFill, PositionLedger};
 use crate::hot::strategy::Actions;
 use crate::log::{hot_error, hot_warn};
 use crate::msg::exec::{ExecEvent, ExecKind, RejectClass};
-use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Side};
+use crate::msg::ids::{AssetId, Notional};
 use crate::msg::persist::{OrderLifecycle, OrderTransition};
 use crate::msg::time::LocalTs;
 
 use super::account::ReleaseOutcome;
 use super::audit::{bank_engine_driven, bank_event_rows};
-use super::capacity::ExecCapacity;
 use super::engine::{ExecEngine, FoldStamps, view_of};
 use super::gates::HaltReason;
-use super::order::{FillDelta, OrderSlot, OrderState, ReconcilePass, free_or_oldest_closed};
-use super::transition::apply_exec_event;
+use super::order::{FillDelta, OrderSlot, OrderState, ReconcilePass, Unseated, apply_exec_event};
 use super::view::{ExecCallback, Fill, OrderReject, RejectOrigin};
 
 impl ExecEngine {
@@ -334,90 +331,4 @@ fn swept_warning(slot: &OrderSlot, recon_seq: u64) {
         slot.client_id.0,
         slot.instrument.0
     );
-}
-
-/// Orders an EARLIER run of this trading engine left resting on the venue. They are cancelled on
-/// sight, but the cancel takes hundreds of milliseconds and whatever rests fills in the meantime.
-/// Those are real executions on this account, so they move the ledger and earn audit rows exactly
-/// like any other.
-///
-/// They must never join THIS run's quoting, which is why they sit in a table of their own rather
-/// than in [`OrderTable`](super::order::OrderTable). A prior-run client id decodes to a slot index
-/// in that table, so seating one there would either evict an order this run is about to place or
-/// lose the fill to the orphan path, decided by nothing but arrival order. Keeping them apart also
-/// keeps a cancel answered "unknown order", this path's ordinary outcome, out of the reject streak.
-pub(super) struct PriorRunOrders {
-    slots: Box<[OrderSlot]>,
-}
-
-digest_fields! { PriorRunOrders { slots } }
-
-/// Why an order of an earlier run has no slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Unseated {
-    TableFull,
-    NoInstrument,
-}
-
-impl PriorRunOrders {
-    pub(super) fn new(capacity: &ExecCapacity) -> Self {
-        Self {
-            slots: vec![OrderSlot::EMPTY; capacity.prior_run_slots()].into_boxed_slice(),
-        }
-    }
-
-    #[inline]
-    pub(super) fn capacity(&self) -> usize {
-        self.slots.len()
-    }
-
-    #[inline]
-    pub(super) fn slot(&self, index: usize) -> &OrderSlot {
-        &self.slots[index]
-    }
-
-    #[inline]
-    pub(super) fn slot_mut(&mut self, index: usize) -> &mut OrderSlot {
-        &mut self.slots[index]
-    }
-
-    pub(super) fn working(
-        &self,
-        instrument: InstrumentId,
-        side: Side,
-    ) -> impl Iterator<Item = &OrderSlot> {
-        self.slots.iter().filter(move |slot| {
-            slot.instrument == instrument && slot.side == side && slot.state.is_working()
-        })
-    }
-
-    pub(super) fn find_or_seat(
-        &mut self,
-        event: &ExecEvent,
-        now: LocalTs,
-    ) -> Result<usize, Unseated> {
-        if let Some(index) = self.find(event.client_id) {
-            return Ok(index);
-        }
-        let instrument = event.instrument.ok_or(Unseated::NoInstrument)?;
-        let index = free_or_oldest_closed(&self.slots[..]).ok_or(Unseated::TableFull)?;
-        self.slots[index] = OrderSlot {
-            client_id: event.client_id,
-            venue_order_id: event.venue_order_id,
-            state: OrderState::Unknown,
-            side: event.side,
-            instrument,
-            price: event.price,
-            qty: event.qty,
-            last_event_ts_us: now,
-            ..OrderSlot::EMPTY
-        };
-        Ok(index)
-    }
-
-    fn find(&self, id: ClientOrderId) -> Option<usize> {
-        self.slots
-            .iter()
-            .position(|slot| slot.client_id == id && slot.state != OrderState::Free)
-    }
 }

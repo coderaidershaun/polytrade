@@ -14,7 +14,7 @@
 use crate::msg::exec::{ExecEvent, ExecKind, RejectClass, VenueOrderStatus};
 use crate::msg::time::LocalTs;
 
-use super::order::{CloseReason, FillDelta, OrderSlot, OrderState};
+use super::{CloseReason, FillDelta, OrderSlot, OrderState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Applied {

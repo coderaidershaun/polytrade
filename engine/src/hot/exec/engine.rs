@@ -16,10 +16,9 @@ use super::account::{AccountTable, Balance};
 use super::budget::{BudgetMeter, OrderBudget};
 use super::capacity::ExecCapacity;
 use super::desired::QuoteLevel;
-use super::event::PriorRunOrders;
 use super::flatten::FeeModel;
 use super::gates::{ExecHalt, HaltReason, Readiness, RefusalLatch};
-use super::order::{OrderSlot, OrderTable};
+use super::order::{OrderSlot, OrderTable, PriorRunOrders};
 use super::reconcile::{ExecLimits, RejectReason, RestingOrder, TickGrid};
 use super::view::{ExecCallback, OrderReject, OrderView, WorkingOrderView};
 

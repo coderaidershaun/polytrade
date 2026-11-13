@@ -1,0 +1,95 @@
+//! The orders that an earlier run of this trading engine left resting, in a table of their own.
+
+use crate::hot::digest::digest_fields;
+use crate::hot::exec::ExecCapacity;
+use crate::msg::exec::ExecEvent;
+use crate::msg::ids::{ClientOrderId, InstrumentId, Side};
+use crate::msg::time::LocalTs;
+
+use super::{OrderSlot, OrderState, free_or_oldest_closed};
+
+/// Orders an EARLIER run of this trading engine left resting on the venue. They are cancelled on
+/// sight, but the cancel takes hundreds of milliseconds and whatever rests fills in the meantime.
+/// Those are real executions on this account, so they move the ledger and earn audit rows exactly
+/// like any other.
+///
+/// They must never join THIS run's quoting, which is why they sit in a table of their own rather
+/// than in [`OrderTable`](super::OrderTable). A prior-run client id decodes to a slot index
+/// in that table, so seating one there would either evict an order this run is about to place or
+/// lose the fill to the orphan path, decided by nothing but arrival order. Keeping them apart also
+/// keeps a cancel answered "unknown order", this path's ordinary outcome, out of the reject streak.
+pub(in crate::hot::exec) struct PriorRunOrders {
+    slots: Box<[OrderSlot]>,
+}
+
+digest_fields! { PriorRunOrders { slots } }
+
+/// Why an order of an earlier run has no slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::hot::exec) enum Unseated {
+    TableFull,
+    NoInstrument,
+}
+
+impl PriorRunOrders {
+    pub(in crate::hot::exec) fn new(capacity: &ExecCapacity) -> Self {
+        Self {
+            slots: vec![OrderSlot::EMPTY; capacity.prior_run_slots()].into_boxed_slice(),
+        }
+    }
+
+    #[inline]
+    pub(in crate::hot::exec) fn capacity(&self) -> usize {
+        self.slots.len()
+    }
+
+    #[inline]
+    pub(in crate::hot::exec) fn slot(&self, index: usize) -> &OrderSlot {
+        &self.slots[index]
+    }
+
+    #[inline]
+    pub(in crate::hot::exec) fn slot_mut(&mut self, index: usize) -> &mut OrderSlot {
+        &mut self.slots[index]
+    }
+
+    pub(in crate::hot::exec) fn working(
+        &self,
+        instrument: InstrumentId,
+        side: Side,
+    ) -> impl Iterator<Item = &OrderSlot> {
+        self.slots.iter().filter(move |slot| {
+            slot.instrument == instrument && slot.side == side && slot.state.is_working()
+        })
+    }
+
+    pub(in crate::hot::exec) fn find_or_seat(
+        &mut self,
+        event: &ExecEvent,
+        now: LocalTs,
+    ) -> Result<usize, Unseated> {
+        if let Some(index) = self.find(event.client_id) {
+            return Ok(index);
+        }
+        let instrument = event.instrument.ok_or(Unseated::NoInstrument)?;
+        let index = free_or_oldest_closed(&self.slots[..]).ok_or(Unseated::TableFull)?;
+        self.slots[index] = OrderSlot {
+            client_id: event.client_id,
+            venue_order_id: event.venue_order_id,
+            state: OrderState::Unknown,
+            side: event.side,
+            instrument,
+            price: event.price,
+            qty: event.qty,
+            last_event_ts_us: now,
+            ..OrderSlot::EMPTY
+        };
+        Ok(index)
+    }
+
+    fn find(&self, id: ClientOrderId) -> Option<usize> {
+        self.slots
+            .iter()
+            .position(|slot| slot.client_id == id && slot.state != OrderState::Free)
+    }
+}
