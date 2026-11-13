@@ -126,19 +126,12 @@ impl HawkesSide {
         }
     }
 
-    /// Before the first estimate the fitter is cheap — it returns without optimising until
-    /// `min_events` have banked — so asking every spin costs nothing and gets the cold fit out the
-    /// moment the floor is crossed.
-    pub fn is_refit_due(&self) -> bool {
-        self.fit.is_none() || self.arrivals_since_fit >= self.choice.refit_arrivals
-    }
-
-    /// A full Nelder-Mead simplex whose objective is one O(window) pass, so this is the expensive
-    /// half of the side and the reason [`HawkesSide::is_refit_due`] exists.
+    /// A full simplex search whose objective is one pass over the window, so it runs only when a
+    /// fit is due.
     ///
     /// A fresh fit re-anchors the resident: seed it once from the buffered window, then only nudge
     /// its params — the excitation carries across a param change, decaying the mismatch away.
-    pub fn refit(&mut self, now: LocalTs) {
+    fn refit(&mut self, now: LocalTs) {
         self.arrivals_since_fit = 0;
         self.fit = self.fitter.fit(&self.events, now);
         let Some(estimate) = self.fit.and_then(HawkesFit::fresh) else {
@@ -154,10 +147,13 @@ impl HawkesSide {
         }
     }
 
-    /// Refits when a fit is due, then gives the fresh fit in force. `None` before the first fresh
-    /// fit, and while the window cannot support a new one.
+    /// Refits when a fit is due, then gives the fresh fit in force. A fit is due before the first
+    /// one and after `refit_arrivals` new arrivals; below `min_events` the fitter returns at once,
+    /// so a read on each spin is cheap. `None` before the first fresh fit, and while the window
+    /// cannot support a new one.
     pub fn estimate(&mut self, now: LocalTs) -> Option<HawkesEstimate> {
-        if self.is_refit_due() {
+        let is_due = self.fit.is_none() || self.arrivals_since_fit >= self.choice.refit_arrivals;
+        if is_due {
             self.refit(now);
         }
         self.fit.and_then(HawkesFit::fresh)
