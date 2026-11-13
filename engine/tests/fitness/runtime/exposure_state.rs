@@ -9,7 +9,7 @@ use engine::msg::time::LocalTs;
 use engine::runtime::config::{Config, ExecutionMode, NoParams, RunIdentity};
 use engine::runtime::exposure::{
     ExposureError, ExposureHandle, ExposureSnapshot, ExposureState, ExposureWriter,
-    ExposureWriterConfig, InstrumentExposure, load,
+    ExposureWriterSetup, InstrumentExposure, WriterStatus, load,
 };
 use engine::runtime::registry::Registry;
 
@@ -107,15 +107,27 @@ pub fn spawn_live_writer(
     registry: &Registry,
     restored: &ExposureState,
 ) -> (ExposureHandle, ExposureSink) {
-    ExposureWriter::spawn(
-        ExposureWriterConfig::new(
-            dir.to_path_buf(),
-            identity(),
-            Some(ExecutionMode::Live),
-            registry,
-        ),
+    spawn_reporting_writer(dir, registry, restored, None)
+}
+
+/// A live writer that reports to `status` when it gives up.
+pub fn spawn_reporting_writer(
+    dir: &Path,
+    registry: &Registry,
+    restored: &ExposureState,
+    status: Option<WriterStatus>,
+) -> (ExposureHandle, ExposureSink) {
+    let (sink, lane) = ExposureWriter::lane();
+    let handle = ExposureWriter::spawn(ExposureWriterSetup {
+        dir: dir.to_path_buf(),
+        identity: identity(),
+        mode: Some(ExecutionMode::Live),
+        registry,
+        status,
         restored,
-    )
+        lane,
+    });
+    (handle, sink)
 }
 
 /// The caller drops the sink first, so it alone decides what the writer still holds when it drains.

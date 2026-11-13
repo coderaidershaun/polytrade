@@ -22,7 +22,7 @@ use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrd
 use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
 };
-use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
+use engine::msg::inbound::{FileWriter, InboundMessage, MessageBody, SpinTick, WriterFailure};
 use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::time::{DurationUs, LocalTs, Stamper, VenueTs};
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
@@ -422,6 +422,10 @@ const MEASURED_STEPS: u64 = 100_000;
 /// parks and resumes only once those columns have had the window.
 const PARK_AT_STEP: u64 = 99_000;
 
+/// A writer that gives up halts quoting for the rest of the run, so it reports once the other paths
+/// have run under the counter.
+const WRITER_FAILED_AT_STEP: u64 = 99_500;
+
 /// Each shipped strategy runs with far more instruments than its config names.
 const SHIPPED_INSTRUMENTS: u16 = 16;
 
@@ -475,7 +479,7 @@ const STAGE_RING: u64 = 4_096;
 const EXTRAS_EVERY: i64 = 50;
 
 /// One name for each kind of message, in the order of [`kind_of`].
-const KINDS: [&str; 10] = [
+const KINDS: [&str; 11] = [
     "trade",
     "book",
     "book reset",
@@ -486,6 +490,7 @@ const KINDS: [&str; 10] = [
     "run control",
     "exec",
     "account",
+    "writer failed",
 ];
 
 /// No arm catches the rest, so a new kind of message stops this file compiling until the mix sends
@@ -502,19 +507,22 @@ fn kind_of(message: &InboundMessage) -> usize {
         MessageBody::RunControl(_) => 7,
         MessageBody::Exec(_) => 8,
         MessageBody::Account(_) => 9,
+        MessageBody::WriterFailed(_) => 10,
     }
 }
 
-/// The input queues of a trading engine: market data, the timer, the venue's answers, the link.
+/// The input queues of a trading engine: market data, the timer, the venue's answers, the link, and
+/// the status of its file writers.
 #[derive(Debug, Clone, Copy)]
 enum Queue {
     Market,
     Timer,
     Venue,
     Link,
+    WriterStatus,
 }
 
-const QUEUES: usize = 4;
+const QUEUES: usize = 5;
 
 /// The write ends of the input rings, and the count of each kind of message pushed into them.
 struct Inputs {
@@ -538,6 +546,14 @@ impl Inputs {
             .push(message)
             .expect("the driver empties each input ring before the next push");
     }
+}
+
+fn writer_failed(when: i64) -> InboundMessage {
+    let failure = WriterFailure {
+        writer: FileWriter::Exposure,
+        consecutive_failures: 3,
+    };
+    InboundMessage::new(ts(when), MessageBody::WriterFailed(failure))
 }
 
 fn when_of(i: i64) -> i64 {
@@ -1266,6 +1282,7 @@ fn drive_on_this_thread(case: Case) -> Window {
     }
 
     let mut parked_at = None;
+    let mut has_writer_failed = false;
     'window: for i in 0.. {
         if i == MEASURED_START {
             window = Window::default();
@@ -1303,6 +1320,10 @@ fn drive_on_this_thread(case: Case) -> Window {
                 inputs.push(Queue::Link, run_control(running_at(2), when));
             }
             _ => {}
+        }
+        if !has_writer_failed && window.steps >= WRITER_FAILED_AT_STEP {
+            inputs.push(Queue::WriterStatus, writer_failed(when));
+            has_writer_failed = true;
         }
         loop {
             let before = crate::alloc_count();

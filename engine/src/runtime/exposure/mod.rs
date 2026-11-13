@@ -6,13 +6,14 @@ mod writer;
 
 use std::path::{Path, PathBuf};
 
+use crate::msg::failure::{FailureClass, Halt};
 use crate::msg::ids::{AssetId, InstrumentId, Qty};
 use crate::msg::time::LocalTs;
 use crate::runtime::config::{ExecutionMode, RunIdentity, VenueMarket};
 use crate::runtime::registry::Registry;
 use crate::warn;
 
-pub use writer::{ExposureHandle, ExposureWriter, ExposureWriterConfig};
+pub use writer::{ExposureHandle, ExposureWriter, ExposureWriterSetup, WriterStatus};
 
 /// Max instruments per snapshot (engine serves one source).
 pub const MAX_EXPOSURE_INSTRUMENTS: usize = 16;
@@ -163,6 +164,26 @@ pub enum ExposureError {
     WriterPanicked { payload: Box<str> },
     #[error("exposure writer drain was interrupted before the thread could be joined")]
     DrainInterrupted,
+}
+
+impl ExposureError {
+    /// A file that a start cannot trust refuses the start. A failed write is tried again at the
+    /// writer's next poll, and its limit halts quoting. A writer that died, or a drain that could
+    /// not wait for it, leaves the file behind the position, so the engine halts.
+    pub fn failure_class(&self) -> FailureClass {
+        match self {
+            ExposureError::Read { .. }
+            | ExposureError::Malformed { .. }
+            | ExposureError::WrongIdentity { .. }
+            | ExposureError::UnknownVersion { .. }
+            | ExposureError::ScaleMismatch { .. }
+            | ExposureError::UnknownInstrument { .. } => FailureClass::Halt(Halt::Start),
+            ExposureError::Write { .. } => FailureClass::Retry,
+            ExposureError::WriterPanicked { .. } | ExposureError::DrainInterrupted => {
+                FailureClass::Halt(Halt::Engine)
+            }
+        }
+    }
 }
 
 /// Adds `-sim` to simulated exposure filenames.

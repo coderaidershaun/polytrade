@@ -570,7 +570,8 @@ fn a_public_link_bind_is_a_startup_error_unless_allowed() {
 }
 
 /// FITNESS: no queue id at or past the cap of 20 exists, and each registry numbers its input queues
-/// 0 to n - 1, with the timer, the link and the execution edge after the producer groups. The hot
+/// 0 to n - 1, with the timer, the link, the execution edge and the writer status after the
+/// producer groups. The hot
 /// thread sizes its tables by that cap and a tape records each queue id, so an id past the cap, a
 /// gap or a shifted id would fold an order other than the one that the run recorded.
 #[test]
@@ -628,12 +629,14 @@ fn twenty_one_input_queues_are_refused() {
         ids.push(registry.timer_queue_id().index());
         ids.extend(registry.link_queue_id().map(QueueId::index));
         ids.extend(registry.exec_queue_id().map(QueueId::index));
+        ids.extend(registry.writer_status_queue_id().map(QueueId::index));
         let count = registry.input_queue_count();
         assert!(count <= 20, "{count} input queues");
         assert_eq!(
             ids,
             (0..count).collect::<Vec<usize>>(),
-            "the ids are dense, and the timer, the link and the execution edge follow the groups"
+            "the ids are dense, and the timer, the link, the execution edge and the writer status \
+             follow the groups"
         );
     }
 }
@@ -757,7 +760,7 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             "",
             ExecutionMode::Live,
             true,
-            5,
+            6,
         ),
         (
             "binance sim",
@@ -766,7 +769,7 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             SIM_BLOCK,
             ExecutionMode::Sim,
             true,
-            5,
+            6,
         ),
         (
             "polymarket off",
@@ -784,7 +787,7 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             "",
             ExecutionMode::Live,
             true,
-            3,
+            4,
         ),
     ];
     for (case, source, spelling, extra, expected, expects_queue, input_queues) in modes {
@@ -804,9 +807,15 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             "{case}: the exec input queue exists exactly when an edge will feed it"
         );
         assert_eq!(
+            registry.writer_status_queue_id().is_some(),
+            expects_queue,
+            "{case}: a writer that gives up halts quoting, so its queue exists only when quoting can"
+        );
+        assert_eq!(
             registry.input_queue_count(),
             input_queues,
-            "{case}: producer groups + the timer, plus execution when it is armed"
+            "{case}: producer groups + the timer, plus execution and the writer status when it is \
+             armed"
         );
     }
 }
@@ -1022,11 +1031,11 @@ fn the_base_floor_may_be_zero_and_the_quote_floor_may_not() {
 /// Every execution field whose range has no other floor/ceiling test: the µs-duration fields
 /// overflow the runtime's storage type at `u64::MAX`, and the bps field overflows the runtime's
 /// centi-bps conversion at a merely enormous finite float — two different overflow mechanisms,
-/// same refusal shape.
+/// same refusal shape. A limit of failed writes refuses zero, as each limit of the config does.
 #[test]
 fn execution_numeric_fields_reject_out_of_range_values() {
     let max = u64::MAX.to_string();
-    let cases: [(&str, String, Option<&str>); 6] = [
+    let cases: [(&str, String, Option<&str>); 7] = [
         (
             "execution.max_book_age_ms",
             execution_block_overriding("live", "max_book_age_ms", &max),
@@ -1059,6 +1068,14 @@ fn execution_numeric_fields_reject_out_of_range_values() {
             "execution.max_quote_distance_bps",
             execution_block_overriding("live", "max_quote_distance_bps", "1e308"),
             None,
+        ),
+        (
+            "exposure.max_failed_writes",
+            format!(
+                "{}exposure:\n  max_failed_writes: 0\n",
+                execution_block("live")
+            ),
+            Some("0"),
         ),
     ];
     for (expected_field, block, expected_value) in cases {

@@ -1,5 +1,6 @@
 //! Writer thread: drain ring to newest snapshot, write to disk on change. Dedicated thread (blocks
-//! on fsync).
+//! on fsync). A writer that cannot write its limit of times in a row reports it once, and quoting
+//! halts.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,8 +9,11 @@ use std::time::Duration;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::hot::sink::ExposureSink;
+use crate::hot::spawn::QueueProducer;
+use crate::msg::failure::FailureClass;
 use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId};
-use crate::msg::time::wall_clock_now;
+use crate::msg::inbound::{FileWriter, InboundMessage, MessageBody, WriterFailure};
+use crate::msg::time::{EngineClock, wall_clock_now};
 use crate::runtime::config::{ExecutionMode, RunIdentity};
 use crate::runtime::registry::Registry;
 use crate::runtime::shutdown::WriterThread;
@@ -24,24 +28,66 @@ use super::{
 /// Ring capacity: absorb burst between polls (absolute state, sink keeps newest).
 const RING_CAPACITY: usize = 16;
 
-/// Poll interval: 10x/sec bounds disk lag while keeping fsync rate low.
+/// Poll interval: 10x/sec bounds disk lag while keeping fsync rate low. A failed write is tried
+/// again at the next poll, with no growing delay: a longer wait would only delay the halt.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
+/// What a writer needs from the start. The registry gives the venue and symbol of each instrument
+/// and the name of each asset, so the file names each one in words that outlive the run.
+pub struct ExposureWriterSetup<'a> {
+    pub dir: PathBuf,
+    pub identity: RunIdentity,
+    pub mode: Option<ExecutionMode>,
+    pub registry: &'a Registry,
+    /// `None` with execution off, where no quote can halt: the writer then only logs each failure.
+    pub status: Option<WriterStatus>,
+    /// The state on disk, which seeds the writer.
+    pub restored: &'a ExposureState,
+    pub lane: Consumer<ExposureSnapshot>,
+}
+
+/// Where the writer reports that it gave up, and after how many failed writes in a row.
+pub struct WriterStatus {
+    pub queue: QueueProducer,
+    /// The writer stamps its message with the clock of the engine, as each producer of an input
+    /// queue does, so the message takes its place in the order of the input.
+    pub clock: EngineClock,
+    pub max_failed_writes: u32,
+}
+
+impl WriterStatus {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a writer that gives up stamps its one message as each producer of an input queue does"
+    )]
+    fn report(mut self, consecutive_failures: u32) {
+        let failure = WriterFailure {
+            writer: FileWriter::Exposure,
+            consecutive_failures,
+        };
+        let message = InboundMessage::new(self.clock.now(), MessageBody::WriterFailed(failure));
+        self.queue.push(message);
+    }
+}
+
 /// Writer config (owned outright, thread borrows nothing).
-pub struct ExposureWriterConfig {
+struct ExposureWriterConfig {
     dir: PathBuf,
     identity: RunIdentity,
     mode: Option<ExecutionMode>,
     instruments: Vec<InstrumentFacts>,
     asset_names: Vec<Box<str>>,
+    /// Taken when the writer reports, so it reports once in a run.
+    status: Option<WriterStatus>,
 }
 
 impl ExposureWriterConfig {
-    pub fn new(
+    fn new(
         dir: PathBuf,
         identity: RunIdentity,
         mode: Option<ExecutionMode>,
         registry: &Registry,
+        status: Option<WriterStatus>,
     ) -> Self {
         ExposureWriterConfig {
             dir,
@@ -58,6 +104,7 @@ impl ExposureWriterConfig {
                 })
                 .collect(),
             asset_names: registry.assets().names().to_vec(),
+            status,
         }
     }
 }
@@ -72,23 +119,35 @@ struct InstrumentFacts {
 pub struct ExposureWriter;
 
 impl ExposureWriter {
-    /// Spawn writer + ring; seed with restored state (disk match needed).
-    pub fn spawn(
-        config: ExposureWriterConfig,
-        restored: &ExposureState,
-    ) -> (ExposureHandle, ExposureSink) {
+    /// The lane from the hot thread to the writer. The start makes it before the hot thread, and
+    /// hands its read end to the writer once the writer-status queue exists.
+    pub fn lane() -> (ExposureSink, Consumer<ExposureSnapshot>) {
         let (producer, consumer) = RingBuffer::<ExposureSnapshot>::new(RING_CAPACITY);
+        (ExposureSink::new(producer), consumer)
+    }
+
+    pub fn spawn(setup: ExposureWriterSetup<'_>) -> ExposureHandle {
+        let ExposureWriterSetup {
+            dir,
+            identity,
+            mode,
+            registry,
+            status,
+            restored,
+            lane,
+        } = setup;
         let state = WriterState {
-            config,
-            consumer,
+            config: ExposureWriterConfig::new(dir, identity, mode, registry, status),
+            consumer: lane,
             latest: seed_snapshot(restored),
             // Sequence 0 is the state already on disk. Every snapshot the hot side emits starts at
             // 1, so the first genuine change is the first write.
             written_seq: Some(0),
             failed_writes: 0,
         };
-        let writer = WriterThread::spawn("exposure", move |drain| state.run(&drain));
-        (ExposureHandle(writer), ExposureSink::new(producer))
+        ExposureHandle(WriterThread::spawn("exposure", move |drain| {
+            state.run(&drain)
+        }))
     }
 }
 
@@ -129,7 +188,7 @@ struct WriterState {
     latest: ExposureSnapshot,
     /// Sequence of last write (None until first, so static position still writes once).
     written_seq: Option<u64>,
-    failed_writes: u64,
+    failed_writes: u32,
 }
 
 impl WriterState {
@@ -141,19 +200,35 @@ impl WriterState {
                 self.take_latest();
                 return self.write_if_changed();
             }
-            // Failures retry on next change (full disk can't stop trading, position in memory).
-            // SMELL: a failed write is only counted and logged, and the hot thread never learns of
-            // it, so the engine trades on without end while the file on disk goes stale. A failure
-            // that lasts past a limit should stop quoting.
             if let Err(error) = self.write_if_changed() {
-                self.failed_writes += 1;
-                error!(
-                    "exposure write failed ({} so far): {error}",
-                    self.failed_writes
-                );
+                self.on_failed_write(&error);
             }
             std::thread::sleep(POLL_INTERVAL);
         }
+    }
+
+    /// The root of the writer reads the class of each failure: a write is tried again at the next
+    /// poll, and at the limit the writer reports once, so quoting halts.
+    fn on_failed_write(&mut self, error: &ExposureError) {
+        assert_eq!(
+            error.failure_class(),
+            FailureClass::Retry,
+            "a write of the exposure file gave {error}, and only a failed write is tried again here"
+        );
+        self.failed_writes = self.failed_writes.saturating_add(1);
+        let failed_writes = self.failed_writes;
+        error!("exposure write failed ({failed_writes} in a row): {error}");
+        let Some(status) = self
+            .config
+            .status
+            .take_if(|status| failed_writes >= status.max_failed_writes)
+        else {
+            return;
+        };
+        error!(
+            "exposure file not written {failed_writes} times in a row — it no longer follows the position, so quoting halts"
+        );
+        status.report(failed_writes);
     }
 
     /// Keep only newest snapshot (earlier = same state, old time; writing all = unnecessary fsyncs).
@@ -169,6 +244,7 @@ impl WriterState {
         }
         let path = file_path(&self.config.dir, &self.config.identity, self.config.mode);
         file::write_atomically(&path, &self.document())?;
+        self.failed_writes = 0;
         let is_first = self.written_seq.is_none();
         self.written_seq = Some(self.latest.seq);
         if is_first {
@@ -195,20 +271,19 @@ impl WriterState {
         }
     }
 
-    /// Drop rows for unknown instruments (unresolvable symbol on boot = refuse).
     fn instrument_entries(&self) -> Vec<InstrumentEntry> {
         self.latest
             .active()
             .iter()
-            .filter_map(|exposure| {
-                let facts = self.facts(exposure.instrument)?;
-                Some(InstrumentEntry {
+            .map(|exposure| {
+                let facts = self.facts(exposure.instrument);
+                InstrumentEntry {
                     venue: facts.venue.to_owned(),
                     symbol: facts.symbol.as_ref().to_owned(),
                     position_base: exposure.position_base.mantissa(),
                     cash_quote: exposure.cash_quote,
                     basis_quote: exposure.basis_quote,
-                })
+                }
             })
             .collect()
     }
@@ -216,9 +291,7 @@ impl WriterState {
     fn asset_entries(&self) -> Vec<AssetEntry> {
         let mut amounts = vec![0i128; self.config.asset_names.len()];
         for exposure in self.latest.active() {
-            let Some(facts) = self.facts(exposure.instrument) else {
-                continue;
-            };
+            let facts = self.facts(exposure.instrument);
             add_amount(
                 &mut amounts,
                 facts.base_asset,
@@ -246,7 +319,20 @@ impl WriterState {
             )
     }
 
-    fn facts(&self, instrument: InstrumentId) -> Option<&InstrumentFacts> {
-        self.config.instruments.get(usize::from(instrument.0))
+    /// # Panics
+    /// A row of an instrument that this run's registry does not hold. The hot side numbers its rows
+    /// by that registry, so such a row is a bug, and a file written without it would erase its
+    /// position.
+    fn facts(&self, instrument: InstrumentId) -> &InstrumentFacts {
+        self.config
+            .instruments
+            .get(usize::from(instrument.0))
+            .unwrap_or_else(|| {
+                panic!(
+                    "exposure row names instrument {}, and this run's registry holds {} instruments",
+                    instrument.0,
+                    self.config.instruments.len()
+                )
+            })
     }
 }

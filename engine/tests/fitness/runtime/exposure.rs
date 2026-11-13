@@ -1,33 +1,42 @@
 //! A position outlives the process that opened it: the file that keeps it, the start that refuses a
 //! file it cannot trust, and the writer that stops quoting when it can no longer keep the file.
 
-use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup};
-use engine::hot::exec::{DesiredQuote, ExecSettings, QuoteLevel};
+use std::fs::{File, Permissions};
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use std::time::{Duration, Instant};
+
+use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup, StateDigest};
+use engine::hot::exec::{DesiredQuote, ExecSettings, HaltReason, QuoteLevel};
 use engine::hot::sink::{ExecSink, ExposureSink};
+use engine::hot::spawn::QueueProducer;
 use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem};
 use engine::msg::failure::{FailureClass, Halt};
-use engine::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Qty, Side};
-use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
-use engine::msg::time::Stamper;
-use engine::runtime::StartError;
+use engine::msg::ids::{
+    ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Qty, QueueId, Side, SourceId,
+};
+use engine::msg::inbound::{FileWriter, InboundMessage, MessageBody, SpinTick, WriterFailure};
+use engine::msg::time::{EngineClock, Stamper};
+use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::{ExecutionMode, TrackerSpec};
 use engine::runtime::exposure::{
-    ExposureError, ExposureSnapshot, ExposureState, InstrumentExposure, MAX_EXPOSURE_INSTRUMENTS,
-    file_path,
+    ExposureError, ExposureSnapshot, ExposureState, InstrumentExposure, WriterStatus, file_path,
 };
 use engine::runtime::registry::{InstrumentRow, Registry};
+use engine::runtime::shutdown::FatalSignal;
+use engine::runtime::{DrainDeadline, DrainFailure, DrainOutcome, Exit, StartError, Trigger};
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
     FillPen, ONE, book_reset, detached_setup, exec_event, exposure_ring, instrument_row,
-    persist_ring, snapshot_pair, ts,
+    persist_ring, snapshot_pair, spin, ts, ui_event_ring,
 };
 use crate::exec_support::{drain_commands, exec_settings, make_ready, spin_at};
 use crate::parquet_readback::TempDir;
 use crate::runtime::exposure_state::{
     BINANCE_SOURCE, POLY_SOURCE, drain_writer, identity, load_live, registry_for, row, snapshot,
-    spawn_live_writer, write_from, write_through_the_writer,
+    spawn_live_writer, spawn_reporting_writer, write_from, write_through_the_writer,
 };
 
 const INSTRUMENT: InstrumentId = InstrumentId(0);
@@ -175,7 +184,7 @@ fn a_fill_reaches_the_file_that_the_next_start_reads() {
     let root = TempDir::new("exposure-write-through");
     let registry = registry_for(BINANCE_SOURCE);
     let (writer, sink) = spawn_live_writer(root.path(), &registry, &ExposureState::default());
-    let (mut engine, _commands) = engine_with_exposure(
+    let (mut engine, _commands, _ui_events) = engine_with_exposure(
         registry.instruments(),
         ExposureWiring {
             restored: &[],
@@ -416,6 +425,332 @@ enum Expect {
     Refuses(fn(&ExposureError) -> bool),
 }
 
+/// FITNESS: a writer that fails `exposure.max_failed_writes` writes of the exposure file in a row
+/// sends one `WriterFailed` message on its own input queue, and the fold halts quoting at that
+/// message. A writer that tried with no end while the engine traded on would leave a file that no
+/// longer holds the position, and the next start would restore the stale one with nothing to say
+/// so. The halt is one message of the input, so a second fold of the same input halts at the same
+/// place.
+#[test]
+fn exposure_write_failure_halts_at_limit() {
+    a_writer_that_cannot_write_reports_once_and_quoting_halts();
+    a_folder_that_does_not_sync_counts_as_a_failed_write();
+    a_write_that_passes_starts_the_count_again();
+    a_writer_that_died_gives_an_exit_that_is_not_graceful();
+}
+
+/// Each write fails, because the folder takes no new file. The position changes at each spin, so
+/// each poll of the writer has a newer snapshot to write.
+fn a_writer_that_cannot_write_reports_once_and_quoting_halts() {
+    let root = TempDir::new("exposure-write-fails");
+    let registry = registry_for(BINANCE_SOURCE);
+    let clock = EngineClock::start();
+    let (status, mut reports, fatal) = writer_status(&clock);
+    let (writer, sink) = spawn_reporting_writer(
+        root.path(),
+        &registry,
+        &ExposureState::default(),
+        Some(status),
+    );
+    let (mut engine, _commands, mut ui_events) = engine_with_exposure(
+        registry.instruments(),
+        ExposureWiring {
+            restored: &[],
+            sink,
+        },
+    );
+    let started_at = clock.now().micros();
+    make_ready(&mut engine, started_at);
+    let mut fold = RecordedFold::default();
+    let unwritable = FolderMode::set(root.path(), 0o500);
+    assert!(
+        File::create(root.path().join("probe")).is_err(),
+        "this case needs a user that file permissions bind, not root"
+    );
+
+    let mut pen = FillPen::new(0);
+    let deadline = Instant::now() + REPORT_DEADLINE;
+    let mut seq = 0;
+    let report = loop {
+        let when = clock.now().micros();
+        for message in pen.fill(Side::Buy, 60_000 * ONE, ONE / 100, when) {
+            fold.dispatch(&mut engine, message);
+        }
+        seq += 1;
+        fold.dispatch(&mut engine, spin(seq, when));
+        std::thread::sleep(Duration::from_millis(20));
+        if let Ok(report) = reports.pop() {
+            break report;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the writer sent no report in {REPORT_DEADLINE:?} of failed writes"
+        );
+    };
+    assert_eq!(
+        report.body,
+        MessageBody::WriterFailed(WriterFailure {
+            writer: FileWriter::Exposure,
+            consecutive_failures: 3,
+        }),
+        "the writer reports at its limit of 3 failed writes in a row"
+    );
+    let report_index = fold.inputs.len();
+    fold.dispatch(&mut engine, report);
+    assert!(
+        halt_of(&mut ui_events).is_some_and(|halt| !halt.is_halted()),
+        "the spins before the report show no halt"
+    );
+    fold.dispatch(&mut engine, spin(seq + 1, clock.now().micros()));
+    assert!(
+        matches!(
+            halt_of(&mut ui_events),
+            Some(UiHalt::Halted {
+                reason: HaltReason::WriterFailed,
+                ..
+            })
+        ),
+        "quoting halts at the report, and the halt names the writer that failed"
+    );
+
+    std::thread::sleep(4 * POLL);
+    assert!(
+        reports.pop().is_err(),
+        "each later write fails too, and the writer reports once in a run"
+    );
+    assert!(!fatal.is_tripped(), "the queue never filled");
+
+    let replay = RecordedFold::replay(registry.instruments(), started_at, &fold.inputs);
+    assert_eq!(
+        replay.digests, fold.digests,
+        "a second fold of the same input holds the same state after each message"
+    );
+    assert_ne!(
+        fold.digests[report_index - 1],
+        fold.digests[report_index],
+        "and the report is the message at which the state halts"
+    );
+
+    drop(unwritable);
+    drop(engine);
+    drain_writer(writer).expect("a folder that takes files again takes the last write");
+}
+
+/// The file is written, but its folder does not sync, so a power cut could bring back the file
+/// before it. That write is not done, and it counts toward the limit.
+fn a_folder_that_does_not_sync_counts_as_a_failed_write() {
+    let root = TempDir::new("exposure-folder-unsynced");
+    let registry = registry_for(BINANCE_SOURCE);
+    let clock = EngineClock::start();
+    let (status, mut reports, _fatal) = writer_status(&clock);
+    let (writer, mut sink) = spawn_reporting_writer(
+        root.path(),
+        &registry,
+        &ExposureState::default(),
+        Some(status),
+    );
+    let unsynced = FolderMode::set(root.path(), 0o300);
+    assert!(
+        File::open(root.path()).is_err(),
+        "this case needs a user that file permissions bind, not root"
+    );
+    sink.push(snapshot(1, &[row(0, ONE, -60_000 * ONE, 60_000 * ONE)]));
+
+    let report = wait_for_report(&mut reports);
+    assert_eq!(
+        report.body,
+        MessageBody::WriterFailed(WriterFailure {
+            writer: FileWriter::Exposure,
+            consecutive_failures: 3,
+        })
+    );
+    assert!(
+        file_path(root.path(), &identity(), Some(ExecutionMode::Live)).exists(),
+        "each try wrote the file, and only its folder did not sync"
+    );
+    drop(unsynced);
+    drop(sink);
+    drain_writer(writer).expect("a folder that syncs again takes the last write");
+}
+
+/// Two writes fail, the third passes, and two more fail: no limit of 3 in a row is reached. Each
+/// try leaves the file behind, because only its folder fails to sync, so the test sees each try.
+fn a_write_that_passes_starts_the_count_again() {
+    let root = TempDir::new("exposure-write-recovers");
+    let registry = registry_for(BINANCE_SOURCE);
+    let clock = EngineClock::start();
+    let (status, mut reports, _fatal) = writer_status(&clock);
+    let (writer, mut sink) = spawn_reporting_writer(
+        root.path(),
+        &registry,
+        &ExposureState::default(),
+        Some(status),
+    );
+    let path = file_path(root.path(), &identity(), Some(ExecutionMode::Live));
+    let folder = FolderMode::set(root.path(), 0o300);
+    for seq in 1..=2 {
+        sink.push(snapshot(seq, &[row(0, seq as i64 * ONE, 0, 0)]));
+        folder.change_to(0o300);
+        wait_for_try(&path);
+        wait_for_try(&path);
+        folder.change_to(0o700);
+        wait_for_try(&path);
+    }
+    assert!(
+        reports.pop().is_err(),
+        "a write that passed started the count again, so no limit was reached"
+    );
+    drop(folder);
+    drop(sink);
+    drain_writer(writer).expect("the last write passes");
+}
+
+/// A row of an instrument that this run's registry does not hold is a bug, and the writer dies on
+/// it rather than write a file without the row. Its panic text on stderr is part of a green run.
+fn a_writer_that_died_gives_an_exit_that_is_not_graceful() {
+    let root = TempDir::new("exposure-writer-panic");
+    let registry = registry_for(BINANCE_SOURCE);
+    let (writer, mut sink) = spawn_live_writer(root.path(), &registry, &ExposureState::default());
+    sink.push(snapshot(1, &[row(5, ONE, 0, 0)]));
+    drop(sink);
+
+    let error = drain_writer(writer).expect_err("a writer that died cannot drain clean");
+    assert!(
+        matches!(error, ExposureError::WriterPanicked { .. }),
+        "{error:?}"
+    );
+    assert_eq!(error.failure_class(), FailureClass::Halt(Halt::Engine));
+    let exit = Exit::decide(DrainOutcome {
+        trigger: Trigger::Request("SIGTERM"),
+        fatal: None,
+        failures: vec![DrainFailure::Exposure {
+            cause: error.to_string().into(),
+        }],
+        deadline: DrainDeadline::Kept,
+    });
+    assert!(matches!(exit, Exit::DrainFailed(_)), "{exit:?}");
+    assert_ne!(exit.code(), 0);
+}
+
+/// The writer polls each 100 ms, so 3 failed writes take about 300 ms.
+const POLL: Duration = Duration::from_millis(100);
+const REPORT_DEADLINE: Duration = Duration::from_secs(10);
+
+/// The writer-status queue of a writer that reports at 3 failed writes in a row.
+fn writer_status(clock: &EngineClock) -> (WriterStatus, Consumer<InboundMessage>, FatalSignal) {
+    let (producer, reports) = RingBuffer::<InboundMessage>::new(4);
+    let fatal = FatalSignal::new();
+    let queue = QueueProducer::new(
+        producer,
+        fatal.clone(),
+        QueueId::new(5).unwrap(),
+        SourceId(3),
+    );
+    let status = WriterStatus {
+        queue,
+        clock: clock.clone(),
+        max_failed_writes: 3,
+    };
+    (status, reports, fatal)
+}
+
+fn wait_for_report(reports: &mut Consumer<InboundMessage>) -> InboundMessage {
+    let deadline = Instant::now() + REPORT_DEADLINE;
+    loop {
+        if let Ok(report) = reports.pop() {
+            return report;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the writer sent no report in {REPORT_DEADLINE:?} of failed writes"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Waits for one try of the writer to leave the file, lets the try end, and removes the file, so
+/// the next try shows too. The tries are a poll apart, far longer than the wait after the file.
+fn wait_for_try(path: &Path) {
+    let deadline = Instant::now() + REPORT_DEADLINE;
+    while !path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the writer made no try in {REPORT_DEADLINE:?}"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    std::thread::sleep(Duration::from_millis(20));
+    std::fs::remove_file(path).expect("the test removes the file of the try");
+}
+
+/// A folder whose mode the test sets. It gets each permission back on drop, so its temporary
+/// folder can be removed.
+struct FolderMode<'a>(&'a Path);
+
+impl<'a> FolderMode<'a> {
+    fn set(folder: &'a Path, mode: u32) -> Self {
+        let guard = Self(folder);
+        guard.change_to(mode);
+        guard
+    }
+
+    fn change_to(&self, mode: u32) {
+        std::fs::set_permissions(self.0, Permissions::from_mode(mode))
+            .expect("the test sets the mode of its folder");
+    }
+}
+
+impl Drop for FolderMode<'_> {
+    fn drop(&mut self) {
+        let restored = std::fs::set_permissions(self.0, Permissions::from_mode(0o700));
+        // A second panic while a failing test unwinds would abort the whole test binary.
+        if !std::thread::panicking() {
+            restored.expect("the test gives the folder each permission back");
+        }
+    }
+}
+
+/// The messages of one fold, with the state after each one.
+#[derive(Default)]
+struct RecordedFold {
+    inputs: Vec<InboundMessage>,
+    digests: Vec<StateDigest>,
+}
+
+impl RecordedFold {
+    fn dispatch(&mut self, engine: &mut HotEngine, message: InboundMessage) {
+        engine.dispatch(&message);
+        self.inputs.push(message);
+        self.digests.push(engine.state_digest());
+    }
+
+    /// The same messages folded by a fresh engine that was made ready at the same time.
+    fn replay(
+        instruments: &[InstrumentRow],
+        started_at: i64,
+        inputs: &[InboundMessage],
+    ) -> RecordedFold {
+        let (mut engine, _commands) = restored_engine(instruments, &[]);
+        make_ready(&mut engine, started_at);
+        let mut fold = RecordedFold::default();
+        for message in inputs {
+            fold.dispatch(&mut engine, *message);
+        }
+        fold
+    }
+}
+
+/// The halt that the last spin's execution event shows, or `None` when no spin ran.
+fn halt_of(ui_events: &mut Consumer<UiEvent>) -> Option<UiHalt> {
+    let mut halt = None;
+    while let Ok(event) = ui_events.pop() {
+        if let UiEvent::Execution { halt: latest, .. } = event {
+            halt = Some(latest);
+        }
+    }
+    halt
+}
+
 fn asset_amounts<'a>(registry: &'a Registry, state: &ExposureState) -> Vec<(&'a str, i64)> {
     state
         .assets()
@@ -435,17 +770,21 @@ fn restored_engine(
     restored: &[InstrumentExposure],
 ) -> (HotEngine, Consumer<ExecLaneItem>) {
     let (sink, _snapshots) = exposure_ring(64);
-    engine_with_exposure(instruments, ExposureWiring { restored, sink })
+    let (engine, commands, _ui_events) =
+        engine_with_exposure(instruments, ExposureWiring { restored, sink });
+    (engine, commands)
 }
 
 fn engine_with_exposure(
     instruments: &[InstrumentRow],
     exposure: ExposureWiring<'_>,
-) -> (HotEngine, Consumer<ExecLaneItem>) {
+) -> (HotEngine, Consumer<ExecLaneItem>, Consumer<UiEvent>) {
     let (persistence, _persist) = persist_ring(1_024);
     let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(256);
+    let (ui_event_sink, ui_events) = ui_event_ring(1_024);
     let engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),
+        ui_event_sink,
         exec: Some(ExecWiring {
             sink: ExecSink::new(commands_producer, Stamper::Off),
             // A wide band and a long book age: a quote refused by the price band or a stale book
@@ -459,7 +798,7 @@ fn engine_with_exposure(
         exposure,
         ..detached_setup(instruments, Box::new(TwoSidedQuoter))
     });
-    (engine, commands)
+    (engine, commands, ui_events)
 }
 
 /// Declares a resting quote on both sides at the touch, at each spin, and records what the ledger
@@ -641,28 +980,6 @@ fn a_restored_position_without_a_mark_is_not_flat() {
         readings.pnl_quote, RESTORED_COST,
         "and raw PnL reads as the whole cost basis lost, which is why no loss limit may compare \
          against it"
-    );
-}
-
-/// FITNESS: a writer that dies never reports a clean drain, so the run cannot exit 0 while the file
-/// on disk holds a position that the next start restores and trades against.
-#[test]
-fn a_writer_that_died_cannot_report_a_clean_drain() {
-    let root = TempDir::new("exposure-writer-panic");
-    let registry = registry_for(BINANCE_SOURCE);
-    let (writer, mut sink) = spawn_live_writer(root.path(), &registry, &ExposureState::default());
-
-    // More rows than the fixed array holds is corrupt state, and the writer must die on it rather
-    // than write it. The writer thread's own panic text on stderr is part of a green run.
-    let mut corrupt = final_position(1, ONE);
-    corrupt.len = MAX_EXPOSURE_INSTRUMENTS as u8 + 1;
-    sink.push(corrupt);
-    drop(sink);
-
-    let outcome = drain_writer(writer);
-    assert!(
-        matches!(outcome, Err(ExposureError::WriterPanicked { .. })),
-        "a panicked writer surfaces as WriterPanicked, so the exit is not graceful, got {outcome:?}"
     );
 }
 

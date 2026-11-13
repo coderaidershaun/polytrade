@@ -15,8 +15,8 @@ use engine::log::{HotRecord, TextRecord, open_hot_lane, open_text_lane};
 use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus};
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{
-    BookChunk, InboundMessage, KlineEvent, MarketRotation, MessageBody, MessageKind, SpinTick,
-    TradeEvent,
+    BookChunk, FileWriter, InboundMessage, KlineEvent, MarketRotation, MessageBody, MessageKind,
+    SpinTick, TradeEvent, WriterFailure,
 };
 use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::run_state::{RunAssertion, RunState};
@@ -472,7 +472,7 @@ fn two_folds_agree(start: Start, sequence: &[InboundMessage]) -> Result<Folded, 
 }
 
 /// One name for each kind of message, in the order of [`kind_of`].
-const KINDS: [&str; 10] = [
+const KINDS: [&str; 11] = [
     "trade",
     "book",
     "book reset",
@@ -483,6 +483,7 @@ const KINDS: [&str; 10] = [
     "run control",
     "exec",
     "account",
+    "writer failed",
 ];
 
 /// No arm catches the rest, so a new kind of message stops this file compiling here. Its name then
@@ -499,6 +500,7 @@ fn kind_of(message: &InboundMessage) -> usize {
         MessageBody::RunControl(_) => 7,
         MessageBody::Exec(_) => 8,
         MessageBody::Account(_) => 9,
+        MessageBody::WriterFailed(_) => 10,
     }
 }
 
@@ -536,6 +538,9 @@ enum Draw {
     Account {
         base_units: i64,
         quote_units: i64,
+    },
+    WriterFailed {
+        consecutive_failures: u32,
     },
 }
 
@@ -652,6 +657,9 @@ fn draw() -> impl Generator<Value = Draw> {
         1 => (0..20_i64, 0..2_000_000_i64).prop_map(|(base_units, quote_units)| Draw::Account {
             base_units,
             quote_units
+        }),
+        1 => (1..5_u32).prop_map(|consecutive_failures| Draw::WriterFailed {
+            consecutive_failures
         }),
     ]
 }
@@ -817,6 +825,15 @@ impl Builder {
                     }),
                 )
             }
+            Draw::WriterFailed {
+                consecutive_failures,
+            } => InboundMessage::new(
+                ts(when),
+                MessageBody::WriterFailed(WriterFailure {
+                    writer: FileWriter::Exposure,
+                    consecutive_failures,
+                }),
+            ),
         }
     }
 
@@ -1149,6 +1166,7 @@ fn kind_named_by(body: &MessageBody) -> MessageKind {
         MessageBody::RunControl(_) => MessageKind::RunControl,
         MessageBody::Exec(_) => MessageKind::Exec,
         MessageBody::Account(_) => MessageKind::Account,
+        MessageBody::WriterFailed(_) => MessageKind::WriterFailed,
     }
 }
 
