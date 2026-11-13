@@ -28,6 +28,8 @@ use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::RecordedTables;
+use proptest::prelude::{prop_assert, prop_assert_eq};
+use proptest::test_runner::{Config, TestRunner};
 use rtrb::Consumer;
 
 use crate::engine_support::{
@@ -78,7 +80,6 @@ fn cancels(commands: &[ExecCommand]) -> usize {
         .count()
 }
 
-#[test]
 fn the_quote_window_opens_at_the_open_and_shuts_a_margin_before_the_close() {
     let window = WindowInfo {
         open_ts_us: VenueTs::from_micros(OPEN),
@@ -157,11 +158,10 @@ fn seat_ladder(
     first_seq + LADDER_DEPTH as u64
 }
 
-/// FITNESS: the quote stop pulls the whole ladder and cancels nothing twice, and the mirror control —
+/// the quote stop pulls the whole ladder and cancels nothing twice, and the mirror control —
 /// an instrument that carries no window at all quotes whatever the margin says, because there is no
 /// stop to reach. Without the second half, an engine that had simply stopped quoting for some other
 /// reason would read exactly like the window gate working.
-#[test]
 fn the_quote_stop_pulls_the_whole_ladder_and_an_unwindowed_instrument_never_stops() {
     let (mut engine, mut commands, mut ui_events) =
         quoting_engine(Box::new(LadderQuoter), LADDER_DEPTH);
@@ -222,7 +222,6 @@ fn the_quote_stop_pulls_the_whole_ladder_and_an_unwindowed_instrument_never_stop
     );
 }
 
-#[test]
 fn a_sweep_pulls_resting_quotes_and_never_a_marketable_order() {
     let is_resting = |style: OrderStyle, state: OrderState| {
         let mut orders = OrderTable::new(&exec_capacity(1), 0);
@@ -420,5 +419,112 @@ fn ack_cancelled(engine: &mut HotEngine, commands: &[ExecCommand], when: i64) {
                 ..exec_event(INSTRUMENT, *client_id, Side::Buy, BID, when)
             }),
         ));
+    }
+}
+
+/// FITNESS: no quote rests when a window closes. A fill in the last moment of an expiring market is
+/// a position on contracts that settle at nothing or at everything, with no book left to trade out.
+///
+/// Over generated windows (open, length, stop margin, and spin interval) for a ladder of two levels
+/// a side, with each placement and cancel answered within its spin: before the open nothing is
+/// placed; from the stop on nothing is placed, and the first spin there cancels each resting quote,
+/// so none rests after it. The named cases hold the window edges, a stop that pulls a whole ladder
+/// while an instrument with no window quotes on, and a sweep that never cancels a marketable order.
+#[test]
+fn no_order_rests_when_a_window_closes() {
+    the_quote_window_opens_at_the_open_and_shuts_a_margin_before_the_close();
+    the_quote_stop_pulls_the_whole_ladder_and_an_unwindowed_instrument_never_stops();
+    a_sweep_pulls_resting_quotes_and_never_a_marketable_order();
+
+    let windows = (0i64..=60, 20i64..=300, 1i64..=10, 1i64..=7, 1i64..=3);
+    let mut runner = TestRunner::new(Config {
+        cases: 32,
+        failure_persistence: None,
+        ..Config::default()
+    });
+    let outcome = runner.run(&windows, |(offset, length, margin, interval, lead)| {
+        let open = OPEN + offset * 1_000_000;
+        let close = open + length * 1_000_000;
+        let stop = close - margin * 1_000_000;
+        let built = built_quoting_engine(QuotingSetup {
+            row: row_with_ceiling(1_000_000 * ONE),
+            strategy: Box::new(TwoLevelsEachSide),
+            restored: &[],
+            settings: ExecSettings {
+                quote_stop_margin: DurationUs::from_secs(margin),
+                max_orders_per_side: 2,
+                ..exec_settings()
+            },
+            tables: RecordedTables::new(&ALL_TABLES),
+            run_nonce: 0,
+        });
+        let (mut engine, mut commands) = (built.engine, built.commands);
+        let first = open - lead * interval * 1_000_000;
+        make_ready(&mut engine, first - 2);
+        for message in reseat_book(BID, ASK, first - 2) {
+            engine.dispatch(&message);
+        }
+        engine.dispatch(&rotation(0, open, close, first - 1));
+        let mut live = Vec::new();
+        let mut placed_in_window = 0;
+        for (seq, at) in (1u64..)
+            .zip((first..=close + interval * 1_000_000).step_by(interval as usize * 1_000_000))
+        {
+            spin_at(&mut engine, seq, at);
+            let sent = drain_commands(&mut commands);
+            for command in &sent {
+                match command {
+                    ExecCommand::Place { client_id, .. } => live.push(*client_id),
+                    ExecCommand::Cancel { client_id, .. } => live.retain(|id| id != client_id),
+                    _ => {}
+                }
+            }
+            ack_placed(&mut engine, &sent, at + 1);
+            ack_cancelled(&mut engine, &sent, at + 1);
+            if at < open || at >= stop {
+                prop_assert_eq!(places(&sent), 0, "a placement outside the window at {}", at);
+            } else {
+                placed_in_window += places(&sent);
+            }
+            if at >= stop {
+                prop_assert!(
+                    live.is_empty(),
+                    "{:?} still rest at {} past the stop {}",
+                    live,
+                    at,
+                    stop
+                );
+            }
+        }
+        let has_window_spin = (first..stop)
+            .step_by(interval as usize * 1_000_000)
+            .any(|at| at >= open);
+        prop_assert!(
+            !has_window_spin || placed_in_window > 0,
+            "the window placed nothing"
+        );
+        Ok(())
+    });
+    if let Err(failure) = outcome {
+        panic!("a quote rested at a window's close: {failure}");
+    }
+}
+
+/// Quotes a bid and an offer at each of two levels, each spin.
+struct TwoLevelsEachSide;
+
+impl Strategy for TwoLevelsEachSide {
+    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
+        for level in 0..2u8 {
+            let step = i64::from(level) * ONE;
+            for (side, price) in [(Side::Buy, BID - step), (Side::Sell, ASK + step)] {
+                let quote = DesiredQuote {
+                    price: Price::from_mantissa(price),
+                    qty: QUOTE_QTY,
+                };
+                let level = QuoteLevel::new(level).expect("two levels");
+                ctx.quote(INSTRUMENT, side, level, Some(quote));
+            }
+        }
     }
 }
