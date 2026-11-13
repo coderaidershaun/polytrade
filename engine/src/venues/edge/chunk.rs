@@ -5,7 +5,6 @@ use crate::msg::ids::{InstrumentId, Side};
 use crate::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, Level};
 use crate::msg::time::{LocalTs, VenueTs};
 
-// A chunk reports its own length in a `u8`, and raising the level count lives in another module.
 const _: () = assert!(
     BOOK_CHUNK_LEVELS <= u8::MAX as usize,
     "a chunk's level count no longer fits the byte that reports it"

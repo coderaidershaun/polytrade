@@ -96,7 +96,11 @@ labelled_enum! {
 }
 
 impl Side {
-    /// Snap PASSIVE direction: buy DOWN, sell UP. Rounding opposite = aggression + crossing risk. Method (not match) catches inversions at compile time.
+    /// Rounds onto the passive side of the grid: a buy rounds down and a sell rounds up. Rounding
+    /// the other way makes the order aggressive, so it can cross the book.
+    ///
+    /// # Panics
+    /// When `increment` is not positive.
     #[inline]
     pub fn snap_passive(self, price: Price, increment: i64) -> Price {
         assert!(

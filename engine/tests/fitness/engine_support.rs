@@ -1,5 +1,5 @@
-//! Shared builders for the dispatch fitness tests (zero-alloc + replay): synthetic messages,
-//! a fully-configured instrument row, and a persistence ring wired to a `PersistSink`.
+//! Builders that many tests share, so that each builds its messages, its instrument row, and its
+//! persistence ring wired to a `PersistSink` the same way.
 
 use std::num::NonZeroU32;
 

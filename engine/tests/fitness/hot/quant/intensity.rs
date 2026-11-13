@@ -5,7 +5,7 @@
 //! directly, and buy-to-ask routing is pinned through `estimate.bid.is_none()`. The bucket
 //! contents (per-depth fill, sweep grouping by `(side, exchange_ts)`, the shallower-continuation
 //! rule, decay between groups, the clamp of an inside-spread print to bucket 0) and the closed-form
-//! geometric MLE cross-check of the fit are not checked from outside the crate.
+//! geometric maximum-likelihood check of the fit are not checked from outside the crate.
 
 use super::Lcg;
 use engine::hot::book::{Book, SnapshotOutcome};

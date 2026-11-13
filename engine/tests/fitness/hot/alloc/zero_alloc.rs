@@ -1,5 +1,5 @@
-//! Zero-allocation fitness: after construction, the hot loop's own driver and the quant fit never
-//! touch the allocator. The falsifiable proof of the steady-state no-alloc rule, green forever.
+//! Checks that the hot loop's driver and the quant fit never allocate once built. The rule that the
+//! hot thread allocates nothing in steady state rests on this test, not on trust.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

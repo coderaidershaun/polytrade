@@ -1,9 +1,9 @@
 //! The two money rules of the order table: a passive quote never snaps into aggression, and a
 //! duplicated, reordered or late event stream never books a fill twice or loses one.
 //!
-//! Both failures are silent by construction. An inverted snap still compiles, still produces a legal
-//! order, and every layer downstream agrees with it; a double-folded fill produces a ledger that is
-//! wrong in a direction no downstream reader can detect.
+//! Both failures are silent by construction. An inverted snap still compiles, still makes a legal
+//! order, and each layer after it agrees with it. A fill folded twice makes a ledger that is wrong
+//! in a way that no later reader can detect.
 
 use engine::hot::exec::{
     AccountTable, ClientIdLayout, CloseReason, MAX_ORDER_SLOTS, OrderClaim, OrderSlot, OrderState,

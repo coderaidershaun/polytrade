@@ -3,11 +3,11 @@
 //!
 //! Separate from the quote reconciler because it answers a different question. The reconciler asks
 //! what the book should look like; flatten asks how to stop holding a position. Both are pure:
-//! fitness can run them without an engine, and a strategy uses this path only when trying to exit.
+//! a test can run them without an engine, and a strategy uses this path only when trying to exit.
 //!
 //! Idempotent by design: the strategy re-declares intent every spin, the plan sizes to current
 //! position, and partial fills produce a smaller order next spin. Nothing remembers what was sent.
-//! The engine-side pass is at file bottom, colocated with the planner, so their decisions stay aligned.
+//! The engine's own pass sits at the end of this file, beside the planner, so the two decide alike.
 
 use crate::log::hot_warn;
 use crate::msg::exec::OrderStyle;
@@ -88,6 +88,9 @@ pub enum FlattenOutcome {
 /// `Nothing` means flat (goal reached). `Refuse` means the engine still holds a position it could not
 /// shed (residue below venue minimum). On a resolving market, an unflattened position realizes its
 /// full value at resolution, so the distinction matters.
+///
+/// # Panics
+/// When the tick or the step of the grid is not positive.
 pub fn plan_flatten(input: FlattenInput) -> FlattenOutcome {
     let FlattenInput {
         position_base,

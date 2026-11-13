@@ -1,8 +1,8 @@
-//! Engine-owned order truth: the fixed slot array, the geography that addresses a slot, and the
-//! lifecycle that hands slots out and takes them back.
+//! The engine's own record of its orders: a fixed table of slots, the client id that names a slot,
+//! and the rules that hand slots out and take them back.
 //!
-//! What an event MEANS lives next door in `transition.rs`. The two are separable because the store
-//! never interprets: it locates a slot, and the transition table decides what happens to it.
+//! The table never reads what an event means: it finds the slot, and a separate transition table
+//! decides what happens to it.
 
 use std::ops::Range;
 
@@ -30,6 +30,8 @@ pub struct ClientIdLayout {
 }
 
 impl ClientIdLayout {
+    /// # Panics
+    /// When `slot_index` is past the slot table.
     #[inline]
     pub fn encode(self, slot_index: usize, generation: u16) -> ClientOrderId {
         assert!(

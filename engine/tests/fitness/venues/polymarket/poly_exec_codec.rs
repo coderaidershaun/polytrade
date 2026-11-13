@@ -1,10 +1,10 @@
-//! Polymarket execution codec goldens. With no testnet, these committed venue payloads are the only
-//! place the normalisation layer is exercised before real money moves through it.
+//! Polymarket order messages, decoded from recorded venue payloads. With no test network, these
+//! tests are the only check of that decoding before real money moves through it.
 //!
-//! Four judgements are pinned, because each is silent and expensive when wrong: the fill law (which
-//! payload may be folded and which may not), the message-string → [`RejectClass`] table, the split
-//! between an order rejection and a venue-wide outage, and the byte-exact place body — whose
-//! signature is checked against a vector the official SDK minted, not against our own output.
+//! Four judgements are checked, because each fails silently and costs money when wrong: which
+//! payload may be folded as a fill, the message text to a [`RejectClass`], the split between an
+//! order rejection and an outage of the whole venue, and the exact bytes of a place body, whose
+//! signature is checked against a vector from the official SDK, not against our own output.
 //!
 //! A fifth is the startup gate's protocol-version read, which must accept the real venue's JSON
 //! shape and fail closed on anything else, because nothing else stands between it and a live run.

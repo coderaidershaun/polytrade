@@ -1,9 +1,9 @@
-//! Execution wire codec goldens. With no testnet, these run against committed venue payloads are
-//! the only place the normalisation layer is exercised at all before real money moves through it.
+//! Binance order messages, decoded from recorded venue payloads. With no test network, these tests
+//! are the only check of that decoding before real money moves through it.
 //!
-//! Three judgements are pinned here because each is silent and expensive when wrong: the
-//! `(x, X)` → `(ExecKind, VenueOrderStatus)` table, the error-code → [`RejectClass`] table, and the
-//! client-id → [`Provenance`] test that decides whether the engine may touch an order.
+//! Three mappings are checked, because each fails silently and costs money when wrong: the codes
+//! `x` and `X` to an `ExecKind` and a `VenueOrderStatus`, the error codes to a [`RejectClass`], and
+//! the client id to a [`Provenance`], which decides whether the engine may touch an order.
 
 use engine::msg::exec::{
     AccountChunkKind, ExecEvent, ExecKind, Liquidity, OrderStyle, Provenance, RejectClass,

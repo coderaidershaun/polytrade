@@ -1,5 +1,5 @@
-//! Binance depth sequencing goldens: the depth state machines over recorded prod fixtures plus
-//! the synthetic spot/perp equal-boundary asymmetry a fixture can't force.
+//! Binance depth sequencing, run over recorded live payloads, plus made-up cases for the one
+//! boundary rule where spot and futures differ, which no recording can force.
 
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunkKind, InboundMessage, MessageBody};

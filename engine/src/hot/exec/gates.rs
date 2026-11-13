@@ -79,6 +79,8 @@ pub struct SessionPnl {
     pub position_base: Qty,
 }
 
+/// # Panics
+/// When `max_loss` is negative.
 #[inline]
 pub fn assess_loss(pnl: SessionPnl, max_loss: Notional) -> LossVerdict {
     assert!(

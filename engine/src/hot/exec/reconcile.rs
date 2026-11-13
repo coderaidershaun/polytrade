@@ -1,18 +1,18 @@
 //! The quote reconciler: one pure function from "what the strategy wants" and "what is actually
 //! resting" to the single primitive that closes the gap.
 //!
-//! No `&mut self`, no clock, no ring, no allocation — every input is a parameter, so fitness drives
+//! No `&mut self`, no clock, no ring, no allocation: every input is a parameter, so a test drives
 //! it with no engine at all. That is the point: this is where the money decisions live, and a
 //! function testable only through a running engine is a function tested less.
 //!
-//! Guard-clause ordered, and the order is load-bearing rather than stylistic: the cross guard comes
-//! before the funds gate because a quote that would take liquidity must be refused whether or not we
-//! could have afforded it.
+//! The order of the guard clauses carries meaning, not style: the cross guard comes before the
+//! funds gate, because a quote that would take liquidity must be refused whether or not we could
+//! have afforded it.
 //!
-//! What is NOT here is the single-flight rule. This function decides one level; whether the side is
-//! already awaiting an answer is a side-wide fact, and the engine holds it — see the guard in
-//! `spin.rs`'s ladder pass and the matching one in `flatten.rs`. A second copy here would be a
-//! second place to get `max_orders_per_side` wrong.
+//! The single-flight rule is NOT here. This function decides one level, and whether the side
+//! already waits for an answer is a fact of the whole side, so the engine holds it, in its ladder
+//! pass and in its flatten pass. A second copy here would be a second place to get
+//! `max_orders_per_side` wrong.
 
 use core::fmt;
 use core::mem::discriminant;
@@ -238,6 +238,9 @@ impl LogValue for RejectReason {
 }
 
 /// The one decision function; see the module header for why the guard order is not stylistic.
+///
+/// # Panics
+/// When the tick or the step of the grid is not positive.
 pub fn reconcile_side(input: ReconcileInput) -> ReconcileOutcome {
     let ReconcileInput {
         side,
