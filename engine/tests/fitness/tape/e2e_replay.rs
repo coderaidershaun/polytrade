@@ -10,7 +10,9 @@ use rtrb::RingBuffer;
 use tokio::sync::mpsc;
 
 use engine::hot::ingress::IngressQueues;
-use engine::hot::spawn::{HotThreadConfig, IdleWait, QueueProducer, spawn_hot_thread};
+use engine::hot::spawn::{
+    HotDriver, HotLoop, HotThreadConfig, IdleWait, QueueProducer, spawn_hot_thread,
+};
 use engine::hot::strategy::StrategyConfig;
 use engine::msg::ids::{FIXED_SCALE, QueueId, SourceId};
 use engine::msg::inbound::InboundMessage;
@@ -18,6 +20,7 @@ use engine::msg::persist::RotationRow;
 use engine::runtime::config::{
     ExecutionMode, RecordedTables, StrategyId, TableKind, TradingEngineId,
 };
+use engine::runtime::pin_to_core;
 use engine::runtime::shutdown::{DrainSignal, FatalSignal};
 use engine::tape::{PersistConfig, PersistWriter, RunMeta};
 
@@ -285,18 +288,21 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
         rotations_rx,
     );
 
+    let (hot_fatal, hot_drain) = (fatal.clone(), drain.clone());
     let hot = spawn_hot_thread(
         HotThreadConfig {
             core_id: None,
             tag: "e2e-hot",
-            samples: None,
-            idle: IdleWait::Spin,
         },
-        ingress,
-        engine,
-        fatal.clone(),
-        drain.clone(),
-    );
+        pin_to_core,
+    )
+    .expect("a thread with no core never refuses its pin")
+    .start(move || HotLoop {
+        driver: HotDriver::new(ingress, engine, None),
+        idle: IdleWait::Spin,
+        fatal: hot_fatal,
+        drain: hot_drain,
+    });
 
     for message in message_sequence() {
         producer.push(message);

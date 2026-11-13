@@ -2,7 +2,7 @@
 //! under a watchdog deadline.
 //!
 //! Every submodule is either a PHASE of one run — `preflight`, `run`, `drain`, in that order — or the
-//! bring-up of ONE subsystem, named for it: `exec`, `link`, `persist`, `metrics`, `senders`,
+//! bring-up of ONE subsystem, named for it: `hot`, `exec`, `link`, `persist`, `metrics`, `senders`,
 //! `timer`, `queues`. The rest are leaves those two lean on: `error`, `exec_identity`, `exit`. Which
 //! venue a run talks to is decided by the adapters, never here.
 
@@ -11,6 +11,7 @@ mod error;
 mod exec;
 mod exec_identity;
 mod exit;
+mod hot;
 mod link;
 pub mod metrics;
 mod persist;
@@ -32,7 +33,7 @@ use tokio::sync::mpsc;
 use crate::hot::dispatch::{ExposureWiring, HotEngine, HotEngineSetup, LinkWiring};
 use crate::hot::metrics::DriverSamples;
 use crate::hot::sink::{LinkSink, StrategyLogSink};
-use crate::hot::spawn::{HotThreadConfig, IdleWait, SimTapGate, spawn_hot_thread};
+use crate::hot::spawn::{HotThreadConfig, SimTapGate, spawn_hot_thread};
 use crate::hot::strategy::Strategy;
 use crate::link::{LinkActor, LinkActorSetup, OutboundLink};
 use crate::log::{self, LaneReader, LogConfig, LogHandle};
@@ -40,8 +41,9 @@ use crate::msg::persist::RotationRow;
 use crate::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, Stamper};
 use crate::msg::ui::UiCatalog;
 use crate::msg::ui::channel::{UiLifecycle, UiWiring, ui_channel};
-use crate::runtime::config::{Config, ExecutionMode, IdleMode, SenderPlacement};
+use crate::runtime::config::{Config, ExecutionMode, SenderPlacement};
 use crate::runtime::exposure::{ExposureHandle, ExposureWriter, ExposureWriterConfig};
+use crate::runtime::pin::PinCall;
 use crate::runtime::shutdown::{DrainSignal, FatalSignal, RunControlGate, TaskHandle};
 use crate::tape::PersistHandle;
 use crate::venues::exec::EdgeHandle;
@@ -49,12 +51,13 @@ use crate::venues::venue::{MarketDataWiring, WindowAssignment, spawn_market_data
 use crate::{error, info, warn};
 
 use drain::install_panic_hook;
-use exec::{ExecBringUp, ExecBringUpSetup, exec_bring_up};
+use exec::{CommandLane, ExecBringUp, ExecBringUpSetup, exec_bring_up, open_command_lane};
+use hot::{HotBringUp, HotBringUpSetup, hot_bring_up};
 use metrics::{
     MetricsBringUp, MetricsBringUpSetup, MetricsThread, SampleProducers, metrics_bring_up,
 };
 use persist::{PersistBringUp, PersistBringUpSetup, persist_bring_up};
-use queues::{InputQueues, QueueCapacities, build_input_queues};
+use queues::{InputProducers, RingPlan};
 use timer::spawn_timer;
 
 pub use drain::{DrainWatchdog, ForcedExit};
@@ -76,7 +79,7 @@ const ROTATIONS_CHANNEL_CAPACITY: usize = 256;
 const ASSIGNMENTS_CHANNEL_CAPACITY: usize = 8;
 const LINK_RING_CAPACITY: usize = 1_024;
 
-struct Engine {
+pub struct Engine {
     /// One trading engine per host: while this is held, no second process under the same TE
     /// identity can place. The credential names the nonce file, not the lock, so swapping keys
     /// does not buy a second engine.
@@ -106,21 +109,37 @@ struct Engine {
 }
 
 impl Engine {
-    /// Brings up what `plan` checked, in dependency order: logging, runtime, persistence,
-    /// metrics, the pinned senders' thread, hot thread, timer, adapters.
+    /// Starts what `plan` checked. Each thread that can refuse its pin starts first, in this order:
+    /// the hot thread, the log, the metrics thread, the pinned senders' thread. Then the runtime
+    /// and the writers start, the hot thread builds its rings and its engine on its own core, and
+    /// only then do the timer, the edges and the link start. Each pin goes through `pin`.
     ///
     /// # Errors
-    /// A log, metrics or senders' thread that cannot pin, or a runtime that cannot be built. Each
-    /// comes after the threads before it have started.
+    /// [`StartError::HotPin`], [`StartError::HousekeepingPin`] or [`StartError::SenderPin`] for a
+    /// thread that cannot pin on Linux, and [`StartError::Runtime`] for a runtime that cannot be
+    /// built. Each thread that started before the refusal has stopped when this returns, and no
+    /// writer has started.
     #[expect(
         clippy::disallowed_methods,
         reason = "the one clock of the process, started before any producer of message stamps"
     )]
-    fn start<P>(
+    pub fn start<P>(
         config: Config<P>,
         strategy: Box<dyn Strategy>,
         plan: StartPlan,
+        pin: PinCall,
     ) -> Result<Engine, StartError> {
+        let hot_thread = spawn_hot_thread(
+            HotThreadConfig {
+                core_id: config.engine.hot_core_id,
+                tag: "hot",
+            },
+            pin,
+        )
+        .map_err(|refused| StartError::HotPin {
+            core: refused.core_id,
+        })?;
+
         // The one clock of the process: every producer of message stamps reads it.
         let clock = EngineClock::start();
         let latency_clock = ClockSource::check(InvariantCounter::detect());
@@ -138,29 +157,81 @@ impl Engine {
 
         let identity = plan.identity.clone();
         let mode = plan.mode;
-        let log_handle = log::init(
-            &LogConfig {
-                dir: config.logging.dir.clone(),
-                file_stem: ExecutionMode::artifact_stem(mode, &identity).into(),
-                ring_capacity: config.logging.ring_capacity,
-                drain_deadline: Duration::from_millis(config.logging.drain_deadline_ms),
-                reopen_limit: config.logging.reopen_limit,
-                core_id: config.engine.housekeeping_core_id,
-            },
-            &clock,
-        )
-        .map_err(|refused| StartError::HousekeepingPin {
-            core_id: refused.core_id,
-            thread: "log",
-        })?;
+        let log_config = LogConfig {
+            dir: config.logging.dir.clone(),
+            file_stem: ExecutionMode::artifact_stem(mode, &identity).into(),
+            ring_capacity: config.logging.ring_capacity,
+            drain_deadline: Duration::from_millis(config.logging.drain_deadline_ms),
+            reopen_limit: config.logging.reopen_limit,
+            core_id: config.engine.housekeeping_core_id,
+        };
+        let log_handle = match log::init(&log_config, &clock, pin) {
+            Ok(handle) => handle,
+            Err(refused) => {
+                hot_thread.abandon();
+                return Err(StartError::HousekeepingPin {
+                    core_id: refused.core_id,
+                    thread: "log",
+                });
+            }
+        };
         log::register_thread("main");
         info!("polysim starting — trading engine {identity}");
         match latency_clock {
             Ok(source) => info!("latency stamps read the {} counter", source.label()),
             Err(refusal) => warn!("{refusal}"),
         }
-
+        if config.engine.hot_core_id.is_some() && !cfg!(target_os = "linux") {
+            warn!(
+                "cpu pinning is best-effort on {} — hot thread may float",
+                std::env::consts::OS
+            );
+        }
         plan.log_report();
+
+        let MetricsBringUp {
+            thread: metrics,
+            samples,
+            reports: latency_reports,
+        } = match metrics_bring_up(MetricsBringUpSetup {
+            latency: &config.latency,
+            clock: &clock,
+            stamper: &stamper,
+            clock_source: latency_clock.unwrap_or_else(|refusal| refusal.fallback()),
+            queue_count: plan.registry.input_queue_count(),
+            core_id: config.engine.housekeeping_core_id,
+            pin,
+        }) {
+            Ok(brought_up) => brought_up,
+            Err(error) => return Err(refuse(error, log_handle, || hot_thread.abandon())),
+        };
+        let senders = match config.senders.placement {
+            SenderPlacement::Shared => None,
+            SenderPlacement::Pinned => match PinnedSenders::spawn(config.senders.core_id, pin) {
+                Ok(senders) => Some(senders),
+                Err(error) => {
+                    return Err(refuse(error, log_handle, || {
+                        metrics.stop();
+                        hot_thread.abandon();
+                    }));
+                }
+            },
+        };
+        let runtime = match build_runtime(config.engine.tokio_workers) {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                return Err(refuse(error, log_handle, || {
+                    drop(senders);
+                    metrics.stop();
+                    hot_thread.abandon();
+                }));
+            }
+        };
+        let tokio_handle = runtime.handle().clone();
+        let edge_runtime = senders
+            .as_ref()
+            .map_or_else(|| tokio_handle.clone(), |senders| senders.handle().clone());
+
         let StartPlan {
             registry,
             exposure: restored_exposure,
@@ -169,16 +240,6 @@ impl Engine {
             execution: execution_plan,
             ..
         } = plan;
-        let runtime = match build_runtime(config.engine.tokio_workers) {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                error!("startup failed after the log thread started: {error}");
-                log_handle.drain();
-                return Err(error);
-            }
-        };
-        let tokio_handle = runtime.handle().clone();
-
         let fatal = FatalSignal::new();
         let drain = DrainSignal::new();
         install_panic_hook(fatal.clone());
@@ -211,9 +272,9 @@ impl Engine {
             rotations: rotations_rx,
         });
 
-        // This runs before the hot thread, so the writer knows the disk state before anything
-        // changes it. `mode` names the ledger file, so it must be the same value the load was
-        // given, or this run writes a ledger it did not read.
+        // This runs before the hot thread is built, so the writer knows the disk state before
+        // anything changes it. `mode` names the ledger file, so it must be the same value the load
+        // was given, or this run writes a ledger it did not read.
         let (exposure, exposure_sink) = ExposureWriter::spawn(
             ExposureWriterConfig::new(
                 config.exposure.dir.clone(),
@@ -224,25 +285,6 @@ impl Engine {
             &restored_exposure,
         );
 
-        let MetricsBringUp {
-            thread: metrics,
-            samples,
-            reports: latency_reports,
-        } = match metrics_bring_up(MetricsBringUpSetup {
-            latency: &config.latency,
-            clock: &clock,
-            stamper: &stamper,
-            clock_source: latency_clock.unwrap_or_else(|refusal| refusal.fallback()),
-            queue_count: registry.input_queue_count(),
-            core_id: config.engine.housekeeping_core_id,
-        }) {
-            Ok(brought_up) => brought_up,
-            Err(error) => {
-                error!("startup failed before the hot thread spawned: {error}");
-                log_handle.drain();
-                return Err(error);
-            }
-        };
         let SampleProducers {
             stages,
             counters,
@@ -262,56 +304,17 @@ impl Engine {
             LaneReader::new(strategy_log_consumer, strategy_log_sink.drops_handle()),
         );
 
-        let queues = build_input_queues(&registry, &QueueCapacities::of(&config), &fatal);
-        let InputQueues {
-            ingress,
-            groups: mut group_producers,
-            timer: timer_producer,
-            link: link_producer,
-            exec: exec_producer,
-        } = queues;
-
         let drain_deadline = Duration::from_millis(config.engine.drain_deadline_ms);
         let spin_interval = config.engine.spin_interval();
-        let ExecBringUp {
+        let CommandLane {
             wiring: exec_wiring,
-            spawn: exec_spawn,
-            tap_gate: exec_tap_gate,
-            lease: execution_lease,
-        } = exec_bring_up(ExecBringUpSetup {
-            plan: execution_plan,
-            execution: config.execution.as_ref(),
-            registry: &registry,
-            producer: exec_producer,
-            groups: &mut group_producers,
-            window_assignments: assignments_rx,
-            clock: &clock,
-            stamper: &stamper,
-            wires,
-            senders: &config.senders,
-            fatal: &fatal,
-            desired_run_state: control.desired().clone(),
-            drain_deadline,
+            edge: planned_edge,
+        } = open_command_lane(
+            execution_plan,
+            config.execution.as_ref(),
             spin_interval,
-            input_capacity: config.queues.input_capacity,
-        });
-
-        // Before the first edge spawns, so a sender that cannot pin refuses the start while no edge
-        // has connected.
-        let senders = match config.senders.placement {
-            SenderPlacement::Shared => None,
-            SenderPlacement::Pinned => match PinnedSenders::spawn(config.senders.core_id) {
-                Ok(senders) => Some(senders),
-                Err(error) => {
-                    error!("startup failed before the hot thread spawned: {error}");
-                    log_handle.drain();
-                    return Err(error);
-                }
-            },
-        };
-        let edge_runtime = senders
-            .as_ref()
-            .map_or_else(|| tokio_handle.clone(), |senders| senders.handle().clone());
+            &stamper,
+        );
 
         let (link_wiring, link_feed) = match &bound_link {
             None => (None, None),
@@ -327,44 +330,71 @@ impl Engine {
             }
         };
 
-        let hot_engine = HotEngine::new(HotEngineSetup {
-            exec: exec_wiring,
-            instruments: registry.instruments(),
-            strategy,
-            persistence: persist_wiring,
-            strategy_log_sink,
-            ui_book_sink,
-            ui_event_sink,
-            link: link_wiring,
-            exposure: ExposureWiring {
-                restored: restored_exposure.instruments(),
-                sink: exposure_sink,
+        let instruments = registry.instruments().to_vec();
+        let restored = restored_exposure.instruments().to_vec();
+        let warmup = DurationUs::from_secs(config.engine.warmup_secs as i64);
+        let HotBringUp {
+            thread: hot,
+            producers,
+        } = hot_bring_up(HotBringUpSetup {
+            thread: hot_thread,
+            rings: RingPlan::of(&registry, &config),
+            engine: move || {
+                HotEngine::new(HotEngineSetup {
+                    exec: exec_wiring,
+                    instruments: &instruments,
+                    strategy,
+                    persistence: persist_wiring,
+                    strategy_log_sink,
+                    ui_book_sink,
+                    ui_event_sink,
+                    link: link_wiring,
+                    exposure: ExposureWiring {
+                        restored: &restored,
+                        sink: exposure_sink,
+                    },
+                    warmup,
+                })
             },
-            warmup: DurationUs::from_secs(config.engine.warmup_secs as i64),
+            samples: DriverSamples {
+                stamper: stamper.clone(),
+                stages,
+                counters,
+            },
+            config: &config.engine,
+            fatal: &fatal,
+            drain: &drain,
         });
-        let hot = spawn_hot_thread(
-            HotThreadConfig {
-                core_id: config.engine.hot_core_id,
-                tag: "hot",
-                samples: Some(DriverSamples {
-                    stamper: stamper.clone(),
-                    stages,
-                    counters,
-                }),
-                idle: match config.engine.idle {
-                    IdleMode::Spin => IdleWait::Spin,
-                    IdleMode::Park => IdleWait::Park(config.engine.park()),
-                },
-            },
-            ingress,
-            hot_engine,
-            fatal.clone(),
-            drain.clone(),
-        );
+        let InputProducers {
+            groups: mut group_producers,
+            timer: timer_producer,
+            link: link_producer,
+            exec: exec_producer,
+        } = producers;
+
+        let ExecBringUp {
+            spawn: exec_spawn,
+            tap_gate: exec_tap_gate,
+            lease: execution_lease,
+        } = exec_bring_up(ExecBringUpSetup {
+            edge: planned_edge,
+            execution: config.execution.as_ref(),
+            registry: &registry,
+            producer: exec_producer,
+            groups: &mut group_producers,
+            window_assignments: assignments_rx,
+            clock: &clock,
+            stamper: &stamper,
+            wires,
+            senders: &config.senders,
+            fatal: &fatal,
+            desired_run_state: control.desired().clone(),
+            drain_deadline,
+            input_capacity: config.queues.input_capacity,
+        });
 
         let timer = spawn_timer(spin_interval, timer_producer, &clock, &tokio_handle);
-        // This runs after the hot thread, so input-queue producers start only after their
-        // consumer exists.
+        // Each producer of an input queue starts only now, after the hot thread that reads it.
         let exec = exec_spawn.map(|spawn| spawn(&edge_runtime));
 
         let adapters = spawn_market_data(MarketDataWiring {
@@ -446,6 +476,16 @@ impl Engine {
             drain_deadline,
         })
     }
+}
+
+/// A refusal after the log started: each thread that started before it stops first, so the log
+/// waits for no lane of a running thread, then the log drains.
+#[cold]
+fn refuse(error: StartError, log_handle: LogHandle, stop_started: impl FnOnce()) -> StartError {
+    error!("startup failed after the hot thread pinned: {error}");
+    stop_started();
+    log_handle.drain();
+    error
 }
 
 fn build_runtime(workers: usize) -> Result<Runtime, StartError> {

@@ -22,6 +22,7 @@ use engine::runtime::config::{
 use engine::runtime::metrics::{
     Metrics, MetricsParts, MetricsSetup, MetricsThread, MetricsThreadSetup, SampleProducers,
 };
+use engine::runtime::pin_to_core;
 use engine::runtime::registry::InstrumentRow;
 use engine::venues::binance::parse::{ParseContext, parse_agg_trade, parse_combined_frame};
 
@@ -184,6 +185,7 @@ impl MetricsRun {
                 ..LogConfig::default()
             },
             clock,
+            pin_to_core,
         )
         .context("the harness cannot start the engine's log")?;
         let stamper = clock::counter_stamper();
@@ -207,6 +209,7 @@ impl MetricsRun {
             clock: clock.clone(),
             stamper: stamper.clone(),
             core_id: None,
+            pin: pin_to_core,
         })
         .context("the harness cannot start the metrics thread")?;
         let run = MetricsRun {

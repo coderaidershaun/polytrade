@@ -13,8 +13,8 @@ use tokio::runtime::Handle;
 use engine::msg::exec::{ExecCommand, ExecLaneItem, OrderStyle, StampedExecCommand};
 use engine::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, QueueId, Side};
 use engine::msg::time::DurationUs;
-use engine::runtime::PinnedSenders;
 use engine::runtime::config::SenderPlacement;
+use engine::runtime::{PinnedSenders, pin_to_core};
 use engine::venues::edge::sender::{CommandTransport, Handover, SendWait, Sender, SenderSetup};
 use engine::venues::exec::SessionOutcome;
 
@@ -171,7 +171,7 @@ impl SenderHome {
                 .build()
                 .map(SenderHome::Shared)
                 .context("the harness cannot build a shared runtime"),
-            SenderPlacement::Pinned => PinnedSenders::spawn(core)
+            SenderPlacement::Pinned => PinnedSenders::spawn(core, pin_to_core)
                 .map(SenderHome::Pinned)
                 .context("the harness cannot start the pinned sender thread"),
         }

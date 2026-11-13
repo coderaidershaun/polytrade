@@ -53,8 +53,6 @@ pub enum FatalReason {
         queue.index()
     )]
     MarketTapFull { queue: QueueId, capacity: usize },
-    #[error("hot thread failed to pin to core {core} — pinning is mandatory on linux")]
-    HotPinRefused { core: usize },
     #[error("a thread panicked — the log holds its place and message")]
     Panic,
     #[error("{venue} execution cannot retain an observed order in its possibly-live set")]
@@ -100,7 +98,6 @@ impl FatalReason {
         match self {
             FatalReason::InputQueueFull { .. }
             | FatalReason::MarketTapFull { .. }
-            | FatalReason::HotPinRefused { .. }
             | FatalReason::Panic
             | FatalReason::MirrorRetainFailed { .. }
             | FatalReason::PlacementFailedClosed { .. }

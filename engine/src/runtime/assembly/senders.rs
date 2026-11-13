@@ -8,7 +8,7 @@ use std::thread::JoinHandle;
 use tokio::runtime::{Builder, Handle};
 use tokio::sync::oneshot;
 
-use crate::runtime::pin::spawn_pinned;
+use crate::runtime::pin::{PinCall, spawn_pinned};
 use crate::warn;
 
 use super::StartError;
@@ -25,20 +25,20 @@ pub struct PinnedSenders {
 }
 
 impl PinnedSenders {
-    /// Starts the thread, pins it to `core_id` before anything else runs on it, and builds its
-    /// runtime. With no core the thread floats, which only a host that cannot pin allows.
+    /// Starts the thread, pins it to `core_id` through `pin` before anything else runs on it, and
+    /// builds its runtime. With no core the thread floats, which only a host that cannot pin
+    /// allows.
     ///
     /// # Errors
     /// [`StartError::SenderPin`] when the thread cannot pin to `core_id` on linux, and
     /// [`StartError::Runtime`] when its runtime cannot be built. Either way no task runs on it.
-    pub fn spawn(core_id: Option<usize>) -> Result<PinnedSenders, StartError> {
+    pub fn spawn(core_id: Option<usize>, pin: PinCall) -> Result<PinnedSenders, StartError> {
         let (started, ready) = sync_channel(1);
         let (stop, stopped) = oneshot::channel();
-        let thread = spawn_pinned(THREAD_NAME, core_id, move || run(&started, stopped)).map_err(
-            |refused| StartError::SenderPin {
+        let thread = spawn_pinned(THREAD_NAME, core_id, pin, move || run(&started, stopped))
+            .map_err(|refused| StartError::SenderPin {
                 core_id: refused.core_id,
-            },
-        )?;
+            })?;
         let handle = ready
             .recv()
             .expect("the sender thread answers before it can end, since starting cannot panic");

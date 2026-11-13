@@ -12,4 +12,5 @@ mod latency_probe;
 pub(crate) mod metrics;
 mod pin;
 mod preflight;
+mod start_order;
 mod timer;

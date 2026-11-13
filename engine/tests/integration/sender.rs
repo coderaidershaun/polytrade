@@ -11,9 +11,9 @@ use engine::msg::latency::WireSample;
 use engine::msg::time::{
     ClockSource, EngineClock, InvariantCounter, Stamper, TickAnchor, TickScale,
 };
-use engine::runtime::PinnedSenders;
 use engine::runtime::config::{LatencyConfig, SenderPlacement};
 use engine::runtime::metrics::{Metrics, MetricsParts, MetricsSetup};
+use engine::runtime::{PinnedSenders, pin_to_core};
 use engine::venues::edge::sender::{CommandTransport, Handover, SendWait, Sender, SenderSetup};
 use engine::venues::exec::SessionOutcome;
 
@@ -80,7 +80,8 @@ fn pinned_sender_sends_without_waiting_for_a_tick() {
     let core = core_affinity::get_core_ids()
         .and_then(|cores| cores.last().copied())
         .map(|core| core.id);
-    let senders = PinnedSenders::spawn(core).expect("the pinned senders' thread starts");
+    let senders =
+        PinnedSenders::spawn(core, pin_to_core).expect("the pinned senders' thread starts");
     let venue = UdpSocket::bind("127.0.0.1:0").expect("a loopback port");
     venue
         .set_read_timeout(Some(ARRIVAL_LIMIT))

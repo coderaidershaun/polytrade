@@ -14,7 +14,7 @@ use engine::hot::exec::{
 use engine::hot::ingress::IngressQueues;
 use engine::hot::metrics::DriverSamples;
 use engine::hot::sink::ExecSink;
-use engine::hot::spawn::{HotDriver, HotThreadConfig, IdleWait, Step, spawn_hot_thread};
+use engine::hot::spawn::{HotDriver, HotLoop, HotThreadConfig, IdleWait, Step, spawn_hot_thread};
 use engine::hot::strategy::{Strategy, StrategyConfig, StrategyCtx};
 use engine::log::{HotRecord, LaneReader, TextRecord, open_hot_lane, open_text_lane};
 use engine::msg::exec::{
@@ -33,6 +33,7 @@ use engine::runtime::config::{
 };
 use engine::runtime::exposure::ExposureSnapshot;
 use engine::runtime::metrics::{SampleProducers, SinkKind};
+use engine::runtime::pin_to_core;
 use engine::runtime::registry::InstrumentRow;
 use engine::runtime::shutdown::{DrainSignal, FatalSignal};
 use engine::venues::binance::depth::{ChainRule, DepthSequencer, DiffOutcome, SnapshotOutcome};
@@ -1263,22 +1264,26 @@ fn park_setting_parks_idle_loop() {
     let engine = HotEngine::new(detached_setup(&instruments, Box::new(strategy)));
     let (mut input, queue) = RingBuffer::new(4);
     let drain = DrainSignal::new();
+    let samples = DriverSamples {
+        stamper: harness.counter.stamper.clone(),
+        stages,
+        counters,
+    };
+    let hot_drain = drain.clone();
     let hot = spawn_hot_thread(
         HotThreadConfig {
             core_id: None,
             tag: "fitness-idle",
-            samples: Some(DriverSamples {
-                stamper: harness.counter.stamper.clone(),
-                stages,
-                counters,
-            }),
-            idle: IdleWait::Park(Duration::from_micros(50)),
         },
-        IngressQueues::new(vec![queue]),
-        engine,
-        FatalSignal::new(),
-        drain.clone(),
-    );
+        pin_to_core,
+    )
+    .expect("a thread with no core never refuses its pin")
+    .start(move || HotLoop {
+        driver: HotDriver::new(IngressQueues::new(vec![queue]), engine, Some(samples)),
+        idle: IdleWait::Park(Duration::from_micros(50)),
+        fatal: FatalSignal::new(),
+        drain: hot_drain,
+    });
     for seq in 0..3u64 {
         if seq > 0 {
             std::thread::sleep(GAP);

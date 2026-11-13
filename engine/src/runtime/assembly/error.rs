@@ -69,6 +69,10 @@ pub enum StartError {
     #[error("hot_core_id {core_id} is not an available core (found {available})")]
     CoreId { core_id: usize, available: usize },
     #[error(
+        "the hot thread could not pin to engine.hot_core_id {core} — on linux the hot thread runs only on the core it was given; name a core this process may use"
+    )]
+    HotPin { core: usize },
+    #[error(
         "the {thread} thread could not pin to engine.housekeeping_core_id {core_id} — on linux a housekeeping thread runs only on the core it was given; name a core this process may use"
     )]
     HousekeepingPin {
@@ -115,6 +119,7 @@ impl StartError {
             | StartError::ExecutionIdentityExhausted { .. }
             | StartError::Runtime(_)
             | StartError::CoreId { .. }
+            | StartError::HotPin { .. }
             | StartError::HousekeepingPin { .. }
             | StartError::SenderPin { .. }
             | StartError::LinkBind { .. }

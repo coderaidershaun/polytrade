@@ -3,7 +3,7 @@
 
 use engine::msg::time::EngineClock;
 use engine::runtime::metrics::{MetricsThread, MetricsThreadSetup};
-use engine::runtime::{PinnedSenders, StartError};
+use engine::runtime::{PinnedSenders, StartError, pin_to_core};
 
 use crate::runtime::metrics::Harness;
 
@@ -18,6 +18,7 @@ fn housekeeping_pin_failure_refuses_start() {
         clock: EngineClock::start(),
         stamper: harness.counter.stamper.clone(),
         core_id: Some(UNUSABLE_CORE),
+        pin: pin_to_core,
     });
     if cfg!(target_os = "linux") {
         assert!(
@@ -38,7 +39,7 @@ fn housekeeping_pin_failure_refuses_start() {
 
 #[test]
 fn sender_pin_failure_refuses_start() {
-    let spawned = PinnedSenders::spawn(Some(UNUSABLE_CORE));
+    let spawned = PinnedSenders::spawn(Some(UNUSABLE_CORE), pin_to_core);
     if cfg!(target_os = "linux") {
         let refusal = spawned.err();
         assert!(

@@ -1,11 +1,11 @@
-//! Input-queue fabric: one SPSC ring per queue id the registry issued, all built before any
-//! producer exists so the hot thread owns every read end from the first message on.
+//! Input-queue fabric: one SPSC ring per queue id. The plan is read on the start thread, and the
+//! hot thread builds and touches each ring on its own core before any producer runs.
 
-use rtrb::{Consumer, Producer, RingBuffer};
+use rtrb::Consumer;
 
 use super::exec::command_lane_capacity;
 use crate::hot::ingress::IngressQueues;
-use crate::hot::spawn::{LinkQueueProducer, QueueProducer};
+use crate::hot::spawn::{LinkQueueProducer, QueueProducer, touched_input_ring};
 use crate::msg::ids::{QueueId, SourceId};
 use crate::msg::inbound::InboundMessage;
 use crate::runtime::config::Config;
@@ -17,7 +17,7 @@ use crate::runtime::shutdown::FatalSignal;
 const MIN_TIMER_CAPACITY: usize = 16;
 
 /// The ring capacity of each kind of input queue, with the default of each key that is absent.
-pub(super) struct QueueCapacities {
+struct QueueCapacities {
     market_data: usize,
     timer: usize,
     link: usize,
@@ -25,7 +25,7 @@ pub(super) struct QueueCapacities {
 }
 
 impl QueueCapacities {
-    pub(super) fn of<P>(config: &Config<P>) -> QueueCapacities {
+    fn of<P>(config: &Config<P>) -> QueueCapacities {
         let queues = &config.queues;
         let drain_deadline_us = config.engine.drain_deadline_ms.saturating_mul(1_000);
         let spins_in_drain = drain_deadline_us.div_ceil(config.engine.spin_interval_us) as usize;
@@ -42,75 +42,94 @@ impl QueueCapacities {
     }
 }
 
-pub(super) struct InputQueues {
-    pub ingress: IngressQueues,
+/// Which ring each queue id gets, with whose source id and how many slots, read from the registry
+/// so that the hot thread can build the rings with no registry of its own.
+pub(super) struct RingPlan {
+    queue_count: usize,
     /// In the registry's producer-group order, because the market-data spawn pairs each group with
     /// its producer by position.
-    pub groups: Vec<QueueProducer>,
-    pub timer: QueueProducer,
-    /// None with no link: block. Drop+count, not fatal-on-full.
-    pub link: Option<LinkQueueProducer>,
-    /// None unless execution actor exists. Engine-fed -> FATAL-on-full: engine can't keep up.
-    pub exec: Option<QueueProducer>,
+    groups: Vec<(QueueId, SourceId)>,
+    timer: (QueueId, SourceId),
+    link: Option<QueueId>,
+    exec: Option<(QueueId, SourceId)>,
+    capacities: QueueCapacities,
 }
 
-pub(super) fn build_input_queues(
-    registry: &Registry,
-    capacities: &QueueCapacities,
-    fatal: &FatalSignal,
-) -> InputQueues {
-    let mut consumers: Vec<Option<Consumer<InboundMessage>>> =
-        (0..registry.input_queue_count()).map(|_| None).collect();
-    // Pushed in the registry's producer-group order, which the market-data spawn relies on.
-    let mut group_producers = Vec::with_capacity(registry.producer_groups().len());
-    for group in registry.producer_groups() {
-        let producer = attach_ring(&mut consumers, group.queue_id, capacities.market_data);
-        group_producers.push(QueueProducer::new(
-            producer,
+/// The write ends of the input queues, handed back to the start by the hot thread.
+pub(super) struct InputProducers {
+    /// In the registry's producer-group order.
+    pub(super) groups: Vec<QueueProducer>,
+    pub(super) timer: QueueProducer,
+    /// `None` with no `link:` block. A full ring drops the frame and counts it.
+    pub(super) link: Option<LinkQueueProducer>,
+    /// `None` unless execution is armed. The engine's own edge fills it, so a full ring halts the
+    /// engine.
+    pub(super) exec: Option<QueueProducer>,
+}
+
+impl RingPlan {
+    pub(super) fn of<P>(registry: &Registry, config: &Config<P>) -> RingPlan {
+        let group_count = registry.producer_groups().len() as u16;
+        RingPlan {
+            queue_count: registry.input_queue_count(),
+            groups: registry
+                .producer_groups()
+                .iter()
+                .map(|group| (group.queue_id, group.source_id))
+                .collect(),
+            // The timer and the execution edge are no producer groups, so their source ids are the
+            // two after the last group.
+            timer: (registry.timer_queue_id(), SourceId(group_count)),
+            link: registry.link_queue_id(),
+            exec: registry
+                .exec_queue_id()
+                .map(|queue_id| (queue_id, SourceId(group_count + 1))),
+            capacities: QueueCapacities::of(config),
+        }
+    }
+
+    /// Builds each ring on the calling thread, the hot thread, and touches each slot once there.
+    pub(super) fn build(self, fatal: &FatalSignal) -> (IngressQueues, InputProducers) {
+        let capacities = &self.capacities;
+        let mut consumers: Vec<Option<Consumer<InboundMessage>>> =
+            (0..self.queue_count).map(|_| None).collect();
+        let mut ring = |queue_id: QueueId, capacity: usize| {
+            let (producer, consumer) = touched_input_ring(capacity);
+            consumers[queue_id.index()] = Some(consumer);
+            producer
+        };
+        let groups = self
+            .groups
+            .iter()
+            .map(|&(queue_id, source_id)| {
+                let producer = ring(queue_id, capacities.market_data);
+                QueueProducer::new(producer, fatal.clone(), queue_id, source_id)
+            })
+            .collect();
+        let (timer_queue, timer_source) = self.timer;
+        let timer = QueueProducer::new(
+            ring(timer_queue, capacities.timer),
             fatal.clone(),
-            group.queue_id,
-            group.source_id,
-        ));
+            timer_queue,
+            timer_source,
+        );
+        let link = self
+            .link
+            .map(|queue_id| LinkQueueProducer::new(ring(queue_id, capacities.link), queue_id));
+        let exec = self.exec.map(|(queue_id, source_id)| {
+            let producer = ring(queue_id, capacities.execution);
+            QueueProducer::new(producer, fatal.clone(), queue_id, source_id)
+        });
+        let consumers = consumers
+            .into_iter()
+            .map(|slot| slot.expect("every queue id assigned a ring"))
+            .collect();
+        let producers = InputProducers {
+            groups,
+            timer,
+            link,
+            exec,
+        };
+        (IngressQueues::new(consumers), producers)
     }
-
-    let timer_queue_id = registry.timer_queue_id();
-    let timer_ring = attach_ring(&mut consumers, timer_queue_id, capacities.timer);
-    // Timer not a producer group -> source id one past last group.
-    let timer_source_id = SourceId(registry.producer_groups().len() as u16);
-    let timer_producer =
-        QueueProducer::new(timer_ring, fatal.clone(), timer_queue_id, timer_source_id);
-
-    let link_producer = registry.link_queue_id().map(|queue_id| {
-        let link_ring = attach_ring(&mut consumers, queue_id, capacities.link);
-        LinkQueueProducer::new(link_ring, queue_id)
-    });
-
-    // One past last producer group + timer -> unique source id.
-    let exec_producer = registry.exec_queue_id().map(|queue_id| {
-        let exec_ring = attach_ring(&mut consumers, queue_id, capacities.execution);
-        let source_id = SourceId(registry.producer_groups().len() as u16 + 1);
-        QueueProducer::new(exec_ring, fatal.clone(), queue_id, source_id)
-    });
-
-    let consumers = consumers
-        .into_iter()
-        .map(|slot| slot.expect("every queue id assigned a ring"))
-        .collect();
-    InputQueues {
-        ingress: IngressQueues::new(consumers),
-        groups: group_producers,
-        timer: timer_producer,
-        link: link_producer,
-        exec: exec_producer,
-    }
-}
-
-fn attach_ring(
-    consumers: &mut [Option<Consumer<InboundMessage>>],
-    queue_id: QueueId,
-    capacity: usize,
-) -> Producer<InboundMessage> {
-    let (producer, consumer) = RingBuffer::<InboundMessage>::new(capacity);
-    consumers[queue_id.index()] = Some(consumer);
-    producer
 }

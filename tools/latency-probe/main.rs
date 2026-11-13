@@ -18,7 +18,7 @@ use anyhow::{Context, bail};
 use engine::hot::spawn::IdleWait;
 use engine::runtime::config::SenderPlacement;
 
-use idle::IdleRun;
+use idle::{BuildPlace, IdleRun};
 use sender::SenderRun;
 use step::StepRun;
 
@@ -26,6 +26,7 @@ const USAGE: &str = "usage:
   latency-probe step --stamps on|off [--messages N] [--rate HZ] [--core ID]
   latency-probe sender --placement shared|pinned [--commands N] [--rate HZ] [--tick-us US] [--core ID]
   latency-probe idle --wait spin|park [--park-us US] [--messages N] [--gap-us US] [--core ID]
+                    [--build main|hot]
   latency-probe stages --config PATH";
 
 fn main() -> ExitCode {
@@ -83,6 +84,7 @@ fn run_timed(mode: &str, options: &HashMap<String, String>) -> anyhow::Result<()
             messages: number(options, "messages", 20_000)? as usize,
             gap_us: number(options, "gap-us", 500)?,
             core,
+            build: build_place(options)?,
         }
         .run()?,
         other => bail!("unknown mode {other:?}"),
@@ -137,6 +139,15 @@ fn placement(options: &HashMap<String, String>) -> anyhow::Result<SenderPlacemen
         Some("shared") => Ok(SenderPlacement::Shared),
         Some("pinned") => Ok(SenderPlacement::Pinned),
         other => bail!("--placement is {other:?}, not shared or pinned"),
+    }
+}
+
+/// The engine's own start builds on the hot thread, so that is the place when the flag is absent.
+fn build_place(options: &HashMap<String, String>) -> anyhow::Result<BuildPlace> {
+    match options.get("build").map(String::as_str) {
+        None | Some("hot") => Ok(BuildPlace::Hot),
+        Some("main") => Ok(BuildPlace::Main),
+        Some(other) => bail!("--build is {other:?}, not main or hot"),
     }
 }
 

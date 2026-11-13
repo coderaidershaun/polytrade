@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rtrb::RingBuffer;
+use rtrb::{Consumer, RingBuffer};
 use tokio::sync::mpsc;
 
 use crate::hot::dispatch::ExecWiring;
@@ -38,7 +38,6 @@ use super::exec_identity::ExecutionLease;
 const SWEEP_SHARE_OF_DRAIN: u32 = 2;
 
 pub(super) struct ExecBringUp {
-    pub(super) wiring: Option<ExecWiring>,
     pub(super) spawn: Option<EdgeSpawn>,
     /// Only the simulated venue feeds itself from market taps, so only it has any to hold open
     /// across its own shutdown sweep.
@@ -49,7 +48,6 @@ pub(super) struct ExecBringUp {
 impl ExecBringUp {
     fn disabled() -> Self {
         ExecBringUp {
-            wiring: None,
             spawn: None,
             tap_gate: None,
             lease: None,
@@ -136,9 +134,61 @@ pub(super) fn check_execution(check: ExecCheck<'_>) -> Result<Option<ExecPlan>, 
     }))
 }
 
+/// The command lane of an armed run. Its write end goes into the engine, which the hot thread
+/// builds, and its read end into the edge, which is built once the input rings of the hot thread
+/// exist.
+pub(super) struct CommandLane {
+    pub(super) wiring: Option<ExecWiring>,
+    pub(super) edge: Option<PlannedEdge>,
+}
+
+/// An edge that preflight checked, with the read end of its command lane.
+pub(super) struct PlannedEdge {
+    plan: ExecPlan,
+    commands: Consumer<ExecLaneItem>,
+    lane_capacity: usize,
+}
+
+/// Opens the command lane of an armed run, before the engine that writes it is built.
+pub(super) fn open_command_lane(
+    plan: Option<ExecPlan>,
+    execution: Option<&ExecutionConfig>,
+    spin_interval: DurationUs,
+    stamper: &Stamper,
+) -> CommandLane {
+    let (Some(plan), Some(execution)) = (plan, execution) else {
+        return CommandLane {
+            wiring: None,
+            edge: None,
+        };
+    };
+    let edge_stall = edge_stall();
+    let lane_capacity = command_lane_capacity(spin_interval);
+    let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(lane_capacity);
+    info!(
+        "execution command lane: {lane_capacity} slots ({} KiB), sized to hold a {}s edge stall at the configured {}ms spin",
+        lane_capacity * size_of::<ExecLaneItem>() / 1_024,
+        edge_stall.micros() / 1_000_000,
+        spin_interval.micros() / 1_000
+    );
+    let wiring = ExecWiring {
+        sink: ExecSink::new(commands_producer, stamper.clone()),
+        settings: settings(execution, &plan.capabilities),
+        run_nonce: plan.lease.run_nonce(),
+    };
+    CommandLane {
+        wiring: Some(wiring),
+        edge: Some(PlannedEdge {
+            plan,
+            commands,
+            lane_capacity,
+        }),
+    }
+}
+
 pub(super) struct ExecBringUpSetup<'a> {
     /// `None` when execution is disarmed or absent.
-    pub(super) plan: Option<ExecPlan>,
+    pub(super) edge: Option<PlannedEdge>,
     pub(super) execution: Option<&'a ExecutionConfig>,
     pub(super) registry: &'a Registry,
     /// The write end of the execution input queue; `None` if the registry allocated no queue.
@@ -158,35 +208,30 @@ pub(super) struct ExecBringUpSetup<'a> {
     pub(super) fatal: &'a FatalSignal,
     pub(super) desired_run_state: RunStateCell,
     pub(super) drain_deadline: Duration,
-    pub(super) spin_interval: DurationUs,
     pub(super) input_capacity: usize,
 }
 
 /// Builds the edge that preflight checked: nothing here can refuse the run.
 pub(super) fn exec_bring_up(setup: ExecBringUpSetup<'_>) -> ExecBringUp {
-    let (Some(plan), Some(execution)) = (setup.plan, setup.execution) else {
+    let (Some(edge), Some(execution)) = (setup.edge, setup.execution) else {
         return ExecBringUp::disabled();
     };
     let producer = setup
         .producer
         .expect("preflight checked that the registry allocated the execution input queue");
-    let ExecPlan {
-        venue,
-        capabilities,
-        lease,
-        queue,
-        te_tag,
-    } = plan;
+    let PlannedEdge {
+        plan:
+            ExecPlan {
+                venue,
+                lease,
+                queue,
+                te_tag,
+                ..
+            },
+        commands,
+        lane_capacity,
+    } = edge;
     let mode = execution.mode.as_str();
-    let edge_stall = edge_stall();
-    let lane_capacity = command_lane_capacity(setup.spin_interval);
-    let (commands_producer, commands_consumer) = RingBuffer::<ExecLaneItem>::new(lane_capacity);
-    info!(
-        "execution command lane: {lane_capacity} slots ({} KiB), sized to hold a {}s edge stall at the configured {}ms spin",
-        lane_capacity * size_of::<ExecLaneItem>() / 1_024,
-        edge_stall.micros() / 1_000_000,
-        setup.spin_interval.micros() / 1_000
-    );
     let sweep_deadline = setup.drain_deadline / SWEEP_SHARE_OF_DRAIN;
     let described = venue.describe();
     let VenueEdge { spawn, tap_gate } = venue.bring_up(
@@ -194,7 +239,7 @@ pub(super) fn exec_bring_up(setup: ExecBringUpSetup<'_>) -> ExecBringUp {
             registry: setup.registry,
             execution,
             identity: lease.identity(te_tag),
-            commands: commands_consumer,
+            commands,
             producer,
             settings: EdgeSettings {
                 clock: setup.clock.clone(),
@@ -228,11 +273,6 @@ pub(super) fn exec_bring_up(setup: ExecBringUpSetup<'_>) -> ExecBringUp {
         setup.drain_deadline.as_millis()
     );
     ExecBringUp {
-        wiring: Some(ExecWiring {
-            sink: ExecSink::new(commands_producer, setup.stamper.clone()),
-            settings: settings(execution, &capabilities),
-            run_nonce,
-        }),
         spawn: Some(spawn),
         tap_gate,
         lease: Some(lease),

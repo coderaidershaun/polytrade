@@ -33,7 +33,7 @@ const ENGINE: &str = "te-refusals";
 const ONE: i64 = 100_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Scales {
+pub(super) enum Scales {
     Stamped { max_num_orders: u32 },
     Unstamped,
     Refused,
@@ -41,8 +41,8 @@ enum Scales {
 
 /// The venue as a test sees it: no network, no key, no `.env`. A probe always refuses, because
 /// only a real probe can hand on credentials.
-struct StandInVenue {
-    scales: Scales,
+pub(super) struct StandInVenue {
+    pub(super) scales: Scales,
 }
 
 impl VenuePort for StandInVenue {
@@ -104,7 +104,7 @@ fn with_state(document: String, state: &Path) -> String {
 }
 
 /// Each file of the state folder with its bytes.
-fn snapshot(state: &Path) -> BTreeMap<String, Vec<u8>> {
+pub(super) fn snapshot(state: &Path) -> BTreeMap<String, Vec<u8>> {
     let Ok(entries) = fs::read_dir(state) else {
         return BTreeMap::new();
     };

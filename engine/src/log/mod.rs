@@ -11,8 +11,8 @@ mod record;
 mod render;
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -45,8 +45,8 @@ pub use lane::{hot_message, text_message};
 pub use render::{LogArgs, Renderer};
 
 use crate::msg::time::EngineClock;
-use crate::runtime::PinRefused;
 use crate::runtime::pin::spawn_pinned;
+use crate::runtime::{PinCall, PinRefused};
 
 const DEFAULT_FILE_STEM: &str = "polysim";
 
@@ -103,25 +103,36 @@ impl LogHandle {
 }
 
 /// Call at startup, before any thread logs. Text lines take their time from `clock`, the one clock
-/// of the process.
+/// of the process, and the drain thread pins itself to `config.core_id` through `pin`.
 ///
 /// # Errors
 /// [`PinRefused`] when the drain thread cannot pin itself to `config.core_id` on Linux. The drain
-/// then never runs.
+/// then never runs, and the log is not installed: lines stay dropped as before the call.
 ///
 /// # Panics
-/// Panics if called more than once in a process, and in the browser build, which can start no
-/// drain thread. The browser needs no init: there the macros print straight to the console.
-pub fn init(config: &LogConfig, clock: &EngineClock) -> Result<LogHandle, PinRefused> {
-    let channels = lane::install(clock, config.ring_capacity);
-    let output = LogOutput::from_config(config);
-    let log_drain = LogDrain::with_channels(output, clock.clone(), channels);
+/// Panics if called more than once in a process after a call that returned a handle, and in the
+/// browser build, which can start no drain thread. The browser needs no init: there the macros
+/// print straight to the console.
+pub fn init(
+    config: &LogConfig,
+    clock: &EngineClock,
+    pin: PinCall,
+) -> Result<LogHandle, PinRefused> {
     let stop = Arc::new(AtomicBool::new(false));
     let thread_stop = Arc::clone(&stop);
     let deadline = config.drain_deadline;
-    let join = spawn_pinned("polysim-log", config.core_id, move || {
-        drain::run(log_drain, thread_stop, deadline)
+    let (hand_over, handed) = mpsc::sync_channel::<LogDrain>(1);
+    let join = spawn_pinned("polysim-log", config.core_id, pin, move || {
+        handed.recv().map_or_else(
+            |_| DrainReport::default(),
+            |log_drain| drain::run(log_drain, thread_stop, deadline),
+        )
     })?;
+    let channels = lane::install(clock, config.ring_capacity);
+    let output = LogOutput::from_config(config);
+    hand_over
+        .send(LogDrain::with_channels(output, clock.clone(), channels))
+        .expect("the drain thread waits for its drain once its pin holds");
     Ok(LogHandle { stop, join })
 }
 

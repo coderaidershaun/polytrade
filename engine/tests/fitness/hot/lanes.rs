@@ -8,7 +8,9 @@ use engine::hot::sink::{
     ExposureSink, LinkSink, PersistSink, SampleSink, StrategyLogSink, UiBookSink, UiEventSink,
 };
 use engine::hot::spawn::spawn_hot_thread;
-use engine::hot::spawn::{HotThreadConfig, IdleWait, LinkQueueProducer, QueueProducer, SimTapGate};
+use engine::hot::spawn::{
+    HotDriver, HotLoop, HotThreadConfig, IdleWait, LinkQueueProducer, QueueProducer, SimTapGate,
+};
 use engine::msg::failure::{FailureClass, Halt};
 use engine::msg::ids::{QueueId, Side, SourceId};
 use engine::msg::inbound::{InboundMessage, MarketTapItem, MessageBody, SpinTick, VenueMeta};
@@ -17,7 +19,7 @@ use engine::msg::persist::PersistRecord;
 use engine::msg::ui::UiEvent;
 use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
 use engine::runtime::shutdown::{DrainSignal, FatalReason, FatalSignal};
-use engine::runtime::{DrainDeadline, DrainOutcome, Exit, Trigger};
+use engine::runtime::{DrainDeadline, DrainOutcome, Exit, Trigger, pin_to_core};
 use rtrb::{Consumer, RingBuffer};
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -58,18 +60,21 @@ fn each_lane_full_gives_its_class() {
 
     let instruments = [instrument_row(0, TrackerSpec::default(), 64)];
     let engine = HotEngine::new(detached_setup(&instruments, Box::new(Idle)));
+    let hot_fatal = fatal.clone();
     let hot = spawn_hot_thread(
         HotThreadConfig {
             core_id: None,
             tag: "fitness-lanes",
-            samples: None,
-            idle: IdleWait::Park(std::time::Duration::from_micros(50)),
         },
-        IngressQueues::new(vec![consumer]),
-        engine,
-        fatal.clone(),
-        DrainSignal::new(),
-    );
+        pin_to_core,
+    )
+    .expect("a thread with no core never refuses its pin")
+    .start(move || HotLoop {
+        driver: HotDriver::new(IngressQueues::new(vec![consumer]), engine, None),
+        idle: IdleWait::Park(std::time::Duration::from_micros(50)),
+        fatal: hot_fatal,
+        drain: DrainSignal::new(),
+    });
     hot.join()
         .expect("the hot thread reads the latch and stops");
     let exit = Exit::decide(DrainOutcome {

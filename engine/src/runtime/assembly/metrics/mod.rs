@@ -20,7 +20,7 @@ use crate::msg::time::{
 };
 use crate::msg::ui::LatencyReport;
 use crate::runtime::config::LatencyConfig;
-use crate::runtime::pin::spawn_pinned;
+use crate::runtime::pin::{PinCall, spawn_pinned};
 use crate::{warn, warn_repeating};
 
 use super::StartError;
@@ -183,6 +183,7 @@ pub(super) struct MetricsBringUpSetup<'a> {
     pub queue_count: usize,
     /// The housekeeping core the thread pins itself to. Absent, the OS places it.
     pub core_id: Option<usize>,
+    pub pin: PinCall,
 }
 
 /// # Errors
@@ -212,6 +213,7 @@ pub(super) fn metrics_bring_up(
         clock: setup.clock.clone(),
         stamper,
         core_id: setup.core_id,
+        pin: setup.pin,
     })?;
     Ok(MetricsBringUp {
         thread,
@@ -239,6 +241,7 @@ pub struct MetricsThreadSetup {
     pub stamper: Stamper,
     /// Absent, the OS places the thread.
     pub core_id: Option<usize>,
+    pub pin: PinCall,
 }
 
 pub struct MetricsThread {
@@ -257,10 +260,11 @@ impl MetricsThread {
             clock,
             stamper,
             core_id,
+            pin,
         } = setup;
         let stop = Arc::new(AtomicBool::new(false));
         let stop_flag = Arc::clone(&stop);
-        let join = spawn_pinned("polysim-metrics", core_id, move || {
+        let join = spawn_pinned("polysim-metrics", core_id, pin, move || {
             run(metrics, &clock, &stamper, &stop_flag);
         })
         .map_err(|refused| StartError::HousekeepingPin {

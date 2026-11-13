@@ -21,7 +21,7 @@ use engine::venues::exec::{ExecCore, ExitPlan, MirroredOrder, SessionOutcome, Sw
 const REQUESTS: [&str; 3] = ["SIGTERM", "SIGINT", "shutdown request"];
 
 /// One value of each variant, listed in the order of `variant_index`.
-fn each_fatal_reason() -> [FatalReason; 16] {
+fn each_fatal_reason() -> [FatalReason; 15] {
     [
         FatalReason::InputQueueFull {
             queue: QueueId::new(0).unwrap(),
@@ -31,7 +31,6 @@ fn each_fatal_reason() -> [FatalReason; 16] {
             queue: QueueId::new(1).unwrap(),
             capacity: 1_024,
         },
-        FatalReason::HotPinRefused { core: 3 },
         FatalReason::Panic,
         FatalReason::MirrorRetainFailed { venue: "binance" },
         FatalReason::PlacementFailedClosed {
@@ -77,20 +76,19 @@ fn variant_index(reason: FatalReason) -> usize {
     match reason {
         FatalReason::InputQueueFull { .. } => 0,
         FatalReason::MarketTapFull { .. } => 1,
-        FatalReason::HotPinRefused { .. } => 2,
-        FatalReason::Panic => 3,
-        FatalReason::MirrorRetainFailed { .. } => 4,
-        FatalReason::PlacementFailedClosed { .. } => 5,
-        FatalReason::SimulatorCommandLaneFull { .. } => 6,
-        FatalReason::RestWorkerGone { .. } => 7,
-        FatalReason::UndecodableAnswer { .. } => 8,
-        FatalReason::SubscribeRefused { .. } => 9,
-        FatalReason::EpochExhausted { .. } => 10,
-        FatalReason::MarketDataUnreadable { .. } => 11,
-        FatalReason::UndecodableOpenOrder { .. } => 12,
-        FatalReason::OrderIndexFull { .. } => 13,
-        FatalReason::SubscribeUnbuildable { .. } => 14,
-        FatalReason::SettlementFailed { .. } => 15,
+        FatalReason::Panic => 2,
+        FatalReason::MirrorRetainFailed { .. } => 3,
+        FatalReason::PlacementFailedClosed { .. } => 4,
+        FatalReason::SimulatorCommandLaneFull { .. } => 5,
+        FatalReason::RestWorkerGone { .. } => 6,
+        FatalReason::UndecodableAnswer { .. } => 7,
+        FatalReason::SubscribeRefused { .. } => 8,
+        FatalReason::EpochExhausted { .. } => 9,
+        FatalReason::MarketDataUnreadable { .. } => 10,
+        FatalReason::UndecodableOpenOrder { .. } => 11,
+        FatalReason::OrderIndexFull { .. } => 12,
+        FatalReason::SubscribeUnbuildable { .. } => 13,
+        FatalReason::SettlementFailed { .. } => 14,
     }
 }
 
@@ -140,6 +138,7 @@ fn each_start_refusal() -> Vec<StartError> {
             core_id: 4_096,
             available: 8,
         },
+        StartError::HotPin { core: 3 },
         StartError::HousekeepingPin {
             core_id: 5,
             thread: "log",
@@ -176,10 +175,11 @@ fn start_variant_index(error: &StartError) -> usize {
         StartError::ExecutionIdentityExhausted { .. } => 11,
         StartError::Runtime(_) => 12,
         StartError::CoreId { .. } => 13,
-        StartError::HousekeepingPin { .. } => 14,
-        StartError::SenderPin { .. } => 15,
-        StartError::LinkBind { .. } => 16,
-        StartError::LinkNameTooLong { .. } => 17,
+        StartError::HotPin { .. } => 14,
+        StartError::HousekeepingPin { .. } => 15,
+        StartError::SenderPin { .. } => 16,
+        StartError::LinkBind { .. } => 17,
+        StartError::LinkNameTooLong { .. } => 18,
     }
 }
 
@@ -239,7 +239,7 @@ fn fatal_is_never_a_graceful_exit() {
         .collect();
     assert_eq!(
         indexes,
-        (0..16).collect::<Vec<_>>(),
+        (0..15).collect::<Vec<_>>(),
         "one value of each variant, once"
     );
     for reason in reasons {
@@ -288,7 +288,7 @@ fn fatal_is_never_a_graceful_exit() {
             }
         }
     }
-    assert_eq!(combinations, (3 * 17 + 16) * 6 * 2);
+    assert_eq!(combinations, (3 * 16 + 15) * 6 * 2);
 
     // The six cases that the exit decision held before its reasons were typed.
     let old_cases = [
@@ -370,7 +370,7 @@ fn fatal_is_never_a_graceful_exit() {
     let start_indexes: Vec<usize> = refusals.iter().map(start_variant_index).collect();
     assert_eq!(
         start_indexes,
-        (0..18).collect::<Vec<_>>(),
+        (0..19).collect::<Vec<_>>(),
         "one refusal of each variant, once"
     );
     for refusal in &refusals {

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use crate::hot::strategy::{EngineView, Strategy, StrategyConfig};
 use crate::runtime::config::{Config, RunIdentity};
+use crate::runtime::pin::pin_to_core;
 
 use super::Engine;
 use super::drain::ForcedExit;
@@ -71,7 +72,7 @@ where
             return None;
         }
     };
-    match Engine::start(config, strategy, plan) {
+    match Engine::start(config, strategy, plan, pin_to_core) {
         Ok(engine) => Some(engine),
         Err(error) => {
             print_error(&label, &error);

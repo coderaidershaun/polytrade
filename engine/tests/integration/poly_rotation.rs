@@ -28,6 +28,7 @@ use engine::runtime::config::PolySeries;
 use engine::runtime::config::{
     Config, ExecutionMode, RecordedTables, StrategyId, TradingEngineId, VenueMarket,
 };
+use engine::runtime::pin_to_core;
 use engine::runtime::registry::Registry;
 use engine::runtime::shutdown::{FatalSignal, RunStateCell};
 use engine::tape::{PersistConfig, PersistWriter, RunMeta};
@@ -75,7 +76,7 @@ logging:
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "live network, 12-min capture: an agent runs it only where a plan names it, by its exact name and with an empty environment"]
 async fn poly_rotation_capture_spans_two_rotations_with_zero_gap_handover() {
-    let log_handle = log::init(&LogConfig::default(), &EngineClock::start())
+    let log_handle = log::init(&LogConfig::default(), &EngineClock::start(), pin_to_core)
         .expect("no core is named, so the drain pins nothing and nothing can refuse it");
     log::register_thread("integration");
     let config: Config = Config::from_yaml(CONFIG_YAML).expect("parse integration config");
