@@ -4,6 +4,7 @@
 use std::cell::RefCell;
 use std::fs::{self, File};
 use std::path::Path;
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -22,6 +23,11 @@ const ENGINE: &str = "te-pins";
 const HOT_CORE: usize = 3;
 const HOUSEKEEPING_CORE: usize = 5;
 const SENDER_CORE: usize = 7;
+
+/// Set in the process that runs the cases. The last case starts the log, which a process starts
+/// only once and which then reaches each thread of that process, so no other test may share it.
+const CASES_PROCESS: &str = "POLYSIM_START_ORDER_CASES";
+const THIS_TEST: &str = "runtime::start_order::pin_failure_refuses_start_before_any_producer";
 
 /// The core that the stand-in refuses. Only this test pins through the stand-in, and it runs its
 /// cases one after the other.
@@ -142,9 +148,9 @@ fn engine_thread_names() -> Option<Vec<String>> {
     Some(names)
 }
 
-/// Other tests of this process start engine threads too, so a name may be present before and gone
-/// after, and a thread of another test may hold a name for a moment. Only an added name that stays
-/// is a thread that this start left running.
+/// The cases run in a process of their own, so each engine thread there is one that a case
+/// started. A thread that a join has seen end can still be listed for a moment, so the census waits
+/// up to 2 s for an added name to go.
 fn assert_no_engine_thread_added(before: Option<&[String]>) {
     let Some(before) = before else {
         return;
@@ -246,9 +252,29 @@ fn requests(expected: &[(usize, &str)]) -> Vec<(usize, String)> {
 /// CONTRACT: the hot thread pins as its first act and reports the result, so a refused hot pin
 /// ends the start before any other thread exists. Each pin that can refuse comes before the first
 /// writer, in the order hot, log, metrics, senders, and a refusal after the hot pin stops each
-/// thread that started before it. Only the last case starts the log, which a process does once.
+/// thread that started before it. The cases run in a process of their own, which runs this test
+/// alone.
 #[test]
 fn pin_failure_refuses_start_before_any_producer() {
+    if std::env::var_os(CASES_PROCESS).is_some() {
+        return each_refused_start();
+    }
+    let suite = std::env::current_exe().expect("the suite knows the path of its own binary");
+    let run = Command::new(suite)
+        .args(["--exact", THIS_TEST, "--test-threads=1", "--nocapture"])
+        .env(CASES_PROCESS, "1")
+        .output()
+        .expect("the suite starts its own binary again");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        run.status.success() && stdout.contains("test result: ok. 1 passed"),
+        "the cases of the start order failed in their own process:\n{stdout}\n{stderr}"
+    );
+}
+
+/// Only the last case starts the log.
+fn each_refused_start() {
     let root = TempDir::new("start-order");
 
     let (hot, asked) = refused_start(root.path(), HOT_CORE);
