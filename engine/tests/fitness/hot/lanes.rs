@@ -2,7 +2,7 @@
 //! drop, or dropped where it should halt, would lose state or let a stalled consumer stop the run.
 
 use engine::hot::dispatch::{HotEngine, PersistWiring};
-use engine::hot::exec::{ExecHalt, HaltReason};
+use engine::hot::exec::HaltReason;
 use engine::hot::ingress::IngressQueues;
 use engine::hot::sink::{
     ExposureSink, LinkSink, PersistSink, SampleSink, StrategyLogSink, UiBookSink, UiEventSink,
@@ -16,7 +16,7 @@ use engine::msg::ids::{QueueId, Side, SourceId};
 use engine::msg::inbound::{InboundMessage, MarketTapItem, MessageBody, SpinTick, VenueMeta};
 use engine::msg::latency::StageSample;
 use engine::msg::persist::PersistRecord;
-use engine::msg::ui::UiEvent;
+use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
 use engine::runtime::shutdown::{DrainSignal, FatalReason, FatalSignal};
 use engine::runtime::{DrainDeadline, DrainOutcome, Exit, Trigger, pin_to_core};
@@ -180,7 +180,7 @@ impl Parked {
         }
     }
 
-    fn spin(&mut self, seq: u64, when: i64) -> Option<ExecHalt> {
+    fn spin(&mut self, seq: u64, when: i64) -> Option<UiHalt> {
         self.engine.dispatch(&spin_at(seq, when));
         let mut halt = None;
         while let Ok(event) = self.ui_events.pop() {
@@ -212,7 +212,7 @@ fn pending_seal_goes_first_when_room_returns() {
 
     let halt = parked.spin(1, 4_000);
     assert_eq!(
-        halt.map(ExecHalt::is_halted),
+        halt.map(UiHalt::is_halted),
         Some(false),
         "no halt: {halt:?}"
     );
@@ -233,7 +233,7 @@ fn pending_seal_goes_first_when_room_returns() {
     }
     let halt = parked.spin(2, 7_000);
     assert_eq!(
-        halt.map(ExecHalt::is_halted),
+        halt.map(UiHalt::is_halted),
         Some(false),
         "the next seal counts its tries from 1 again, so its second try halts nothing: {halt:?}"
     );
@@ -247,7 +247,7 @@ fn seal_retry_reaches_cap_then_halts() {
     let mut parked = Parked::with_seal_try_limit(3);
     let halt = parked.spin(1, 4_000);
     assert_eq!(
-        halt.map(ExecHalt::is_halted),
+        halt.map(UiHalt::is_halted),
         Some(false),
         "try 2 of 3 fails: {halt:?}"
     );
@@ -255,7 +255,7 @@ fn seal_retry_reaches_cap_then_halts() {
     assert!(
         matches!(
             halt,
-            Some(ExecHalt::Halted {
+            Some(UiHalt::Halted {
                 reason: HaltReason::SealNotAccepted,
                 ..
             })

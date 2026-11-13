@@ -55,7 +55,7 @@ impl Actor {
                 return;
             };
             let Some(mut mirrored) = MirroredOrder::observed(&event) else {
-                return;
+                continue;
             };
             let is_cold_start = !self.session.core.has_opened_quoting();
             if is_cold_start && mirrored.provenance != Provenance::Foreign {

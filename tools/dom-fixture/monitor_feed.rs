@@ -1,6 +1,6 @@
 //! Builds the monitor scenes by feeding ordered events through the real model, as the link would.
 
-use engine::hot::exec::{CloseReason, ExecHalt, OrderState, RejectOrigin};
+use engine::hot::exec::{CloseReason, OrderState, RejectOrigin};
 use engine::msg::exec::Liquidity;
 use engine::msg::ids::{AssetId, ClientOrderId};
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
@@ -8,7 +8,7 @@ use engine::msg::inbound::Level;
 use engine::msg::persist::FeatureId;
 use engine::msg::time::DurationUs;
 use engine::msg::time::VenueTs;
-use engine::msg::ui::{DomQuote, UiBookState, UiCatalog, UiEvent};
+use engine::msg::ui::{DomQuote, UiBookState, UiCatalog, UiEvent, UiHalt};
 use engine::operator::workstation::model::UiModel;
 use engine::operator::workstation::monitor::model::SystemNote;
 use engine::operator::workstation::monitor::view::MonitorUiState;
@@ -211,7 +211,7 @@ impl Feed {
         });
     }
 
-    pub fn execution(&mut self, ts: i64, halt: ExecHalt) {
+    pub fn execution(&mut self, ts: i64, halt: UiHalt) {
         self.apply(UiEvent::Execution {
             seq: 0,
             event_ts_us: ts_at(ts),

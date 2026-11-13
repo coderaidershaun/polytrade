@@ -143,9 +143,10 @@ impl ExecEngine {
         // SMELL: when every prior-run slot is taken, this event is logged and dropped, so a fill of
         // an order from the earlier run never reaches the ledger and the position stays wrong. A
         // full table should halt the engine instead.
-        let Some(index) = self.prior_orders.find_or_seat(event, now) else {
-            self.prior_run_overflow_error(event);
-            return;
+        let index = match self.prior_orders.find_or_seat(event, now) {
+            Ok(index) => index,
+            Err(Unseated::TableFull) => return self.prior_run_overflow_error(event),
+            Err(Unseated::NoInstrument) => return self.prior_run_without_instrument_error(event),
         };
         let previous_state = OrderLifecycle::from(self.prior_orders.slot(index).state);
         let applied = apply_exec_event(self.prior_orders.slot_mut(index), event, now);
@@ -185,6 +186,14 @@ impl ExecEngine {
             "prior-run order {:x} has nowhere to fold — all {} entries are still working, so its fills cannot reach the ledger",
             event.client_id.0,
             PRIOR_RUN_SLOTS
+        );
+    }
+
+    #[cold]
+    fn prior_run_without_instrument_error(&self, event: &ExecEvent) {
+        hot_error!(
+            "prior-run order {:x} names no instrument, so it has no slot and its fills cannot reach the ledger",
+            event.client_id.0
         );
     }
 
@@ -339,6 +348,13 @@ pub(super) struct PriorRunOrders {
 
 digest_fields! { PriorRunOrders { slots } }
 
+/// Why an order of an earlier run has no slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Unseated {
+    TableFull,
+    NoInstrument,
+}
+
 impl PriorRunOrders {
     pub(super) fn new() -> Self {
         Self {
@@ -366,23 +382,28 @@ impl PriorRunOrders {
         })
     }
 
-    pub(super) fn find_or_seat(&mut self, event: &ExecEvent, now: LocalTs) -> Option<usize> {
+    pub(super) fn find_or_seat(
+        &mut self,
+        event: &ExecEvent,
+        now: LocalTs,
+    ) -> Result<usize, Unseated> {
         if let Some(index) = self.find(event.client_id) {
-            return Some(index);
+            return Ok(index);
         }
-        let index = free_or_oldest_closed(&self.slots[..])?;
+        let instrument = event.instrument.ok_or(Unseated::NoInstrument)?;
+        let index = free_or_oldest_closed(&self.slots[..]).ok_or(Unseated::TableFull)?;
         self.slots[index] = OrderSlot {
             client_id: event.client_id,
             venue_order_id: event.venue_order_id,
             state: OrderState::Unknown,
             side: event.side,
-            instrument: event.instrument?,
+            instrument,
             price: event.price,
             qty: event.qty,
             last_event_ts_us: now,
             ..OrderSlot::EMPTY
         };
-        Some(index)
+        Ok(index)
     }
 
     fn find(&self, id: ClientOrderId) -> Option<usize> {

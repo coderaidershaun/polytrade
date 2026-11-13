@@ -3,12 +3,12 @@
 
 use proptest::prelude::*;
 
-use engine::hot::exec::{CloseReason, ExecHalt, HaltReason, OrderState, RejectOrigin};
+use engine::hot::exec::{CloseReason, HaltReason, OrderState, RejectOrigin};
 use engine::msg::exec::RejectClass;
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
-use engine::msg::time::{DurationUs, LocalTs, VenueTs};
+use engine::msg::time::{DurationUs, VenueTs};
 use engine::msg::ui::{
-    DomQuote, UI_ORDER_SNAPSHOT_CAPACITY, UiBookSnapshot, UiBookState, UiCatalog, UiEvent,
+    DomQuote, UI_ORDER_SNAPSHOT_CAPACITY, UiBookSnapshot, UiBookState, UiCatalog, UiEvent, UiHalt,
     UiInstrument, UiWorkingOrder,
 };
 use engine::operator::workstation::format::{MISSING, write_bps_delta, write_opt_bps_delta};
@@ -633,17 +633,17 @@ fn account_view_cases() {
         model.apply_event(UiEvent::Execution {
             seq: 0,
             event_ts_us: VenueTs::from_micros(10),
-            halt: ExecHalt::Armed,
+            halt: UiHalt::Armed,
         });
         assert_eq!(
             account(&model, InstrumentId(0), TICK).halt,
-            Some(ExecHalt::Armed),
+            Some(UiHalt::Armed),
             "{name}: armed"
         );
 
-        let halted = ExecHalt::Halted {
+        let halted = UiHalt::Halted {
             reason: HaltReason::RealisedLoss,
-            halted_ts_us: LocalTs::from_micros(20),
+            halted_ts_us: VenueTs::from_micros(20),
         };
         model.apply_event(UiEvent::Execution {
             seq: 1,

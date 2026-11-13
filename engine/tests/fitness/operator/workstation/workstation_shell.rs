@@ -1,8 +1,9 @@
 //! What the operator sees follows from the canvas and the selection alone: no pane leaves its size,
 //! no two panes overlap, and no safety badge is squeezed out of the top bar.
 
-use engine::hot::exec::{ExecHalt, HaltReason};
-use engine::msg::time::LocalTs;
+use engine::hot::exec::HaltReason;
+use engine::msg::time::VenueTs;
+use engine::msg::ui::UiHalt;
 use engine::operator::workstation::shell::{
     Area, Arrangement, Navigation, Pane, Selection, SizeClass, View, zoom_to_fit,
 };
@@ -19,10 +20,10 @@ fn canvas(width: f32, height: f32) -> Area {
     }
 }
 
-fn latched() -> Option<ExecHalt> {
-    Some(ExecHalt::Halted {
+fn latched() -> Option<UiHalt> {
+    Some(UiHalt::Halted {
         reason: HaltReason::RejectStreak,
-        halted_ts_us: LocalTs::from_micros(1),
+        halted_ts_us: VenueTs::from_micros(1),
     })
 }
 

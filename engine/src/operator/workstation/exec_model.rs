@@ -6,9 +6,10 @@
 //! reports, so a stale cell is never silent.
 
 use super::history::grow_to;
-use crate::hot::exec::{ExecHalt, OrderState, QuoteLevel, RejectOrigin};
+use crate::hot::exec::{OrderState, QuoteLevel, RejectOrigin};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use crate::msg::time::VenueTs;
+use crate::msg::ui::UiHalt;
 use crate::msg::ui::{UI_ORDER_SNAPSHOT_MAX_TOTAL, UiEvent, UiWorkingOrder};
 
 const WORKING_PER_SIDE: usize = 8;
@@ -208,7 +209,7 @@ pub struct ExecModel {
     balances: Vec<(AssetId, BalanceCell)>,
     unknown_asset_balances: u64,
     last_reject: Option<RejectCell>,
-    halt: Option<ExecHalt>,
+    halt: Option<UiHalt>,
 }
 
 impl ExecModel {
@@ -327,7 +328,7 @@ impl ExecModel {
         self.last_reject
     }
 
-    pub fn halt(&self) -> Option<ExecHalt> {
+    pub fn halt(&self) -> Option<UiHalt> {
         self.halt
     }
 

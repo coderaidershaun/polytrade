@@ -2,10 +2,11 @@
 //! halt latch.
 
 use crate::hot::exec::{
-    CloseReason, ExecHalt, HaltReason, OrderState, ReadinessGap, RejectOrigin, RejectReason,
+    CloseReason, HaltReason, OrderState, ReadinessGap, RejectOrigin, RejectReason,
 };
 use crate::msg::exec::{Liquidity, RejectClass};
-use crate::msg::time::LocalTs;
+use crate::msg::time::VenueTs;
+use crate::msg::ui::UiHalt;
 
 use super::super::envelope::{ByteReader, ByteWriter, LinkDecodeError};
 use super::super::wire::{WireField, wire_enum};
@@ -130,15 +131,15 @@ impl WireField for RejectOrigin {
     }
 }
 
-impl WireField for ExecHalt {
+impl WireField for UiHalt {
     fn write(&self, writer: &mut ByteWriter<'_>) {
         match *self {
-            ExecHalt::Armed => {
+            UiHalt::Armed => {
                 HALT_ARMED.write(writer);
                 0_u8.write(writer);
                 0_i64.write(writer);
             }
-            ExecHalt::Halted {
+            UiHalt::Halted {
                 reason,
                 halted_ts_us,
             } => {
@@ -154,10 +155,10 @@ impl WireField for ExecHalt {
         match tag {
             HALT_ARMED => {
                 let _padding = u8::read(reader)?;
-                let _stamp = LocalTs::read(reader)?;
-                Ok(ExecHalt::Armed)
+                let _stamp = VenueTs::read(reader)?;
+                Ok(UiHalt::Armed)
             }
-            HALT_HALTED => Ok(ExecHalt::Halted {
+            HALT_HALTED => Ok(UiHalt::Halted {
                 reason: WireField::read(reader)?,
                 halted_ts_us: WireField::read(reader)?,
             }),
