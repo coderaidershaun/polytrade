@@ -754,7 +754,7 @@ const RECORDED: [(Shipped, [Digest; 8]); 2] = [
 
 const RECORDER_OUTPUTS: [Digest; 8] = [
     recorded("tape rows", 46_415, 0x6a6d_77e4_2f76_4512),
-    recorded("commands", 241, 0xa5c3_8b1f_1c6d_e8ff),
+    recorded("commands", 241, 0x60ea_828f_819b_c86e),
     recorded("ui books", 601, 0xd1ca_5f6f_2e33_bab2),
     recorded("ui events", 48_281, 0x24ad_47c2_3baf_320e),
     recorded("exposure", 2, 0x27cc_3d45_433e_2022),
