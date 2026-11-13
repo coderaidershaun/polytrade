@@ -391,7 +391,7 @@ fn the_last_snapshot_leaves_the_sink_when_its_owner_does() {
 }
 
 /// FITNESS: a writer that dies never reports success. `drain()` answering `Ok` over a dead writer
-/// is the worst shape this subsystem has — `decide_exit` reads that as a graceful shutdown and the
+/// is the worst shape this subsystem has — `Exit::decide` reads that as a graceful shutdown and the
 /// run exits 0, while the file on disk still holds whatever the boot seeded. The position that was
 /// never written is the one the next boot restores and trades against.
 #[test]

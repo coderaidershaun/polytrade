@@ -3,7 +3,9 @@
 
 use crate::msg::exec::{ExecCommand, ExecKind, Provenance};
 use crate::msg::time::TsUs;
+use crate::runtime::shutdown::FatalReason;
 use crate::venues::binance::rest::OrderRecord;
+use crate::venues::edge::EdgeDriver;
 use crate::venues::exec::{MirroredOrder, Outgoing, ResyncPoll, SessionOutcome};
 use crate::{error, info, warn};
 
@@ -46,10 +48,10 @@ impl Actor {
             let Some(event) = self.decode_order(order, ExecKind::SnapshotOrder, 0) else {
                 self.session.core.stop_quoting();
                 self.fail_resync(resync_seq);
-                self.control.fatal.trip(format!(
-                    "binance execution cannot decode a possibly-owned open order {}",
-                    order.order_id
-                ));
+                self.control.fatal.trip(FatalReason::UndecodableOpenOrder {
+                    venue: self.venue(),
+                    venue_order_id: order.order_id,
+                });
                 return;
             };
             let mut mirrored = MirroredOrder::observed(&event);
@@ -81,9 +83,9 @@ impl Actor {
                             "binance execution cannot retain venue order {:016x} in its possibly-live set ({error:?}) — quoting is disabled",
                             mirrored.client_id.0
                         );
-                        self.control.fatal.trip(format!(
-                            "binance execution possibly-live mirror failed: {error:?}"
-                        ));
+                        self.control.fatal.trip(FatalReason::MirrorRetainFailed {
+                            venue: self.venue(),
+                        });
                         self.fail_resync(resync_seq);
                         return;
                     }

@@ -17,7 +17,7 @@ use crate::msg::inbound::{InboundMessage, MarketTapItem, TappedMessage, VenueMet
 use crate::msg::latency::CounterSample;
 use crate::msg::time::TsUs;
 use crate::runtime::pin::pin_current_thread;
-use crate::runtime::shutdown::{DrainSignal, FatalSignal};
+use crate::runtime::shutdown::{DrainSignal, FatalReason, FatalSignal};
 
 /// Keeps market taps open until the simulator finishes its final sweep.
 #[derive(Debug, Default)]
@@ -102,6 +102,10 @@ impl QueueProducer {
         self.tap.is_some()
     }
 
+    pub(crate) fn source_id(&self) -> SourceId {
+        self.source_id
+    }
+
     /// Full queue = engine stalled: trips fatal signal (never silent, never backpressure).
     pub fn push(&mut self, message: InboundMessage) {
         if self.producer.push(message).is_err() {
@@ -156,38 +160,37 @@ impl QueueProducer {
     /// A full ring means its consumer has stalled, so it is fatal rather than waited out.
     #[cold]
     fn signal_full(&self, ring: FullRing) {
-        let (ring_name, capacity, stalled) = match ring {
-            FullRing::Input => ("input queue", self.producer.buffer().capacity(), "engine"),
+        let (queue, source) = (self.queue_id, self.source_id);
+        let reason = match ring {
+            FullRing::Input => {
+                let capacity = self.producer.buffer().capacity();
+                hot_error!(
+                    "input queue {} (source {}) full at capacity {} — engine cannot keep up",
+                    queue.0,
+                    source.0,
+                    capacity
+                );
+                FatalReason::InputQueueFull { queue, capacity }
+            }
             FullRing::MarketTap => {
                 let capacity = self
                     .tap
                     .as_ref()
                     .map_or(0, |tap| tap.producer.buffer().capacity());
-                ("market tap ring for input queue", capacity, "simulator")
+                hot_error!(
+                    "market tap ring for input queue {} (source {}) full at capacity {} — simulator cannot keep up",
+                    queue.0,
+                    source.0,
+                    capacity
+                );
+                FatalReason::MarketTapFull { queue, capacity }
             }
         };
-        let (queue, source) = (self.queue_id.0, self.source_id.0);
-        match ring {
-            FullRing::Input => hot_error!(
-                "input queue {} (source {}) full at capacity {} — engine cannot keep up",
-                queue,
-                source,
-                capacity
-            ),
-            FullRing::MarketTap => hot_error!(
-                "market tap ring for input queue {} (source {}) full at capacity {} — simulator cannot keep up",
-                queue,
-                source,
-                capacity
-            ),
-        }
-        self.fatal.trip(format!(
-            "{ring_name} {queue} full at capacity {capacity} — {stalled} cannot keep up"
-        ));
+        self.fatal.trip(reason);
     }
 }
 
-/// The two rings an input producer writes; the fatal message names the one that filled.
+/// The two rings an input producer writes; the fatal reason names the one that filled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FullRing {
     Input,

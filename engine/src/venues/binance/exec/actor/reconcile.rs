@@ -5,9 +5,11 @@ use crate::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, Provenance, RejectClass, VenueOrderStatus,
 };
 use crate::msg::ids::{ClientOrderId, InstrumentId, Qty};
+use crate::runtime::shutdown::FatalReason;
 use crate::venues::binance::rest::{
     AccountInfo, AccountTrade, FailureVerdict, OrderRecord, RestError,
 };
+use crate::venues::edge::EdgeDriver;
 use crate::venues::exec::{EventSink, Outgoing, SessionOutcome};
 use crate::{error, warn};
 
@@ -26,9 +28,9 @@ impl Actor {
         let Some(outcome) = outcome else {
             error!("binance execution lost its rest worker — the reconcilers are gone");
             self.is_rest_gone = true;
-            self.control
-                .fatal
-                .trip("binance execution: the rest worker stopped answering");
+            self.control.fatal.trip(FatalReason::RestWorkerGone {
+                venue: self.venue(),
+            });
             return None;
         };
         self.on_rest_outcome(outcome, Some(writer)).await;

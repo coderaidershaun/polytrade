@@ -5,7 +5,7 @@
 use crate::msg::exec::{CancelReason, ExecEvent};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Side};
 use crate::msg::time::TsUs;
-use crate::runtime::shutdown::FatalSignal;
+use crate::runtime::shutdown::{FatalReason, FatalSignal};
 use crate::{error, warn};
 
 use super::{
@@ -102,9 +102,12 @@ impl<S: EventSink> ExecSession<S> {
             .core
             .on_event(event, &mut Outgoing::sink(outgoing, recon_seq));
         if let Err(error) = folded {
-            self.fatal.trip(format!(
-                "execution edge cannot retain an observed order in its possibly-live set: {error}"
-            ));
+            error!(
+                "{} execution cannot retain an observed order in its possibly-live set: {error}",
+                self.venue
+            );
+            self.fatal
+                .trip(FatalReason::MirrorRetainFailed { venue: self.venue });
         }
     }
 
@@ -125,10 +128,10 @@ impl<S: EventSink> ExecSession<S> {
                 self.events
                     .send_exec(place_not_sent(instrument, client_id, side, now));
                 if reason.is_fatal() {
-                    self.fatal.trip(format!(
-                        "{} execution placement admission failed closed: {reason:?}",
-                        self.venue
-                    ));
+                    self.fatal.trip(FatalReason::PlacementFailedClosed {
+                        venue: self.venue,
+                        client_id,
+                    });
                 }
             }
             ExecEffect::AmendNotSent {

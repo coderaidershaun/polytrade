@@ -5,6 +5,7 @@ use std::time::Duration;
 use crate::error;
 use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::TappedMessage;
+use crate::runtime::shutdown::FatalReason;
 use crate::venues::binance::parse::ParseContext;
 use crate::venues::binance::rest::RestRequest;
 
@@ -75,9 +76,8 @@ impl Actor {
             "binance adapter {} exhausted its connection epoch counter",
             self.label
         );
-        self.fatal.trip(format!(
-            "binance adapter {} exhausted its connection epoch counter",
-            self.label
-        ));
+        self.fatal.trip(FatalReason::EpochExhausted {
+            source_id: self.producer.source_id(),
+        });
     }
 }

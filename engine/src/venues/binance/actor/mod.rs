@@ -19,7 +19,7 @@ use crate::msg::run_state::RunState;
 use crate::msg::time::{EngineClock, TsUs};
 use crate::runtime::config::{BinanceMarket, KlineInterval};
 use crate::runtime::registry::{ConnectionCategory, InstrumentRow, ProducerGroup};
-use crate::runtime::shutdown::{FatalSignal, RunStateCell, TaskHandle};
+use crate::runtime::shutdown::{FatalReason, FatalSignal, RunStateCell, TaskHandle};
 use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::lane::{Flow, Lane, LaneSpec, SessionEnd, run_lane};
 use crate::venues::edge::rest_quiet::SharedRestQuiet;
@@ -269,7 +269,9 @@ impl Actor {
     fn on_parse_error(&mut self, error: ParseError) {
         if error.is_fatal() {
             error!("binance adapter {} fatal parse: {error}", self.label);
-            self.fatal.trip(format!("binance {}: {error}", self.label));
+            self.fatal.trip(FatalReason::MarketDataUnreadable {
+                source_id: self.producer.source_id(),
+            });
             return;
         }
         warn_repeating!(

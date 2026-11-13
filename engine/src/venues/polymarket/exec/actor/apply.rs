@@ -12,6 +12,8 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::msg::exec::{CancelReason, ExecEvent};
 use crate::msg::ids::{ClientOrderId, Side};
 use crate::msg::time::DurationUs;
+use crate::runtime::shutdown::FatalReason;
+use crate::venues::edge::EdgeDriver;
 use crate::venues::exec::{
     EventSink, ExecEffect, ExecRequest, InFlightRequest, Outgoing, PlaceNotSentReason, RequestId,
     SessionOutcome, SkipReason, stream_ready,
@@ -174,9 +176,9 @@ impl Actor {
                 Ok(frame) => frame,
                 Err(error) => {
                     error!("polymarket execution cannot build its stream subscription: {error}");
-                    self.control
-                        .fatal
-                        .trip(format!("polymarket execution subscribe: {error}"));
+                    self.control.fatal.trip(FatalReason::SubscribeUnbuildable {
+                        venue: self.venue(),
+                    });
                     return Some(SessionOutcome::Reconnect);
                 }
             };

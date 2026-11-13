@@ -45,7 +45,8 @@ use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::sender::{SendWait, Sender, SenderSetup};
 use crate::venues::edge::socket::{Reader, Writer, connect};
 use crate::venues::exec::{
-    EdgeHandle, EngineIdentity, EventSink, ExecStop, ExitPlan, SessionOutcome,
+    EdgeHandle, EngineIdentity, EventSink, ExecStop, ExitPlan, MirroredOrder, SessionOutcome,
+    SweepFailure,
 };
 use crate::{info, warn};
 
@@ -155,6 +156,8 @@ pub(crate) struct EdgeControl {
     pub(crate) disconnect_sweep_after: DurationUs,
     pub(crate) exit: Option<ExitPlan>,
     pub(crate) is_swept: bool,
+    /// Why the sweep of the final exit did not end clean, handed to the runtime as the edge stops.
+    sweep_failure: Option<SweepFailure>,
 }
 
 impl EdgeControl {
@@ -169,6 +172,7 @@ impl EdgeControl {
             disconnect_sweep_after: settings.disconnect_sweep_after,
             exit: None,
             is_swept: false,
+            sweep_failure: None,
         }
     }
 
@@ -203,24 +207,22 @@ impl EdgeControl {
     pub(crate) fn finished_exit(
         &self,
         now: TsUs,
-        venue: &str,
-        mirrored: usize,
+        venue: &'static str,
+        resting: &[MirroredOrder],
     ) -> Option<SessionOutcome> {
         let exit = self.exit.as_ref()?;
         if self.is_swept {
             return Some(SessionOutcome::Swept);
         }
-        if now > exit.deadline {
-            warn!(
-                "{venue} execution gave up waiting for its {:?} sweep — {mirrored} orders are still mirrored as resting",
-                exit.reason
-            );
-            // SMELL: past the deadline this reports `Swept` although orders are still mirrored as
-            // resting, so a caller cannot tell a clean sweep from one that gave up. This case needs
-            // its own outcome.
-            return Some(SessionOutcome::Swept);
+        exit.past_deadline(now, venue, resting)
+    }
+
+    /// Only the final exit's sweep can fail the run: a park that gave up is swept again before
+    /// the edge stops.
+    fn keep_sweep_failure(&mut self, failure: SweepFailure) {
+        if self.exit.as_ref().is_some_and(ExitPlan::is_final) {
+            self.sweep_failure = Some(failure);
         }
-        None
     }
 
     /// Opens the exit unless one is already under way, answering whether this call is the one that
@@ -374,8 +376,13 @@ pub(crate) async fn run_edge<D: EdgeDriver>(mut driver: D, lane: EdgeLane) {
                 down_since = None;
                 attempt = 0;
                 let (writer, reader) = socket.split();
-                if driver.serve(writer, reader, &mut sender).await == SessionOutcome::Swept {
-                    complete_exit(&mut driver).await;
+                match driver.serve(writer, reader, &mut sender).await {
+                    SessionOutcome::Reconnect => {}
+                    SessionOutcome::Swept => complete_exit(&mut driver).await,
+                    SessionOutcome::SweepPastDeadline(failure) => {
+                        driver.control().keep_sweep_failure(failure);
+                        complete_exit(&mut driver).await;
+                    }
                 }
             }
             Err(error) => {
@@ -401,7 +408,8 @@ pub(crate) async fn run_edge<D: EdgeDriver>(mut driver: D, lane: EdgeLane) {
     }
 
     driver.report_stop();
-    driver.control().stop.settled.notify_one();
+    let control = driver.control();
+    control.stop.settle(control.sweep_failure.take());
     driver.abort_workers();
 }
 
@@ -414,6 +422,14 @@ async fn check_latches<D: EdgeDriver>(driver: &mut D) {
     if driver.control().exit.is_some() {
         let wait = driver.control().sweep_deadline;
         settle_offline(driver, wait).await;
+        let venue = driver.venue();
+        let control = driver.control();
+        if !control.is_swept {
+            control.keep_sweep_failure(SweepFailure::Unconfirmed {
+                venue,
+                deadline_ms: wait.as_millis(),
+            });
+        }
         complete_exit(driver).await;
     }
 }

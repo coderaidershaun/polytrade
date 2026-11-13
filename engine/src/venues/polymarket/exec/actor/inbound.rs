@@ -8,6 +8,8 @@
 use tokio_tungstenite::tungstenite::{Error as ProtocolError, Message};
 
 use crate::msg::exec::{ExecEvent, Liquidity};
+use crate::runtime::shutdown::{AnswerPart, FatalReason};
+use crate::venues::edge::EdgeDriver;
 use crate::venues::edge::RECENT_TRADES;
 use crate::venues::exec::{Outgoing, SessionOutcome};
 use crate::{error, warn};
@@ -79,9 +81,10 @@ impl Actor {
             }
             Err(error) if error.is_fatal() => {
                 error!("polymarket execution fatal stream decode: {error}");
-                self.control
-                    .fatal
-                    .trip(format!("polymarket execution: {error}"));
+                self.control.fatal.trip(FatalReason::UndecodableAnswer {
+                    venue: self.venue(),
+                    part: AnswerPart::Stream,
+                });
                 false
             }
             Err(error) => {
@@ -179,10 +182,10 @@ impl Actor {
             lineage.venue_trade_id, lineage.instrument.0, self.counts.settlement_failures
         );
         self.session.core.stop_quoting();
-        self.control.fatal.trip(format!(
-            "polymarket execution settlement failed on trade {} — a folded fill did not settle on chain",
-            lineage.venue_trade_id
-        ));
+        self.control.fatal.trip(FatalReason::SettlementFailed {
+            venue: self.venue(),
+            trade: lineage.trade_id,
+        });
     }
 
     /// Re-reads held frames in order; mappings landed since their first arrival may now explain them.

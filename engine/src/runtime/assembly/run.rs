@@ -2,16 +2,18 @@
 //! Workstation is separate process. Terminal: prints failures.
 
 use std::path::PathBuf;
-use std::process::ExitCode;
 
 use crate::hot::strategy::{EngineView, Strategy, StrategyConfig};
 use crate::runtime::config::{Config, RunIdentity};
 
 use super::Engine;
+use super::drain::ForcedExit;
+use super::exit::Exit;
 
 /// Run strategy S as trading engine, drain on SIGINT/SIGTERM/fatal. Config from --config or default path.
-/// Returns SUCCESS only on graceful drain; all failures printed first.
-pub fn run_trading_engine<S>(strategy_id: &str, te_id: &str) -> ExitCode
+/// Each failure is printed before it returns; the binary exits with [`Exit::code`]. `forced_exit`
+/// ends the process when the drain passes `engine.drain_deadline_ms`.
+pub fn run_trading_engine<S>(strategy_id: &str, te_id: &str, forced_exit: ForcedExit) -> Exit
 where
     S: Strategy + StrategyConfig + 'static,
 {
@@ -19,25 +21,24 @@ where
         Ok(identity) => identity,
         Err(error) => {
             print_error(&format!("{strategy_id}-{te_id}"), &error);
-            return ExitCode::FAILURE;
+            return Exit::StartRefused;
         }
     };
     let label = identity.to_string();
     let Some(config_path) = config_path_from_args(&identity) else {
         eprintln!("{label}: --config requires a path argument");
-        return ExitCode::FAILURE;
+        return Exit::StartRefused;
     };
     let Some(engine) = start_engine::<S>(identity, config_path) else {
-        return ExitCode::FAILURE;
+        return Exit::StartRefused;
     };
 
-    let report = engine.run_until_shutdown();
+    let exit = engine.run_until_shutdown(forced_exit);
     println!(
-        "{label} exit ({}): {}",
-        if report.graceful { "graceful" } else { "fatal" },
-        report.reason
+        "{label} exit ({}): {exit}",
+        if exit.code() == 0 { "graceful" } else { "fatal" }
     );
-    if report.graceful { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+    exit
 }
 
 /// Load config, build strategy, start engine. None on failure; already printed (or logged by Engine::start).

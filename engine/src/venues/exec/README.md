@@ -113,7 +113,12 @@ arm readiness → Quoting. On disconnect: mark every in-flight request ambiguous
 `StreamReset` (which invalidates every hot slot to Unknown and disarms readiness),
 reconnect with backoff, resync again. On exit: plan a cancel sweep, retry it paced until
 the mirror confirms every order gone or the deadline forces an abort, then report, settle
-the latch, and stop.
+the latch, and stop. A sweep past its deadline with orders still mirrored never reports
+`Swept`: the session ends with `SweepPastDeadline`, which names the client id of each order
+that stays, and one ERROR line names them too. A final exit whose sweep was never confirmed,
+because the socket stayed down or nothing answered in time, ends the same way with no ids.
+The edge settles its latch with that failure, and the drain counts it as a failed step, so
+the exit is not graceful.
 
 ## Identity and ownership
 

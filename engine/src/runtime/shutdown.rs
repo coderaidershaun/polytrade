@@ -1,12 +1,12 @@
-//! The shutdown latches: `FatalSignal` stops NOW, and `DrainSignal` finishes the input then stops.
-//! `TaskHandle` stops a spawned task, and `WriterThread` lets a blocking file writer finish before
-//! exit. `RunStateCell` is a TWO-WAY toggle for trading on and off rather than an ending; SIGINT or
-//! SIGTERM remains the only graceful exit.
+//! The latches of a run: `FatalSignal` keeps the first `FatalReason` and stops now, `DrainSignal`
+//! finishes the input first, and the run-state cells turn trading off and on without an ending.
 
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, OnceLock};
 
+use crate::msg::failure::{FailureClass, Halt};
+use crate::msg::ids::{ClientOrderId, QueueId, SourceId, TradeId};
 use crate::msg::run_state::{RunAssertion, RunState};
 use crate::warn;
 
@@ -15,7 +15,7 @@ use crate::warn;
 #[derive(Clone, Default)]
 pub struct FatalSignal {
     tripped: Arc<AtomicBool>,
-    reason: Arc<Mutex<Option<Box<str>>>>,
+    reason: Arc<OnceLock<FatalReason>>,
 }
 
 impl FatalSignal {
@@ -23,14 +23,11 @@ impl FatalSignal {
         Self::default()
     }
 
-    /// Records `reason` (only the first is kept) and latches the signal.
+    /// Keeps `reason` unless an earlier trip left one, then latches the signal. The reason is set
+    /// before the flag, so a reader that sees the flag also finds the reason.
     #[cold]
-    pub fn trip(&self, reason: impl Into<Box<str>>) {
-        let mut slot = self.reason.lock().unwrap_or_else(PoisonError::into_inner);
-        if slot.is_none() {
-            *slot = Some(reason.into());
-        }
-        drop(slot);
+    pub fn trip(&self, reason: FatalReason) {
+        self.reason.get_or_init(|| reason);
         self.tripped.store(true, Ordering::Release);
     }
 
@@ -39,11 +36,101 @@ impl FatalSignal {
         self.tripped.load(Ordering::Acquire)
     }
 
-    pub fn reason(&self) -> Option<Box<str>> {
-        self.reason
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+    pub fn reason(&self) -> Option<FatalReason> {
+        self.reason.get().copied()
+    }
+}
+
+/// Why the fatal latch tripped. Each value is a plain copy, so the latch keeps the first one with no
+/// lock. Text that no value can hold, such as a parse error, is in the ERROR line that the site
+/// writes before it trips.
+#[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FatalReason {
+    #[error("input queue {} full at capacity {capacity} — engine cannot keep up", queue.0)]
+    InputQueueFull { queue: QueueId, capacity: usize },
+    #[error(
+        "market tap ring for input queue {} full at capacity {capacity} — simulator cannot keep up",
+        queue.0
+    )]
+    MarketTapFull { queue: QueueId, capacity: usize },
+    #[error("hot thread failed to pin to core {core} — pinning is mandatory on linux")]
+    HotPinRefused { core: usize },
+    #[error("a thread panicked — the log holds its place and message")]
+    Panic,
+    #[error("{venue} execution cannot retain an observed order in its possibly-live set")]
+    MirrorRetainFailed { venue: &'static str },
+    #[error("{venue} execution placement admission failed closed for order {:016x}", client_id.0)]
+    PlacementFailedClosed {
+        venue: &'static str,
+        client_id: ClientOrderId,
+    },
+    #[error("the exchange simulator's command lane is full at capacity {capacity}")]
+    SimulatorCommandLaneFull { capacity: usize },
+    #[error("{venue} execution: the rest worker stopped answering")]
+    RestWorkerGone { venue: &'static str },
+    #[error("{venue} execution cannot decode {}", part.noun())]
+    UndecodableAnswer {
+        venue: &'static str,
+        part: AnswerPart,
+    },
+    #[error("{venue} execution: the account stream subscribe was refused {failures} times")]
+    SubscribeRefused { venue: &'static str, failures: u32 },
+    #[error("market data source {} exhausted its connection epoch counter", source_id.0)]
+    EpochExhausted { source_id: SourceId },
+    #[error(
+        "market data source {} sent a decimal too large for the fixed-point range",
+        source_id.0
+    )]
+    MarketDataUnreadable { source_id: SourceId },
+    #[error("{venue} execution cannot decode a possibly-owned open order {venue_order_id}")]
+    UndecodableOpenOrder {
+        venue: &'static str,
+        venue_order_id: i64,
+    },
+    #[error("{venue} execution order index is full and cannot record a venue order id")]
+    OrderIndexFull { venue: &'static str },
+    #[error("{venue} execution cannot build its account stream subscription")]
+    SubscribeUnbuildable { venue: &'static str },
+    #[error("{venue} execution trade {} settled failed after its fill was folded", trade.0)]
+    SettlementFailed { venue: &'static str, trade: TradeId },
+}
+
+impl FatalReason {
+    pub const fn failure_class(&self) -> FailureClass {
+        match self {
+            FatalReason::InputQueueFull { .. }
+            | FatalReason::MarketTapFull { .. }
+            | FatalReason::HotPinRefused { .. }
+            | FatalReason::Panic
+            | FatalReason::MirrorRetainFailed { .. }
+            | FatalReason::PlacementFailedClosed { .. }
+            | FatalReason::SimulatorCommandLaneFull { .. }
+            | FatalReason::RestWorkerGone { .. }
+            | FatalReason::UndecodableAnswer { .. }
+            | FatalReason::SubscribeRefused { .. }
+            | FatalReason::EpochExhausted { .. }
+            | FatalReason::MarketDataUnreadable { .. }
+            | FatalReason::UndecodableOpenOrder { .. }
+            | FatalReason::OrderIndexFull { .. }
+            | FatalReason::SubscribeUnbuildable { .. }
+            | FatalReason::SettlementFailed { .. } => FailureClass::Halt(Halt::Engine),
+        }
+    }
+}
+
+/// Which part of a venue's wire held the frame that could not be decoded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AnswerPart {
+    Response,
+    Stream,
+}
+
+impl AnswerPart {
+    const fn noun(self) -> &'static str {
+        match self {
+            AnswerPart::Response => "an answer to one of its requests",
+            AnswerPart::Stream => "an event of its account stream",
+        }
     }
 }
 

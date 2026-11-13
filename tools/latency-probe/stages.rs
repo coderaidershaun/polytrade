@@ -13,5 +13,8 @@ pub fn run(config: &Path) -> ExitCode {
         eprintln!("latency-probe stages refused: {refusal}");
         return ExitCode::FAILURE;
     }
-    engine::runtime::run_trading_engine::<Silent>("latency-probe", "stages")
+    let exit = engine::runtime::run_trading_engine::<Silent>("latency-probe", "stages", |code| {
+        std::process::exit(code)
+    });
+    ExitCode::from(exit.code())
 }

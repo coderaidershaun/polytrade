@@ -3,13 +3,14 @@
 //!
 //! Every submodule is either a PHASE of one run — `prepare`, `run`, `drain`, in that order — or the
 //! bring-up of ONE subsystem, named for it: `exec`, `link`, `persist`, `metrics`, `senders`,
-//! `timer`, `queues`. The rest are leaves those two lean on: `error`, `exec_identity`. Which venue a run
-//! talks to is decided by the adapters, never here.
+//! `timer`, `queues`. The rest are leaves those two lean on: `error`, `exec_identity`, `exit`. Which
+//! venue a run talks to is decided by the adapters, never here.
 
 mod drain;
 mod error;
 mod exec;
 mod exec_identity;
+mod exit;
 mod link;
 pub mod metrics;
 mod persist;
@@ -58,12 +59,13 @@ use prepare::{Prepared, prepare};
 use queues::{InputQueues, build_input_queues};
 use timer::spawn_timer;
 
-// SMELL: `decide_exit` and `check_symbol_order_capacity` are public only because the fitness
-// suite calls them. A test is not a reason to make an item public, so their checks should move
-// onto a public entry point and these two should go back to crate visibility.
-pub use drain::decide_exit;
+pub use drain::{DrainWatchdog, ForcedExit};
 pub use error::EngineError;
 pub use exec_identity::ExecutionLease;
+pub use exit::{DrainDeadline, DrainFailure, DrainOutcome, Exit, Trigger};
+// SMELL: `check_symbol_order_capacity` is public only because the fitness suite calls it. A test is
+// not a reason to make an item public, so its check should move onto a public entry point and it
+// should go back to crate visibility.
 pub use prepare::check_symbol_order_capacity;
 pub use run::run_trading_engine;
 pub use senders::PinnedSenders;
@@ -74,12 +76,6 @@ const ROTATIONS_CHANNEL_CAPACITY: usize = 256;
 /// a slow bring-up cannot lose the first window.
 const ASSIGNMENTS_CHANNEL_CAPACITY: usize = 8;
 const LINK_RING_CAPACITY: usize = 1_024;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExitReport {
-    pub graceful: bool,
-    pub reason: Box<str>,
-}
 
 struct Engine {
     /// One trading engine per host: while this is held, no second process under the same TE
