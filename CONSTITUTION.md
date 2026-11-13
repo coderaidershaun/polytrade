@@ -920,14 +920,33 @@ test, or sits in a module that is a concept in its own right, and each clause na
   - `QueueId::new`, its error `QueueIdError`, and `QueueId::index`, which replaces the public field:
     vocabulary of `msg`. The timing harness calls `QueueId::new` (`tools/latency-probe/sender.rs`).
   - `FailureClass` and `Halt` (`engine::msg::failure`): vocabulary of `msg` (§6).
+  - `MessageHeader`, `MessageBody`, `MessageKind`, and `InboundMessage::kind`
+    (`engine::msg::inbound`), `StageSample::ABSENT_VENUE` (`engine::msg::latency`), and the
+    builders of the two chunks, `BookChunk::new`, `BookChunk::push_levels`, `AccountChunk::new`,
+    and `AccountChunk::push_balances`: vocabulary of `msg`, the data that crosses domains. The
+    timing harness builds each message from a `MessageBody` (`tools/latency-probe/rig.rs`). A
+    chunk keeps its entries and its length private, and its filled part is read through
+    `active_levels` and `active_balances`, which were `pub` before.
   - `SpinSchedule::slot_to_fire`, with the type of the clause above. `StateDigest`, the value of
     `state_digest`.
   - `PinCall` and `pin_to_core`: the timing harness passes `pin_to_core`.
   - `HotLoop`, `PinnedHotThread`, and `touched_input_ring` (`engine::hot::spawn`): the timing
     harness starts its hot thread through them (`tools/latency-probe/rig.rs`).
+  - The failure class of each lane, as a constant beside its type: `QueueProducer::WHEN_FULL` and
+    `LinkQueueProducer::WHEN_FULL` (`engine::hot::spawn`), and `DropCountingSink::WHEN_FULL`,
+    `StrategyLogSink::WHEN_FULL`, `SampleSink::WHEN_FULL`, `ExecSink::WHEN_FULL`,
+    `PersistSink::ROW_WHEN_FULL`, `PersistSink::SEAL_WHEN_FULL`, `PersistSink::SEAL_PAST_CAP`, and
+    `ExposureSink::WHEN_FULL` (`engine::hot::sink`). Merit, for the group: the rule of §6 that each
+    lane type names its failure class in code, beside the type (2026-11-13 section on failure
+    classes). The sinks sit in the concept module `engine::hot::sink`, and the two input producers
+    in `engine::hot::spawn`.
   - `StrategyGate`: `StrategyCtx::gate` returns it to strategy code, the seam of §8 (2026-07-20).
   - `Ema` (`engine::hot::series`): the series module is a concept in its own right, and the
     strategies name it (`strategies/strat-micro-recorder/te-binance-spot-btcusdt/models.rs`).
+  - `FastQueue::ema_over_window` and `FastQueue::median_over_window` (`engine::hot::series`), the
+    new names of `ema` and `median`, and `FastQueue::running_mean`, which takes the place of `mean`
+    for a queue of `f64`: the strategies call them
+    (`strategies/strat-micro-recorder/te-binance-spot-btcusdt/strategy.rs`, `models.rs` beside it).
   - `DrainOutcome`, `Trigger`, `DrainFailure`, `DrainDeadline`, `ForcedExit`, `AnswerPart`, and
     `SweepFailure`: the inputs and the values of `Exit` and `FatalReason`, by the clause on `Exit`.
   - `DrainWatchdog` and `ExitPlan`: by the ruling of §12 (2026-11-13).
