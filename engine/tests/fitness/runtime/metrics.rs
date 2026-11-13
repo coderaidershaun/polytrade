@@ -507,10 +507,35 @@ fn backward_pair_is_counted_not_recorded() {
     harness.samples.stages.push(forward);
     let command = harness.command(2_000, 1_000, 3_000);
     harness.samples.wires.push(command);
+    // The queue stamp has a resolution of one microsecond, so a pop half a microsecond before it is
+    // a wait too short to resolve, not a pair that ran backward.
+    let queued_tick = QUEUED_US as u64 * 1_000;
+    let unresolved = harness.message(Category::Exec, queued_tick - 500, queued_tick + 300);
+    harness.samples.stages.push(unresolved);
+    let beyond = harness.message(Category::Exec, queued_tick - 30_000, queued_tick - 29_200);
+    harness.samples.stages.push(beyond);
     harness.pass(QUEUED_US + 100);
     harness.pass(INTERVAL_US);
 
     let rows = &harness.rows;
+    for stage in [Stage::QueueWait, Stage::MessageToDecision] {
+        let row = rows
+            .stage(Category::Exec, stage)
+            .expect("each pair of a queue stamp and a tick has its row");
+        assert_eq!(
+            (row.count, row.backward),
+            (1, 1),
+            "{stage:?}: a pair inside the resolution of its stamps is a wait, one far beyond it ran \
+             backward"
+        );
+    }
+    let queue_wait = rows
+        .stage(Category::Exec, Stage::QueueWait)
+        .expect("checked above");
+    assert_eq!(
+        queue_wait.max_ns, 0,
+        "a wait shorter than the stamps resolve is recorded as no wait"
+    );
     let processing = rows
         .stage(Category::Trade, Stage::Processing)
         .expect("a backward pair still has its row");

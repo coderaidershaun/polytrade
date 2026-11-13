@@ -7,21 +7,25 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
+use anyhow::Context;
 use rtrb::RingBuffer;
+use tokio::runtime::Handle;
 
 use engine::msg::exec::{ExecCommand, ExecLaneItem, OrderStyle, StampedExecCommand};
 use engine::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, QueueId, Side};
-use engine::msg::latency::{Category, Stage};
 use engine::msg::time::DurationUs;
+use engine::runtime::PinnedSenders;
 use engine::runtime::config::SenderPlacement;
 use engine::venues::edge::sender::{CommandTransport, Handover, SendWait, Sender, SenderSetup};
 use engine::venues::exec::SessionOutcome;
 
 use crate::clock;
-use crate::rig::{self, MetricsRun};
-use crate::tally;
+use crate::rig::MetricsRun;
 
 const LANE: usize = 4_096;
+
+/// The workers of a small engine's shared runtime.
+const SHARED_WORKERS: usize = 2;
 
 /// The size of one order request on the wire, about what a venue takes.
 const REQUEST_BYTES: usize = 256;
@@ -59,10 +63,11 @@ impl CommandTransport for LoopbackVenue {
 
 impl SenderRun {
     /// # Errors
-    /// When a pinned sender cannot pin on Linux.
+    /// When the log, the metrics thread or the sender's runtime cannot start, a pinned sender
+    /// among them on Linux.
     pub fn run(&self) -> anyhow::Result<()> {
         let clock = clock::start_engine_clock();
-        let (metrics, samples, stamper) = MetricsRun::start(&clock);
+        let (metrics, samples, stamper) = MetricsRun::start(&clock, "latency-probe-sender")?;
         let (mut lane, commands) = RingBuffer::new(LANE);
         let (venue, reader) = loopback();
         let refused = Arc::new(AtomicU64::new(0));
@@ -86,34 +91,21 @@ impl SenderRun {
             request: [0x5a; REQUEST_BYTES],
             refused: Arc::clone(&refused),
         };
-        let sending = Arc::clone(&is_done);
+        let home = SenderHome::start(self.placement, self.core)?;
         let placement = self.placement;
-        let core = self.core;
-        let sender = std::thread::spawn(move || -> anyhow::Result<()> {
-            if placement == SenderPlacement::Pinned {
-                rig::pin(core)?;
-            }
-            let runtime = match placement {
-                SenderPlacement::Shared => tokio::runtime::Builder::new_multi_thread()
-                    .worker_threads(2)
-                    .enable_time()
-                    .build(),
-                SenderPlacement::Pinned => tokio::runtime::Builder::new_current_thread()
-                    .enable_time()
-                    .build(),
-            }
-            .expect("the harness can build a tokio runtime");
-            runtime.block_on(async {
-                let setup = SenderSetup {
-                    commands,
-                    stamper: sender_stamper,
-                    wires,
-                    queue: QueueId(0),
-                    wait: SendWait::new(placement, tokio::time::interval(tick)),
-                };
-                drive_sender(setup, wire, &sending).await;
-            });
-            Ok(())
+        let sending = Arc::clone(&is_done);
+        let (finished, has_finished) = std::sync::mpsc::sync_channel(1);
+        home.handle().spawn(async move {
+            let setup = SenderSetup {
+                commands,
+                stamper: sender_stamper,
+                wires,
+                queue: QueueId(0),
+                wait: SendWait::new(placement, tokio::time::interval(tick)),
+            };
+            drive_sender(setup, wire, &sending).await;
+            // The harness waits for this before it stops the runtime, so the send cannot fail.
+            finished.send(()).ok();
         });
 
         let interval = DurationUs::from_micros((1_000_000 / self.rate_hz.max(1)).max(1) as i64);
@@ -138,29 +130,55 @@ impl SenderRun {
             std::hint::spin_loop();
         }
         is_done.store(true, Ordering::Release);
-        let sent = sender
-            .join()
-            .expect("the sender thread of the harness does not panic");
+        has_finished
+            .recv()
+            .context("the sender task of the harness ended before it finished")?;
+        drop(home);
         drain_socket
             .join()
             .expect("the socket reader of the harness does not panic");
-        sent?;
-        let rows = metrics.finish();
         let label = match self.placement {
             SenderPlacement::Shared => "sender --placement shared",
             SenderPlacement::Pinned => "sender --placement pinned",
         };
-        tally::print_rows(
-            label,
-            &rows,
-            Category::Command,
-            &[Stage::DecisionToWire, Stage::BankAndLaneWait, Stage::Send],
-        );
+        metrics.finish(label)?;
         println!(
             "development {label}: loopback sends refused={}",
             refused.load(Ordering::Relaxed)
         );
         Ok(())
+    }
+}
+
+/// Where the sender loop runs: the shared multi-thread runtime of an engine, or the engine's own
+/// pinned sender thread.
+enum SenderHome {
+    Shared(tokio::runtime::Runtime),
+    Pinned(PinnedSenders),
+}
+
+impl SenderHome {
+    /// # Errors
+    /// When the runtime cannot be built, or when the pinned thread cannot pin on Linux.
+    fn start(placement: SenderPlacement, core: Option<usize>) -> anyhow::Result<SenderHome> {
+        match placement {
+            SenderPlacement::Shared => tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(SHARED_WORKERS)
+                .enable_all()
+                .build()
+                .map(SenderHome::Shared)
+                .context("the harness cannot build a shared runtime"),
+            SenderPlacement::Pinned => PinnedSenders::spawn(core)
+                .map(SenderHome::Pinned)
+                .context("the harness cannot start the pinned sender thread"),
+        }
+    }
+
+    fn handle(&self) -> &Handle {
+        match self {
+            SenderHome::Shared(runtime) => runtime.handle(),
+            SenderHome::Pinned(senders) => senders.handle(),
+        }
     }
 }
 

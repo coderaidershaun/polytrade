@@ -4,9 +4,6 @@
 
 use hdrhistogram::Histogram;
 
-use engine::msg::latency::{Category, Stage};
-use engine::runtime::metrics::LatencyRow;
-
 use crate::clock::Probe;
 
 /// One nanosecond to ten seconds, three significant figures: a major page fault still records.
@@ -91,31 +88,4 @@ fn spread(histogram: &Histogram<u64>) -> String {
 
 fn micros(nanos: u64) -> String {
     format!("{:.3}us", nanos as f64 / 1_000.0)
-}
-
-/// The rows of the metrics core for `stages` of `category`, one line each.
-pub fn print_rows(label: &str, rows: &[LatencyRow], category: Category, stages: &[Stage]) {
-    for &stage in stages {
-        let mut matching = rows
-            .iter()
-            .filter(|row| row.category == category && row.stage == stage)
-            .peekable();
-        if matching.peek().is_none() {
-            println!("development {label} {}: count=0", stage.label());
-        }
-        for row in matching {
-            println!(
-                "development {label} {}: count={} p50={} p99={} p99.9={} max={} dropped={} backward={} negative={}",
-                stage.label(),
-                row.count,
-                micros(row.p50_ns),
-                micros(row.p99_ns),
-                micros(row.p999_ns),
-                micros(row.max_ns),
-                row.dropped,
-                row.backward,
-                row.negative,
-            );
-        }
-    }
 }

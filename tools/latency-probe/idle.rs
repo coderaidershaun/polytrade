@@ -9,14 +9,12 @@ use rtrb::RingBuffer;
 use engine::hot::ingress::IngressQueues;
 use engine::hot::metrics::DriverSamples;
 use engine::hot::spawn::{HotThreadConfig, IdleWait, spawn_hot_thread};
-use engine::msg::latency::{Category, Stage};
 use engine::msg::time::DurationUs;
 use engine::runtime::metrics::SampleProducers;
 use engine::runtime::shutdown::{DrainSignal, FatalSignal};
 
 use crate::clock;
 use crate::rig::{self, MetricsRun};
-use crate::tally;
 
 const INPUT_RING: usize = 4_096;
 
@@ -29,10 +27,10 @@ pub struct IdleRun {
 
 impl IdleRun {
     /// # Errors
-    /// Never today: the hot thread pins itself, and on Linux a failed pin stops it.
+    /// When the log or the metrics thread cannot start.
     pub fn run(&self) -> anyhow::Result<()> {
         let clock = clock::start_engine_clock();
-        let (metrics, producers, stamper) = MetricsRun::start(&clock);
+        let (metrics, producers, stamper) = MetricsRun::start(&clock, "latency-probe-idle")?;
         let SampleProducers {
             stages, counters, ..
         } = producers;
@@ -73,21 +71,11 @@ impl IdleRun {
         drain.request();
         hot.join()
             .expect("the hot thread of the harness does not panic");
-        let rows = metrics.finish();
         let label = match self.wait {
             IdleWait::Spin => "idle --wait spin".to_owned(),
             IdleWait::Park(nap) => format!("idle --wait park --park-us {}", nap.as_micros()),
         };
-        tally::print_rows(
-            &label,
-            &rows,
-            Category::Trade,
-            &[
-                Stage::QueueWait,
-                Stage::Processing,
-                Stage::MessageToDecision,
-            ],
-        );
+        metrics.finish(&label)?;
         Ok(())
     }
 }

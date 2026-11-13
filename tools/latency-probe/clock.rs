@@ -94,15 +94,6 @@ pub fn first_scale(stamper: &Stamper, clock: &EngineClock) -> TickScale {
         .expect("the cpu counter and the engine clock both move in two milliseconds")
 }
 
-/// A counter read, an engine clock read, and a second counter read, which together make one
-/// anchor of the metrics core.
-pub fn anchor_reads(stamper: &Stamper, clock: &EngineClock) -> (Tick, TsUs, Tick) {
-    let before = stamp(stamper);
-    let at = now(clock);
-    let after = stamp(stamper);
-    (before, at, after)
-}
-
 /// Spins until the engine clock reaches `due`, so the sender of the harness keeps a fixed rate.
 pub fn spin_until(clock: &EngineClock, due: TsUs) {
     while now(clock) < due {
