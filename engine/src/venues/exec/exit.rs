@@ -9,6 +9,7 @@ use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
 use crate::msg::exec::CancelReason;
+use crate::msg::failure::{FailureClass, Halt};
 use crate::msg::ids::ClientOrderId;
 use crate::msg::time::{DurationUs, LocalTs};
 use crate::{error, warn};
@@ -181,4 +182,14 @@ pub enum SweepFailure {
         venue: &'static str,
         deadline_ms: u128,
     },
+}
+
+impl SweepFailure {
+    pub const fn failure_class(&self) -> FailureClass {
+        match self {
+            SweepFailure::PastDeadline { .. } | SweepFailure::Unconfirmed { .. } => {
+                FailureClass::Halt(Halt::Engine)
+            }
+        }
+    }
 }
