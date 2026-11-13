@@ -328,8 +328,9 @@ fn a_full_command_bank_halts_and_leaves_the_order_it_could_not_cancel_live() {
 const COMMAND_BANK_CAPACITY: usize = MAX_ORDER_SLOTS + 6 * MAX_ORDER_INSTRUMENTS;
 
 /// CONTRACT: a bank that holds its whole capacity refuses the next command and halts quoting, and a
-/// cancel that it refuses never reaches the lane, so the order it would have pulled stays `Live`. A
-/// cancel marked as sent but never banked would leave a quote resting with nothing asking again.
+/// cancel that it refuses never reaches the lane, so the order it would have pulled stays `Live`,
+/// also when the window closes after the halt. A cancel marked as sent but never banked would leave
+/// a quote resting with nothing asking again.
 #[test]
 fn full_command_bank_halts_and_leaves_the_order_live() {
     let built = built_quoting_engine(QuotingSetup {
@@ -383,6 +384,14 @@ fn full_command_bank_halts_and_leaves_the_order_live() {
         working,
         [OrderState::Live; 2],
         "the refused cancels leave both orders live"
+    );
+
+    spin_at(&mut engine, 2 + JAM_SPINS as u64, CLOSE - MARGIN.micros());
+    let (_, working) = read_screen(&mut ui_events);
+    assert_eq!(
+        working,
+        [OrderState::Live; 2],
+        "the closing window's cancels were refused too, so both quotes still read as resting"
     );
 
     let lane = drain_commands(&mut commands);
