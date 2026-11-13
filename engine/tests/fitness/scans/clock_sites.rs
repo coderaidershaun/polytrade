@@ -883,131 +883,233 @@ struct Site {
     body: String,
 }
 
+/// One banned call in a body, with the type that the text names before `::`, if it names one.
+struct Call {
+    line: usize,
+    owner: Option<String>,
+}
+
 impl Site {
-    /// Each name whose calls in the body differ in number from the row, with the line of each call.
+    /// Each difference between the banned calls of the body and the row: a name called a different
+    /// number of times, or a call that names a type that the row does not list for that name, such
+    /// as `SystemTime::now` where the row lists `EngineClock::now`.
     fn unlisted_calls(&self, listed: &[&str], banned: &[String]) -> Vec<String> {
-        let mut names: Vec<String> = banned.iter().map(|path| call_name(path)).collect();
-        names.sort();
+        let mut names: Vec<&str> = banned.iter().map(|path| last_segment(path)).collect();
+        names.sort_unstable();
         names.dedup();
-        names
+        let mut problems = Vec::new();
+        for name in names {
+            let owners: Vec<&str> = banned
+                .iter()
+                .filter(|path| last_segment(path) == name)
+                .map(|path| owner_of(path))
+                .collect();
+            let calls = self.calls_of(name, &owners);
+            let rows: Vec<&str> = listed
+                .iter()
+                .copied()
+                .filter(|path| last_segment(path) == name)
+                .collect();
+            if calls.len() != rows.len() {
+                let lines: Vec<usize> = calls.iter().map(|call| call.line).collect();
+                problems.push(format!(
+                    "{}:{} `fn {}` calls {name} {} times, at lines {lines:?}, and its row lists {}",
+                    self.file,
+                    self.attribute_line,
+                    self.function,
+                    calls.len(),
+                    rows.len()
+                ));
+            }
+            let mut typed: Vec<&str> = calls
+                .iter()
+                .filter_map(|call| call.owner.as_deref())
+                .collect();
+            typed.sort_unstable();
+            typed.dedup();
+            for owner in typed {
+                let lines: Vec<usize> = calls
+                    .iter()
+                    .filter(|call| call.owner.as_deref() == Some(owner))
+                    .map(|call| call.line)
+                    .collect();
+                let allowed = rows.iter().filter(|path| owner_of(path) == owner).count();
+                if lines.len() > allowed {
+                    problems.push(format!(
+                        "{}:{} `fn {}` calls {owner}::{name} at lines {lines:?}, but its row lists \
+                         {allowed} such call: {rows:?}",
+                        self.file, lines[0], self.function
+                    ));
+                }
+            }
+        }
+        problems
+    }
+
+    /// The calls of `name` in the body. A call written with its type (`SystemTime::now()`) keeps the
+    /// type. A method call (`clock.now()`) names no type, so only its name counts.
+    fn calls_of(&self, name: &str, owners: &[&str]) -> Vec<Call> {
+        let mut calls: Vec<(usize, Option<String>)> = Vec::new();
+        if name == FREE_CALL {
+            for (at, _) in self.body.match_indices(name) {
+                if is_free_call(&self.body, at, name) {
+                    calls.push((at, None));
+                }
+            }
+        } else {
+            let empty = CALLS_WITHOUT_ARGUMENTS.contains(&name);
+            let suffix = if empty { "()" } else { "(" };
+            for (at, _) in self.body.match_indices(&format!("::{name}{suffix}")) {
+                let owner = owner_before(&self.body, at);
+                if CALLS_BY_TYPE.contains(&name) && !owners.contains(&owner.as_str()) {
+                    continue;
+                }
+                calls.push((at, Some(owner)));
+            }
+            if !CALLS_BY_TYPE.contains(&name) {
+                for (at, _) in self.body.match_indices(&format!(".{name}{suffix}")) {
+                    calls.push((at, None));
+                }
+            }
+        }
+        calls.sort_by_key(|(at, _)| *at);
+        calls
             .into_iter()
-            .filter_map(|name| {
-                let lines = self.call_lines(&name);
-                let expected = listed.iter().filter(|call| call_name(call) == name).count();
-                (lines.len() != expected).then(|| {
-                    format!(
-                        "{}:{} `fn {}` calls {name} {} times, at lines {lines:?}, and its row lists {expected}",
-                        self.file,
-                        self.attribute_line,
-                        self.function,
-                        lines.len()
-                    )
-                })
+            .map(|(at, owner)| Call {
+                line: self.first_line + self.body[..at].matches('\n').count(),
+                owner,
             })
             .collect()
     }
-
-    fn call_lines(&self, name: &str) -> Vec<usize> {
-        let spellings = spellings_of(name);
-        let mut offsets: Vec<usize> = spellings
-            .iter()
-            .flat_map(|spelling| self.body.match_indices(spelling.as_str()))
-            .filter(|&(at, spelling)| is_a_call(&self.body, at, spelling, name))
-            .map(|(at, _)| at)
-            .collect();
-        offsets.sort_unstable();
-        offsets.dedup();
-        offsets
-            .into_iter()
-            .map(|at| self.first_line + self.body[..at].matches('\n').count())
-            .collect()
-    }
 }
 
-/// How the text names a banned call: `Type::name` where other types share the name, else the name.
-fn call_name(path: &str) -> String {
-    let mut segments = path.rsplit("::");
-    let name = segments.next().expect("a path has a last segment");
-    let owner = segments.next().unwrap_or_default();
-    if CALLS_BY_TYPE.contains(&name) { format!("{owner}::{name}") } else { name.to_owned() }
-}
+/// The one banned free function. It counts as a word wherever it stands, also passed by name, but
+/// never in its own `fn` line.
+const FREE_CALL: &str = "boot_stamp_us";
 
-fn spellings_of(name: &str) -> Vec<String> {
-    if name.contains("::") {
-        return vec![format!("{name}(")];
-    }
-    if CALLS_WITHOUT_ARGUMENTS.contains(&name) {
-        return vec![format!(".{name}()"), format!("::{name}()")];
-    }
-    if name == "boot_stamp_us" {
-        return vec![name.to_owned()];
-    }
-    vec![format!(".{name}("), format!("::{name}(")]
-}
-
-/// A free function counts as a word wherever it stands, also passed by name, but never in its own
-/// `fn` line. A spelling that starts with a type name must not end another identifier.
-fn is_a_call(body: &str, at: usize, spelling: &str, name: &str) -> bool {
-    let is_ident = |character: char| character.is_alphanumeric() || character == '_';
+fn is_free_call(body: &str, at: usize, name: &str) -> bool {
     let before = body[..at].chars().next_back();
-    let after = body[at + spelling.len()..].chars().next();
-    let starts_with_ident = spelling.chars().next().is_some_and(is_ident);
-    if starts_with_ident && before.is_some_and(is_ident) {
-        return false;
-    }
-    if name == "boot_stamp_us" {
-        return !after.is_some_and(is_ident) && !body[..at].trim_end().ends_with("fn");
-    }
-    true
+    let after = body[at + name.len()..].chars().next();
+    !before.is_some_and(is_ident)
+        && !after.is_some_and(is_ident)
+        && !body[..at].trim_end().ends_with("fn")
 }
 
-/// Each function of a source that expects the clock lint. An attribute that allows it, or that
-/// expects it on anything but a function, is a problem: only an expectation reports a site that has
-/// stopped reading a clock.
+/// The identifier that ends where `::` starts at `at`.
+fn owner_before(body: &str, at: usize) -> String {
+    let start = body[..at]
+        .char_indices()
+        .rev()
+        .take_while(|&(_, character)| is_ident(character))
+        .last()
+        .map_or(at, |(index, _)| index);
+    body[start..at].to_owned()
+}
+
+fn is_ident(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
+}
+
+fn last_segment(path: &str) -> &str {
+    path.rsplit("::").next().expect("a path has a last segment")
+}
+
+fn owner_of(path: &str) -> &str {
+    path.rsplit("::").nth(1).unwrap_or_default()
+}
+
+/// The clock lint, the clippy groups that hold it, and the group of every warning: an `allow` or an
+/// `expect` of any of them lifts the clock lint where it stands.
+const LINT_COVERS: [&str; 4] = [LINT, "clippy::style", "clippy::all", "warnings"];
+
+/// Each function of a source that expects the clock lint. Every attribute is read, inner and outer,
+/// on any item. One that allows or expects the lint, or a group that holds it, is a problem unless it
+/// is a function's own outer expectation of the lint alone: only that reports a site that has
+/// stopped reading a clock, and only a listed function may carry it.
 fn sites_of(source: &str, file: &str, problems: &mut Vec<String>) -> Vec<Site> {
     let code = without_comments_and_literals(source);
-    let lines: Vec<&str> = source.lines().collect();
+    let source_lines: Vec<&str> = source.lines().collect();
     let code_lines: Vec<&str> = code.lines().collect();
+    let mut openings: Vec<usize> = code
+        .match_indices("#[")
+        .chain(code.match_indices("#!["))
+        .map(|(at, _)| at)
+        .collect();
+    openings.sort_unstable();
     let mut sites = Vec::new();
-    let mut index = 0;
-    while index < code_lines.len() {
-        if !code_lines[index].trim_start().starts_with("#[") {
-            index += 1;
+    for at in openings {
+        let attribute = &code[at..attribute_close(&code, at)];
+        let covers: Vec<&str> = LINT_COVERS
+            .iter()
+            .copied()
+            .filter(|name| names_lint(attribute, name))
+            .collect();
+        let lifts_a_level = attribute.contains("allow(") || attribute.contains("expect(");
+        if covers.is_empty() || !lifts_a_level {
             continue;
         }
-        let end = attribute_end(&code_lines, index);
-        let attribute = lines[index..=end].join("\n");
-        if !attribute.contains(LINT) {
-            index = end + 1;
-            continue;
-        }
-        if !attribute.contains("expect(") || attribute.contains("allow(") {
+        let line = code[..at].matches('\n').count();
+        let is_inner = code[at..].starts_with("#![");
+        let is_site = !is_inner
+            && attribute.contains("expect(")
+            && !attribute.contains("allow(")
+            && covers == [LINT];
+        if !is_site {
             problems.push(format!(
-                "{file}:{} allows the clock lint: a permitted site expects it, so the gate reports \
-                 the site once it reads no clock",
-                index + 1
+                "{file}:{} `{}` lifts the clock lint here: only a listed function's own \
+                 #[expect(clippy::disallowed_methods)] may",
+                line + 1,
+                source_lines[line].trim()
             ));
+            continue;
         }
-        match function_after(&code_lines, end + 1) {
+        let end_line = line + attribute.matches('\n').count();
+        match function_after(&code_lines, end_line + 1) {
             Some(first) => {
                 let last = function_end(&code_lines, first);
-                let name = function_name(code_lines[first]);
                 sites.push(Site {
                     file: file.to_owned(),
-                    function: name,
-                    attribute_line: index + 1,
+                    function: function_name(code_lines[first]),
+                    attribute_line: line + 1,
                     first_line: first + 1,
                     body: code_lines[first..=last].join("\n"),
                 });
             }
             None => problems.push(format!(
                 "{file}:{} expects the clock lint on something that is not a function",
-                index + 1
+                line + 1
             )),
         }
-        index = end + 1;
     }
     sites
+}
+
+/// The byte just past the `]` that closes the attribute opened at `at`.
+fn attribute_close(code: &str, at: usize) -> usize {
+    let mut depth = 0i32;
+    for (offset, character) in code[at..].char_indices() {
+        match character {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    return at + offset + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    code.len()
+}
+
+/// `name` as a whole lint path inside the attribute, not a piece of a longer one.
+fn names_lint(attribute: &str, name: &str) -> bool {
+    attribute.match_indices(name).any(|(at, _)| {
+        let before = attribute[..at].chars().next_back();
+        let after = attribute[at + name.len()..].chars().next();
+        let is_path = |character: char| is_ident(character) || character == ':';
+        !before.is_some_and(is_path) && !after.is_some_and(is_path)
+    })
 }
 
 /// The line that closes the attribute opened at `start`.
