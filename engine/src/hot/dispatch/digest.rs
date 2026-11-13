@@ -34,7 +34,7 @@ digest_fields! {
 
 digest_fields! {
     HotState {
-        books, trackers, ewma, windows, ledger, published_exposure, spin_seq, fold_time, gates,
+        books, derived, windows, ledger, published_exposure, spin_seq, fold_time, gates,
         exec, desired, actions, declared_link_topics,
     }
     not_state {

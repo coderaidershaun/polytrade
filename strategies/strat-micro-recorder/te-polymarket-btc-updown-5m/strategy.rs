@@ -152,6 +152,16 @@ impl Strategy for PolyUpPublisher {
         }
     }
 
+    /// A park leaves a hole in the traded volume and in the trade intensity, so each leg starts
+    /// again as at a rotation. The rotation that the edge sends after the resume opens the warmup
+    /// of its market, so it never reaches this strategy as a callback.
+    fn on_resume(&mut self, _ctx: &mut StrategyCtx<'_>) {
+        let refit_interval = self.refit_interval;
+        for slot in self.slots.iter_mut().flatten() {
+            *slot = UpSlot::new(slot.instrument, refit_interval);
+        }
+    }
+
     fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
         let now = ctx.now().as_local();
         self.publish(ctx, now);

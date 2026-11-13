@@ -259,19 +259,16 @@ impl HotEngine {
         }
     }
 
-    /// Resume: wipe derived state (trackers, EwmaVol, estimators); poison from pre-pause gap. Ledger NOT wiped (money≠estimator, session PnL spans all parks).
+    /// A value derived before the gap describes a market that the run did not see, so the fold
+    /// throws its own away, then the strategy throws away its own, then each market warms again.
+    /// The ledger stays: money is no estimate, and the profit of the session spans each park.
     #[cold]
     fn resume(&mut self, received_ts: LocalTs) {
         hot_info!(
             "run state RUNNING (epoch {}) — derived state reset, warmup re-armed",
             self.run.epoch
         );
-        for index in 0..self.state.trackers.len() {
-            self.state.trackers[index].on_rotation();
-            if let Some(ewma) = self.state.ewma[index].as_mut() {
-                ewma.reset();
-            }
-        }
+        self.state.derived.reset_for_gap();
         let mut ctx = self.state.ctx(received_ts);
         self.strategy.on_resume(&mut ctx);
         self.state.gates.rearm();
