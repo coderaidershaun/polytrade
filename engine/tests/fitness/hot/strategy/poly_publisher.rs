@@ -28,7 +28,9 @@ use engine::link::{
 use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{
+    AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
+};
 use engine::msg::inbound::{BookChunk, InboundMessage, MessageBody};
 use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::time::{DurationUs, Stamper};
@@ -148,7 +150,7 @@ fn poly_rows() -> Vec<InstrumentRow> {
             quote_asset: AssetId(1),
             // Stamped by the poly preflight on the live path; the reach histogram buckets by it, and
             // `MicroTracker::new` refuses to build one without it.
-            tick_size: Some(Price(TICK)),
+            tick_size: Some(Price::from_mantissa(TICK)),
             lot_size: None,
             min_qty: None,
             min_notional: None,
@@ -162,7 +164,7 @@ fn poly_rows() -> Vec<InstrumentRow> {
             },
             kline_intervals: Vec::new(),
             book_capacity: 128,
-            max_exposure_quote: 500 * FIXED_SCALE,
+            max_exposure_quote: Notional::from_mantissa(500 * FIXED_SCALE),
             tracker: poly_tracker(),
         })
         .collect()
@@ -282,10 +284,10 @@ fn an_untouched_frame_is_absent_in_every_slot() {
 fn quoted_block(block: &mut link_schema::UpRole, slot: usize) {
     let (bid, ask) = QUOTES[slot];
     let (bid_qty, ask_qty) = DEPTHS[slot];
-    block.bid = Price(bid).to_f64();
-    block.ask = Price(ask).to_f64();
-    block.bid_qty = Qty(bid_qty).to_f64();
-    block.ask_qty = Qty(ask_qty).to_f64();
+    block.bid = Price::from_mantissa(bid).to_f64();
+    block.ask = Price::from_mantissa(ask).to_f64();
+    block.bid_qty = Qty::from_mantissa(bid_qty).to_f64();
+    block.ask_qty = Qty::from_mantissa(ask_qty).to_f64();
     block.buy_vol = 0.0;
     block.sell_vol = 0.0;
 }
@@ -410,8 +412,8 @@ fn book_slots_read_absent_until_the_snapshot_is_whole() {
     );
     let mut resnapshotted = link_schema::UpFrame::ABSENT;
     quoted_block(&mut resnapshotted.cur, A_UP as usize);
-    resnapshotted.cur.bid = Price(cents(37)).to_f64();
-    resnapshotted.cur.ask = Price(cents(39)).to_f64();
+    resnapshotted.cur.bid = Price::from_mantissa(cents(37)).to_f64();
+    resnapshotted.cur.ask = Price::from_mantissa(cents(39)).to_f64();
     assert_eq!(
         spin_and_collect(&mut linked, FIRST_OPEN + 6),
         wire_of(resnapshotted)
@@ -448,16 +450,34 @@ fn each_priced_slot_carries_the_side_and_the_quantity_its_name_claims() {
     let (next_bid, next_ask) = QUOTES[B_UP as usize];
     let (next_bid_qty, next_ask_qty) = DEPTHS[B_UP as usize];
     for (field, expected) in [
-        ("poly_cur_up_bid", Price(cur_bid).to_f64()),
-        ("poly_cur_up_ask", Price(cur_ask).to_f64()),
-        ("poly_cur_up_bid_qty", Qty(cur_bid_qty).to_f64()),
-        ("poly_cur_up_ask_qty", Qty(cur_ask_qty).to_f64()),
-        ("poly_cur_up_buy_vol", Qty(shares(3)).to_f64()),
-        ("poly_cur_up_sell_vol", Qty(shares(1)).to_f64()),
-        ("poly_next_up_bid", Price(next_bid).to_f64()),
-        ("poly_next_up_ask", Price(next_ask).to_f64()),
-        ("poly_next_up_bid_qty", Qty(next_bid_qty).to_f64()),
-        ("poly_next_up_ask_qty", Qty(next_ask_qty).to_f64()),
+        ("poly_cur_up_bid", Price::from_mantissa(cur_bid).to_f64()),
+        ("poly_cur_up_ask", Price::from_mantissa(cur_ask).to_f64()),
+        (
+            "poly_cur_up_bid_qty",
+            Qty::from_mantissa(cur_bid_qty).to_f64(),
+        ),
+        (
+            "poly_cur_up_ask_qty",
+            Qty::from_mantissa(cur_ask_qty).to_f64(),
+        ),
+        (
+            "poly_cur_up_buy_vol",
+            Qty::from_mantissa(shares(3)).to_f64(),
+        ),
+        (
+            "poly_cur_up_sell_vol",
+            Qty::from_mantissa(shares(1)).to_f64(),
+        ),
+        ("poly_next_up_bid", Price::from_mantissa(next_bid).to_f64()),
+        ("poly_next_up_ask", Price::from_mantissa(next_ask).to_f64()),
+        (
+            "poly_next_up_bid_qty",
+            Qty::from_mantissa(next_bid_qty).to_f64(),
+        ),
+        (
+            "poly_next_up_ask_qty",
+            Qty::from_mantissa(next_ask_qty).to_f64(),
+        ),
     ] {
         assert_eq!(sent[slot_of(field)], Some(expected), "{field}");
     }
@@ -800,9 +820,9 @@ fn maker_rows() -> Vec<InstrumentRow> {
     poly_rows()
         .into_iter()
         .map(|row| InstrumentRow {
-            lot_size: Some(Qty(SHARE_STEP)),
-            min_qty: Some(Qty(MIN_ORDER_SHARES)),
-            max_price: Some(Price(MAX_PRICE)),
+            lot_size: Some(Qty::from_mantissa(SHARE_STEP)),
+            min_qty: Some(Qty::from_mantissa(MIN_ORDER_SHARES)),
+            max_price: Some(Price::from_mantissa(MAX_PRICE)),
             max_num_orders: Some(32),
             ..row
         })
@@ -818,16 +838,16 @@ fn maker_settings() -> ExecSettings {
             requote_threshold_ticks: 1,
             max_quote_distance_centi_bps: 100_000_000,
             max_book_age: DurationUs::from_secs(3_600),
-            max_order_notional_quote: 1_000 * FIXED_SCALE,
+            max_order_notional_quote: Notional::from_mantissa(1_000 * FIXED_SCALE),
         },
         max_orders_per_side: 1,
         // Zero, as the shipped config states it: the base asset IS the position here, so any
         // reserve at all is taken out of what may be sold and a holding of exactly the venue
         // minimum stops being sellable by either route.
-        min_base_balance: 0,
-        min_quote_balance: 0,
+        min_base_balance: Qty::from_mantissa(0),
+        min_quote_balance: Notional::from_mantissa(0),
         max_consecutive_rejects: 5,
-        max_session_loss_quote: 1_000 * FIXED_SCALE,
+        max_session_loss_quote: Notional::from_mantissa(1_000 * FIXED_SCALE),
         inflight_timeout: DurationUs::from_secs(3_600),
         // No silence sweep: a reconciliation request in the command stream is noise these tests
         // would have to filter rather than a behaviour they are about.
@@ -1028,7 +1048,7 @@ impl Maker {
                 MessageBody::Exec(ExecEvent {
                     kind: ExecKind::AckPlaced,
                     status: Some(VenueOrderStatus::New),
-                    ..exec_event(*instrument, *client_id, *side, price.0, when)
+                    ..exec_event(*instrument, *client_id, *side, price.mantissa(), when)
                 }),
             ));
         }
@@ -1144,15 +1164,15 @@ fn the_open_leg_is_bid_for_behind_the_touch_and_that_bid_is_what_gets_placed() {
     let report = maker.spin(FIRST_OPEN + 1);
 
     let wanted = (
-        Price(QUOTES[A_UP as usize].0 - i64::from(EDGE_TICKS) * TICK),
-        Qty((ORDER_SHARES * FIXED_SCALE as f64) as i64),
+        Price::from_mantissa(QUOTES[A_UP as usize].0 - i64::from(EDGE_TICKS) * TICK),
+        Qty::from_mantissa((ORDER_SHARES * FIXED_SCALE as f64) as i64),
     );
     assert_eq!(
         report.ladder(A_UP),
         (Some(wanted), None),
         "one bid, {EDGE_TICKS} ticks behind the {} touch, and no offer against a position it does \
          not hold",
-        Price(QUOTES[A_UP as usize].0).to_f64()
+        Price::from_mantissa(QUOTES[A_UP as usize].0).to_f64()
     );
     assert_eq!(
         report.places(),
@@ -1220,8 +1240,8 @@ fn a_position_is_offered_back_and_never_added_to() {
         (
             None,
             Some((
-                Price(QUOTES[A_UP as usize].1 + i64::from(EDGE_TICKS) * TICK),
-                Qty(HELD_SHARES)
+                Price::from_mantissa(QUOTES[A_UP as usize].1 + i64::from(EDGE_TICKS) * TICK),
+                Qty::from_mantissa(HELD_SHARES)
             ))
         ),
         "the offer is sized to what is actually held, and the bid is gone"
@@ -1296,8 +1316,8 @@ fn the_offer_comes_down_before_the_flatten_goes_out() {
             Side::Sell,
             // Through the bid by the configured slack, which is what a venue holding marketable
             // orders for 250ms before matching them needs.
-            Price(QUOTES[A_UP as usize].0 - 2 * TICK),
-            Qty(HELD_SHARES),
+            Price::from_mantissa(QUOTES[A_UP as usize].0 - 2 * TICK),
+            Qty::from_mantissa(HELD_SHARES),
             OrderStyle::Immediate
         )],
         "the side is free, so the position goes out at market"
@@ -1336,8 +1356,8 @@ fn the_market_moves_to_whichever_leg_hosts_the_next_window() {
     assert_eq!(
         second.ladder(B_UP).0,
         Some((
-            Price(QUOTES[B_UP as usize].0 - i64::from(EDGE_TICKS) * TICK),
-            Qty((ORDER_SHARES * FIXED_SCALE as f64) as i64)
+            Price::from_mantissa(QUOTES[B_UP as usize].0 - i64::from(EDGE_TICKS) * TICK),
+            Qty::from_mantissa((ORDER_SHARES * FIXED_SCALE as f64) as i64)
         )),
         "and the bid has moved to the leg that now hosts the open window, at ITS touch"
     );

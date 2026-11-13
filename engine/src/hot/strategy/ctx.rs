@@ -6,7 +6,7 @@ use crate::hot::quant::volatility::EwmaVol;
 use crate::hot::tracker::MicroTracker;
 use crate::link::TopicId;
 use crate::log::{Callsite, HotRecord, LogArgs};
-use crate::msg::ids::{AssetId, InstrumentId, Qty, Side};
+use crate::msg::ids::{AssetId, InstrumentId, Notional, Qty, Side};
 use crate::msg::persist::{BookEventRow, FeatureId, FeatureRow, KlineRow, PersistRecord, TradeRow};
 use crate::msg::time::LocalTs;
 
@@ -89,16 +89,15 @@ impl StrategyCtx<'_> {
         self.ledger.row(instrument).position_base()
     }
 
-    /// MTM signed notional (1e-8 units); 0 until has_mark or flat.
+    /// The signed value of the position at the mark, zero while there is no mark or no position.
     #[inline]
-    pub fn exposure_quote(&self, instrument: InstrumentId) -> i64 {
+    pub fn exposure_quote(&self, instrument: InstrumentId) -> Notional {
         self.ledger.row(instrument).exposure_quote()
     }
 
-    /// Total PnL (realized + unrealized) in quote mantissa (1e-8 units).
-    /// Before has_mark: cash + cost basis. After: includes MTM.
+    /// Realised and unrealised PnL. Before the first mark it is cash plus cost basis.
     #[inline]
-    pub fn pnl_quote(&self, instrument: InstrumentId) -> i64 {
+    pub fn pnl_quote(&self, instrument: InstrumentId) -> Notional {
         self.ledger.row(instrument).pnl_quote()
     }
 

@@ -395,10 +395,10 @@ impl PacedIntensity {
 
 fn tick_depth(side: Side, anchor: Price, price: Price, tick: Price) -> i64 {
     let diff = match side {
-        Side::Buy => price.0 - anchor.0,
-        Side::Sell => anchor.0 - price.0,
+        Side::Buy => price.mantissa() - anchor.mantissa(),
+        Side::Sell => anchor.mantissa() - price.mantissa(),
     };
-    diff.div_euclid(tick.0)
+    diff.div_euclid(tick.mantissa())
 }
 
 /// Poisson NLL: mu_j = T*A*(e^(-k j) - e^(-k(j+1))) over exact interior bins, censored tail at mu = T*A*e^(-k(max-1)).

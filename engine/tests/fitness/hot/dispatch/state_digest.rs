@@ -50,7 +50,7 @@ const LANE: usize = 4_096;
 const SEQUENCE_LEN: usize = 200;
 
 /// The size that the probe quotes on each side.
-const QUOTE_QTY: Qty = Qty(ONE / 10);
+const QUOTE_QTY: Qty = Qty::from_mantissa(ONE / 10);
 
 /// Writes one feature row and one note line for each callback, the value of the row the code of
 /// the callback, so the tape holds the order of callbacks. Each spin it quotes both sides of each
@@ -165,8 +165,8 @@ impl Strategy for FeedProbe {
     fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
         ctx.emit(self.feature.expect("registered"), InstrumentId(0), 7.0);
         let bid = DesiredQuote {
-            price: Price(100 * ONE),
-            qty: Qty(ONE),
+            price: Price::from_mantissa(100 * ONE),
+            qty: Qty::from_mantissa(ONE),
             style: OrderStyle::PostOnly,
         };
         ctx.quote(InstrumentId(0), Side::Buy, QuoteLevel::ZERO, Some(bid));
@@ -801,17 +801,17 @@ impl Builder {
                     .encode(side_base(instrument, side) + slot, generation);
                 let price = if side == Side::Buy { 99 * ONE } else { 101 * ONE };
                 let is_fill = kind == ExecKind::ReportTrade;
-                let filled = if is_fill { QUOTE_QTY } else { Qty(0) };
+                let filled = if is_fill { QUOTE_QTY } else { Qty::from_mantissa(0) };
                 InboundMessage::new(
                     ts(when),
                     MessageBody::Exec(ExecEvent {
                         kind,
                         status: Some(status),
                         qty: QUOTE_QTY,
-                        last_price: Price(if is_fill { price } else { 0 }),
+                        last_price: Price::from_mantissa(if is_fill { price } else { 0 }),
                         last_qty: filled,
                         cumulative_qty: filled,
-                        cumulative_quote: Price(price).notional(filled),
+                        cumulative_quote: Price::from_mantissa(price).notional(filled),
                         ..exec_event(instrument, client_id, side, price, when)
                     }),
                 )

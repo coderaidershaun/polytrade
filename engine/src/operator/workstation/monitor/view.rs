@@ -177,12 +177,12 @@ fn holding(balance: Option<BalanceCell>) -> Option<i64> {
 /// in the half-tick mid, so the value rounds once. A result too large for `i64` is absent rather
 /// than clamped, because a clamped money figure is wrong and nothing on screen would say so.
 fn value_at_mid(holding: i64, mid_half_ticks: i64, tick: Price) -> Option<i64> {
-    if tick.0 <= 0 {
+    if tick.mantissa() <= 0 {
         return None;
     }
     let scaled = i128::from(holding)
         .checked_mul(i128::from(mid_half_ticks))?
-        .checked_mul(i128::from(tick.0))?;
+        .checked_mul(i128::from(tick.mantissa()))?;
     i64::try_from(scaled / (2 * i128::from(FIXED_SCALE))).ok()
 }
 

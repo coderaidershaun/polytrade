@@ -30,10 +30,10 @@ use crate::operator::workstation::workstation_support::{BookFixture, book_snapsh
 
 /// A one-mantissa tick, so a price mantissa reads directly as its tick index and the bucket math is
 /// legible in the assertions.
-const TICK: Price = Price(1);
+const TICK: Price = Price::from_mantissa(1);
 
 /// BTCUSDT's tick, the venue that motivated grouping: 0.01 at the 1e-8 fixed-point scale.
-const CENT_TICK: Price = Price(FIXED_SCALE / 100);
+const CENT_TICK: Price = Price::from_mantissa(FIXED_SCALE / 100);
 
 fn book(bids: &[(i64, i64)], asks: &[(i64, i64)]) -> UiBookSnapshot {
     book_snapshot(BookFixture {
@@ -77,7 +77,9 @@ fn bucket_qty(levels: &[(i64, i64)], edge: i64, ticks_per_bucket: i64) -> Option
         .iter()
         .filter(|(tick, _)| bucket_low_edge(*tick, ticks_per_bucket) == edge)
         .fold(None, |sum: Option<Qty>, (_, qty)| {
-            Some(Qty(sum.map_or(0, |seen| seen.0) + qty))
+            Some(Qty::from_mantissa(
+                sum.map_or(0, |seen| seen.mantissa()) + qty,
+            ))
         })
 }
 
@@ -121,8 +123,8 @@ proptest! {
         // Conservation across the window: every level whose bucket is visible is counted once.
         let visible_ask: Vec<i64> = view.ask_rows().iter().map(|row| row.tick_index).collect();
         let visible_bid: Vec<i64> = view.bid_rows().iter().map(|row| row.tick_index).collect();
-        let shown_ask: i64 = view.ask_rows().iter().filter_map(|row| row.public_qty).map(|q| q.0).sum();
-        let shown_bid: i64 = view.bid_rows().iter().filter_map(|row| row.public_qty).map(|q| q.0).sum();
+        let shown_ask: i64 = view.ask_rows().iter().filter_map(|row| row.public_qty).map(|q| q.mantissa()).sum();
+        let shown_bid: i64 = view.bid_rows().iter().filter_map(|row| row.public_qty).map(|q| q.mantissa()).sum();
         let in_window = |levels: &[(i64, i64)], edges: &[i64]| -> i64 {
             levels
                 .iter()
@@ -192,11 +194,11 @@ proptest! {
         let bid_by_tick: HashMap<i64, i64> = bid_levels.iter().copied().collect();
         for (offset, row) in defaulted.ask_rows().iter().enumerate() {
             prop_assert_eq!(row.tick_index, ask_anchor(mid) + offset as i64);
-            prop_assert_eq!(row.public_qty, ask_by_tick.get(&row.tick_index).map(|&q| Qty(q)));
+            prop_assert_eq!(row.public_qty, ask_by_tick.get(&row.tick_index).map(|&q| Qty::from_mantissa(q)));
         }
         for (offset, row) in defaulted.bid_rows().iter().enumerate() {
             prop_assert_eq!(row.tick_index, bid_anchor(mid) - offset as i64);
-            prop_assert_eq!(row.public_qty, bid_by_tick.get(&row.tick_index).map(|&q| Qty(q)));
+            prop_assert_eq!(row.public_qty, bid_by_tick.get(&row.tick_index).map(|&q| Qty::from_mantissa(q)));
         }
     }
 }
@@ -299,7 +301,7 @@ fn bucket_ownership_at_boundaries_follows_the_grid_not_mid_parity() {
     assert_eq!(view.ask_rows()[0].tick_index, 100);
     assert_eq!(
         view.ask_rows()[0].public_qty,
-        Some(Qty(12)),
+        Some(Qty::from_mantissa(12)),
         "both asks in the 100..109 bucket aggregate; the locked bid never joins them"
     );
     assert_eq!(view.bid_rows()[0].tick_index, 90);
@@ -318,7 +320,7 @@ fn bucket_ownership_at_boundaries_follows_the_grid_not_mid_parity() {
     assert_eq!(view.bid_rows()[0].tick_index, 100);
     assert_eq!(
         view.bid_rows()[0].public_qty,
-        Some(Qty(7)),
+        Some(Qty::from_mantissa(7)),
         "109 and 102 share the bid's row 0 bucket"
     );
 
@@ -329,8 +331,8 @@ fn bucket_ownership_at_boundaries_follows_the_grid_not_mid_parity() {
     assert_eq!(view.mid_half_ticks, Some(210));
     assert_eq!(view.ask_rows()[0].tick_index, 100);
     assert_eq!(view.bid_rows()[0].tick_index, 100);
-    assert_eq!(view.ask_rows()[0].public_qty, Some(Qty(5)));
-    assert_eq!(view.bid_rows()[0].public_qty, Some(Qty(4)));
+    assert_eq!(view.ask_rows()[0].public_qty, Some(Qty::from_mantissa(5)));
+    assert_eq!(view.bid_rows()[0].public_qty, Some(Qty::from_mantissa(4)));
 
     // Whether the two sides' row 0 name the same bucket follows from where the anchors fall against
     // the bucket boundary — never from the mid's parity. Anchoring to the absolute tick grid is what
@@ -352,16 +354,20 @@ fn bucket_ownership_at_boundaries_follows_the_grid_not_mid_parity() {
     assert_eq!(view.bid_rows()[0].tick_index, 100);
     assert_eq!(
         view.ask_rows()[0].public_qty,
-        Some(Qty(18)),
+        Some(Qty::from_mantissa(18)),
         "the shared bucket's ask row holds 101, 104 and 109 only"
     );
     assert_eq!(
         view.bid_rows()[0].public_qty,
-        Some(Qty(4)),
+        Some(Qty::from_mantissa(4)),
         "the shared bucket's bid row holds the bid at 100 only"
     );
     assert_eq!(view.bid_rows()[1].tick_index, 90);
-    assert_eq!(view.bid_rows()[1].public_qty, Some(Qty(5)), "98 and 95");
+    assert_eq!(
+        view.bid_rows()[1].public_qty,
+        Some(Qty::from_mantissa(5)),
+        "98 and 95"
+    );
 
     // Even mid, best bid 104 and best ask 106: the anchors are 106 and 104, two apart yet both in
     // bucket 100, so the bucket is shared.
@@ -391,7 +397,10 @@ fn bucket_ownership_at_boundaries_follows_the_grid_not_mid_parity() {
 #[test]
 fn a_quote_lands_in_its_bucket_and_off_screen_stays_in_half_ticks() {
     let snapshot = book(&[(100, 4)], &[(102, 5)]);
-    let inside = DomQuote::top(Some((Price(87), Qty(9))), Some((Price(115), Qty(9))));
+    let inside = DomQuote::top(
+        Some((Price::from_mantissa(87), Qty::from_mantissa(9))),
+        Some((Price::from_mantissa(115), Qty::from_mantissa(9))),
+    );
     // With a mid of 202 half-ticks and 10-tick buckets, the ask rows are 100, 110 and 120 and the
     // bid rows are 100, 90 and 80.
     let view = build_dom_view(DomViewInput {
@@ -416,11 +425,14 @@ fn a_quote_lands_in_its_bucket_and_off_screen_stays_in_half_ticks() {
         vec![110, 80],
         "each quote flags exactly the row whose bucket owns its tick"
     );
-    assert_eq!(view.ask_rows()[1].strategy_qty, Some(Qty(9)));
-    assert_eq!(view.bid_rows()[2].strategy_qty, Some(Qty(9)));
+    assert_eq!(view.ask_rows()[1].strategy_qty, Some(Qty::from_mantissa(9)));
+    assert_eq!(view.bid_rows()[2].strategy_qty, Some(Qty::from_mantissa(9)));
 
     // Off-screen deltas are distances from mid, so grouping cannot rescale them.
-    let far = DomQuote::top(Some((Price(10), Qty(9))), Some((Price(200), Qty(9))));
+    let far = DomQuote::top(
+        Some((Price::from_mantissa(10), Qty::from_mantissa(9))),
+        Some((Price::from_mantissa(200), Qty::from_mantissa(9))),
+    );
     for per_bucket in [1, 10] {
         let view = build_dom_view(DomViewInput {
             snapshot: Some(&snapshot),
@@ -447,11 +459,14 @@ fn a_quote_lands_in_its_bucket_and_off_screen_stays_in_half_ticks() {
 
     // An off-grid quote has no tick index, so grouping gives it no home either.
     let on_grid = book(&[(1_000, 4)], &[(1_020, 5)]);
-    let off_grid = DomQuote::top(Some((Price(995), Qty(9))), Some((Price(1_015), Qty(9))));
+    let off_grid = DomQuote::top(
+        Some((Price::from_mantissa(995), Qty::from_mantissa(9))),
+        Some((Price::from_mantissa(1_015), Qty::from_mantissa(9))),
+    );
     let view = build_dom_view(DomViewInput {
         snapshot: Some(&on_grid),
         overlay: overlay(off_grid),
-        tick: Price(10),
+        tick: Price::from_mantissa(10),
         grouping: DomGrouping::Ticks { per_bucket: 5 },
         rows_per_side: 3,
         feed: FeedStatus::default(),
@@ -542,7 +557,7 @@ fn dom_grouping_model_state() {
 #[test]
 fn venue_labels_render_the_price_exactly_at_its_own_precision() {
     let mut label = String::new();
-    let whole_tick = Price(FIXED_SCALE);
+    let whole_tick = Price::from_mantissa(FIXED_SCALE);
 
     write_venue_mid(&mut label, 131_982, whole_tick);
     assert_eq!(label, "65991", "a 1.0 tick renders the tick count itself");
@@ -560,7 +575,7 @@ fn venue_labels_render_the_price_exactly_at_its_own_precision() {
 
     write_venue_price(
         &mut label,
-        Price(118_000 * FIXED_SCALE),
+        Price::from_mantissa(118_000 * FIXED_SCALE),
         price_decimals(CENT_TICK),
     );
     assert_eq!(
@@ -569,11 +584,15 @@ fn venue_labels_render_the_price_exactly_at_its_own_precision() {
     );
 
     assert_eq!(
-        price_decimals(Price(1)),
+        price_decimals(Price::from_mantissa(1)),
         8,
         "a one-mantissa tick is the finest the fixed-point scale expresses"
     );
-    write_venue_price(&mut label, Price(123_456_789), price_decimals(Price(1)));
+    write_venue_price(
+        &mut label,
+        Price::from_mantissa(123_456_789),
+        price_decimals(Price::from_mantissa(1)),
+    );
     assert_eq!(label, "1.23456789");
 
     write_opt_venue_mid(&mut label, None, CENT_TICK);

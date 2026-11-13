@@ -11,7 +11,7 @@ use super::resting::{
 use super::wallet::{ReservationRequest, ReserveOutcome, SimWallet};
 use super::{EmissionBook, VenueEvent};
 use crate::msg::exec::OrderStyle;
-use crate::msg::ids::{ClientOrderId, Price, Qty, Side};
+use crate::msg::ids::{ClientOrderId, Notional, Price, Qty, Side};
 use crate::msg::time::LocalTs;
 use crate::venues::exec::ExecRequest;
 
@@ -95,8 +95,12 @@ impl RequestFold<'_> {
     pub fn crosses(&self, side: Side, price: Price) -> bool {
         let book = self.market.book();
         let is_public_cross = match side {
-            Side::Buy => book.best_ask().is_some_and(|ask| ask.price.0 <= price.0),
-            Side::Sell => book.best_bid().is_some_and(|bid| bid.price.0 >= price.0),
+            Side::Buy => book
+                .best_ask()
+                .is_some_and(|ask| ask.price.mantissa() <= price.mantissa()),
+            Side::Sell => book
+                .best_bid()
+                .is_some_and(|bid| bid.price.mantissa() >= price.mantissa()),
         };
         is_public_cross
             || self
@@ -114,8 +118,8 @@ impl RequestFold<'_> {
                 side: placement.side,
                 price: placement.price,
                 qty: placement.qty,
-                filled: Qty(0),
-                filled_quote: 0,
+                filled: Qty::from_mantissa(0),
+                filled_quote: Notional::ZERO,
             },
             placement.effective_ts_us,
         ));

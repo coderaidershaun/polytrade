@@ -64,8 +64,8 @@ impl HotState {
             .map(|(instrument, row)| InstrumentExposure {
                 instrument,
                 position_base: row.position_base(),
-                cash_quote: row.cash_quote(),
-                basis_quote: row.basis_quote(),
+                cash_quote: row.cash_quote().mantissa(),
+                basis_quote: row.basis_quote().mantissa(),
             });
         let mut snapshot = snapshot_of(durable);
         if snapshot.active() == self.published_exposure.active() {
@@ -74,7 +74,7 @@ impl HotState {
         // Seq monotone from seed's 0 (writer's disk state). Mark informational only, saturate on overflow.
         snapshot.seq = self.published_exposure.seq + 1;
         snapshot.exposure_quote = self.ledger.rows().fold(0i64, |sum, (_, row)| {
-            sum.saturating_add(row.exposure_quote())
+            sum.saturating_add(row.exposure_quote().mantissa())
         });
         snapshot.emitted_ts_us = at;
         self.published_exposure = snapshot;

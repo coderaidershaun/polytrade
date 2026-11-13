@@ -9,7 +9,9 @@ use engine::msg::exec::{
     AccountChunkKind, ExecEvent, ExecKind, Liquidity, OrderStyle, Provenance, RejectClass,
     VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{
+    AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
+};
 use engine::msg::time::LocalTs;
 use engine::runtime::config::RunIdentity;
 use engine::runtime::secrets::Secret;
@@ -31,7 +33,7 @@ const NOW: LocalTs = LocalTs::from_micros(1_785_000_000_700_000);
 /// A whole number of quote units as a 1e-8 mantissa. `usdt(118_000)` reads the way the price does;
 /// the expanded mantissa does not.
 const fn usdt(units: i64) -> Price {
-    Price(units * FIXED_SCALE)
+    Price::from_mantissa(units * FIXED_SCALE)
 }
 
 /// The two orders the committed fixtures name, and a third from an earlier run of this same engine.
@@ -81,7 +83,7 @@ fn place_request(client_id: ClientOrderId) -> ExecRequest {
         client_id,
         side: Side::Buy,
         price: usdt(118_000),
-        qty: Qty(10_000),
+        qty: Qty::from_mantissa(10_000),
         style: OrderStyle::PostOnly,
     }
 }
@@ -250,11 +252,20 @@ fn every_report_maps_to_its_kind_status_and_owner() {
 #[test]
 fn last_execution_and_cumulative_totals_stay_distinct() {
     let event = decode_exec(fixture!("report_trade_filled"), &venue());
-    assert_eq!(event.last_qty, Qty(6_000), "l — this execution alone");
-    assert_eq!(event.last_price, usdt(118_000), "L");
-    assert_eq!(event.cumulative_qty, Qty(10_000), "z — the order's total");
     assert_eq!(
-        event.cumulative_quote, 1_180_000_000,
+        event.last_qty,
+        Qty::from_mantissa(6_000),
+        "l — this execution alone"
+    );
+    assert_eq!(event.last_price, usdt(118_000), "L");
+    assert_eq!(
+        event.cumulative_qty,
+        Qty::from_mantissa(10_000),
+        "z — the order's total"
+    );
+    assert_eq!(
+        event.cumulative_quote,
+        Notional::from_mantissa(1_180_000_000),
         "Z — 11.80 USDT at 1e-8"
     );
     assert_eq!(event.liquidity, Some(Liquidity::Maker));
@@ -526,7 +537,7 @@ fn every_response_shape_decodes_to_the_events_it_should() {
             ExecRequest::AmendQty {
                 instrument: InstrumentId(0),
                 client_id: ORDER_A,
-                qty: Qty(6_000),
+                qty: Qty::from_mantissa(6_000),
             },
             &venue,
         )
@@ -537,7 +548,11 @@ fn every_response_shape_decodes_to_the_events_it_should() {
             events[0].client_id, ORDER_A,
             "addressed by origClientOrderId"
         );
-        assert_eq!(events[0].qty, Qty(6_000), "read from `qty`, not `origQty`");
+        assert_eq!(
+            events[0].qty,
+            Qty::from_mantissa(6_000),
+            "read from `qty`, not `origQty`"
+        );
     }
 
     // The definitive answer to an ambiguous cancel. `-2011` said "unknown order"; the query says
@@ -555,9 +570,10 @@ fn every_response_shape_decodes_to_the_events_it_should() {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, ExecKind::SnapshotOrder);
         assert_eq!(events[0].status, Some(VenueOrderStatus::Filled));
-        assert_eq!(events[0].cumulative_qty, Qty(10_000));
+        assert_eq!(events[0].cumulative_qty, Qty::from_mantissa(10_000));
         assert_eq!(
-            events[0].cumulative_quote, 1_180_000_000,
+            events[0].cumulative_quote,
+            Notional::from_mantissa(1_180_000_000),
             "11.80 USDT at 1e-8"
         );
         assert_eq!(
@@ -648,7 +664,7 @@ fn every_response_shape_decodes_to_the_events_it_should() {
             ExecRequest::AmendQty {
                 instrument: InstrumentId(0),
                 client_id: ORDER_A,
-                qty: Qty(6_000),
+                qty: Qty::from_mantissa(6_000),
             },
             &venue,
         )
@@ -678,7 +694,7 @@ fn every_response_shape_decodes_to_the_events_it_should() {
             ExecRequest::AmendQty {
                 instrument: InstrumentId(0),
                 client_id: ORDER_A,
-                qty: Qty(6_000),
+                qty: Qty::from_mantissa(6_000),
             },
             &venue,
         )
@@ -883,7 +899,7 @@ fn placement_and_amend_requests_encode_the_documented_wire_shape() {
             ExecRequest::AmendQty {
                 instrument: InstrumentId(0),
                 client_id: ORDER_A,
-                qty: Qty(6_000),
+                qty: Qty::from_mantissa(6_000),
             },
             &venue,
         );
@@ -906,16 +922,16 @@ proptest! {
                 instrument: InstrumentId(0),
                 client_id: ORDER_A,
                 side: Side::Buy,
-                price: Price(mantissa),
-                qty: Qty(mantissa),
+                price: Price::from_mantissa(mantissa),
+                qty: Qty::from_mantissa(mantissa),
                 style: OrderStyle::PostOnly,
             },
             &venue,
         );
         let price = value(&params, "price").expect("a price is always sent");
-        prop_assert_eq!(Price::parse_decimal(price).expect("wire form parses"), Price(mantissa));
+        prop_assert_eq!(Price::parse_decimal(price).expect("wire form parses"), Price::from_mantissa(mantissa));
         let quantity = value(&params, "quantity").expect("a quantity is always sent");
-        prop_assert_eq!(Qty::parse_decimal(quantity).expect("wire form parses"), Qty(mantissa));
+        prop_assert_eq!(Qty::parse_decimal(quantity).expect("wire form parses"), Qty::from_mantissa(mantissa));
     }
 }
 
@@ -933,17 +949,17 @@ fn fake_venue_events_match_the_real_decoders() {
         assert_eq!(events[1].kind, ExecKind::ReportNew);
         assert!(venue.is_resting(ORDER_A));
 
-        let filled = exec_events(&venue.fill(ORDER_A, Qty(4_000), NOW));
+        let filled = exec_events(&venue.fill(ORDER_A, Qty::from_mantissa(4_000), NOW));
         assert_eq!(filled.len(), 1);
         assert_eq!(filled[0].kind, ExecKind::ReportTrade);
         assert_eq!(filled[0].status, Some(VenueOrderStatus::PartiallyFilled));
-        assert_eq!(filled[0].cumulative_qty, Qty(4_000));
+        assert_eq!(filled[0].cumulative_qty, Qty::from_mantissa(4_000));
 
-        let rest = exec_events(&venue.fill(ORDER_A, Qty(6_000), NOW));
+        let rest = exec_events(&venue.fill(ORDER_A, Qty::from_mantissa(6_000), NOW));
         assert_eq!(rest[0].status, Some(VenueOrderStatus::Filled));
         assert_eq!(
             rest[0].cumulative_qty,
-            Qty(10_000),
+            Qty::from_mantissa(10_000),
             "cumulative, so a duplicate folds to nothing"
         );
         assert!(!venue.is_resting(ORDER_A), "a filled order stops resting");
@@ -1002,8 +1018,12 @@ fn rest_reconciliation_rows_decode_like_their_websocket_twins() {
         assert_eq!(event.provenance, Provenance::Mine);
         assert_eq!(event.kind, ExecKind::SnapshotOrder);
         assert_eq!(event.status, Some(VenueOrderStatus::PartiallyFilled));
-        assert_eq!(event.cumulative_qty, Qty(4_000));
-        assert_eq!(event.cumulative_quote, 472_000_000, "4.72 USDT at 1e-8");
+        assert_eq!(event.cumulative_qty, Qty::from_mantissa(4_000));
+        assert_eq!(
+            event.cumulative_quote,
+            Notional::from_mantissa(472_000_000),
+            "4.72 USDT at 1e-8"
+        );
         assert_eq!(event.recon_seq, 9);
     }
 

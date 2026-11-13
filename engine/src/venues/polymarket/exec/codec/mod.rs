@@ -235,7 +235,10 @@ fn venue_status(field: &'static str, status: &str) -> Result<VenueOrderStatus, W
 /// A resting order with a partial fill answers `LIVE`, which the engine spells `PartiallyFilled`.
 /// The venue never says so itself; the size is the only evidence.
 fn status_with_fill(status: VenueOrderStatus, filled: Qty, total: Qty) -> VenueOrderStatus {
-    match status == VenueOrderStatus::New && filled.0 > 0 && filled.0 < total.0 {
+    match status == VenueOrderStatus::New
+        && filled.mantissa() > 0
+        && filled.mantissa() < total.mantissa()
+    {
         true => VenueOrderStatus::PartiallyFilled,
         false => status,
     }
@@ -279,7 +282,7 @@ fn optional_venue_amount(field: &'static str, text: &str) -> Result<i64, WireErr
 
 pub(super) fn optional_qty(field: &'static str, text: &str) -> Result<Qty, WireError> {
     match text.trim().is_empty() {
-        true => Ok(Qty(0)),
+        true => Ok(Qty::from_mantissa(0)),
         false => Ok(qty_field(field, text)?),
     }
 }

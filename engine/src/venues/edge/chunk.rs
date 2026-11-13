@@ -99,8 +99,8 @@ impl ChunkEmitter {
         is_last_chunk: bool,
     ) -> BookChunk {
         let mut filled = [Level {
-            price: Price(0),
-            qty: Qty(0),
+            price: Price::from_mantissa(0),
+            qty: Qty::from_mantissa(0),
         }; BOOK_CHUNK_LEVELS];
         filled[..group.len()].copy_from_slice(group);
         BookChunk {

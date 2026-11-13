@@ -158,7 +158,7 @@ impl ExecEngine {
         let amount = side.spend(intent.price, intent.qty);
         let reserved_at = self.account.reserve(asset, amount);
         let slot = self.orders.slot_mut(index);
-        slot.reserved_amount = amount;
+        slot.reserved_amount = Some(amount).filter(|amount| amount.mantissa() != 0);
         slot.reserved_at = reserved_at;
         Some((index, client_id))
     }

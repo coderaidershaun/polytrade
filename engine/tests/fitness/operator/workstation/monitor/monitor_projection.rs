@@ -29,7 +29,7 @@ use engine::runtime::config::ExecutionMode;
 use crate::operator::workstation::workstation_support::{BookFixture, NamedCase, book_snapshot};
 
 /// One-mantissa tick, so a price reads directly as its tick index in the assertions.
-const TICK: Price = Price(1);
+const TICK: Price = Price::from_mantissa(1);
 
 /// 100 ms spin: the DOM liveness threshold is 2.5 spins = 250 ms, the changed window 2 spins =
 /// 200 ms, the stale threshold 5 spins = 500 ms.
@@ -57,7 +57,9 @@ fn quote_event(
     bid: Option<(i64, i64)>,
     ask: Option<(i64, i64)>,
 ) -> UiEvent {
-    let leg = |value: Option<(i64, i64)>| value.map(|(p, q)| (Price(p), Qty(q)));
+    let leg = |value: Option<(i64, i64)>| {
+        value.map(|(p, q)| (Price::from_mantissa(p), Qty::from_mantissa(q)))
+    };
     UiEvent::Quote {
         instrument: InstrumentId(instrument),
         seq,
@@ -82,8 +84,8 @@ fn trade_event(instrument: u16, seq: u64, event_ts: i64, qty: i64) -> UiEvent {
         seq,
         event_ts_us: VenueTs::from_micros(event_ts),
         aggressor: Side::Buy,
-        price: Price(100),
-        qty: Qty(qty),
+        price: Price::from_mantissa(100),
+        qty: Qty::from_mantissa(qty),
     }
 }
 
@@ -261,10 +263,14 @@ fn channel_projections_cases() {
             256,
             "{name}: the tape retains its bounded capacity"
         );
-        assert_eq!(tape[0].qty, Qty(299), "{name}: newest print is first");
+        assert_eq!(
+            tape[0].qty,
+            Qty::from_mantissa(299),
+            "{name}: newest print is first"
+        );
         assert_eq!(
             tape[255].qty,
-            Qty(44),
+            Qty::from_mantissa(44),
             "{name}: the oldest 44 prints evicted; 44 is the oldest retained"
         );
     }
@@ -279,9 +285,9 @@ fn channel_projections_cases() {
             quote_level: None,
             side: Side::Buy,
             state: OrderState::Closed(CloseReason::Canceled),
-            price: Price(100),
-            qty: Qty(5),
-            filled: Qty(0),
+            price: Price::from_mantissa(100),
+            qty: Qty::from_mantissa(5),
+            filled: Qty::from_mantissa(0),
         });
         model.apply_event(UiEvent::Reject {
             instrument: InstrumentId(0),
@@ -450,8 +456,8 @@ fn catalog_with_assets(base_asset: AssetId, quote_asset: AssetId) -> UiCatalog {
             quote: "USDT".into(),
             base_asset,
             quote_asset,
-            tick_size: Some(Price(1)),
-            lot_size: Some(Qty(1)),
+            tick_size: Some(Price::from_mantissa(1)),
+            lot_size: Some(Qty::from_mantissa(1)),
             qty_scale: 100_000_000,
         }],
         feature_names: Vec::new(),
@@ -477,9 +483,9 @@ fn order_event(seq: u64, id: u64, side: Side, state: OrderState) -> UiEvent {
         quote_level: None,
         side,
         state,
-        price: Price(100),
-        qty: Qty(5),
-        filled: Qty(0),
+        price: Price::from_mantissa(100),
+        qty: Qty::from_mantissa(5),
+        filled: Qty::from_mantissa(0),
     }
 }
 
@@ -488,9 +494,9 @@ fn working_order(id: u64, state: OrderState) -> UiWorkingOrder {
         client_id: ClientOrderId(id),
         quote_level: None,
         state,
-        price: Price(100 + id as i64),
-        qty: Qty(5),
-        filled: Qty(0),
+        price: Price::from_mantissa(100 + id as i64),
+        qty: Qty::from_mantissa(5),
+        filled: Qty::from_mantissa(0),
     }
 }
 
@@ -510,7 +516,7 @@ fn order_snapshot(seq: u64, side: Side, total_working: u16, details: &[UiWorking
 
 /// A 0.01 tick, so the fixtures below read as venue prices on a 118000 book rather than as tick
 /// counts, and the valuation arithmetic is exercised at a real scale.
-const CENT_TICK: Price = Price(1_000_000);
+const CENT_TICK: Price = Price::from_mantissa(1_000_000);
 
 /// Best 117999.99 / 118000.01, a mid of exactly 118000.00.
 fn btc_book(seq: u64, event_ts: i64) -> UiBookSnapshot {

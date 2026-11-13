@@ -14,6 +14,7 @@ use crate::hot::sink::{ExecLaneBudget, ExecSink, SampleSink, exec_lane_capacity}
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::info;
 use crate::msg::exec::ExecLaneItem;
+use crate::msg::ids::{Notional, Qty};
 use crate::msg::latency::WireSample;
 use crate::msg::time::{DurationUs, EngineClock, Stamper};
 use crate::runtime::config::{
@@ -242,13 +243,18 @@ fn settings(execution: &ExecutionConfig, capabilities: &VenueCapabilities) -> Ex
             // comparing as floats would risk both a spurious violation and a determinism hazard.
             max_quote_distance_centi_bps: (execution.max_quote_distance_bps * 100.0).round() as i64,
             max_book_age: DurationUs::from_millis(execution.max_book_age_ms as i64),
-            max_order_notional_quote: validated_mantissa(execution.max_order_notional_quote),
+            max_order_notional_quote: Notional::from_mantissa(validated_mantissa(
+                execution.max_order_notional_quote,
+            )),
         },
         max_orders_per_side: execution.max_orders_per_side as usize,
-        min_base_balance: validated_mantissa(execution.min_base_balance),
-        min_quote_balance: validated_mantissa(execution.min_quote_balance),
+        min_base_balance: Qty::from_mantissa(validated_mantissa(execution.min_base_balance)),
+        min_quote_balance: Notional::from_mantissa(validated_mantissa(execution.min_quote_balance)),
         max_consecutive_rejects: execution.max_consecutive_rejects,
-        max_session_loss_quote: validated_mantissa(execution.max_session_loss_quote),
+        max_session_loss_quote: Notional::from_mantissa(validated_mantissa(
+            execution.max_session_loss_quote,
+        )),
+
         inflight_timeout: DurationUs::from_millis(execution.inflight_timeout_ms as i64),
         exec_silence_spins: execution.exec_silence_spins,
         order_reap_window: DurationUs::from_secs(execution.order_reap_secs as i64),

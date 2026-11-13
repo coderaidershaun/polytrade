@@ -6,7 +6,7 @@
 use engine::hot::quant::pricing::{GueantParams, Objective, QuoteCoefficients, QuoteInputs};
 use engine::msg::ids::Price;
 
-const TICK: Price = Price(1_000_000); // $0.01 at the 1e-8 fixed-point scale.
+const TICK: Price = Price::from_mantissa(1_000_000); // $0.01 at the 1e-8 fixed-point scale.
 
 fn approx(a: f64, b: f64, tol: f64) -> bool {
     (a - b).abs() <= tol
@@ -26,8 +26,8 @@ fn inputs(fair_ticks: f64, inventory: f64, best_bid_tick: i64, best_ask_tick: i6
     QuoteInputs {
         fair: fair_ticks * TICK.to_f64(),
         inventory,
-        best_bid: Price(best_bid_tick * TICK.0),
-        best_ask: Price(best_ask_tick * TICK.0),
+        best_bid: Price::from_mantissa(best_bid_tick * TICK.mantissa()),
+        best_ask: Price::from_mantissa(best_ask_tick * TICK.mantissa()),
         tick: TICK,
     }
 }
@@ -65,8 +65,8 @@ fn rounding_is_outward_and_never_crosses_the_book() {
     let clean = worked_example().quote(inputs(10_050.0, 0.0, 10_049, 10_051));
     assert_eq!(clean.bid_tick, 10_047, "bid floors: floor(10050 - 2.2)");
     assert_eq!(clean.ask_tick, 10_053, "ask ceils: ceil(10050 + 2.2)");
-    assert_eq!(clean.bid, Price(10_047 * TICK.0));
-    assert_eq!(clean.ask, Price(10_053 * TICK.0));
+    assert_eq!(clean.bid, Price::from_mantissa(10_047 * TICK.mantissa()));
+    assert_eq!(clean.ask, Price::from_mantissa(10_053 * TICK.mantissa()));
 
     // Long inventory -> ask_depth negative (liquidation skew); crossing ask clamps to best_bid+1.
     let long = worked_example().quote(inputs(10_050.0, 10.0, 10_049, 10_051));

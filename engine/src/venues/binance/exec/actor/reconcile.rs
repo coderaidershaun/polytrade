@@ -209,7 +209,10 @@ impl Actor {
         self.counts.missed_fills += 1;
         warn!(
             "binance execution recovered a fill the account stream never delivered: order {venue_order_id} is {:?} order {:016x}, filled {} of {}",
-            event.provenance, event.client_id.0, event.cumulative_qty.0, event.qty.0
+            event.provenance,
+            event.client_id.0,
+            event.cumulative_qty.mantissa(),
+            event.qty.mantissa()
         );
         self.note_event(&event);
         self.session.events.send_exec(received_ts_us, event);
@@ -423,7 +426,11 @@ impl Actor {
         let mut outgoing = Vec::new();
         // Gone means it never rested, so the cumulative quantity is zero.
         let core = &mut self.session.core;
-        core.on_order_gone(client_id, Qty(0), &mut Outgoing::sink(&mut outgoing, 0));
+        core.on_order_gone(
+            client_id,
+            Qty::from_mantissa(0),
+            &mut Outgoing::sink(&mut outgoing, 0),
+        );
         self.dispatch(outgoing, writer).await;
         self.session.arm_readiness(self.control.clock.now());
     }

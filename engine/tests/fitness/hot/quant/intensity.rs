@@ -19,16 +19,19 @@ use engine::runtime::config::{IntensitySpec, TrackerSpec};
 
 use crate::engine_support::{ts, venue_ts};
 
-const TICK: Price = Price(10);
-const ASK: Price = Price(100_000);
-const BID: Price = Price(ASK.0 - TICK.0);
+const TICK: Price = Price::from_mantissa(10);
+const ASK: Price = Price::from_mantissa(100_000);
+const BID: Price = Price::from_mantissa(ASK.mantissa() - TICK.mantissa());
 
 fn snapshot_chunk(side: Side, price: Price, is_last_chunk: bool) -> BookChunk {
     let mut levels = [Level {
-        price: Price(0),
-        qty: Qty(0),
+        price: Price::from_mantissa(0),
+        qty: Qty::from_mantissa(0),
     }; BOOK_CHUNK_LEVELS];
-    levels[0] = Level { price, qty: Qty(1) };
+    levels[0] = Level {
+        price,
+        qty: Qty::from_mantissa(1),
+    };
     BookChunk {
         instrument: InstrumentId(0),
         kind: BookChunkKind::Snapshot,
@@ -67,7 +70,7 @@ fn ev(side: Side, price: Price, when: i64) -> TradeEvent {
     TradeEvent {
         instrument: InstrumentId(0),
         price,
-        qty: Qty(1),
+        qty: Qty::from_mantissa(1),
         side,
         exchange_ts_us: venue_ts(when),
         exchange_sent_ts_us: None,
@@ -76,7 +79,11 @@ fn ev(side: Side, price: Price, when: i64) -> TradeEvent {
 
 fn buy(tracker: &mut MicroTracker, ticks: i64, when: i64) {
     tracker.on_trade(
-        &ev(Side::Buy, Price(ASK.0 + ticks * TICK.0), when),
+        &ev(
+            Side::Buy,
+            Price::from_mantissa(ASK.mantissa() + ticks * TICK.mantissa()),
+            when,
+        ),
         ts(when),
     );
 }

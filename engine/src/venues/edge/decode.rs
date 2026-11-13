@@ -77,7 +77,7 @@ pub(crate) fn qty_field(field: &'static str, text: &str) -> Result<Qty, DecimalF
 }
 
 pub(crate) fn mantissa_field(field: &'static str, text: &str) -> Result<i64, DecimalFault> {
-    qty_field(field, text).map(|qty| qty.0)
+    qty_field(field, text).map(|qty| qty.mantissa())
 }
 
 pub(crate) fn levels<'a>(

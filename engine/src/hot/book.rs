@@ -128,7 +128,7 @@ impl BookSide {
     fn apply(&mut self, level: Level) -> ApplyOutcome {
         match self.search(level.price) {
             Ok(index) => {
-                if level.qty.0 == 0 {
+                if level.qty.mantissa() == 0 {
                     self.levels.remove(index);
                     self.is_trim_warned = false;
                 } else {
@@ -137,7 +137,7 @@ impl BookSide {
                 ApplyOutcome::Applied
             }
             Err(index) => {
-                if level.qty.0 == 0 {
+                if level.qty.mantissa() == 0 {
                     ApplyOutcome::RemoveMissing
                 } else {
                     self.insert_new(index, level)
@@ -430,8 +430,8 @@ impl Book {
         hot_warn!(
             "crossed book: instrument {} best bid {} > best ask {}",
             chunk.instrument.0,
-            bid.0,
-            ask.0
+            bid.mantissa(),
+            ask.mantissa()
         );
     }
 }

@@ -18,7 +18,9 @@ use std::collections::BTreeSet;
 use engine::msg::exec::{
     AccountChunkKind, ExecEvent, ExecKind, Liquidity, OrderStyle, RejectClass, VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{
+    AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
+};
 use engine::msg::time::LocalTs;
 use engine::venues::edge::decode::DecimalFault;
 use engine::venues::exec::ExecRequest;
@@ -71,9 +73,9 @@ const CLIENT_A: ClientOrderId = ClientOrderId(0x6a64_f040_000c_0001);
 const CLIENT_B: ClientOrderId = ClientOrderId(0x6a64_f040_000c_0002);
 
 /// `0.52` and `10` shares, the size every fixture is written around.
-const PRICE: Price = Price(52_000_000);
-const SIZE: Qty = Qty(10 * FIXED_SCALE);
-const TICK: Price = Price(1_000_000);
+const PRICE: Price = Price::from_mantissa(52_000_000);
+const SIZE: Qty = Qty::from_mantissa(10 * FIXED_SCALE);
+const TICK: Price = Price::from_mantissa(1_000_000);
 
 fn tokens() -> TokenTable {
     let mut table = TokenTable::with_retired_capacity(4);
@@ -187,7 +189,10 @@ fn place_responses_decode_to_the_outcome_each_shape_demands() {
             .expect("committed fixture decodes"),
         );
         assert_eq!(outcome.event.cumulative_qty, SIZE);
-        assert_eq!(outcome.event.cumulative_quote, 520_000_000);
+        assert_eq!(
+            outcome.event.cumulative_quote,
+            Notional::from_mantissa(520_000_000)
+        );
         assert_eq!(outcome.event.status, Some(VenueOrderStatus::Filled));
         assert_eq!(outcome.event.kind, ExecKind::AckPlaced);
         let placed = outcome.placed.expect("a matched placement still has an id");
@@ -205,8 +210,14 @@ fn place_responses_decode_to_the_outcome_each_shape_demands() {
             )
             .expect("the live decimal-dollar amounts decode"),
         );
-        assert_eq!(outcome.event.cumulative_qty, Qty(542_553_000));
-        assert_eq!(outcome.event.cumulative_quote, 254_999_900);
+        assert_eq!(
+            outcome.event.cumulative_qty,
+            Qty::from_mantissa(542_553_000)
+        );
+        assert_eq!(
+            outcome.event.cumulative_quote,
+            Notional::from_mantissa(254_999_900)
+        );
         assert_eq!(outcome.event.status, Some(VenueOrderStatus::Filled));
         assert_eq!(outcome.event.kind, ExecKind::AckPlaced);
         assert_eq!(
@@ -232,7 +243,7 @@ fn place_responses_decode_to_the_outcome_each_shape_demands() {
             outcome.placed.expect("delayed is accepted").status,
             PlacementStatus::Delayed
         );
-        assert_eq!(outcome.event.cumulative_qty, Qty(0));
+        assert_eq!(outcome.event.cumulative_qty, Qty::from_mantissa(0));
         assert_eq!(outcome.event.status, Some(VenueOrderStatus::New));
         assert_eq!(outcome.event.reject, None);
     }
@@ -254,7 +265,7 @@ fn place_responses_decode_to_the_outcome_each_shape_demands() {
         );
         assert_eq!(outcome.event.kind, ExecKind::AckPlaced);
         assert_eq!(outcome.event.status, Some(VenueOrderStatus::New));
-        assert_eq!(outcome.event.cumulative_qty, Qty(0));
+        assert_eq!(outcome.event.cumulative_qty, Qty::from_mantissa(0));
         assert_eq!(outcome.event.reject, None);
     }
 
@@ -273,8 +284,8 @@ fn place_responses_decode_to_the_outcome_each_shape_demands() {
             outcome.placed.expect("unmatched rests").status,
             PlacementStatus::Unmatched
         );
-        assert_eq!(outcome.event.cumulative_qty, Qty(0));
-        assert_eq!(outcome.event.cumulative_quote, 0);
+        assert_eq!(outcome.event.cumulative_qty, Qty::from_mantissa(0));
+        assert_eq!(outcome.event.cumulative_quote, Notional::from_mantissa(0));
     }
 
     // HTTP 200 with success:false is a rejection, not an accepted order.
@@ -358,15 +369,18 @@ fn a_maker_fill_folds_from_the_cumulative_size_matched() {
 
     assert_eq!(partial.kind, ExecKind::ReportTrade);
     assert_eq!(partial.liquidity, Some(Liquidity::Maker));
-    assert_eq!(partial.cumulative_qty, Qty(4 * FIXED_SCALE));
-    assert_eq!(partial.cumulative_quote, 208_000_000);
+    assert_eq!(partial.cumulative_qty, Qty::from_mantissa(4 * FIXED_SCALE));
+    assert_eq!(
+        partial.cumulative_quote,
+        Notional::from_mantissa(208_000_000)
+    );
     // The venue answers LIVE for a partly filled resting order and never says "partially filled".
     assert_eq!(partial.status, Some(VenueOrderStatus::PartiallyFilled));
 
     assert_eq!(filled.cumulative_qty, SIZE);
     assert_eq!(filled.status, Some(VenueOrderStatus::Filled));
     assert!(
-        filled.cumulative_qty.0 > partial.cumulative_qty.0,
+        filled.cumulative_qty.mantissa() > partial.cumulative_qty.mantissa(),
         "size_matched must be cumulative or the fold is a delta fold in disguise"
     );
 }
@@ -383,7 +397,7 @@ fn placement_and_cancellation_frames_report_their_own_kind() {
     assert_eq!(placed.client_id, CLIENT_A);
     assert_eq!(placed.status, Some(VenueOrderStatus::New));
     assert_eq!(placed.liquidity, None);
-    assert_eq!(placed.cumulative_qty, Qty(0));
+    assert_eq!(placed.cumulative_qty, Qty::from_mantissa(0));
 
     let canceled = stream_order(fixture!("ws_order_cancellation"), &wiring);
     assert_eq!(canceled.kind, ExecKind::ReportCanceled);
@@ -391,8 +405,11 @@ fn placement_and_cancellation_frames_report_their_own_kind() {
     assert_eq!(canceled.status, Some(VenueOrderStatus::Canceled));
     assert_eq!(canceled.liquidity, None);
     assert_eq!(canceled.qty, SIZE);
-    assert_eq!(canceled.cumulative_qty, Qty(4 * FIXED_SCALE));
-    assert_eq!(canceled.cumulative_quote, 208_000_000);
+    assert_eq!(canceled.cumulative_qty, Qty::from_mantissa(4 * FIXED_SCALE));
+    assert_eq!(
+        canceled.cumulative_quote,
+        Notional::from_mantissa(208_000_000)
+    );
 }
 
 /// Everything downstream of a trade frame that is NOT the failed↔matched settlement transition
@@ -552,7 +569,10 @@ fn open_orders_and_trades_pages_paginate_and_separate_unmapped_orders() {
         assert_eq!(decoded.events.len(), 2);
         assert_eq!(decoded.events[0].client_id, CLIENT_A);
         assert_eq!(decoded.events[0].kind, ExecKind::SnapshotOrder);
-        assert_eq!(decoded.events[0].cumulative_qty, Qty(4 * FIXED_SCALE));
+        assert_eq!(
+            decoded.events[0].cumulative_qty,
+            Qty::from_mantissa(4 * FIXED_SCALE)
+        );
         assert_eq!(decoded.events[0].recon_seq, 7);
         assert_eq!(decoded.events[1].kind, ExecKind::SnapshotEnd);
         assert_eq!(decoded.unmapped.len(), 1);
@@ -671,7 +691,7 @@ fn single_fixture_reads_decode_their_documented_shape() {
             decode_clob_market(fixture!("clob_market")).expect("committed fixture decodes");
         assert_eq!(market.condition_id.as_ref(), CONDITION);
         assert_eq!(market.tick_size, TICK);
-        assert_eq!(market.min_order_size, Qty(5 * FIXED_SCALE));
+        assert_eq!(market.min_order_size, Qty::from_mantissa(5 * FIXED_SCALE));
         assert_eq!(market.tokens.len(), 2);
         assert_eq!(market.tokens[0].token_id.as_ref(), UP_TOKEN);
         assert_eq!(market.tokens[0].outcome.as_ref(), "Up");

@@ -23,11 +23,11 @@ fn secs(count: i64) -> i64 {
 }
 
 fn price(units: f64) -> Price {
-    Price((units * FIXED_SCALE as f64).round() as i64)
+    Price::from_mantissa((units * FIXED_SCALE as f64).round() as i64)
 }
 
 fn qty(units: f64) -> Qty {
-    Qty((units * FIXED_SCALE as f64).round() as i64)
+    Qty::from_mantissa((units * FIXED_SCALE as f64).round() as i64)
 }
 
 // Clocks disagree deliberately: fills key off received_ts_us only (trips boundary if wrong).
@@ -35,7 +35,7 @@ fn print(side: Side, units: f64, when: i64) -> TradeEvent {
     TradeEvent {
         instrument: InstrumentId(0),
         price: price(units),
-        qty: Qty(FIXED_SCALE),
+        qty: Qty::from_mantissa(FIXED_SCALE),
         side,
         exchange_ts_us: venue_ts(when - 7),
         exchange_sent_ts_us: None,
@@ -62,8 +62,8 @@ fn assert_bps(realised: Option<f64>, expected: f64) {
 #[test]
 fn unqueued_quote_fills_at_or_through_once_per_placement() {
     let mut markouts = tracker(secs(1));
-    markouts.arm(MarkoutSide::Bid, price(100.0), Qty(0));
-    markouts.arm(MarkoutSide::Ask, price(101.0), Qty(0));
+    markouts.arm(MarkoutSide::Bid, price(100.0), Qty::from_mantissa(0));
+    markouts.arm(MarkoutSide::Ask, price(101.0), Qty::from_mantissa(0));
 
     // Buying aggressor never reaches bid, however far it prints.
     markouts.on_trade(&print(Side::Buy, 99.0, 0), at(0));
@@ -80,7 +80,7 @@ fn unqueued_quote_fills_at_or_through_once_per_placement() {
     assert_eq!(markouts.bid().fill_count(), 1);
 
     // Fresh placement to make fillable again; through counts as at.
-    markouts.arm(MarkoutSide::Bid, price(100.0), Qty(0));
+    markouts.arm(MarkoutSide::Bid, price(100.0), Qty::from_mantissa(0));
     markouts.on_trade(&print(Side::Sell, 99.0, secs(2)), at(secs(2)));
     assert_eq!(markouts.bid().fill_count(), 2);
 
@@ -92,13 +92,13 @@ fn unqueued_quote_fills_at_or_through_once_per_placement() {
     assert_eq!(markouts.ask().armed_quote(), None);
 
     // Through ask from above must fill (equality prints alone can't pin >=).
-    markouts.arm(MarkoutSide::Ask, price(101.0), Qty(0));
+    markouts.arm(MarkoutSide::Ask, price(101.0), Qty::from_mantissa(0));
     markouts.on_trade(&print(Side::Buy, 102.0, secs(4)), at(secs(4)));
     assert_eq!(markouts.ask().fill_count(), 2);
 
     // Disarm != placement: unquoted side takes level away, prints find nothing to fill.
-    markouts.arm(MarkoutSide::Bid, price(100.0), Qty(0));
-    markouts.arm(MarkoutSide::Ask, price(101.0), Qty(0));
+    markouts.arm(MarkoutSide::Bid, price(100.0), Qty::from_mantissa(0));
+    markouts.arm(MarkoutSide::Ask, price(101.0), Qty::from_mantissa(0));
     markouts.disarm(MarkoutSide::Bid);
     markouts.disarm(MarkoutSide::Ask);
     markouts.on_trade(&print(Side::Sell, 99.0, secs(5)), at(secs(5)));
@@ -117,8 +117,8 @@ fn forward_markouts_are_side_signed_and_ripen_per_horizon() {
     // a horizon reading the wrong lane ripens at the wrong second.
     let mut markouts = tracker(secs(1));
     markouts.on_mid(at(0), 100.0);
-    markouts.arm(MarkoutSide::Bid, price(100.0), Qty(0));
-    markouts.arm(MarkoutSide::Ask, price(100.0), Qty(0));
+    markouts.arm(MarkoutSide::Bid, price(100.0), Qty::from_mantissa(0));
+    markouts.arm(MarkoutSide::Ask, price(100.0), Qty::from_mantissa(0));
     markouts.on_trade(&print(Side::Sell, 100.0, 0), at(0));
     markouts.on_trade(&print(Side::Buy, 100.0, 0), at(0));
 
@@ -138,7 +138,7 @@ fn forward_markouts_are_side_signed_and_ripen_per_horizon() {
     assert_eq!(markouts.bid().forward(ForwardHorizon::Secs5).len(), 0);
 
     // Print sweep fills at OUR armed 100.00 (not 99.90 on tape) -> markout = +1 bps (not +110).
-    markouts.arm(MarkoutSide::Bid, price(100.0), Qty(0));
+    markouts.arm(MarkoutSide::Bid, price(100.0), Qty::from_mantissa(0));
     markouts.on_trade(&print(Side::Sell, 99.9, secs(10)), at(secs(10)));
     markouts.on_mid(at(secs(11)), 100.01);
     assert_bps(markouts.bid().forward(ForwardHorizon::Secs1).last(), 1.0);
@@ -147,8 +147,8 @@ fn forward_markouts_are_side_signed_and_ripen_per_horizon() {
 #[test]
 fn on_trade_reports_the_fill_it_records() {
     let mut markouts = tracker(secs(1));
-    markouts.arm(MarkoutSide::Bid, price(100.0), Qty(0));
-    markouts.arm(MarkoutSide::Ask, price(101.0), Qty(0));
+    markouts.arm(MarkoutSide::Bid, price(100.0), Qty::from_mantissa(0));
+    markouts.arm(MarkoutSide::Ask, price(101.0), Qty::from_mantissa(0));
 
     // Print reaching no armed level -> reports nothing.
     assert_eq!(markouts.on_trade(&print(Side::Buy, 99.0, 0), at(0)), None);

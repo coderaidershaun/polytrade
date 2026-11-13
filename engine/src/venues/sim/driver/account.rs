@@ -20,8 +20,8 @@ impl SimExecDriver {
             .iter()
             .map(|balance| SimBalance {
                 asset: asset_name(decode.assets, balance.asset),
-                free: Qty(balance.free),
-                locked: Qty(balance.locked),
+                free: Qty::from_mantissa(balance.free),
+                locked: Qty::from_mantissa(balance.locked),
             })
             .collect();
         let payload = self

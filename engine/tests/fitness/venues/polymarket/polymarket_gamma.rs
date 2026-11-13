@@ -38,8 +38,8 @@ fn double_parses_token_ids_and_window_from_slug() {
             token_down:
                 "67063025231054467036218378525223409033496849839613617174918904089424584844374"
                     .into(),
-            tick_size: Price(1_000_000),
-            min_order_size: Qty(500_000_000),
+            tick_size: Price::from_mantissa(1_000_000),
+            min_order_size: Qty::from_mantissa(500_000_000),
             // The window bounds come from the slug's grid timestamp, not from startDate (creation
             // time) or end_date_iso (too coarse).
             window_open_ts_us: VenueTs::from_micros(1_784_439_600_000_000),

@@ -7,7 +7,7 @@ use crate::link::{LinkHash, LinkPayload, OutboundLink, TopicId};
 use crate::log::HotRecord;
 use crate::msg::exec::{Liquidity, OrderStyle, Provenance, RejectClass};
 use crate::msg::ids::{
-    AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId,
+    AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, Spend, TradeId, VenueOrderId,
 };
 use crate::msg::inbound::{Level, TradeEvent};
 use crate::msg::latency::LaneDrops;
@@ -224,6 +224,8 @@ digest_by_hash!(
     DurationUs,
     Price,
     Qty,
+    Notional,
+    Spend,
     Side,
     InstrumentId,
     AssetId,

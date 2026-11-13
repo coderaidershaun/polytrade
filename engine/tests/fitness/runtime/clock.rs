@@ -6,19 +6,6 @@ use engine::msg::time::{
     ClockError, ClockSource, DurationUs, InvariantCounter, LocalTs, Stamper, Tick, VenueTs,
 };
 
-/// Compiles only while the type lacks the bound. A second impl that the bound switches on would
-/// make the call ambiguous, so the build fails on the line that names the bound.
-macro_rules! assert_lacks {
-    ($type:ty: $($bound:tt)+) => {{
-        trait Ambiguous<Marker> {
-            fn check() {}
-        }
-        impl<T> Ambiguous<()> for T {}
-        impl<T: $($bound)+> Ambiguous<u8> for T {}
-        <$type as Ambiguous<_>>::check();
-    }};
-}
-
 /// A span or a comparison across two clocks compiles silently when both are one type, and its
 /// number is then off by the skew between the clocks. Each crossing goes through a named method.
 #[test]

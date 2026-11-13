@@ -95,7 +95,7 @@ wire_struct! {
 }
 
 wire_array! {
-    Level; UI_BOOK_LEVELS; Level { price: Price(0), qty: Qty(0) },
+    Level; UI_BOOK_LEVELS; Level { price: Price::from_mantissa(0), qty: Qty::from_mantissa(0) },
     UiWorkingOrder; UI_ORDER_SNAPSHOT_CAPACITY; UiWorkingOrder::EMPTY,
     Option<(Price, Qty)>; UI_QUOTE_LEVELS; None,
 }

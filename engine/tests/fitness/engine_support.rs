@@ -17,7 +17,9 @@ use engine::msg::exec::{
     ACCOUNT_CHUNK_ASSETS, AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind,
     ExecLaneItem, Liquidity, Provenance, VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{
+    AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
+};
 use engine::msg::inbound::{
     BOOK_CHUNK_LEVELS, BookChunk, BookChunkKind, BookReset, InboundMessage, KlineEvent, Level,
     MarketRotation, MessageBody, RunControl, SpinTick, TradeEvent,
@@ -53,8 +55,8 @@ pub fn venue_ts(us: i64) -> VenueTs {
 pub fn trade(instrument: u16, price: i64, qty: i64, side: Side, when: i64) -> TradeEvent {
     TradeEvent {
         instrument: InstrumentId(instrument),
-        price: Price(price),
-        qty: Qty(qty),
+        price: Price::from_mantissa(price),
+        qty: Qty::from_mantissa(qty),
         side,
         exchange_ts_us: venue_ts(when),
         exchange_sent_ts_us: None,
@@ -70,13 +72,13 @@ fn chunk(
     when: i64,
 ) -> BookChunk {
     let mut filled = [Level {
-        price: Price(0),
-        qty: Qty(0),
+        price: Price::from_mantissa(0),
+        qty: Qty::from_mantissa(0),
     }; BOOK_CHUNK_LEVELS];
     for (slot, &(price, qty)) in filled.iter_mut().zip(levels) {
         *slot = Level {
-            price: Price(price),
-            qty: Qty(qty),
+            price: Price::from_mantissa(price),
+            qty: Qty::from_mantissa(qty),
         };
     }
     BookChunk {
@@ -193,11 +195,11 @@ pub fn kline(
         instrument: InstrumentId(instrument),
         interval,
         open_ts_us: venue_ts(when),
-        open: Price(open),
-        high: Price(high),
-        low: Price(low),
-        close: Price(close),
-        base_volume: Qty(ONE),
+        open: Price::from_mantissa(open),
+        high: Price::from_mantissa(high),
+        low: Price::from_mantissa(low),
+        close: Price::from_mantissa(close),
+        base_volume: Qty::from_mantissa(ONE),
         quote_volume: 42,
         trade_count: 3,
         is_closed,
@@ -287,7 +289,7 @@ pub fn instrument_row(id: u16, tracker: TrackerSpec, book_capacity: usize) -> In
         subscriptions: Subscriptions::default(),
         kline_intervals: vec![KlineInterval::OneMinute],
         book_capacity,
-        max_exposure_quote: TEST_MAX_EXPOSURE_QUOTE,
+        max_exposure_quote: Notional::from_mantissa(TEST_MAX_EXPOSURE_QUOTE),
         tracker,
     }
 }
@@ -646,7 +648,7 @@ impl FillPen {
             MessageBody::Exec(ExecEvent {
                 kind: ExecKind::SnapshotOrder,
                 // A large size, because the slot must outlive every fill this pen reports into it.
-                qty: Qty(i64::MAX / 4),
+                qty: Qty::from_mantissa(i64::MAX / 4),
                 ..exec_event(self.instrument, self.client_id(side), side, price, when)
             }),
         ))
@@ -656,18 +658,20 @@ impl FillPen {
     pub fn report(&mut self, side: Side, price: i64, qty: i64, when: i64) -> InboundMessage {
         let total = &mut self.cumulative[side as usize];
         total.0 += qty;
-        total.1 += Price(price).notional(Qty(qty));
-        let (cumulative_qty, cumulative_quote) = (Qty(total.0), total.1);
+        total.1 += Price::from_mantissa(price)
+            .notional(Qty::from_mantissa(qty))
+            .mantissa();
+        let (cumulative_qty, cumulative_quote) = (Qty::from_mantissa(total.0), total.1);
         InboundMessage::new(
             ts(when),
             MessageBody::Exec(ExecEvent {
                 kind: ExecKind::ReportTrade,
                 status: Some(VenueOrderStatus::PartiallyFilled),
-                last_price: Price(price),
-                last_qty: Qty(qty),
+                last_price: Price::from_mantissa(price),
+                last_qty: Qty::from_mantissa(qty),
                 cumulative_qty,
-                cumulative_quote,
-                qty: Qty(i64::MAX / 4),
+                cumulative_quote: Notional::from_mantissa(cumulative_quote),
+                qty: Qty::from_mantissa(i64::MAX / 4),
                 ..exec_event(self.instrument, self.client_id(side), side, price, when)
             }),
         )
@@ -708,12 +712,12 @@ pub fn exec_event(
         provenance: Provenance::Mine,
         side,
         liquidity: Some(Liquidity::Maker),
-        price: Price(price),
-        qty: Qty(0),
-        last_price: Price(0),
-        last_qty: Qty(0),
-        cumulative_qty: Qty(0),
-        cumulative_quote: 0,
+        price: Price::from_mantissa(price),
+        qty: Qty::from_mantissa(0),
+        last_price: Price::from_mantissa(0),
+        last_qty: Qty::from_mantissa(0),
+        cumulative_qty: Qty::from_mantissa(0),
+        cumulative_quote: Notional::from_mantissa(0),
         commission: 0,
         commission_asset: AssetId::UNKNOWN,
         reject_code: 0,
@@ -795,9 +799,9 @@ pub fn drain_orders_and_fills(records: &mut Consumer<PersistRecord>) -> Banked {
 /// A two-sided book around the midpoint, fresh as of the spin that reads it.
 pub fn top(bid: i64, ask: i64) -> BookTop {
     BookTop {
-        best_bid: Some(Price(bid)),
-        best_ask: Some(Price(ask)),
-        mid: Price(bid + (ask - bid) / 2),
+        best_bid: Some(Price::from_mantissa(bid)),
+        best_ask: Some(Price::from_mantissa(ask)),
+        mid: Price::from_mantissa(bid + (ask - bid) / 2),
         is_valid: true,
         last_commit_ts_us: ts(1_000),
         now_ts_us: ts(1_000),
@@ -815,8 +819,8 @@ pub fn rich() -> FundsView {
 /// One price level from bare mantissas.
 pub fn level(price: i64, qty: i64) -> Level {
     Level {
-        price: Price(price),
-        qty: Qty(qty),
+        price: Price::from_mantissa(price),
+        qty: Qty::from_mantissa(qty),
     }
 }
 

@@ -6,7 +6,7 @@
 //! repeats at every settlement step, so it is never itself accumulated.
 
 use crate::msg::exec::{ExecEvent, ExecKind, VenueOrderStatus};
-use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
+use crate::msg::ids::{ClientOrderId, InstrumentId, Notional, Price, Qty, Side};
 use crate::venues::edge::decode::unknown_enum;
 use crate::venues::exec::blank;
 
@@ -84,8 +84,8 @@ pub fn decode_place(
     let making = optional_venue_amount("makingAmount", &response.making_amount)?;
     let taking = optional_venue_amount("takingAmount", &response.taking_amount)?;
     let (filled_qty, filled_quote) = match request.side {
-        Side::Buy => (Qty(taking), making),
-        Side::Sell => (Qty(making), taking),
+        Side::Buy => (Qty::from_mantissa(taking), Notional::from_mantissa(making)),
+        Side::Sell => (Qty::from_mantissa(making), Notional::from_mantissa(taking)),
     };
 
     let venue_status = match status {

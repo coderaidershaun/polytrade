@@ -14,8 +14,8 @@ use crate::engine_support::level;
 fn update(side: Side, price: i64, qty: i64, venue_ts: i64) -> LevelUpdate {
     LevelUpdate {
         side,
-        price: Price(price),
-        qty: Qty(qty),
+        price: Price::from_mantissa(price),
+        qty: Qty::from_mantissa(qty),
         exchange_ts_us: VenueTs::from_micros(venue_ts),
     }
 }

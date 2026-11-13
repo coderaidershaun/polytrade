@@ -176,9 +176,9 @@ impl UiWorkingOrder {
         client_id: ClientOrderId(0),
         quote_level: None,
         state: OrderState::Free,
-        price: Price(0),
-        qty: Qty(0),
-        filled: Qty(0),
+        price: Price::from_mantissa(0),
+        qty: Qty::from_mantissa(0),
+        filled: Qty::from_mantissa(0),
     };
 }
 

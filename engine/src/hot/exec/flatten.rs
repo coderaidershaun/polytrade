@@ -11,7 +11,7 @@
 
 use crate::log::hot_warn;
 use crate::msg::exec::OrderStyle;
-use crate::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use crate::msg::ids::{FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side};
 
 use super::desired::QuoteLevel;
 use super::engine::ExecEngine;
@@ -37,24 +37,25 @@ impl FeeModel {
     /// outside them rather than negative. Because it is charged on top, a buy must reserve it
     /// separately from the notional.
     #[inline]
-    pub fn taker_fee_quote(self, price: Price, qty: Qty, rate: i64) -> i64 {
+    pub fn taker_fee_quote(self, price: Price, qty: Qty, rate: i64) -> Notional {
         match self {
-            FeeModel::None => 0,
+            FeeModel::None => Notional::ZERO,
             FeeModel::BinaryOutcome => binary_outcome_fee(price, qty, rate),
         }
     }
 }
 
 #[inline]
-fn binary_outcome_fee(price: Price, qty: Qty, rate: i64) -> i64 {
-    let complement = i128::from(FIXED_SCALE - price.0);
-    if rate == 0 || complement <= 0 || price.0 <= 0 {
-        return 0;
+fn binary_outcome_fee(price: Price, qty: Qty, rate: i64) -> Notional {
+    let complement = i128::from(FIXED_SCALE - price.mantissa());
+    if rate == 0 || complement <= 0 || price.mantissa() <= 0 {
+        return Notional::ZERO;
     }
     let scale = i128::from(FIXED_SCALE);
-    let fee = i128::from(qty.0) * i128::from(rate) * i128::from(price.0) * complement
-        / (scale * scale * scale);
-    i64::try_from(fee).unwrap_or(i64::MAX)
+    let fee =
+        i128::from(qty.mantissa()) * i128::from(rate) * i128::from(price.mantissa()) * complement
+            / (scale * scale * scale);
+    Notional::from_mantissa(i64::try_from(fee).unwrap_or(i64::MAX))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -105,7 +106,7 @@ pub fn plan_flatten(input: FlattenInput) -> FlattenOutcome {
         grid.step
     );
 
-    let side = match position_base.0.signum() {
+    let side = match position_base.mantissa().signum() {
         1 => Side::Sell,
         -1 => Side::Buy,
         _ => return FlattenOutcome::Nothing,
@@ -117,13 +118,13 @@ pub fn plan_flatten(input: FlattenInput) -> FlattenOutcome {
         return FlattenOutcome::Refuse(RejectReason::BookNotQuotable);
     };
 
-    let held = Qty(position_base.0.abs());
+    let held = Qty::from_mantissa(position_base.mantissa().abs());
     let affordable = affordable_qty(side, price, funds, fee_model, taker_fee_rate);
     let within_notional = notional_capped_qty(price, limits.max_order_notional_quote);
     let wanted = held.min(affordable).min(within_notional);
     let qty = wanted.floor_to_step(grid.step);
 
-    if qty < grid.min_qty || qty.0 == 0 {
+    if qty < grid.min_qty || qty.mantissa() == 0 {
         // Distinguish the failure mode for operators: insufficient balance vs venue size too coarse.
         let reason = if affordable < held.min(within_notional) {
             RejectReason::Underfunded
@@ -154,9 +155,13 @@ fn marketable_price(side: Side, top: &BookTop, grid: TickGrid, slack_ticks: u32)
     // cannot round back to a resting price instead of trading.
     let aggressive = side
         .opposite()
-        .snap_passive(Price(touch.0 + through), grid.tick);
-    let ceiling = grid.max_price.map_or(aggressive.0, |max| max.0);
-    Some(Price(aggressive.0.min(ceiling).max(grid.tick)))
+        .snap_passive(Price::from_mantissa(touch.mantissa() + through), grid.tick);
+    let ceiling = grid
+        .max_price
+        .map_or(aggressive.mantissa(), |max| max.mantissa());
+    Some(Price::from_mantissa(
+        aggressive.mantissa().min(ceiling).max(grid.tick),
+    ))
 }
 
 /// Maximum quantity affordable under the side's budget, including taker fees where charged.
@@ -172,29 +177,34 @@ fn affordable_qty(
 ) -> Qty {
     let budget = funds.spendable - funds.floor;
     if budget <= 0 {
-        return Qty(0);
+        return Qty::from_mantissa(0);
     }
     match side {
-        Side::Sell => Qty(budget),
+        Side::Sell => Qty::from_mantissa(budget),
         Side::Buy => {
-            let unit_cost = i128::from(price.0)
-                + i128::from(fee_model.taker_fee_quote(price, Qty(FIXED_SCALE), taker_fee_rate));
+            let unit_cost = i128::from(price.mantissa())
+                + i128::from(
+                    fee_model
+                        .taker_fee_quote(price, Qty::from_mantissa(FIXED_SCALE), taker_fee_rate)
+                        .mantissa(),
+                );
             if unit_cost <= 0 {
-                return Qty(0);
+                return Qty::from_mantissa(0);
             }
             let affordable = i128::from(budget) * i128::from(FIXED_SCALE) / unit_cost;
-            Qty(i64::try_from(affordable).unwrap_or(i64::MAX))
+            Qty::from_mantissa(i64::try_from(affordable).unwrap_or(i64::MAX))
         }
     }
 }
 
 #[inline]
-fn notional_capped_qty(price: Price, max_notional_quote: i64) -> Qty {
-    if price.0 <= 0 {
-        return Qty(0);
+fn notional_capped_qty(price: Price, max_notional_quote: Notional) -> Qty {
+    if price.mantissa() <= 0 {
+        return Qty::from_mantissa(0);
     }
-    let capped = i128::from(max_notional_quote) * i128::from(FIXED_SCALE) / i128::from(price.0);
-    Qty(i64::try_from(capped).unwrap_or(i64::MAX))
+    let capped = i128::from(max_notional_quote.mantissa()) * i128::from(FIXED_SCALE)
+        / i128::from(price.mantissa());
+    Qty::from_mantissa(i64::try_from(capped).unwrap_or(i64::MAX))
 }
 
 impl ExecEngine {
@@ -280,7 +290,7 @@ fn report_unflattened(instrument: InstrumentId, position: Qty, reason: RejectRea
     hot_warn!(
         "instrument {} still holds {} base and cannot be flattened: {:?}",
         instrument.0,
-        position.0,
+        position.mantissa(),
         reason
     );
 }

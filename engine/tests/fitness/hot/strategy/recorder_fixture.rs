@@ -5,7 +5,7 @@ use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::StrategyConfig;
 use engine::msg::exec::{ExecCommand, ExecLaneItem};
-use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{AssetId, InstrumentId, Notional, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::persist::PersistRecord;
 use engine::msg::time::{DurationUs, Stamper};
@@ -171,10 +171,10 @@ pub(crate) fn step_messages(base: i64, index: i64, when: i64) -> [InboundMessage
 
 pub(crate) fn recorded_row(step: i64) -> InstrumentRow {
     let mut row = instrument_row(0, tracker_spec_all(100), 128);
-    row.tick_size = Some(Price(TICK));
-    row.lot_size = Some(Qty(step));
-    row.min_qty = Some(Qty(step));
-    row.min_notional = Some(ONE);
+    row.tick_size = Some(Price::from_mantissa(TICK));
+    row.lot_size = Some(Qty::from_mantissa(step));
+    row.min_qty = Some(Qty::from_mantissa(step));
+    row.min_notional = Some(Notional::from_mantissa(ONE));
     row.tracker.intensity = Some(IntensitySpec {
         max_depth_ticks: 16,
         half_life_secs: 600.0,

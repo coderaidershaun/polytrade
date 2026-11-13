@@ -8,7 +8,7 @@ use crate::hot::sink::{ExecSink, PendingCommands};
 use crate::hot::strategy::Actions;
 use crate::log::{hot_error, hot_warn};
 use crate::msg::exec::{AccountChunk, CancelReason, ExecCommand, ExecEvent, ExecKind, Provenance};
-use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Qty, Side};
+use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Qty, Side};
 use crate::msg::time::{DurationUs, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 use crate::runtime::registry::InstrumentRow;
@@ -27,10 +27,10 @@ use super::view::{ExecCallback, OrderReject, OrderView, WorkingOrderView};
 pub struct ExecSettings {
     pub limits: ExecLimits,
     pub max_orders_per_side: usize,
-    pub min_base_balance: i64,
-    pub min_quote_balance: i64,
+    pub min_base_balance: Qty,
+    pub min_quote_balance: Notional,
     pub max_consecutive_rejects: u32,
-    pub max_session_loss_quote: i64,
+    pub max_session_loss_quote: Notional,
     pub inflight_timeout: DurationUs,
     pub exec_silence_spins: u32,
     pub order_reap_window: DurationUs,
@@ -62,10 +62,10 @@ impl ExecSettings {
             // Kept non-zero to avoid halting on inherited state; the zero_alloc fitness
             // test measures this.
             max_orders_per_side: MAX_QUOTE_LEVELS,
-            min_base_balance: 0,
-            min_quote_balance: 0,
+            min_base_balance: Qty::from_mantissa(0),
+            min_quote_balance: Notional::ZERO,
             max_consecutive_rejects: 0,
-            max_session_loss_quote: 0,
+            max_session_loss_quote: Notional::ZERO,
             inflight_timeout: DurationUs::ZERO,
             exec_silence_spins: 0,
             order_reap_window: DurationUs::ZERO,
@@ -85,7 +85,7 @@ pub(super) struct InstrumentExec {
     pub(super) grid: TickGrid,
     pub(super) base_asset: AssetId,
     pub(super) quote_asset: AssetId,
-    pub(super) max_exposure_quote: i64,
+    pub(super) max_exposure_quote: Notional,
     pub(super) last_commit_ts_us: LocalTs,
     pub(super) is_prior_run_cancel_sent: bool,
     /// What the flatten pass last refused for, so a position it cannot shed is reported when the
@@ -93,7 +93,7 @@ pub(super) struct InstrumentExec {
     pub(super) flatten_refusal: Option<RejectReason>,
     /// Realised result of windows this instrument has already retired. The ledger row goes with the
     /// window it belonged to; the kill switch measures the RUN.
-    pub(super) realised_carried_quote: i64,
+    pub(super) realised_carried_quote: Notional,
 }
 
 impl InstrumentExec {
@@ -131,7 +131,7 @@ pub struct ExecEngine {
     pub(super) recon_seq: u64,
     /// The PnL baseline at the first honest valuation; the session loss gate compares
     /// against this. `None` until that first mark.
-    pub(super) pnl_at_baseline: Vec<Option<i64>>,
+    pub(super) pnl_at_baseline: Vec<Option<Notional>>,
 }
 
 digest_by_hash!(ExecSettings);
@@ -160,10 +160,10 @@ impl ExecEngine {
             .iter()
             .map(|row| InstrumentExec {
                 grid: TickGrid {
-                    tick: row.tick_size.map_or(1, |tick| tick.0.max(1)),
-                    step: row.lot_size.map_or(1, |lot| lot.0.max(1)),
-                    min_qty: row.min_qty.unwrap_or(Qty(0)),
-                    min_notional: row.min_notional.unwrap_or(0),
+                    tick: row.tick_size.map_or(1, |tick| tick.mantissa().max(1)),
+                    step: row.lot_size.map_or(1, |lot| lot.mantissa().max(1)),
+                    min_qty: row.min_qty.unwrap_or(Qty::from_mantissa(0)),
+                    min_notional: row.min_notional.unwrap_or(Notional::ZERO),
                     // When the venue declares no amend filter, a shrink is executed as a
                     // cancel followed by a place instead.
                     max_amends: row
@@ -177,7 +177,7 @@ impl ExecEngine {
                 last_commit_ts_us: LocalTs::from_micros(0),
                 is_prior_run_cancel_sent: false,
                 flatten_refusal: None,
-                realised_carried_quote: 0,
+                realised_carried_quote: Notional::ZERO,
             })
             .collect();
         Self {

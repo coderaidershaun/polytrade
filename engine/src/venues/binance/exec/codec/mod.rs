@@ -10,7 +10,7 @@ mod stream;
 mod wire;
 
 use crate::msg::exec::VenueOrderStatus;
-use crate::msg::ids::InstrumentId;
+use crate::msg::ids::{InstrumentId, Notional};
 use crate::msg::time::LocalTs;
 use crate::runtime::registry::{AssetDictionary, Registry};
 use crate::venues::edge::decode::{DecimalFault, JsonFrame, mantissa_field, unknown_enum};
@@ -131,12 +131,12 @@ fn venue_status(field: &'static str, status: &str) -> Result<VenueOrderStatus, W
 }
 
 /// Binance negates an amount it cannot supply, so a leading `-` is a refusal, not a number.
-fn money_field(field: &'static str, text: &str) -> Result<i64, WireError> {
+fn money_field(field: &'static str, text: &str) -> Result<Notional, WireError> {
     if text.starts_with('-') {
         return Err(WireError::UnavailableAmount {
             field,
             value: text.into(),
         });
     }
-    Ok(mantissa_field(field, text)?)
+    Ok(Notional::from_mantissa(mantissa_field(field, text)?))
 }

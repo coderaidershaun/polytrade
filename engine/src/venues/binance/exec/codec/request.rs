@@ -36,8 +36,8 @@ pub fn encode_request(
                 RequestParams::new()
                     .set("symbol", symbol(instrument, context)?)
                     .set("side", side.wire_name())
-                    .set("price", decimal(price.0))
-                    .set("quantity", decimal(qty.0))
+                    .set("price", decimal(price.mantissa()))
+                    .set("quantity", decimal(qty.mantissa()))
                     .set("newClientOrderId", client_order_id(client_id, context)),
                 style,
             ),
@@ -65,7 +65,7 @@ pub fn encode_request(
                 // to the venue by a name no slot holds — every later cancel by client id would
                 // answer -2011, which reads identically to "it filled".
                 .set("newClientOrderId", client_order_id(client_id, context))
-                .set("newQty", decimal(qty.0)),
+                .set("newQty", decimal(qty.mantissa())),
         },
         ExecRequest::OrderStatus {
             instrument,

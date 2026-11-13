@@ -90,7 +90,7 @@ impl BookModel {
 fn book_side(levels: &[Level]) -> Vec<(i64, i64)> {
     levels
         .iter()
-        .map(|level| (level.price.0, level.qty.0))
+        .map(|level| (level.price.mantissa(), level.qty.mantissa()))
         .collect()
 }
 
@@ -116,7 +116,7 @@ proptest! {
 
         for chunk in &snapshot_chunks {
             for &level in chunk.active_levels() {
-                model.apply(chunk.side, capacity, level.price.0, level.qty.0);
+                model.apply(chunk.side, capacity, level.price.mantissa(), level.qty.mantissa());
             }
             let outcome = book.apply_snapshot_chunk(chunk);
             prop_assert_eq!(outcome, SnapshotOutcome::Clean);
@@ -132,7 +132,7 @@ proptest! {
 
         for chunk in &delta_chunks {
             for &level in chunk.active_levels() {
-                model.apply(chunk.side, capacity, level.price.0, level.qty.0);
+                model.apply(chunk.side, capacity, level.price.mantissa(), level.qty.mantissa());
             }
             book.apply_delta_chunk(chunk);
         }

@@ -158,8 +158,8 @@ fn records_features_then_trade() -> Vec<PersistRecord> {
     let mut records: Vec<PersistRecord> = (0..3).map(feature_record).collect();
     records.push(PersistRecord::Trade(TradeRow {
         instrument: InstrumentId(0),
-        price: Price(100 * ONE),
-        qty: Qty(ONE),
+        price: Price::from_mantissa(100 * ONE),
+        qty: Qty::from_mantissa(ONE),
         side: Side::Buy,
         exchange_ts_us: VenueTs::from_micros(BASE_TS_US),
         received_ts_us: LocalTs::from_micros(BASE_TS_US),

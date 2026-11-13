@@ -181,15 +181,17 @@ impl DomView {
 
 #[inline]
 pub fn tick_index(price: Price, tick: Price) -> Option<i64> {
-    if tick.0 <= 0 || price.0.rem_euclid(tick.0) != 0 {
+    if tick.mantissa() <= 0 || price.mantissa().rem_euclid(tick.mantissa()) != 0 {
         return None;
     }
-    Some(price.0.div_euclid(tick.0))
+    Some(price.mantissa().div_euclid(tick.mantissa()))
 }
 
 #[inline]
 pub fn price_for_row(tick: Price, tick_index: i64) -> Option<Price> {
-    tick.0.checked_mul(tick_index).map(Price)
+    tick.mantissa()
+        .checked_mul(tick_index)
+        .map(Price::from_mantissa)
 }
 
 #[inline]
@@ -434,7 +436,9 @@ fn place_public(rows: &mut [DomRow], levels: &[Level], tick: Price, ladder: &Buc
 }
 
 fn add_qty(slot: &mut Option<Qty>, qty: Qty) {
-    *slot = Some(slot.map_or(qty, |seen| Qty(seen.0.saturating_add(qty.0))));
+    *slot = Some(slot.map_or(qty, |seen| {
+        Qty::from_mantissa(seen.mantissa().saturating_add(qty.mantissa()))
+    }));
 }
 
 fn place_quote(

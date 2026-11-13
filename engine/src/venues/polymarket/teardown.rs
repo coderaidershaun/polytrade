@@ -38,7 +38,7 @@ pub struct CollapseDetector {
 
 impl CollapseDetector {
     pub fn observe(&mut self, update: LevelUpdate) -> CollapseSignal {
-        let is_removal = update.qty == Qty(0);
+        let is_removal = update.qty == Qty::from_mantissa(0);
         if is_removal {
             if self.burst_ts != Some(update.exchange_ts_us) {
                 self.burst_ts = Some(update.exchange_ts_us);

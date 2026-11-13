@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use engine::hot::strategy::{EngineView, StrategyConfig};
-use engine::msg::ids::FIXED_SCALE;
+use engine::msg::ids::{FIXED_SCALE, Notional};
 use engine::msg::time::DurationUs;
 use engine::runtime::config::{
     BinanceMarket, ConfigError, ExecutionMode, NoParams, PolySeries, TableKind, VenueMarket,
@@ -167,7 +167,7 @@ fn a_source_fans_out_to_its_rows_connections_and_queues() {
             );
             assert_eq!(
                 row.max_exposure_quote,
-                500 * FIXED_SCALE,
+                Notional::from_mantissa(500 * FIXED_SCALE),
                 "{case}: every row the block expands to carries its 500 quote units, exactly"
             );
         }

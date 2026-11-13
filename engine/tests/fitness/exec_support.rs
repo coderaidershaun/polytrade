@@ -10,7 +10,7 @@ use engine::hot::exec::{
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{CancelReason, ExecCommand, ExecEvent, ExecLaneItem, OrderStyle};
-use engine::msg::ids::{AssetId, InstrumentId, Qty, Side};
+use engine::msg::ids::{AssetId, InstrumentId, Notional, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::{DurationUs, LocalTs, Stamper};
 use engine::msg::ui::UiEvent;
@@ -44,7 +44,7 @@ const QUOTE_ASSET: AssetId = AssetId(1);
 pub(crate) const CEILING: i64 = 100 * ONE;
 
 /// The declared size, and the number the "real notional, not a fixed step" pin turns on.
-pub(crate) const QUOTE_QTY: Qty = Qty(ONE / 10);
+pub(crate) const QUOTE_QTY: Qty = Qty::from_mantissa(ONE / 10);
 
 pub(crate) const BID: i64 = 99 * ONE;
 pub(crate) const ASK: i64 = 101 * ONE;
@@ -78,7 +78,7 @@ impl Strategy for TwoSidedQuoter {
 
 pub(crate) fn row_with_ceiling(ceiling_quote: i64) -> InstrumentRow {
     InstrumentRow {
-        max_exposure_quote: ceiling_quote,
+        max_exposure_quote: Notional::from_mantissa(ceiling_quote),
         ..instrument_row(0, TrackerSpec::default(), 64)
     }
 }
@@ -91,13 +91,13 @@ pub(crate) fn exec_settings() -> ExecSettings {
             requote_threshold_ticks: 1,
             max_quote_distance_centi_bps: 100_000_000,
             max_book_age: DurationUs::from_secs(3_600),
-            max_order_notional_quote: 1_000_000 * ONE,
+            max_order_notional_quote: Notional::from_mantissa(1_000_000 * ONE),
         },
         max_orders_per_side: 1,
-        min_base_balance: 0,
-        min_quote_balance: 0,
+        min_base_balance: Qty::from_mantissa(0),
+        min_quote_balance: Notional::from_mantissa(0),
         max_consecutive_rejects: 5,
-        max_session_loss_quote: 1_000_000 * ONE,
+        max_session_loss_quote: Notional::from_mantissa(1_000_000 * ONE),
         inflight_timeout: DurationUs::from_secs(3_600),
         // No silence sweep: a reconciliation request in the command stream would be noise to filter
         // rather than a behaviour these tests are about.

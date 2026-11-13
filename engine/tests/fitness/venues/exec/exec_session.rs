@@ -9,7 +9,7 @@ use engine::msg::exec::{
     CancelReason, ExecCommand, ExecEvent, ExecKind, OrderStyle, Provenance, RejectClass,
     VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side};
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::runtime::shutdown::FatalSignal;
 use engine::venues::exec::{
@@ -26,7 +26,7 @@ const VENUE: &str = "test-venue";
 const INSTRUMENT: InstrumentId = InstrumentId(0);
 const OTHER_INSTRUMENT: InstrumentId = InstrumentId(1);
 const NOW: LocalTs = LocalTs::from_micros(1_785_000_000_000_000);
-const PRICE: Price = Price(11_800_000_000_000);
+const PRICE: Price = Price::from_mantissa(11_800_000_000_000);
 
 fn new_session() -> (Session, FatalSignal) {
     let fatal = FatalSignal::new();
@@ -91,7 +91,7 @@ fn place(client_id: u64, side: Side) -> ExecCommand {
         client_id: ClientOrderId(client_id),
         side,
         price: PRICE,
-        qty: Qty(8_000),
+        qty: Qty::from_mantissa(8_000),
         style: OrderStyle::PostOnly,
     }
 }
@@ -102,7 +102,7 @@ fn place_request(client_id: u64, side: Side) -> ExecRequest {
         client_id: ClientOrderId(client_id),
         side,
         price: PRICE,
-        qty: Qty(8_000),
+        qty: Qty::from_mantissa(8_000),
         style: OrderStyle::PostOnly,
     }
 }
@@ -120,7 +120,7 @@ fn prior_run_order(client_id: u64) -> MirroredOrder {
         client_id: ClientOrderId(client_id),
         side: Side::Buy,
         price: PRICE,
-        qty: Qty(8_000),
+        qty: Qty::from_mantissa(8_000),
         provenance: Provenance::PriorRun,
         has_sent_cancel: false,
         is_ambiguous: false,
@@ -141,11 +141,11 @@ fn resting_report(client_id: u64) -> ExecEvent {
         side: Side::Buy,
         liquidity: None,
         price: PRICE,
-        qty: Qty(8_000),
-        last_price: Price(0),
-        last_qty: Qty(0),
-        cumulative_qty: Qty(0),
-        cumulative_quote: 0,
+        qty: Qty::from_mantissa(8_000),
+        last_price: Price::from_mantissa(0),
+        last_qty: Qty::from_mantissa(0),
+        cumulative_qty: Qty::from_mantissa(0),
+        cumulative_quote: Notional::from_mantissa(0),
         commission: 0,
         commission_asset: AssetId::UNKNOWN,
         reject_code: 0,
@@ -332,7 +332,7 @@ fn a_refused_cancel_rearms_and_a_refused_amend_frees_the_slot() {
     let refused_amend = ExecRequest::AmendQty {
         instrument: INSTRUMENT,
         client_id: ClientOrderId(1),
-        qty: Qty(4_000),
+        qty: Qty::from_mantissa(4_000),
     };
     session.refuse(refused_amend, PlaceNotSentReason::NoTransport, NOW);
     assert_eq!(
@@ -616,7 +616,7 @@ fn readiness_arms_once_after_the_pass_finishes_with_one_snapshot_end_per_instrum
     assert!(blocked.events.is_empty());
     blocked
         .core
-        .on_order_gone(ClientOrderId(9), Qty(0), &mut |_| {});
+        .on_order_gone(ClientOrderId(9), Qty::from_mantissa(0), &mut |_| {});
     assert!(
         blocked.arm_readiness(NOW),
         "the finished pass did not arm once the prior run's order was gone"

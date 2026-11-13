@@ -1,4 +1,5 @@
-//! Compact typed identity + exact fixed-point numerics: dense indices, prices/quantities as i64 1e-8 mantissas (never float).
+//! Typed identity and exact money: dense indices for lookups, and prices, quantities and quote
+//! money as i64 mantissas at one fixed scale, never floats.
 
 use crate::msg::labelled_enum::labelled_enum;
 
@@ -95,15 +96,13 @@ impl Side {
         }
     }
 
-    /// A buy commits quote notional and a sell commits base quantity.
-    ///
     /// # Panics
     /// If a buy's notional does not fit an i64 mantissa, exactly as [`Price::notional`] does.
     #[inline]
-    pub fn spend(self, price: Price, qty: Qty) -> i64 {
+    pub fn spend(self, price: Price, qty: Qty) -> Spend {
         match self {
-            Side::Buy => price.notional(qty),
-            Side::Sell => qty.0,
+            Side::Buy => Spend::Quote(price.notional(qty)),
+            Side::Sell => Spend::Base(qty),
         }
     }
 
@@ -131,16 +130,52 @@ pub(crate) fn fixed_mantissa(units: f64) -> Option<i64> {
     (scaled >= i64::MIN as f64 && scaled < i64::MAX as f64).then_some(scaled as i64)
 }
 
-/// Adapter parse fatal on magnitude > i64::MAX / 1e8 (≈9.2e10); never truncates.
+/// A mantissa at [`FIXED_SCALE`]. An adapter refuses a magnitude above `i64::MAX / 1e8` (about
+/// 9.2e10) and never truncates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Price(pub i64);
+pub struct Price(i64);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Qty(pub i64);
+/// A base quantity, as a mantissa at [`FIXED_SCALE`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Qty(i64);
+
+/// Quote money, as a mantissa at [`FIXED_SCALE`]. No conversion leads to it from a [`Qty`] or a
+/// [`Price`], so a base quantity can never be booked as cash. [`Price::notional`] makes one from a
+/// trade.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Notional(i64);
+
+/// What an order reserves: quote money for a buy, base quantity for a sell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Spend {
+    Quote(Notional),
+    Base(Qty),
+}
+
+impl Spend {
+    /// The amount in the unit of the asset that it reserves.
+    #[inline]
+    pub fn mantissa(self) -> i64 {
+        match self {
+            Spend::Quote(notional) => notional.mantissa(),
+            Spend::Base(qty) => qty.mantissa(),
+        }
+    }
+}
 
 impl Price {
+    #[inline]
+    pub const fn from_mantissa(mantissa: i64) -> Self {
+        Self(mantissa)
+    }
+
+    #[inline]
+    pub const fn mantissa(self) -> i64 {
+        self.0
+    }
+
     pub fn parse_decimal(s: &str) -> Result<Self, DecimalError> {
-        parse_fixed_mantissa(s).map(Price)
+        parse_fixed_mantissa(s).map(Price::from_mantissa)
     }
 
     /// Display and statistics only; never book key or accumulator.
@@ -149,24 +184,105 @@ impl Price {
         self.0 as f64 / FIXED_SCALE as f64
     }
 
+    /// The exact product, truncated toward zero.
+    ///
     /// # Panics
-    /// Notional > i64@1e-8 (≳9.2e10); wrapping cast -> silent research corruption.
+    /// When the notional does not fit an i64 mantissa (about 9.2e10), because a wrapped one would
+    /// book the wrong cash with no error.
     #[inline]
-    pub fn notional(self, qty: Qty) -> i64 {
+    pub fn notional(self, qty: Qty) -> Notional {
         let product = self.0 as i128 * qty.0 as i128;
         let mantissa = product / FIXED_SCALE as i128;
-        i64::try_from(mantissa).unwrap_or_else(|_| {
+        let mantissa = i64::try_from(mantissa).unwrap_or_else(|_| {
             panic!(
                 "notional overflows i64 mantissa: price {} qty {}",
                 self.0, qty.0
             )
-        })
+        });
+        Notional(mantissa)
+    }
+}
+
+impl Notional {
+    pub const ZERO: Notional = Notional(0);
+
+    pub fn parse_decimal(s: &str) -> Result<Self, DecimalError> {
+        parse_fixed_mantissa(s).map(Notional)
+    }
+
+    #[inline]
+    pub const fn from_mantissa(mantissa: i64) -> Self {
+        Self(mantissa)
+    }
+
+    #[inline]
+    pub const fn mantissa(self) -> i64 {
+        self.0
+    }
+
+    /// Display and statistics only, never an accumulator.
+    #[inline]
+    pub fn to_f64(self) -> f64 {
+        self.0 as f64 / FIXED_SCALE as f64
+    }
+
+    #[inline]
+    pub fn abs(self) -> Self {
+        Self(self.0.abs())
+    }
+}
+
+impl std::ops::Add for Notional {
+    type Output = Notional;
+    #[inline]
+    fn add(self, other: Notional) -> Notional {
+        Notional(self.0 + other.0)
+    }
+}
+
+impl std::ops::Sub for Notional {
+    type Output = Notional;
+    #[inline]
+    fn sub(self, other: Notional) -> Notional {
+        Notional(self.0 - other.0)
+    }
+}
+
+impl std::ops::Neg for Notional {
+    type Output = Notional;
+    #[inline]
+    fn neg(self) -> Notional {
+        Notional(-self.0)
+    }
+}
+
+impl std::ops::AddAssign for Notional {
+    #[inline]
+    fn add_assign(&mut self, other: Notional) {
+        self.0 += other.0;
+    }
+}
+
+impl std::ops::SubAssign for Notional {
+    #[inline]
+    fn sub_assign(&mut self, other: Notional) {
+        self.0 -= other.0;
     }
 }
 
 impl Qty {
+    #[inline]
+    pub const fn from_mantissa(mantissa: i64) -> Self {
+        Self(mantissa)
+    }
+
+    #[inline]
+    pub const fn mantissa(self) -> i64 {
+        self.0
+    }
+
     pub fn parse_decimal(s: &str) -> Result<Self, DecimalError> {
-        parse_fixed_mantissa(s).map(Qty)
+        parse_fixed_mantissa(s).map(Qty::from_mantissa)
     }
 
     /// Statistics only; never money math.

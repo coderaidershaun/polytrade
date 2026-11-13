@@ -261,7 +261,7 @@ impl Spoken {
             has_said_new: false,
             has_said_terminal_ack: false,
             has_said_terminal_report: false,
-            cumulative_qty: Qty(0),
+            cumulative_qty: Qty::from_mantissa(0),
             new_barrier_ts_us: None,
         }
     }
@@ -274,11 +274,11 @@ impl Spoken {
         );
         if let Some(cumulative) = voice.cumulative_qty() {
             assert!(
-                cumulative.0 >= self.cumulative_qty.0,
+                cumulative.mantissa() >= self.cumulative_qty.mantissa(),
                 "cumulative quantity on {:?} went backwards, {} then {}",
                 self.key,
-                self.cumulative_qty.0,
-                cumulative.0
+                self.cumulative_qty.mantissa(),
+                cumulative.mantissa()
             );
             self.cumulative_qty = cumulative;
         }

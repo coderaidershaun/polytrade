@@ -128,7 +128,7 @@ impl Replay {
         self.price_changes += 1;
         let mut last_best: HashMap<Box<str>, (Option<Price>, Option<Price>)> = HashMap::new();
         for delta in changes {
-            if delta.level.qty.0 == 0 {
+            if delta.level.qty.mantissa() == 0 {
                 self.zero_removals += 1;
             }
             self.token(&delta.asset_id).on_delta(delta, exchange_ts_us);
@@ -270,7 +270,7 @@ mod collapse {
         LevelUpdate {
             side,
             price,
-            qty: Qty(1),
+            qty: Qty::from_mantissa(1),
             exchange_ts_us,
         }
     }
@@ -288,7 +288,7 @@ mod collapse {
                     continue;
                 };
                 for delta in &change.changes {
-                    if &*delta.asset_id == token && delta.level.qty == Qty(0) {
+                    if &*delta.asset_id == token && delta.level.qty == Qty::from_mantissa(0) {
                         by_ts
                             .entry(change.exchange_ts_us.micros())
                             .or_default()
@@ -323,7 +323,7 @@ mod collapse {
             let removal = LevelUpdate {
                 side,
                 price,
-                qty: Qty(0),
+                qty: Qty::from_mantissa(0),
                 exchange_ts_us: burst_ts,
             };
             detector.observe(removal) == CollapseSignal::Collapsed

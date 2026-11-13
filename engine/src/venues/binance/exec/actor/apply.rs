@@ -234,9 +234,9 @@ impl Actor {
         Some(format!(
             "{:?} {} {} @ {} (client {:016x})",
             order.side,
-            order.qty.0,
+            order.qty.mantissa(),
             self.symbols.symbol(order.instrument).unwrap_or("?"),
-            order.price.0,
+            order.price.mantissa(),
             client_id.0
         ))
     }

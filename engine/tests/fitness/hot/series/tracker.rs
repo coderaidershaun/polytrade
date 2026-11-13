@@ -179,8 +179,8 @@ fn replay_is_deterministic_with_hand_values() {
         .expect("candles configured");
     assert_eq!(candles.open, None, "open slot cleared on close");
     let last = candles.closed.last().expect("one closed candle");
-    assert_eq!(last.close, Price(100 * ONE + ONE / 2));
-    assert_eq!(last.high, Price(103 * ONE));
+    assert_eq!(last.close, Price::from_mantissa(100 * ONE + ONE / 2));
+    assert_eq!(last.high, Price::from_mantissa(103 * ONE));
 
     let best_bid_sample = first
         .spin_sampled(SpinField::BestBid)

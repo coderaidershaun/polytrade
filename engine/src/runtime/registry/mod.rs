@@ -8,7 +8,7 @@ mod grouping;
 mod rows;
 mod validate;
 
-use crate::msg::ids::{AssetId, InstrumentId, MAX_INPUT_QUEUES, Price, Qty, QueueId};
+use crate::msg::ids::{AssetId, InstrumentId, MAX_INPUT_QUEUES, Notional, Price, Qty, QueueId};
 use crate::runtime::config::{
     BinanceEnv, Config, ConfigError, KlineInterval, Subscriptions, TrackerSpec, VenueMarket,
 };
@@ -32,8 +32,8 @@ pub struct InstrumentRow {
     pub tick_size: Option<Price>,
     pub lot_size: Option<Qty>,
     pub min_qty: Option<Qty>,
-    /// The minimum order value, as a 1e-8 quote mantissa.
-    pub min_notional: Option<i64>,
+    /// The minimum order value.
+    pub min_notional: Option<Notional>,
     pub max_num_orders: Option<u32>,
     /// `None` on futures, where no amend-count filter is published.
     pub max_num_order_amends: Option<u32>,
@@ -45,9 +45,9 @@ pub struct InstrumentRow {
     pub subscriptions: Subscriptions,
     pub kline_intervals: Vec<KlineInterval>,
     pub book_capacity: usize,
-    /// The exposure ceiling, as a 1e-8 mantissa. A configured risk budget, validated
-    /// positive and finite at build time.
-    pub max_exposure_quote: i64,
+    /// The exposure ceiling: a configured risk budget, validated positive and finite at build
+    /// time.
+    pub max_exposure_quote: Notional,
     pub tracker: TrackerSpec,
 }
 
@@ -55,7 +55,7 @@ pub struct InstrumentRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BinanceLimits {
     pub min_qty: Qty,
-    pub min_notional: i64,
+    pub min_notional: Notional,
     pub max_num_orders: u32,
     pub max_num_order_amends: Option<u32>,
 }

@@ -210,7 +210,7 @@ impl MarketFold {
     pub fn public_at(&self, side: Side, price: Price) -> QueueAhead {
         match self.book.level_state(side, price) {
             LevelState::Present(qty) => QueueAhead::Known(qty),
-            LevelState::Absent => QueueAhead::Known(Qty(0)),
+            LevelState::Absent => QueueAhead::Known(Qty::from_mantissa(0)),
             LevelState::BeyondDepth => QueueAhead::Unobservable,
         }
     }
@@ -285,7 +285,7 @@ impl MarketFold {
             for (price, queue) in ladder.iter_mut() {
                 match book.level_state(side, price) {
                     LevelState::Present(qty) => queue.reconcile_known_public_to(qty),
-                    LevelState::Absent => queue.reconcile_known_public_to(Qty(0)),
+                    LevelState::Absent => queue.reconcile_known_public_to(Qty::from_mantissa(0)),
                     LevelState::BeyondDepth => queue.mark_public_unobservable(),
                 }
             }
@@ -332,14 +332,15 @@ impl MarketFold {
     ) {
         let own_side = trade.side.opposite();
         let mut budget = trade.qty;
-        let mut filled_privately = Qty(0);
+        let mut filled_privately = Qty::from_mantissa(0);
         let mut counted = |index: SimOrderIndex, offered: Qty| {
             let fill = take(index, offered);
-            filled_privately = Qty(filled_privately.0 + fill.taken.0);
+            filled_privately =
+                Qty::from_mantissa(filled_privately.mantissa() + fill.taken.mantissa());
             fill
         };
         for (price, queue) in self.ladder_mut(own_side).iter_mut() {
-            if budget.0 == 0 {
+            if budget.mantissa() == 0 {
                 break;
             }
             match eligibility(own_side, price, trade.price) {
@@ -352,10 +353,10 @@ impl MarketFold {
             }
         }
         assert!(
-            filled_privately.0 <= trade.qty.0,
+            filled_privately.mantissa() <= trade.qty.mantissa(),
             "one print of {} invented {} of private fill",
-            trade.qty.0,
-            filled_privately.0
+            trade.qty.mantissa(),
+            filled_privately.mantissa()
         );
         self.ladder_mut(own_side).drop_vacant();
     }
@@ -369,7 +370,7 @@ enum Eligibility {
 }
 
 fn eligibility(own_side: Side, own_price: Price, print: Price) -> Eligibility {
-    match (own_price.0.cmp(&print.0), own_side) {
+    match (own_price.mantissa().cmp(&print.mantissa()), own_side) {
         (Ordering::Equal, _) => Eligibility::Equal,
         (Ordering::Greater, Side::Buy) | (Ordering::Less, Side::Sell) => Eligibility::Through,
         (Ordering::Greater, Side::Sell) | (Ordering::Less, Side::Buy) => Eligibility::Away,

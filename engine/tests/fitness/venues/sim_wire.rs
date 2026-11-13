@@ -4,7 +4,7 @@
 //! between the matching model and the wallet.
 
 use engine::msg::ids::{
-    AssetId, ClientOrderId, FIXED_SCALE, Price, Qty, Side, TradeId, VenueOrderId,
+    AssetId, ClientOrderId, FIXED_SCALE, Notional, Price, Qty, Side, TradeId, VenueOrderId,
 };
 use engine::msg::time::LocalTs;
 use engine::runtime::config::RunIdentity;
@@ -44,7 +44,7 @@ fn a_settlement_agreeing_with_the_order_mints_a_partial_fill_report() {
 fn a_settlement_disagreeing_with_the_order_stops_the_trade_report() {
     let order = half_filled_order();
     let mut settlement = settlement_of(&order);
-    settlement.cumulative_qty = Qty(settlement.cumulative_qty.0 + 1);
+    settlement.cumulative_qty = Qty::from_mantissa(settlement.cumulative_qty.mantissa() + 1);
 
     wire().trade_report(
         &order,
@@ -112,14 +112,14 @@ fn a_rebate_is_paid_in_quote_and_a_charge_in_the_asset_received() {
             wire_fee: "-0.00023599",
         },
     ];
-    let price = Price(117_999 * FIXED_SCALE);
-    let qty = Qty(10_000);
+    let price = Price::from_mantissa(117_999 * FIXED_SCALE);
+    let qty = Qty::from_mantissa(10_000);
 
     for row in rows {
         let name = row.name;
         let (opening_base, opening_quote) = match row.side {
-            Side::Buy => (0, price.notional(qty)),
-            Side::Sell => (qty.0, 0),
+            Side::Buy => (Qty::from_mantissa(0), price.notional(qty)),
+            Side::Sell => (qty, Notional::ZERO),
         };
         let mut wallet = SimWallet::new(SimWalletSetup {
             base_asset: BASE,
@@ -141,7 +141,7 @@ fn a_rebate_is_paid_in_quote_and_a_charge_in_the_asset_received() {
         let settlement = row
             .slices
             .iter()
-            .map(|&slice| wallet.fill(&mut reservation, Qty(slice)))
+            .map(|&slice| wallet.fill(&mut reservation, Qty::from_mantissa(slice)))
             .last()
             .expect("every row fills at least once");
 
@@ -204,14 +204,14 @@ fn wire() -> VenueWire {
 }
 
 fn half_filled_order() -> SimOrder {
-    let price = Price(117_999 * FIXED_SCALE);
-    let filled = Qty(5_000);
+    let price = Price::from_mantissa(117_999 * FIXED_SCALE);
+    let filled = Qty::from_mantissa(5_000);
     SimOrder {
         client_id: ClientOrderId(41),
         venue_order_id: VenueOrderId(12_510_053_280),
         side: Side::Buy,
         price,
-        qty: Qty(10_000),
+        qty: Qty::from_mantissa(10_000),
         filled,
         filled_quote: price.notional(filled),
     }
@@ -223,9 +223,9 @@ fn settlement_of(order: &SimOrder) -> FillSettlement {
         last_quote: order.filled_quote,
         cumulative_qty: order.filled,
         cumulative_quote: order.filled_quote,
-        debit: order.filled_quote,
-        received_gross: order.filled.0,
-        received_net: order.filled.0,
+        debit: order.filled_quote.mantissa(),
+        received_gross: order.filled.mantissa(),
+        received_net: order.filled.mantissa(),
         fee: 0,
         fee_asset: AssetId::UNKNOWN,
     }

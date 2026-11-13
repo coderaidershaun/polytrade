@@ -125,7 +125,7 @@ fn report_restored(exposure: &ExposureState, registry: &Registry) {
         info!(
             "exposure restored: {} {}",
             registry.assets().name(asset.asset).unwrap_or("<unknown>"),
-            crate::msg::ids::Qty(asset.amount).to_f64()
+            crate::msg::ids::Qty::from_mantissa(asset.amount).to_f64()
         );
     }
 }

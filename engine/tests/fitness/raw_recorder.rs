@@ -125,8 +125,8 @@ impl Strategy for RecorderStrategy {
                 instrument,
                 kind: BookEventKind::Reset,
                 side: None,
-                price: Price(0),
-                qty: Qty(0),
+                price: Price::from_mantissa(0),
+                qty: Qty::from_mantissa(0),
                 update_id: 0,
                 received_ts_us: event_ts,
             });

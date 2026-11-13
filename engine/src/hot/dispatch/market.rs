@@ -105,7 +105,9 @@ impl HotEngine {
         let Some((bid, ask)) = book.best_bid().zip(book.best_ask()) else {
             return;
         };
-        let mid = Price(bid.price.0 + (ask.price.0 - bid.price.0) / 2);
+        let mid = Price::from_mantissa(
+            bid.price.mantissa() + (ask.price.mantissa() - bid.price.mantissa()) / 2,
+        );
         self.state.ledger.set_mark(instrument, mid);
     }
 

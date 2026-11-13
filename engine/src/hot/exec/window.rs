@@ -4,10 +4,10 @@
 //! a market that rotates periodically. Instruments without rotation (like Binance) are unaffected.
 //! Every deadline derives from message timestamps, so replays close and rotate at exact sequence points.
 
-use crate::hot::ledger::{PositionLedger, narrow};
+use crate::hot::ledger::{PositionLedger, narrow_quote, wide};
 use crate::hot::strategy::Actions;
 use crate::log::hot_warn;
-use crate::msg::ids::{InstrumentId, Qty, Side};
+use crate::msg::ids::{InstrumentId, Notional, Qty, Side};
 use crate::msg::time::LocalTs;
 
 use super::engine::ExecEngine;
@@ -25,12 +25,12 @@ impl ExecEngine {
             return;
         }
         let row = ledger.row(instrument);
-        self.instruments[index].realised_carried_quote = narrow(
-            i128::from(self.instruments[index].realised_carried_quote)
-                + i128::from(row.session_realised_quote()),
+        self.instruments[index].realised_carried_quote = narrow_quote(
+            wide(self.instruments[index].realised_carried_quote)
+                + wide(row.session_realised_quote()),
             "realised_carried_quote",
         );
-        if row.position_base().0 != 0 {
+        if row.position_base().mantissa() != 0 {
             stranded_position_warning(instrument, row.position_base());
         }
         self.pnl_at_baseline[index] = None;
@@ -38,7 +38,7 @@ impl ExecEngine {
 
     /// Realised result carried from windows this instrument has already rotated through.
     #[inline]
-    pub(super) fn realised_carried_quote(&self, instrument: InstrumentId) -> i64 {
+    pub(super) fn realised_carried_quote(&self, instrument: InstrumentId) -> Notional {
         self.instruments[usize::from(instrument.0)].realised_carried_quote
     }
 
@@ -118,6 +118,6 @@ fn stranded_position_warning(instrument: InstrumentId, position: Qty) {
         "instrument {} rotated to a new window still holding {} base — that position is stranded on \
          a market this engine can no longer trade",
         instrument.0,
-        position.0
+        position.mantissa()
     );
 }

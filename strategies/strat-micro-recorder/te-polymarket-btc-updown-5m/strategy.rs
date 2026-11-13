@@ -134,8 +134,12 @@ impl Strategy for PolyUpPublisher {
             return;
         };
         match event.side {
-            Side::Buy => slot.buy_qty.0 += event.qty.0,
-            Side::Sell => slot.sell_qty.0 += event.qty.0,
+            Side::Buy => {
+                slot.buy_qty = Qty::from_mantissa(slot.buy_qty.mantissa() + event.qty.mantissa());
+            }
+            Side::Sell => {
+                slot.sell_qty = Qty::from_mantissa(slot.sell_qty.mantissa() + event.qty.mantissa());
+            }
         }
     }
 
@@ -216,7 +220,7 @@ impl Maker {
             "quote_stop_lead_ms must leave time to get out before the window closes"
         );
         Self {
-            order_qty: Qty((params.order_shares * FIXED_SCALE as f64).round() as i64),
+            order_qty: Qty::from_mantissa((params.order_shares * FIXED_SCALE as f64).round() as i64),
             edge_ticks: i64::from(params.edge_ticks),
             quote_stop_lead: DurationUs::from_millis(i64::from(params.quote_stop_lead_ms)),
         }
@@ -235,7 +239,7 @@ impl Maker {
         // or 1 and a fill here is one nothing can be traded out of. Declaring nothing withdraws the
         // ladder, which is what frees the side for the flatten below.
         if window.is_past_quote_stop(now, self.quote_stop_lead) {
-            if position.0 != 0 {
+            if position.mantissa() != 0 {
                 ctx.flatten(instrument);
             }
             return;
@@ -248,7 +252,7 @@ impl Maker {
             return;
         };
         let grid = ctx.tick_grid(instrument);
-        let (side, quote) = match position.0.signum() {
+        let (side, quote) = match position.mantissa().signum() {
             0 => (Side::Buy, Some(self.bid(best_bid.price, grid))),
             // Long: offer it back and stop bidding. One position at a time is the whole strategy —
             // an engine that never adds to a fill cannot lose more than one order's worth per window.
@@ -265,7 +269,9 @@ impl Maker {
     /// one on a market already trading at a tick.
     fn bid(self, best_bid: Price, grid: TickGrid) -> DesiredQuote {
         DesiredQuote {
-            price: Price((best_bid.0 - self.edge_ticks * grid.tick).max(grid.tick)),
+            price: Price::from_mantissa(
+                (best_bid.mantissa() - self.edge_ticks * grid.tick).max(grid.tick),
+            ),
             qty: self.order_qty,
             style: OrderStyle::PostOnly,
         }
@@ -275,13 +281,16 @@ impl Maker {
     /// order size cannot be sold by any order, so asking would only produce a refusal per spin; it
     /// rides to the flatten, which says so once and loudly.
     fn ask(self, best_ask: Price, position: Qty, grid: TickGrid) -> Option<DesiredQuote> {
-        let qty = Qty(position.0 - position.0.rem_euclid(grid.step));
+        let qty =
+            Qty::from_mantissa(position.mantissa() - position.mantissa().rem_euclid(grid.step));
         if qty < grid.min_qty {
             return None;
         }
-        let ceiling = grid.max_price.map_or(i64::MAX, |max| max.0);
+        let ceiling = grid.max_price.map_or(i64::MAX, |max| max.mantissa());
         Some(DesiredQuote {
-            price: Price((best_ask.0 + self.edge_ticks * grid.tick).min(ceiling)),
+            price: Price::from_mantissa(
+                (best_ask.mantissa() + self.edge_ticks * grid.tick).min(ceiling),
+            ),
             qty,
             style: OrderStyle::PostOnly,
         })
@@ -293,8 +302,8 @@ impl UpSlot {
         Self {
             instrument,
             intensity: PacedIntensity::new(refit_interval),
-            buy_qty: Qty(0),
-            sell_qty: Qty(0),
+            buy_qty: Qty::from_mantissa(0),
+            sell_qty: Qty::from_mantissa(0),
         }
     }
 

@@ -71,8 +71,8 @@ impl Actor {
                     "binance execution sees a foreign order resting on {}: {:?} {} @ {} — it will never be cancelled by this engine",
                     self.symbols.symbol(mirrored.instrument).unwrap_or("?"),
                     mirrored.side,
-                    mirrored.qty.0,
-                    mirrored.price.0
+                    mirrored.qty.mantissa(),
+                    mirrored.price.mantissa()
                 ),
                 provenance => {
                     seen_owned.push(mirrored.client_id);

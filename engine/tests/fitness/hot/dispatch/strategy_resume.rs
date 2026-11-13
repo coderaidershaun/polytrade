@@ -302,7 +302,7 @@ fn recorder_engine(instruments: &[InstrumentRow]) -> LinkedEngine {
 /// reach histogram for the (A, k) fit.
 fn recorded_row() -> InstrumentRow {
     let mut row = instrument_row(0, tracker_spec_all(100), 128);
-    row.tick_size = Some(Price(TICK));
+    row.tick_size = Some(Price::from_mantissa(TICK));
     row.tracker.intensity = Some(IntensitySpec {
         max_depth_ticks: 16,
         half_life_secs: 600.0,

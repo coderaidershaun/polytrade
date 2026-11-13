@@ -188,7 +188,10 @@ fn mid_and_sided_trade_counts_sample_per_tick() {
         );
     }
 
-    let expected_mid = micro::mid(Price(100 * ONE), Price(101 * ONE));
+    let expected_mid = micro::mid(
+        Price::from_mantissa(100 * ONE),
+        Price::from_mantissa(101 * ONE),
+    );
     assert_eq!(
         sided_state(&mut engine, &mut consumer, spin(1, 10)),
         [Some(expected_mid), Some(1.0), Some(3.0), Some(1.0)],

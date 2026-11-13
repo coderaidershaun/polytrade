@@ -20,7 +20,7 @@ use core::mem::discriminant;
 use crate::hot::digest::digest_by_hash;
 use crate::log::{LogValue, Spec};
 use crate::msg::exec::OrderStyle;
-use crate::msg::ids::{Price, Qty, Side};
+use crate::msg::ids::{Notional, Price, Qty, Side, Spend};
 use crate::msg::time::{DurationUs, LocalTs};
 
 use super::desired::DesiredQuote;
@@ -33,7 +33,7 @@ pub struct TickGrid {
     pub tick: i64,
     pub step: i64,
     pub min_qty: Qty,
-    pub min_notional: i64,
+    pub min_notional: Notional,
     pub max_amends: u8,
     /// Venue price ceiling where one is published. Only an aggressive price can reach it, so the
     /// passive reconciler never consults it and the flatten planner always does.
@@ -65,7 +65,7 @@ pub struct ExecLimits {
     pub requote_threshold_ticks: u32,
     pub max_quote_distance_centi_bps: i64,
     pub max_book_age: DurationUs,
-    pub max_order_notional_quote: i64,
+    pub max_order_notional_quote: Notional,
 }
 
 impl ExecLimits {
@@ -74,7 +74,7 @@ impl ExecLimits {
             requote_threshold_ticks: 0,
             max_quote_distance_centi_bps: 0,
             max_book_age: DurationUs::ZERO,
-            max_order_notional_quote: 0,
+            max_order_notional_quote: Notional::ZERO,
         }
     }
 }
@@ -87,8 +87,8 @@ pub struct FundsView {
 
 impl FundsView {
     #[inline]
-    fn can_spend(&self, amount: i64) -> bool {
-        self.spendable >= self.floor + amount
+    fn can_spend(&self, amount: Spend) -> bool {
+        self.spendable >= self.floor + amount.mantissa()
     }
 }
 
@@ -293,7 +293,8 @@ pub fn reconcile_side(input: ReconcileInput) -> ReconcileOutcome {
         return ReconcileOutcome::Place(intent);
     };
 
-    let delta_ticks = price.0.abs_diff(resting.price.0) / grid.tick.unsigned_abs();
+    let delta_ticks =
+        price.mantissa().abs_diff(resting.price.mantissa()) / grid.tick.unsigned_abs();
     if delta_ticks > u64::from(limits.requote_threshold_ticks) {
         return ReconcileOutcome::Cancel;
     }
@@ -331,6 +332,6 @@ fn would_cross(side: Side, price: Price, top: &BookTop) -> bool {
 
 #[inline]
 fn is_outside_band(price: Price, mid: Price, max_centi_bps: i64) -> bool {
-    let distance = i128::from(price.0.abs_diff(mid.0));
-    distance * 1_000_000 > i128::from(mid.0) * i128::from(max_centi_bps)
+    let distance = i128::from(price.mantissa().abs_diff(mid.mantissa()));
+    distance * 1_000_000 > i128::from(mid.mantissa()) * i128::from(max_centi_bps)
 }

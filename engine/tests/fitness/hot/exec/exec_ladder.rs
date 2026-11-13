@@ -14,7 +14,7 @@ use engine::msg::exec::{
     AccountChunk, AccountChunkKind, AssetBalance, ExecCommand, ExecEvent, ExecKind, ExecLaneItem,
     OrderStyle, VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::{LocalTs, Stamper, VenueTs};
 use engine::venues::polymarket::exec::codec::{
@@ -46,8 +46,8 @@ impl Strategy for KeyedLadder {
                 Side::Buy,
                 level,
                 Some(DesiredQuote {
-                    price: Price(price),
-                    qty: Qty(ONE / 10),
+                    price: Price::from_mantissa(price),
+                    qty: Qty::from_mantissa(ONE / 10),
                     style: OrderStyle::PostOnly,
                 }),
             );
@@ -74,9 +74,9 @@ fn engine_with_settings(
     settings: ExecSettings,
 ) -> (HotEngine, Consumer<ExecLaneItem>) {
     let mut row = instrument_row(0, TrackerSpec::default(), 64);
-    row.tick_size = Some(Price(ONE));
-    row.lot_size = Some(Qty(1));
-    row.max_exposure_quote = 1_000_000 * ONE;
+    row.tick_size = Some(Price::from_mantissa(ONE));
+    row.lot_size = Some(Qty::from_mantissa(1));
+    row.max_exposure_quote = Notional::from_mantissa(1_000_000 * ONE);
     let instruments = [row];
     let (producer, commands) = RingBuffer::new(256);
     let engine = HotEngine::new(HotEngineSetup {
@@ -105,8 +105,8 @@ impl Strategy for ReservationQuoter {
             Side::Buy,
             QuoteLevel::ZERO,
             Some(DesiredQuote {
-                price: Price(BID),
-                qty: Qty(ONE / 10),
+                price: Price::from_mantissa(BID),
+                qty: Qty::from_mantissa(ONE / 10),
                 style: OrderStyle::PostOnly,
             }),
         );
@@ -213,10 +213,7 @@ fn ladder_serialises_and_requotes_only_after_terminal_confirmation() {
     let replacement = only(&mut commands);
     assert!(matches!(
         replacement,
-        ExecCommand::Place {
-            price: Price(MOVED_LEVEL_ZERO_PRICE),
-            ..
-        }
+        ExecCommand::Place { price, .. } if price == Price::from_mantissa(MOVED_LEVEL_ZERO_PRICE)
     ));
     assert_eq!(level_of(replacement), QuoteLevel::ZERO);
     acknowledge(&mut engine, replacement, ExecKind::AckPlaced, 51);
@@ -384,17 +381,17 @@ fn a_filled_reservation_waits_for_the_venues_own_settlement() {
     let one_order = observed.lock().expect("reservation probe")[1];
     assert!(one_order > 0, "a placed order reserves its funds");
 
-    let size = Qty(ONE / 10);
+    let size = Qty::from_mantissa(ONE / 10);
     engine.dispatch(&InboundMessage::new(
         ts(25),
         MessageBody::Exec(ExecEvent {
             kind: ExecKind::ReportTrade,
             status: Some(VenueOrderStatus::Filled),
             qty: size,
-            last_price: Price(BID),
+            last_price: Price::from_mantissa(BID),
             last_qty: size,
             cumulative_qty: size,
-            cumulative_quote: Price(BID).notional(size),
+            cumulative_quote: Price::from_mantissa(BID).notional(size),
             ..exec_event(INSTRUMENT, client_id, Side::Buy, BID, 25)
         }),
     ));

@@ -77,8 +77,8 @@ impl LedgerProbe {
                 phase,
                 instrument,
                 position_base: ctx.position_base(instrument),
-                exposure_quote: ctx.exposure_quote(instrument),
-                pnl_quote: ctx.pnl_quote(instrument),
+                exposure_quote: ctx.exposure_quote(instrument).mantissa(),
+                pnl_quote: ctx.pnl_quote(instrument).mantissa(),
                 has_mark: ctx.has_mark(instrument),
             });
     }
@@ -283,7 +283,7 @@ proptest! {
             engine.dispatch(&spin(seq, when + 1));
 
             let reading = spin_reading(&readings, 0, seq);
-            prop_assert_eq!(reading.position_base, Qty(shadow.position_base));
+            prop_assert_eq!(reading.position_base, Qty::from_mantissa(shadow.position_base));
             prop_assert_eq!(reading.exposure_quote, shadow.exposure_quote());
             prop_assert_eq!(reading.pnl_quote, shadow.pnl_quote());
             prop_assert!(reading.has_mark);
@@ -321,7 +321,7 @@ fn a_fill_folds_before_its_callback_and_a_redelivery_moves_the_money_once() {
             .expect("the fill earned an on_fill, and the probe read the ledger inside it");
         assert_eq!(
             in_fill.position_base,
-            Qty(ONE),
+            Qty::from_mantissa(ONE),
             "on_fill ran against a ledger that had not yet folded the fill it was reporting"
         );
         assert_eq!(
@@ -335,7 +335,7 @@ fn a_fill_folds_before_its_callback_and_a_redelivery_moves_the_money_once() {
             .expect("the probe read the ledger on the following spin");
         assert_eq!(
             on_spin.position_base,
-            Qty(ONE),
+            Qty::from_mantissa(ONE),
             "the fill moved the position a second time between its callback and the next spin"
         );
         assert_eq!(on_spin.exposure_quote, 101 * ONE, "one unit marked at 101");
@@ -345,7 +345,7 @@ fn a_fill_folds_before_its_callback_and_a_redelivery_moves_the_money_once() {
         engine.dispatch(&spin(1, 40));
 
         let after = spin_reading(&readings, 0, 1);
-        assert_eq!(after.position_base, Qty(2 * ONE));
+        assert_eq!(after.position_base, Qty::from_mantissa(2 * ONE));
         assert_eq!(after.exposure_quote, 202 * ONE);
         assert_eq!(
             after.pnl_quote, ONE,
@@ -378,7 +378,7 @@ fn a_fill_folds_before_its_callback_and_a_redelivery_moves_the_money_once() {
 
         assert_eq!(
             after.position_base,
-            Qty(3 * ONE),
+            Qty::from_mantissa(3 * ONE),
             "the redeliveries moved the position again"
         );
         // Paid 100 for one unit and 204 for two; three units marked at 101 are worth 303.
@@ -423,7 +423,7 @@ fn a_rotation_flattens_its_own_slot_and_a_resume_preserves_every_one() {
     let rotated = spin_reading(&readings, 0, 1);
     assert_eq!(
         rotated.position_base,
-        Qty(0),
+        Qty::from_mantissa(0),
         "the position was the old window's"
     );
     assert_eq!(rotated.pnl_quote, 0);
@@ -432,7 +432,7 @@ fn a_rotation_flattens_its_own_slot_and_a_resume_preserves_every_one() {
         "the old window's mid is not a price in the new one"
     );
     let untouched = spin_reading(&readings, 1, 1);
-    assert_eq!(untouched.position_base, Qty(ONE));
+    assert_eq!(untouched.position_base, Qty::from_mantissa(ONE));
     assert_eq!(untouched.pnl_quote, ONE);
 
     engine.dispatch(&run_control(idle_at(1), 50));
@@ -441,7 +441,7 @@ fn a_rotation_flattens_its_own_slot_and_a_resume_preserves_every_one() {
     let resumed = spin_reading(&readings, 1, 2);
     assert_eq!(
         resumed.position_base,
-        Qty(ONE),
+        Qty::from_mantissa(ONE),
         "the park sold nothing, so the position it opened is still held"
     );
     // exposure and PnL together pin the cash leg: -100 paid against a 101 mark is the ONE the row
@@ -455,7 +455,7 @@ fn a_rotation_flattens_its_own_slot_and_a_resume_preserves_every_one() {
     let still_rotated = spin_reading(&readings, 0, 2);
     assert_eq!(
         still_rotated.position_base,
-        Qty(0),
+        Qty::from_mantissa(0),
         "a resume does not undo the rotation's flatten either — it touches no row at all"
     );
     assert!(!still_rotated.has_mark);
@@ -518,8 +518,8 @@ struct MoneyProbe {
 impl Strategy for MoneyProbe {
     fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
         *self.latest.lock().expect("money mutex poisoned") = Some((
-            ctx.position_base(InstrumentId(0)).0,
-            ctx.pnl_quote(InstrumentId(0)),
+            ctx.position_base(InstrumentId(0)).mantissa(),
+            ctx.pnl_quote(InstrumentId(0)).mantissa(),
         ));
     }
 }

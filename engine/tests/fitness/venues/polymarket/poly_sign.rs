@@ -185,9 +185,9 @@ fn order_amounts_match_the_sdk_and_refuse_off_grid_prices() {
     // the venue's own worked example.
     let amounts = order_amounts(&AmountRequest {
         side: OrderSide::Buy,
-        price: Price(52_000_000),
-        size: Qty(1_000_000_000),
-        tick: Price(1_000_000),
+        price: Price::from_mantissa(52_000_000),
+        size: Qty::from_mantissa(1_000_000_000),
+        tick: Price::from_mantissa(1_000_000),
     })
     .expect("a well-formed order sizes");
 
@@ -196,9 +196,9 @@ fn order_amounts_match_the_sdk_and_refuse_off_grid_prices() {
 
     let sell = order_amounts(&AmountRequest {
         side: OrderSide::Sell,
-        price: Price(52_000_000),
-        size: Qty(1_000_000_000),
-        tick: Price(1_000_000),
+        price: Price::from_mantissa(52_000_000),
+        size: Qty::from_mantissa(1_000_000_000),
+        tick: Price::from_mantissa(1_000_000),
     })
     .expect("a well-formed order sizes");
     assert_eq!(
@@ -209,9 +209,9 @@ fn order_amounts_match_the_sdk_and_refuse_off_grid_prices() {
 
     let off_grid = order_amounts(&AmountRequest {
         side: OrderSide::Buy,
-        price: Price(52_500_000),
-        size: Qty(1_000_000_000),
-        tick: Price(1_000_000),
+        price: Price::from_mantissa(52_500_000),
+        size: Qty::from_mantissa(1_000_000_000),
+        tick: Price::from_mantissa(1_000_000),
     });
     assert!(
         off_grid.is_err(),
@@ -221,9 +221,9 @@ fn order_amounts_match_the_sdk_and_refuse_off_grid_prices() {
 
     let at_par = order_amounts(&AmountRequest {
         side: OrderSide::Buy,
-        price: Price(100_000_000),
-        size: Qty(1_000_000_000),
-        tick: Price(1_000_000),
+        price: Price::from_mantissa(100_000_000),
+        size: Qty::from_mantissa(1_000_000_000),
+        tick: Price::from_mantissa(1_000_000),
     });
     assert!(at_par.is_err(), "a share cannot cost the full dollar");
 }

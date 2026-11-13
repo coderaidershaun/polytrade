@@ -8,7 +8,9 @@ use std::ops::Range;
 
 use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::msg::exec::{ExecEvent, OrderStyle};
-use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side, VenueOrderId};
+use crate::msg::ids::{
+    ClientOrderId, InstrumentId, Notional, Price, Qty, Side, Spend, VenueOrderId,
+};
 use crate::msg::persist::OrderLifecycle;
 use crate::msg::time::{DurationUs, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
@@ -171,10 +173,11 @@ pub struct OrderSlot {
     pub price: Price,
     pub qty: Qty,
     pub filled_base: Qty,
-    pub filled_quote: i64,
+    pub filled_quote: Notional,
     pub amends_used: u8,
     pub generation: u16,
-    pub reserved_amount: i64,
+    /// `None` while nothing is held for the order, a zero amount included.
+    pub reserved_amount: Option<Spend>,
     pub reserved_at: AccountWatermark,
     pub placed_recon_seq: u64,
     pub seen_recon_seq: u64,
@@ -191,13 +194,13 @@ impl OrderSlot {
         level: QuoteLevel::ZERO,
         style: None,
         instrument: InstrumentId(0),
-        price: Price(0),
-        qty: Qty(0),
-        filled_base: Qty(0),
-        filled_quote: 0,
+        price: Price::from_mantissa(0),
+        qty: Qty::from_mantissa(0),
+        filled_base: Qty::from_mantissa(0),
+        filled_quote: Notional::ZERO,
         amends_used: 0,
         generation: 0,
-        reserved_amount: 0,
+        reserved_amount: None,
         reserved_at: AccountWatermark::ZERO,
         placed_recon_seq: 0,
         seen_recon_seq: 0,
@@ -217,7 +220,7 @@ impl OrderSlot {
 
     #[inline]
     pub fn fold_fill(&mut self, event: &ExecEvent) -> FillDelta {
-        let delta_base = event.cumulative_qty.0 - self.filled_base.0;
+        let delta_base = event.cumulative_qty.mantissa() - self.filled_base.mantissa();
         let delta_quote = event.cumulative_quote - self.filled_quote;
         if delta_base <= 0 {
             return FillDelta::NONE;
@@ -225,7 +228,7 @@ impl OrderSlot {
         self.filled_base = event.cumulative_qty;
         self.filled_quote = event.cumulative_quote;
         FillDelta {
-            base: Qty(delta_base),
+            base: Qty::from_mantissa(delta_base),
             quote: delta_quote,
             // SMELL: the quantity above comes from the venue's running totals, but the fee comes
             // from this one report. A report that carries the fee of only one of its trades, or a
@@ -239,20 +242,21 @@ impl OrderSlot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FillDelta {
     pub base: Qty,
-    pub quote: i64,
+    pub quote: Notional,
     pub commission: i64,
 }
 
 impl FillDelta {
     pub const NONE: FillDelta = FillDelta {
-        base: Qty(0),
-        quote: 0,
+        base: Qty::from_mantissa(0),
+        quote: Notional::ZERO,
+
         commission: 0,
     };
 
     #[inline]
     pub fn is_empty(self) -> bool {
-        self.base.0 == 0
+        self.base.mantissa() == 0
     }
 }
 

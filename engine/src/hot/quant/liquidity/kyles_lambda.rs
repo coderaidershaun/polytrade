@@ -68,9 +68,9 @@ impl KylesLambda {
             spec.min_sign_fraction
         );
         assert!(
-            tick.0 > 0,
+            tick.mantissa() > 0,
             "kyles lambda tick must be positive, got {}",
-            tick.0
+            tick.mantissa()
         );
         Self {
             min_observations: spec.min_observations,

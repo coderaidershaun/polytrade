@@ -4,7 +4,7 @@
 //! classification that may be missing is an `Option`; a missing number is zero.
 
 use crate::msg::ids::{
-    AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId,
+    AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, TradeId, VenueOrderId,
 };
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::time::{LocalTs, Tick, VenueTs};
@@ -33,7 +33,7 @@ pub struct ExecEvent {
     /// The venue's absolute cumulative total, never a delta, so a dropped event can never
     /// corrupt the ledger.
     pub cumulative_qty: Qty,
-    pub cumulative_quote: i64,
+    pub cumulative_quote: Notional,
     /// The fee for `last_qty`, as a 1e-8 mantissa, negative for a rebate. The asset is UNKNOWN when
     /// this configured instrument is not charged a fee at all.
     pub commission: i64,

@@ -10,7 +10,7 @@ use crate::hot::quant::Lcg;
 use engine::hot::quant::liquidity::{KylesLambda, KylesLambdaSpec};
 use engine::msg::ids::Price;
 
-const TICK: Price = Price(1_000_000); // $0.01 at the 1e-8 fixed-point scale.
+const TICK: Price = Price::from_mantissa(1_000_000); // $0.01 at the 1e-8 fixed-point scale.
 
 const WINDOW: usize = 256;
 

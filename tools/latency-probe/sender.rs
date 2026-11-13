@@ -222,8 +222,8 @@ fn place(index: usize) -> ExecCommand {
         instrument: InstrumentId(0),
         client_id: ClientOrderId(index as u64 + 1),
         side: if index.is_multiple_of(2) { Side::Buy } else { Side::Sell },
-        price: Price(65_000 * FIXED_SCALE),
-        qty: Qty(1_000),
+        price: Price::from_mantissa(65_000 * FIXED_SCALE),
+        qty: Qty::from_mantissa(1_000),
         style: OrderStyle::PostOnly,
     }
 }

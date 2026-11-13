@@ -44,8 +44,8 @@ fn claim_at(
             instrument,
             side: Side::Buy,
             level,
-            price: Price(100),
-            qty: Qty(1),
+            price: Price::from_mantissa(100),
+            qty: Qty::from_mantissa(1),
             style: OrderStyle::PostOnly,
             claimed_ts_us: LocalTs::from_micros(0),
             recon_seq,
@@ -90,7 +90,7 @@ fn resurrected_slot(orders: &mut OrderTable, recon_seq: u64) -> usize {
     let index = claim_at(orders, INSTRUMENT, QuoteLevel::ZERO, recon_seq);
     let client_id = orders.slot(index).client_id;
     let base = ExecEvent {
-        qty: Qty(1),
+        qty: Qty::from_mantissa(1),
         ..exec_event(INSTRUMENT, client_id, Side::Buy, 100, 10)
     };
     apply_exec_event(
@@ -185,7 +185,7 @@ fn adopt_live(engine: &mut HotEngine, generation_offset: usize, side: Side, when
         MessageBody::Exec(ExecEvent {
             kind: ExecKind::SnapshotOrder,
             status: Some(VenueOrderStatus::New),
-            qty: Qty(ONE / 10),
+            qty: Qty::from_mantissa(ONE / 10),
             ..exec_event(INSTRUMENT, client_id, side, BID, when)
         }),
     ));

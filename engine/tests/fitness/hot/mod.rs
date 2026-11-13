@@ -7,6 +7,7 @@ mod dispatch;
 mod driver;
 mod exec;
 mod ingress_order;
+mod money;
 mod position_ledger;
 /// The quant calculator pins. They live here rather than beside the calculators because `src/`
 /// carries production code only. One module per calculator, named for the concept rather than the

@@ -1,7 +1,7 @@
 //! Deterministic Binance Spot scenarios over the production simulator.
 
 use engine::msg::exec::{ExecEvent, OrderStyle, VenueOrderStatus};
-use engine::msg::ids::{AssetId, ClientOrderId, Price, Qty, Side, TradeId, VenueOrderId};
+use engine::msg::ids::{AssetId, ClientOrderId, Notional, Price, Qty, Side, TradeId, VenueOrderId};
 use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::time::LocalTs;
 use engine::runtime::config::RunIdentity;
@@ -134,8 +134,8 @@ impl FakeVenue {
             identity,
             wire: VenueWire::new(identity),
             orders: ScenarioOrders::new(),
-            best_bid: Price(117_999 * engine::msg::ids::FIXED_SCALE),
-            best_ask: Price(118_001 * engine::msg::ids::FIXED_SCALE),
+            best_bid: Price::from_mantissa(117_999 * engine::msg::ids::FIXED_SCALE),
+            best_ask: Price::from_mantissa(118_001 * engine::msg::ids::FIXED_SCALE),
             delivery: Delivery::AckFirst,
             next_trade_id: FIRST_TRADE_ID,
         }
@@ -224,7 +224,7 @@ impl FakeVenue {
         if order.is_complete() {
             self.orders.remove(client_id);
         }
-        let settlement = settlement_of(&order, taken, quote_before);
+        let settlement = settlement_of(&order, taken, quote_before.mantissa());
         let report = self.wire.trade_report(
             &order,
             SimFill {
@@ -252,8 +252,8 @@ impl FakeVenue {
                 side,
                 price,
                 qty,
-                filled: Qty(0),
-                filled_quote: 0,
+                filled: Qty::from_mantissa(0),
+                filled_quote: Notional::from_mantissa(0),
             };
             return (
                 vec![self.wire.would_match_error()],
@@ -266,8 +266,8 @@ impl FakeVenue {
             side,
             price,
             qty,
-            filled: Qty(0),
-            filled_quote: 0,
+            filled: Qty::from_mantissa(0),
+            filled_quote: Notional::from_mantissa(0),
         };
         self.orders.insert(order);
         (
@@ -304,7 +304,7 @@ impl FakeVenue {
         let wire = &self.wire;
         match self.orders.get(client_id) {
             Some(order) => {
-                let status = match order.filled.0 > 0 {
+                let status = match order.filled.mantissa() > 0 {
                     true => VenueOrderStatus::PartiallyFilled,
                     false => VenueOrderStatus::New,
                 };
@@ -318,9 +318,9 @@ impl FakeVenue {
                     venue_order_id: self.orders.latest_venue_order_id(),
                     side: Side::Buy,
                     price: self.best_bid,
-                    qty: Qty(10_000),
-                    filled: Qty(10_000),
-                    filled_quote: self.best_bid.notional(Qty(10_000)),
+                    qty: Qty::from_mantissa(10_000),
+                    filled: Qty::from_mantissa(10_000),
+                    filled_quote: self.best_bid.notional(Qty::from_mantissa(10_000)),
                 },
                 VenueOrderStatus::Filled,
                 at,
@@ -386,15 +386,15 @@ impl FakeVenue {
 
 /// Builds a fee-free settlement.
 fn settlement_of(order: &SimOrder, last_qty: Qty, quote_before: i64) -> FillSettlement {
-    let last_quote = order.filled_quote - quote_before;
+    let last_quote = order.filled_quote - Notional::from_mantissa(quote_before);
     FillSettlement {
         last_qty,
         last_quote,
         cumulative_qty: order.filled,
         cumulative_quote: order.filled_quote,
-        debit: last_quote,
-        received_gross: last_qty.0,
-        received_net: last_qty.0,
+        debit: last_quote.mantissa(),
+        received_gross: last_qty.mantissa(),
+        received_net: last_qty.mantissa(),
         fee: 0,
         fee_asset: AssetId::UNKNOWN,
     }

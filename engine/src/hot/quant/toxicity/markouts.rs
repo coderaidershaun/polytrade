@@ -63,8 +63,8 @@ impl MarkoutSide {
     #[inline]
     const fn is_through(self, armed: Price, print: Price) -> bool {
         match self {
-            MarkoutSide::Bid => print.0 <= armed.0,
-            MarkoutSide::Ask => print.0 >= armed.0,
+            MarkoutSide::Bid => print.mantissa() <= armed.mantissa(),
+            MarkoutSide::Ask => print.mantissa() >= armed.mantissa(),
         }
     }
 }
@@ -152,8 +152,8 @@ impl SideMarkouts {
         Self {
             side,
             armed: None,
-            queue_ahead: Qty(0),
-            eaten: Qty(0),
+            queue_ahead: Qty::from_mantissa(0),
+            eaten: Qty::from_mantissa(0),
             forward_lanes: ForwardHorizon::ALL
                 .map(|horizon| ForwardLane::new(horizon, matured_window, spin_interval)),
             reverse_series: ReverseHorizon::ALL
@@ -209,15 +209,16 @@ impl SideMarkouts {
     fn arm(&mut self, price: Price, level_qty: Qty) {
         if self.armed != Some(price) {
             self.queue_ahead = level_qty;
-            self.eaten = Qty(0);
+            self.eaten = Qty::from_mantissa(0);
         }
         self.armed = Some(price);
     }
 
     /// Print AT armed level; true if past fill threshold.
     fn eat(&mut self, qty: Qty) -> bool {
-        self.eaten = Qty(self.eaten.0.saturating_add(qty.0));
-        i128::from(self.eaten.0) * QUEUE_FILL_DEN >= i128::from(self.queue_ahead.0) * QUEUE_FILL_NUM
+        self.eaten = Qty::from_mantissa(self.eaten.mantissa().saturating_add(qty.mantissa()));
+        i128::from(self.eaten.mantissa()) * QUEUE_FILL_DEN
+            >= i128::from(self.queue_ahead.mantissa()) * QUEUE_FILL_NUM
     }
 
     /// Some(armed) if print filled us at our level, None else (side effects apply either way).
@@ -354,9 +355,9 @@ impl MarkoutTracker {
     #[inline]
     pub fn arm(&mut self, side: MarkoutSide, price: Price, level_qty: Qty) {
         debug_assert!(
-            price.0 > 0,
+            price.mantissa() > 0,
             "armed {side:?} quote is the forward-markout denominator, got {}",
-            price.0
+            price.mantissa()
         );
         self.side_mut(side).arm(price, level_qty);
     }

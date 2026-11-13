@@ -206,7 +206,7 @@ pub fn restates_balances(event: &ExecEvent) -> bool {
         // A maker fill: the venue's order update is the only report of it that exists.
         ExecKind::ReportTrade => true,
         // A taker fill: the placement answer reports it once and never again.
-        ExecKind::AckPlaced => event.last_qty.0 > 0,
+        ExecKind::AckPlaced => event.last_qty.mantissa() > 0,
         _ => false,
     }
 }

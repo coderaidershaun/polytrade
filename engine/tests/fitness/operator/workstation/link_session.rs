@@ -140,8 +140,8 @@ fn instrument_frame(index: u16, total: u16, epoch: VenueTs) -> CatalogInstrument
         total_count: total,
         instrument: InstrumentId(index),
         display: WireName::new(&format!("INSTRUMENT-{index}")),
-        tick_size: Some(Price(10 * i64::from(index) + 1)),
-        lot_size: Some(Qty(100 * i64::from(index) + 1)),
+        tick_size: Some(Price::from_mantissa(10 * i64::from(index) + 1)),
+        lot_size: Some(Qty::from_mantissa(100 * i64::from(index) + 1)),
         qty_scale: 100_000_000,
         base_asset: AssetId(2 * index),
         quote_asset: AssetId(2 * index + 1),
@@ -278,7 +278,7 @@ proptest! {
         for (position, row) in catalog.instruments.iter().enumerate() {
             prop_assert_eq!(row.instrument_id, InstrumentId(position as u16));
             prop_assert_eq!(row.display.as_ref(), format!("INSTRUMENT-{position}"));
-            prop_assert_eq!(row.tick_size, Some(Price(10 * position as i64 + 1)));
+            prop_assert_eq!(row.tick_size, Some(Price::from_mantissa(10 * position as i64 + 1)));
         }
         for (index, name) in catalog.feature_names.iter().enumerate() {
             prop_assert_eq!(name.as_ref(), format!("feature_{index}"));
@@ -543,8 +543,8 @@ fn trade_event(seq: u64) -> UiEvent {
         seq,
         event_ts_us: VenueTs::from_micros(seq as i64 * 1_000),
         aggressor: Side::Buy,
-        price: Price(100 + seq as i64),
-        qty: Qty(7),
+        price: Price::from_mantissa(100 + seq as i64),
+        qty: Qty::from_mantissa(7),
     }
 }
 
@@ -605,7 +605,7 @@ proptest! {
             .book(InstrumentId(0))
             .expect("at least one snapshot was accepted");
         prop_assert_eq!(latest.seq, expected_latest);
-        prop_assert_eq!(latest.bids[0].price, Price(500 + expected_latest as i64));
+        prop_assert_eq!(latest.bids[0].price, Price::from_mantissa(500 + expected_latest as i64));
 
         let span = |accepted: &[u64]| match accepted.split_first() {
             Some((first, rest)) => accepted.last().unwrap_or(first) - first - rest.len() as u64,
@@ -929,7 +929,7 @@ fn a_new_boot_raises_the_session_and_its_first_frame_belongs_to_the_new_run() {
         book.seq, 1,
         "the model holds the new run, not the old one's seq 3"
     );
-    assert_eq!(book.bids[0].price, Price(900));
+    assert_eq!(book.bids[0].price, Price::from_mantissa(900));
     assert_eq!(replica.model.book_gaps(), 0);
 
     // The gate is per topic, so a straggler on a topic the new run has not used yet gets past it;

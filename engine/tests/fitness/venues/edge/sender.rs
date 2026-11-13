@@ -430,7 +430,7 @@ fn place(client: u64) -> ExecCommand {
         instrument: INSTRUMENT,
         client_id: ClientOrderId(client),
         side: Side::Buy,
-        price: Price(BID),
+        price: Price::from_mantissa(BID),
         qty: QUOTE_QTY,
         style: OrderStyle::PostOnly,
     }

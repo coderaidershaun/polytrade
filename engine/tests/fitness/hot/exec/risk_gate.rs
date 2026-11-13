@@ -12,7 +12,7 @@ use engine::hot::exec::{
     side_base,
 };
 use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, RejectClass, VenueOrderStatus};
-use engine::msg::ids::{Price, Qty, Side};
+use engine::msg::ids::{Notional, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::ui::UiEvent;
 use engine::runtime::config::RecordedTables;
@@ -89,16 +89,20 @@ const MARK: i64 = 100 * ONE;
 
 fn ceiling_check(side: Side, position_base: i64, has_mark: bool) -> ExposureCheck {
     ExposureCheck {
-        exposure_quote: if has_mark { Price(MARK).notional(Qty(position_base)) } else { 0 },
-        position_base: Qty(position_base),
+        exposure_quote: if has_mark {
+            Price::from_mantissa(MARK).notional(Qty::from_mantissa(position_base))
+        } else {
+            Notional::from_mantissa(0)
+        },
+        position_base: Qty::from_mantissa(position_base),
         has_mark,
         side,
-        price: Price(match side {
+        price: Price::from_mantissa(match side {
             Side::Buy => BID,
             Side::Sell => ASK,
         }),
         qty: QUOTE_QTY,
-        ceiling_quote: CEILING,
+        ceiling_quote: Notional::from_mantissa(CEILING),
     }
 }
 
@@ -201,7 +205,7 @@ fn assess_exposure_ceiling_verdicts_match_named_cases() {
     for case in cases {
         let mut check = ceiling_check(case.side, case.position_base, case.has_mark);
         if let Some(exposure_quote) = case.exposure_override {
-            check.exposure_quote = exposure_quote;
+            check.exposure_quote = Notional::from_mantissa(exposure_quote);
         }
         let got = assess_exposure(check);
         assert_eq!(
@@ -221,12 +225,12 @@ fn the_ceiling_projects_the_declared_notional_rather_than_a_fixed_step() {
     // Nine tenths of the way to the ceiling, so the two sizes below straddle it.
     let position = ONE * 9 / 10;
     let small = ExposureCheck {
-        qty: Qty(ONE / 10),
+        qty: Qty::from_mantissa(ONE / 10),
         ..ceiling_check(Side::Buy, position, true)
     };
     assert_eq!(
-        small.exposure_quote + Price(BID).notional(small.qty),
-        CEILING - ONE / 10,
+        small.exposure_quote + Price::from_mantissa(BID).notional(small.qty),
+        Notional::from_mantissa(CEILING - ONE / 10),
         "the small quote lands just inside the ceiling"
     );
     assert_eq!(
@@ -236,11 +240,12 @@ fn the_ceiling_projects_the_declared_notional_rather_than_a_fixed_step() {
     );
 
     let large = ExposureCheck {
-        qty: Qty(ONE / 5),
+        qty: Qty::from_mantissa(ONE / 5),
         ..small
     };
     assert!(
-        large.exposure_quote + Price(BID).notional(large.qty) > CEILING,
+        large.exposure_quote + Price::from_mantissa(BID).notional(large.qty)
+            > Notional::from_mantissa(CEILING),
         "twice the size clears the ceiling — the scenario needs both sides of it"
     );
     assert_eq!(
@@ -264,24 +269,24 @@ proptest! {
         ceiling_units in 1i64..=500,
         has_mark in any::<bool>(),
     ) {
-        let position_base = Qty(position_units * ONE);
-        let mark = Price(mark_units * ONE);
+        let position_base = Qty::from_mantissa(position_units * ONE);
+        let mark = Price::from_mantissa(mark_units * ONE);
         let check = |side: Side| ExposureCheck {
-            exposure_quote: if has_mark { mark.notional(position_base) } else { 0 },
+            exposure_quote: if has_mark { mark.notional(position_base) } else { Notional::from_mantissa(0) },
             position_base,
             has_mark,
             side,
             price: mark,
-            qty: Qty(qty_hundredths * ONE / 100),
-            ceiling_quote: ceiling_units * ONE,
+            qty: Qty::from_mantissa(qty_hundredths * ONE / 100),
+            ceiling_quote: Notional::from_mantissa(ceiling_units * ONE),
         };
         let buy = assess_exposure(check(Side::Buy));
         let sell = assess_exposure(check(Side::Sell));
         prop_assert!(
             buy.admits(Side::Buy) || sell.admits(Side::Sell),
             "both sides withdrawn holding {} at mark {} against ceiling {} — the position is trapped",
-            position_base.0,
-            mark.0,
+            position_base.mantissa(),
+            mark.mantissa(),
             ceiling_units * ONE,
         );
     }
@@ -297,27 +302,27 @@ proptest! {
         ceiling_units in 1i64..=500,
         has_mark in any::<bool>(),
     ) {
-        let position_base = Qty(position_units * ONE);
-        let mark = Price(mark_units * ONE);
+        let position_base = Qty::from_mantissa(position_units * ONE);
+        let mark = Price::from_mantissa(mark_units * ONE);
         let reducing = match position_units.signum() {
             1 => Side::Sell,
             -1 => Side::Buy,
             _ => return Ok(()),
         };
         let permission = assess_exposure(ExposureCheck {
-            exposure_quote: if has_mark { mark.notional(position_base) } else { 0 },
+            exposure_quote: if has_mark { mark.notional(position_base) } else { Notional::from_mantissa(0) },
             position_base,
             has_mark,
             side: reducing,
             price: mark,
-            qty: Qty(qty_hundredths * ONE / 100),
-            ceiling_quote: ceiling_units * ONE,
+            qty: Qty::from_mantissa(qty_hundredths * ONE / 100),
+            ceiling_quote: Notional::from_mantissa(ceiling_units * ONE),
         });
         prop_assert!(
             permission.admits(reducing),
             "{:?} shrinks a position of {} yet was withdrawn",
             reducing,
-            position_base.0,
+            position_base.mantissa(),
         );
     }
 }
@@ -329,7 +334,7 @@ proptest! {
 fn fill_and_close(engine: &mut HotEngine, side: Side, price: i64, qty: i64, when: i64) {
     let client_id = ClientIdLayout { run_nonce: 0 }.encode(side_base(INSTRUMENT, side) + 1, 1);
     let base = ExecEvent {
-        qty: Qty(qty),
+        qty: Qty::from_mantissa(qty),
         ..exec_event(INSTRUMENT, client_id, side, price, when)
     };
     engine.dispatch(&InboundMessage::new(
@@ -344,10 +349,10 @@ fn fill_and_close(engine: &mut HotEngine, side: Side, price: i64, qty: i64, when
         MessageBody::Exec(ExecEvent {
             kind: ExecKind::ReportTrade,
             status: Some(VenueOrderStatus::Filled),
-            last_price: Price(price),
-            last_qty: Qty(qty),
-            cumulative_qty: Qty(qty),
-            cumulative_quote: Price(price).notional(Qty(qty)),
+            last_price: Price::from_mantissa(price),
+            last_qty: Qty::from_mantissa(qty),
+            cumulative_qty: Qty::from_mantissa(qty),
+            cumulative_quote: Price::from_mantissa(price).notional(Qty::from_mantissa(qty)),
             ..base
         }),
     ));
@@ -410,7 +415,7 @@ fn a_position_at_the_ceiling_stops_the_engine_adding_whether_filled_or_restored(
     // read it off the restored cost basis rather than starting the run believing itself flat.
     let restored = [InstrumentExposure {
         instrument: INSTRUMENT,
-        position_base: Qty(ONE),
+        position_base: Qty::from_mantissa(ONE),
         cash_quote: -MARK,
         basis_quote: MARK,
     }];

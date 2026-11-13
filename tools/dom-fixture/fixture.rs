@@ -16,11 +16,11 @@ const MILLI: i64 = FIXED_SCALE / 1000;
 pub const INSTRUMENT: InstrumentId = InstrumentId(0);
 
 pub fn px(tick_index: i64) -> Price {
-    Price(tick_index * FIXED_SCALE)
+    Price::from_mantissa(tick_index * FIXED_SCALE)
 }
 
 pub fn qm(milli: i64) -> Qty {
-    Qty(milli * MILLI)
+    Qty::from_mantissa(milli * MILLI)
 }
 
 pub fn level(tick_index: i64, milli: i64) -> Level {
@@ -34,7 +34,7 @@ pub fn level(tick_index: i64, milli: i64) -> Level {
 pub fn unit(tick_index: i64) -> Level {
     Level {
         price: px(tick_index),
-        qty: Qty(FIXED_SCALE),
+        qty: Qty::from_mantissa(FIXED_SCALE),
     }
 }
 
@@ -52,8 +52,8 @@ pub fn book(
     asks: &[Level],
 ) -> UiBookSnapshot {
     let empty = Level {
-        price: Price(0),
-        qty: Qty(0),
+        price: Price::from_mantissa(0),
+        qty: Qty::from_mantissa(0),
     };
     let mut bid_levels = [empty; UI_BOOK_LEVELS];
     let mut ask_levels = [empty; UI_BOOK_LEVELS];

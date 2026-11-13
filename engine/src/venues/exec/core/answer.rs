@@ -75,10 +75,11 @@ impl ExecCore {
         executed_qty: Qty,
         emit: &mut dyn FnMut(ExecEffect),
     ) {
-        if executed_qty.0 > 0 {
+        if executed_qty.mantissa() > 0 {
             warn!(
                 "order {} left the book having filled {} — the fill must reach the ledger",
-                client_id.0, executed_qty.0
+                client_id.0,
+                executed_qty.mantissa()
             );
         }
         self.mirror.remove(client_id);

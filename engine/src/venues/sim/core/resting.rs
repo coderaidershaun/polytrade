@@ -4,7 +4,7 @@ use super::orders::{CORPUS_VENUE_ORDER_ID, SimOrder};
 use super::queue::SimOrderIndex;
 use super::wallet::Reservation;
 use crate::msg::exec::VenueOrderStatus;
-use crate::msg::ids::{ClientOrderId, Price, Qty, Side, TradeId, VenueOrderId};
+use crate::msg::ids::{ClientOrderId, Notional, Price, Qty, Side, TradeId, VenueOrderId};
 use crate::msg::time::{DurationUs, LocalTs};
 
 const FIRST_TRADE_ID: TradeId = TradeId(778_291);
@@ -248,20 +248,20 @@ pub struct InstrumentLimits {
     pub tick: Price,
     pub step: Qty,
     pub min_qty: Qty,
-    pub min_notional: i64,
+    pub min_notional: Notional,
     pub max_orders_per_side: u16,
     pub max_amends: u8,
 }
 
 impl InstrumentLimits {
     pub fn refuse(&self, price: Price, qty: Qty) -> Option<RefusalReason> {
-        if self.tick.0 > 0 && price.0 % self.tick.0 != 0 {
+        if self.tick.mantissa() > 0 && price.mantissa() % self.tick.mantissa() != 0 {
             return Some(RefusalReason::TickGrid);
         }
-        if self.step.0 > 0 && qty.0 % self.step.0 != 0 {
+        if self.step.mantissa() > 0 && qty.mantissa() % self.step.mantissa() != 0 {
             return Some(RefusalReason::StepGrid);
         }
-        if qty.0 < self.min_qty.0 {
+        if qty.mantissa() < self.min_qty.mantissa() {
             return Some(RefusalReason::MinQty);
         }
         if price.notional(qty) < self.min_notional {

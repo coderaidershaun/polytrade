@@ -127,7 +127,7 @@ impl Strategy for LadderQuoter {
                 Side::Buy,
                 QuoteLevel::new(level as u8).expect("within the fixed ladder"),
                 Some(DesiredQuote {
-                    price: Price(BID - level as i64 * ONE),
+                    price: Price::from_mantissa(BID - level as i64 * ONE),
                     qty: QUOTE_QTY,
                     style: OrderStyle::PostOnly,
                 }),
@@ -361,7 +361,7 @@ fn ack_placed(engine: &mut HotEngine, commands: &[ExecCommand], when: i64) {
             MessageBody::Exec(ExecEvent {
                 kind: ExecKind::AckPlaced,
                 status: Some(VenueOrderStatus::New),
-                ..exec_event(INSTRUMENT, *client_id, *side, price.0, when)
+                ..exec_event(INSTRUMENT, *client_id, *side, price.mantissa(), when)
             }),
         ));
     }

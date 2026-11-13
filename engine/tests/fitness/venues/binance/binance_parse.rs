@@ -126,7 +126,7 @@ mod rest_klines {
             events[0].open_ts_us,
             VenueTs::from_micros(1_672_515_780_000_000)
         );
-        assert_eq!(events[0].close, Price(200_000));
+        assert_eq!(events[0].close, Price::from_mantissa(200_000));
         assert_eq!(events[0].quote_volume, 100_000_000);
         assert_eq!(events[0].trade_count, 100);
     }
@@ -217,8 +217,8 @@ mod recorded_agg_trade {
                 "recorded aggregate covers a forward raw range"
             );
             let event = parsed.trade;
-            assert!(event.price.0 > 0, "price mantissa positive");
-            assert!(event.qty.0 > 0, "qty mantissa positive");
+            assert!(event.price.mantissa() > 0, "price mantissa positive");
+            assert!(event.qty.mantissa() > 0, "qty mantissa positive");
             assert!(
                 (EPOCH_LO_US..EPOCH_HI_US).contains(&event.exchange_ts_us.micros()),
                 "exchange stamp within the recording epoch"

@@ -93,12 +93,12 @@ fn book_datagram() -> LinkDatagram {
             bid_len: 1,
             ask_len: 1,
             bids: [Level {
-                price: Price(100),
-                qty: Qty(5),
+                price: Price::from_mantissa(100),
+                qty: Qty::from_mantissa(5),
             }; UI_BOOK_LEVELS],
             asks: [Level {
-                price: Price(101),
-                qty: Qty(5),
+                price: Price::from_mantissa(101),
+                qty: Qty::from_mantissa(5),
             }; UI_BOOK_LEVELS],
         }),
     }
@@ -130,9 +130,9 @@ fn working_order(client_id: u64, state: OrderState) -> UiWorkingOrder {
         client_id: ClientOrderId(client_id),
         quote_level: QuoteLevel::new((client_id % 8) as u8),
         state,
-        price: Price(100 + client_id as i64),
-        qty: Qty(5),
-        filled: Qty(1),
+        price: Price::from_mantissa(100 + client_id as i64),
+        qty: Qty::from_mantissa(5),
+        filled: Qty::from_mantissa(1),
     }
 }
 
@@ -182,8 +182,8 @@ fn arb_run_state() -> impl Strategy<Value = RunState> {
 fn arb_levels() -> impl Strategy<Value = [Level; UI_BOOK_LEVELS]> {
     prop::collection::vec(
         (any::<i64>(), any::<i64>()).prop_map(|(price, qty)| Level {
-            price: Price(price),
-            qty: Qty(qty),
+            price: Price::from_mantissa(price),
+            qty: Qty::from_mantissa(qty),
         }),
         UI_BOOK_LEVELS,
     )
@@ -191,7 +191,10 @@ fn arb_levels() -> impl Strategy<Value = [Level; UI_BOOK_LEVELS]> {
 }
 
 fn arb_optional_level() -> impl Strategy<Value = Option<(Price, Qty)>> {
-    prop::option::of((any::<i64>(), any::<i64>()).prop_map(|(price, qty)| (Price(price), Qty(qty))))
+    prop::option::of(
+        (any::<i64>(), any::<i64>())
+            .prop_map(|(price, qty)| (Price::from_mantissa(price), Qty::from_mantissa(qty))),
+    )
 }
 
 fn arb_side() -> impl Strategy<Value = Side> {
@@ -433,8 +436,8 @@ fn arb_event() -> impl Strategy<Value = LinkBody> {
                 seq,
                 event_ts_us: VenueTs::from_micros(stamp),
                 aggressor,
-                price: Price(price),
-                qty: Qty(qty),
+                price: Price::from_mantissa(price),
+                qty: Qty::from_mantissa(qty),
             }
         ),
         (
@@ -462,9 +465,9 @@ fn arb_event() -> impl Strategy<Value = LinkBody> {
                         quote_level,
                         side,
                         state,
-                        price: Price(price),
-                        qty: Qty(qty),
-                        filled: Qty(filled),
+                        price: Price::from_mantissa(price),
+                        qty: Qty::from_mantissa(qty),
+                        filled: Qty::from_mantissa(filled),
                     }
                 }
             ),
@@ -524,8 +527,8 @@ fn arb_event() -> impl Strategy<Value = LinkBody> {
                     event_ts_us: VenueTs::from_micros(stamp),
                     quote_level,
                     side,
-                    price: Price(price),
-                    qty: Qty(qty),
+                    price: Price::from_mantissa(price),
+                    qty: Qty::from_mantissa(qty),
                     commission,
                     commission_asset: AssetId(commission_asset),
                     liquidity,
@@ -576,8 +579,8 @@ fn arb_catalog_instrument() -> impl Strategy<Value = LinkBody> {
                     total_count,
                     instrument: InstrumentId(instrument),
                     display,
-                    tick_size: tick.map(Price),
-                    lot_size: lot.map(Qty),
+                    tick_size: tick.map(Price::from_mantissa),
+                    lot_size: lot.map(Qty::from_mantissa),
                     qty_scale,
                     base_asset: AssetId(base_asset),
                     quote_asset: AssetId(quote_asset),
@@ -1035,17 +1038,23 @@ fn saturated_order_update(state: OrderState) -> UiEvent {
         quote_level: Some(QuoteLevel::new(7).expect("valid quote level")),
         side: Side::Sell,
         state,
-        price: Price(i64::MIN),
-        qty: Qty(i64::MAX),
-        filled: Qty(i64::MIN),
+        price: Price::from_mantissa(i64::MIN),
+        qty: Qty::from_mantissa(i64::MAX),
+        filled: Qty::from_mantissa(i64::MIN),
     }
 }
 
 fn full_quote_ladder() -> UiEvent {
     let mut quote = DomQuote::default();
     for level in 0..8 {
-        quote.bids[level] = Some((Price(100 - level as i64), Qty(level as i64 + 1)));
-        quote.asks[level] = Some((Price(101 + level as i64), Qty(level as i64 + 11)));
+        quote.bids[level] = Some((
+            Price::from_mantissa(100 - level as i64),
+            Qty::from_mantissa(level as i64 + 1),
+        ));
+        quote.asks[level] = Some((
+            Price::from_mantissa(101 + level as i64),
+            Qty::from_mantissa(level as i64 + 11),
+        ));
     }
     UiEvent::Quote {
         instrument: InstrumentId(3),
@@ -1132,8 +1141,8 @@ fn event_encoding_is_independent_of_buffer_reuse() {
             seq: 4,
             event_ts_us: VenueTs::from_micros(10),
             quote: DomQuote::top(
-                Some((Price(i64::MAX), Qty(i64::MAX))),
-                Some((Price(i64::MIN), Qty(i64::MIN))),
+                Some((Price::from_mantissa(i64::MAX), Qty::from_mantissa(i64::MAX))),
+                Some((Price::from_mantissa(i64::MIN), Qty::from_mantissa(i64::MIN))),
             ),
         }),
     };
@@ -1180,12 +1189,12 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
             bid_len: 29,
             ask_len: 31,
             bids: std::array::from_fn(|level| Level {
-                price: Price(11_800_000_000_000 - 1_000_000 * level as i64),
-                qty: Qty(1_000 + 7 * level as i64),
+                price: Price::from_mantissa(11_800_000_000_000 - 1_000_000 * level as i64),
+                qty: Qty::from_mantissa(1_000 + 7 * level as i64),
             }),
             asks: std::array::from_fn(|level| Level {
-                price: Price(-(2_000_000_000_000 + 3_000_000 * level as i64)),
-                qty: Qty(-(500 + 11 * level as i64)),
+                price: Price::from_mantissa(-(2_000_000_000_000 + 3_000_000 * level as i64)),
+                qty: Qty::from_mantissa(-(500 + 11 * level as i64)),
             }),
         }),
     };
@@ -1203,8 +1212,8 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
         total_count: 0x0203,
         instrument: InstrumentId(0x0405),
         display: WireName::new("BTCUSDT"),
-        tick_size: Some(Price(1_000_000)),
-        lot_size: Some(Qty(-7_000)),
+        tick_size: Some(Price::from_mantissa(1_000_000)),
+        lot_size: Some(Qty::from_mantissa(-7_000)),
         qty_scale: 100_000_000,
         base_asset: AssetId(0x0607),
         quote_asset: AssetId(0x0809),
@@ -1227,10 +1236,16 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
 
     let mut quote = DomQuote::default();
     for level in [0, 1, 2, 5] {
-        quote.bids[level] = Some((Price(-90_000 - level as i64), Qty(300 + level as i64)));
+        quote.bids[level] = Some((
+            Price::from_mantissa(-90_000 - level as i64),
+            Qty::from_mantissa(300 + level as i64),
+        ));
     }
     for level in [0, 3, 7] {
-        quote.asks[level] = Some((Price(91_000 + level as i64), Qty(-400 - level as i64)));
+        quote.asks[level] = Some((
+            Price::from_mantissa(91_000 + level as i64),
+            Qty::from_mantissa(-400 - level as i64),
+        ));
     }
 
     vec![
@@ -1325,8 +1340,8 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                     seq: 0x1102,
                     event_ts_us: VenueTs::from_micros(1_700_000_000_001_002),
                     aggressor: Side::Sell,
-                    price: Price(-123_456_789),
-                    qty: Qty(987_654_321),
+                    price: Price::from_mantissa(-123_456_789),
+                    qty: Qty::from_mantissa(987_654_321),
                 },
             ),
         ),
@@ -1342,9 +1357,9 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                     quote_level: QuoteLevel::new(5),
                     side: Side::Buy,
                     state: OrderState::CancelInFlight,
-                    price: Price(118_000_123_000_000),
-                    qty: Qty(-5_000_001),
-                    filled: Qty(2_000_003),
+                    price: Price::from_mantissa(118_000_123_000_000),
+                    qty: Qty::from_mantissa(-5_000_001),
+                    filled: Qty::from_mantissa(2_000_003),
                 },
             ),
         ),
@@ -1371,8 +1386,8 @@ fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                     event_ts_us: VenueTs::from_micros(1_700_000_000_001_005),
                     quote_level: None,
                     side: Side::Sell,
-                    price: Price(66_123_450_000_000),
-                    qty: Qty(1_250_000),
+                    price: Price::from_mantissa(66_123_450_000_000),
+                    qty: Qty::from_mantissa(1_250_000),
                     commission: -944_000,
                     commission_asset: AssetId(0x0708),
                     liquidity: Some(Liquidity::Taker),

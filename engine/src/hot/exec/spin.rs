@@ -285,8 +285,8 @@ impl ExecEngine {
     pub(super) fn funds_view(&self, instrument: InstrumentId, side: Side) -> FundsView {
         let asset = self.instruments[usize::from(instrument.0)].spend_asset(side);
         let floor = match side {
-            Side::Buy => self.settings.min_quote_balance,
-            Side::Sell => self.settings.min_base_balance,
+            Side::Buy => self.settings.min_quote_balance.mantissa(),
+            Side::Sell => self.settings.min_base_balance.mantissa(),
         };
         FundsView {
             spendable: self.account.balance(asset).spendable(),
@@ -298,8 +298,10 @@ impl ExecEngine {
         let book = &input.books[usize::from(instrument.0)];
         let (bid, ask) = (book.best_bid(), book.best_ask());
         let mid = match (bid, ask) {
-            (Some(bid), Some(ask)) => Price(bid.price.0 + (ask.price.0 - bid.price.0) / 2),
-            _ => Price(0),
+            (Some(bid), Some(ask)) => Price::from_mantissa(
+                bid.price.mantissa() + (ask.price.mantissa() - bid.price.mantissa()) / 2,
+            ),
+            _ => Price::from_mantissa(0),
         };
         BookTop {
             best_bid: bid.map(|level| level.price),

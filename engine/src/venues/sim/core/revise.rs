@@ -139,10 +139,10 @@ impl RequestFold<'_> {
         if record.amends_used >= self.limits.max_amends {
             return Some(RefusalReason::AmendBudgetSpent);
         }
-        if total_qty.0 >= record.order.qty.0 {
+        if total_qty.mantissa() >= record.order.qty.mantissa() {
             return Some(RefusalReason::AmendQuantityIncrease);
         }
-        if total_qty.0 <= record.order.filled.0 {
+        if total_qty.mantissa() <= record.order.filled.mantissa() {
             return Some(RefusalReason::AmendFilterFailure);
         }
         self.limits.refuse(record.order.price, total_qty)

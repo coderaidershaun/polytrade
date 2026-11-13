@@ -220,7 +220,7 @@ const FLATTEN_FROM: u64 = 3;
 fn engine_holding_a_position(budget: OrderBudget, strategy: Box<dyn Strategy>) -> QuotingEngine {
     let restored = [InstrumentExposure {
         instrument: INSTRUMENT,
-        position_base: Qty(ONE),
+        position_base: Qty::from_mantissa(ONE),
         cash_quote: -100 * ONE,
         basis_quote: 100 * ONE,
     }];
@@ -245,7 +245,7 @@ impl Strategy for QuoteThenFlatten {
                 side,
                 QuoteLevel::ZERO,
                 Some(DesiredQuote {
-                    price: Price(price),
+                    price: Price::from_mantissa(price),
                     qty: QUOTE_QTY,
                     style: OrderStyle::PostOnly,
                 }),
@@ -351,7 +351,7 @@ impl Strategy for FlattenThenQuote {
             Side::Buy,
             QuoteLevel::ZERO,
             Some(DesiredQuote {
-                price: Price(BID),
+                price: Price::from_mantissa(BID),
                 qty: QUOTE_QTY,
                 style: OrderStyle::PostOnly,
             }),

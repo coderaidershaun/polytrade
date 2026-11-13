@@ -41,8 +41,8 @@ fn fill_event(instrument: u16, bucket: u64, side: Side, price: i64) -> UiEvent {
         event_ts_us: VenueTs::from_micros(bucket as i64 * SPIN.micros()),
         quote_level: None,
         side,
-        price: Price(price),
-        qty: Qty(1),
+        price: Price::from_mantissa(price),
+        qty: Qty::from_mantissa(1),
         commission: 0,
         commission_asset: AssetId(0),
         liquidity: Some(Liquidity::Maker),
@@ -328,7 +328,7 @@ fn domain_retention_rotation_grid_and_replay_determinism() {
     );
 
     // A ten-mantissa grid: 105 is not a multiple of the tick, so the mid does not exist.
-    let mut off_grid = chart_with_ticks(&[Some(Price(10))]);
+    let mut off_grid = chart_with_ticks(&[Some(Price::from_mantissa(10))]);
     commit(&mut off_grid, 0, 1, 100, 105);
     assert!(
         buckets(&off_grid, 0).is_empty(),
@@ -474,8 +474,8 @@ fn chart_view_fills_bounds_and_fractions() {
                 event_ts_us: at(bucket),
                 quote_level: None,
                 side,
-                price: Price(101),
-                qty: Qty(1),
+                price: Price::from_mantissa(101),
+                qty: Qty::from_mantissa(1),
                 commission: 0,
                 commission_asset: AssetId(0),
                 liquidity: Some(Liquidity::Maker),

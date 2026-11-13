@@ -90,7 +90,7 @@ fn row(
 ) -> InstrumentExposure {
     InstrumentExposure {
         instrument: InstrumentId(instrument),
-        position_base: Qty(position_base),
+        position_base: Qty::from_mantissa(position_base),
         cash_quote,
         basis_quote,
     }

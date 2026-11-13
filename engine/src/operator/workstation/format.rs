@@ -102,7 +102,7 @@ pub fn write_mid(buf: &mut String, mid_half_ticks: i64) {
 }
 
 pub fn price_decimals(tick: Price) -> usize {
-    decimals_for_increment(tick.0)
+    decimals_for_increment(tick.mantissa())
 }
 
 pub fn quote_axis_decimals(step_mantissa: i64) -> usize {
@@ -110,7 +110,7 @@ pub fn quote_axis_decimals(step_mantissa: i64) -> usize {
 }
 
 pub fn write_venue_price(buf: &mut String, price: Price, decimals: usize) {
-    write_fixed_point(buf, price.0.into(), FIXED_SCALE as u128, decimals);
+    write_fixed_point(buf, price.mantissa().into(), FIXED_SCALE as u128, decimals);
 }
 
 pub fn write_quote_amount(buf: &mut String, mantissa: i64, decimals: usize) {
@@ -118,7 +118,7 @@ pub fn write_quote_amount(buf: &mut String, mantissa: i64, decimals: usize) {
 }
 
 pub fn write_venue_mid(buf: &mut String, mid_half_ticks: i64, tick: Price) {
-    let twice_mantissa = i128::from(mid_half_ticks) * i128::from(tick.0);
+    let twice_mantissa = i128::from(mid_half_ticks) * i128::from(tick.mantissa());
     let decimals = exact_mid_decimals(twice_mantissa, tick);
     write_fixed_point(buf, twice_mantissa, 2 * FIXED_SCALE as u128, decimals);
 }
@@ -159,7 +159,12 @@ fn exact_mid_decimals(twice_mantissa: i128, tick: Price) -> usize {
 
 pub fn write_qty(buf: &mut String, qty: Qty, scale: i64, decimals: usize) {
     debug_assert!(scale > 0, "fixed-point scale must be positive, got {scale}");
-    write_fixed_point(buf, qty.0.into(), scale.unsigned_abs().into(), decimals);
+    write_fixed_point(
+        buf,
+        qty.mantissa().into(),
+        scale.unsigned_abs().into(),
+        decimals,
+    );
 }
 
 /// Writes `value / scale` cut to `decimals` places, never rounded. An integer part too wide for `u64`
@@ -185,7 +190,7 @@ pub fn write_opt_qty(buf: &mut String, qty: Option<Qty>, scale: i64, decimals: u
 
 pub fn qty_decimals(lot: Option<Qty>) -> usize {
     match lot {
-        Some(Qty(mantissa)) if mantissa > 0 => decimals_for_increment(mantissa),
+        Some(lot) if lot.mantissa() > 0 => decimals_for_increment(lot.mantissa()),
         _ => DEFAULT_QTY_DECIMALS,
     }
 }

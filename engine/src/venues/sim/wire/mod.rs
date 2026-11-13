@@ -98,9 +98,9 @@ impl VenueWire {
         amended["origClientOrderId"] = self.client_order_id(order).into();
         amended["orderId"] = order.venue_order_id.0.into();
         amended["side"] = order.side.wire_name().into();
-        amended["price"] = decimal(order.price.0).into();
-        amended["qty"] = decimal(order.qty.0).into();
-        amended["executedQty"] = decimal(order.filled.0).into();
+        amended["price"] = decimal(order.price.mantissa()).into();
+        amended["qty"] = decimal(order.qty.mantissa()).into();
+        amended["executedQty"] = decimal(order.filled.mantissa()).into();
         document.to_string()
     }
 
@@ -125,12 +125,12 @@ impl VenueWire {
                 let mut row = template.clone();
                 row["clientOrderId"] = self.client_order_id(order).into();
                 row["orderId"] = order.venue_order_id.0.into();
-                row["price"] = decimal(order.price.0).into();
-                row["origQty"] = decimal(order.qty.0).into();
-                row["executedQty"] = decimal(order.filled.0).into();
-                row["cummulativeQuoteQty"] = decimal(order.filled_quote).into();
+                row["price"] = decimal(order.price.mantissa()).into();
+                row["origQty"] = decimal(order.qty.mantissa()).into();
+                row["executedQty"] = decimal(order.filled.mantissa()).into();
+                row["cummulativeQuoteQty"] = decimal(order.filled_quote.mantissa()).into();
                 row["side"] = order.side.wire_name().into();
-                row["status"] = match order.filled.0 > 0 {
+                row["status"] = match order.filled.mantissa() > 0 {
                     true => "PARTIALLY_FILLED",
                     false => "NEW",
                 }
@@ -167,9 +167,9 @@ impl VenueWire {
             false => templates::REPORT_TRADE_PARTIAL,
         };
         self.report(template, order, event_ts_us, |event| {
-            event["l"] = decimal(settlement.last_qty.0).into();
-            event["L"] = decimal(order.price.0).into();
-            event["Y"] = decimal(settlement.last_quote).into();
+            event["l"] = decimal(settlement.last_qty.mantissa()).into();
+            event["L"] = decimal(order.price.mantissa()).into();
+            event["Y"] = decimal(settlement.last_quote.mantissa()).into();
             event["t"] = fill.trade_id.0.into();
             event["n"] = decimal(settlement.fee).into();
             event["N"] = match settlement.fee == 0 {
@@ -225,8 +225,8 @@ impl VenueWire {
             .map(|balance| {
                 let mut row = template.clone();
                 row["a"] = balance.asset.into();
-                row["f"] = decimal(balance.free.0).into();
-                row["l"] = decimal(balance.locked.0).into();
+                row["f"] = decimal(balance.free.mantissa()).into();
+                row["l"] = decimal(balance.locked.mantissa()).into();
                 row
             })
             .collect();
@@ -251,10 +251,10 @@ impl VenueWire {
         event["c"] = self.client_order_id(order).into();
         event["i"] = order.venue_order_id.0.into();
         event["S"] = order.side.wire_name().into();
-        event["p"] = decimal(order.price.0).into();
-        event["q"] = decimal(order.qty.0).into();
-        event["z"] = decimal(order.filled.0).into();
-        event["Z"] = decimal(order.filled_quote).into();
+        event["p"] = decimal(order.price.mantissa()).into();
+        event["q"] = decimal(order.qty.mantissa()).into();
+        event["z"] = decimal(order.filled.mantissa()).into();
+        event["Z"] = decimal(order.filled_quote.mantissa()).into();
         extra(event);
         document.to_string()
     }
@@ -274,10 +274,10 @@ impl VenueWire {
         result["orderId"] = order.venue_order_id.0.into();
         result["status"] = venue_status_text(status).into();
         result["side"] = order.side.wire_name().into();
-        result["price"] = decimal(order.price.0).into();
-        result["origQty"] = decimal(order.qty.0).into();
-        result["executedQty"] = decimal(order.filled.0).into();
-        result["cummulativeQuoteQty"] = decimal(order.filled_quote).into();
+        result["price"] = decimal(order.price.mantissa()).into();
+        result["origQty"] = decimal(order.qty.mantissa()).into();
+        result["executedQty"] = decimal(order.filled.mantissa()).into();
+        result["cummulativeQuoteQty"] = decimal(order.filled_quote.mantissa()).into();
         extra(result);
         document.to_string()
     }

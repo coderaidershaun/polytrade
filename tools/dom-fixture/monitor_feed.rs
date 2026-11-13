@@ -72,7 +72,7 @@ impl Feed {
     }
 
     fn price(&self, tick_index: i64) -> Price {
-        Price(tick_index * self.tick.0)
+        Price::from_mantissa(tick_index * self.tick.mantissa())
     }
 
     fn levels(&self, rows: &[(i64, i64)]) -> Vec<Level> {
@@ -137,7 +137,7 @@ impl Feed {
         let filled = if matches!(state, OrderState::Closed(CloseReason::Filled)) {
             qm(QUOTE_QTY_MILLI)
         } else {
-            Qty(0)
+            Qty::from_mantissa(0)
         };
         self.send_order(OrderStep {
             ts,
@@ -268,7 +268,7 @@ impl Feed {
     }
 }
 
-const TICK: Price = Price(FIXED_SCALE);
+const TICK: Price = Price::from_mantissa(FIXED_SCALE);
 
 fn ts_at(relative: i64) -> VenueTs {
     VenueTs::from_micros(BASE_TS + relative)

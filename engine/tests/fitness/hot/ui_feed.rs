@@ -117,7 +117,11 @@ impl Strategy for MixedProbe {
     }
     fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
         ctx.emit(self.feature.expect("registered"), InstrumentId(0), 7.0);
-        QuoteProbe::declare(ctx, Side::Buy, Some((Price(100 * ONE), Qty(ONE))));
+        QuoteProbe::declare(
+            ctx,
+            Side::Buy,
+            Some((Price::from_mantissa(100 * ONE), Qty::from_mantissa(ONE))),
+        );
     }
 }
 
@@ -242,8 +246,8 @@ fn book_snapshot_lifecycle_from_commit_through_reset_and_rotation() {
 /// level on screen the engine has already cancelled.
 #[test]
 fn quote_tee_declares_then_expires() {
-    let bid = Some((Price(100 * ONE), Qty(ONE)));
-    let ask = Some((Price(101 * ONE), Qty(2 * ONE)));
+    let bid = Some((Price::from_mantissa(100 * ONE), Qty::from_mantissa(ONE)));
+    let ask = Some((Price::from_mantissa(101 * ONE), Qty::from_mantissa(2 * ONE)));
     let (mut engine, _books, mut events) =
         ui_engine(Box::new(QuoteProbe { bid, ask }), DurationUs::ZERO);
 
@@ -348,8 +352,8 @@ fn feed_events_tee_ahead_of_the_warmup_gate() {
         "trade: stamped with the ingress time"
     );
     assert_eq!(aggressor, Side::Sell, "trade: aggressor");
-    assert_eq!(price, Price(100 * ONE), "trade: price");
-    assert_eq!(qty, Qty(3 * ONE), "trade: qty");
+    assert_eq!(price, Price::from_mantissa(100 * ONE), "trade: price");
+    assert_eq!(qty, Qty::from_mantissa(3 * ONE), "trade: qty");
 
     let (mut engine, _books, mut events) = ui_engine(Box::new(Idle), warmup);
     engine.dispatch(&rotation(0, 300 * ONE, 600 * ONE, 30));
@@ -532,7 +536,7 @@ fn the_execution_gate_tee_reflects_whether_a_command_ring_is_wired() {
 /// command that nobody asked the engine to send.
 #[test]
 fn declared_quotes_bank_no_command_while_execution_is_off() {
-    let level = Some((Price(100 * ONE), Qty(ONE)));
+    let level = Some((Price::from_mantissa(100 * ONE), Qty::from_mantissa(ONE)));
     let probe = QuoteProbe {
         bid: level,
         ask: level,
@@ -597,9 +601,9 @@ fn a_partial_fill_updates_the_working_order_then_tees_one_fill() {
             evs[2],
             UiEvent::OrderUpdate {
                 state: OrderState::Live,
-                filled: Qty(ONE),
+                filled,
                 ..
-            }
+            } if filled == Qty::from_mantissa(ONE)
         ),
         "a partial fill must leave one live order with its cumulative fill projected, got {:?}",
         evs[2]
@@ -631,8 +635,12 @@ fn a_partial_fill_updates_the_working_order_then_tees_one_fill() {
     );
     assert_eq!(quote_level, Some(QuoteLevel::ZERO));
     assert_eq!(side, Side::Buy, "a fill on our bid means we bought");
-    assert_eq!(price, Price(100 * ONE));
-    assert_eq!(qty, Qty(ONE), "the executed size, not the resting order's");
+    assert_eq!(price, Price::from_mantissa(100 * ONE));
+    assert_eq!(
+        qty,
+        Qty::from_mantissa(ONE),
+        "the executed size, not the resting order's"
+    );
     // The pen's report is a maker fill charged nothing in an asset the registry does not name. Each
     // of the three is passed through rather than re-derived: a tee that substituted the instrument's
     // quote asset for `UNKNOWN` would book the fee against money it was never charged in, and one
@@ -651,7 +659,7 @@ fn a_partial_fill_updates_the_working_order_then_tees_one_fill() {
         1,
         "a partial fill updates the existing BID; it must not retire it or create a duplicate"
     );
-    assert_eq!(working[0].filled, Qty(ONE));
+    assert_eq!(working[0].filled, Qty::from_mantissa(ONE));
 }
 
 /// FITNESS: a full fill retires the UI's working order on the fill's own message sequence.
@@ -676,20 +684,20 @@ fn a_full_fill_retires_the_working_order_in_the_ui_model() {
     let MessageBody::Exec(event) = &mut adoption.body else {
         unreachable!("FillPen adoption is an execution event");
     };
-    event.qty = Qty(2 * ONE);
+    event.qty = Qty::from_mantissa(2 * ONE);
     let client_id = event.client_id;
     engine.dispatch(&adoption);
 
-    let full_qty = Qty(2 * ONE);
+    let full_qty = Qty::from_mantissa(2 * ONE);
     let full_fill = InboundMessage::new(
         ts(901),
         MessageBody::Exec(engine::msg::exec::ExecEvent {
             kind: ExecKind::ReportTrade,
             status: Some(VenueOrderStatus::Filled),
-            last_price: Price(100 * ONE),
+            last_price: Price::from_mantissa(100 * ONE),
             last_qty: full_qty,
             cumulative_qty: full_qty,
-            cumulative_quote: Price(100 * ONE).notional(full_qty),
+            cumulative_quote: Price::from_mantissa(100 * ONE).notional(full_qty),
             qty: full_qty,
             ..exec_event(InstrumentId(0), client_id, Side::Buy, 100 * ONE, 901)
         }),

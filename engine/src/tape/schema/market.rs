@@ -37,8 +37,8 @@ impl TableRow for TradeRow {
         Column::VenueTs("exchange_ts_us", |row| row.exchange_ts_us),
         Column::Ts("received_ts_us", |row| row.received_ts_us),
         Column::U16("instrument_id", |row| row.instrument.0),
-        Column::Mantissa("price", |row| row.price.0),
-        Column::Mantissa("qty", |row| row.qty.0),
+        Column::Mantissa("price", |row| row.price.mantissa()),
+        Column::Mantissa("qty", |row| row.qty.mantissa()),
         Column::Text("side", |row| row.side.as_str()),
     ];
 
@@ -54,8 +54,8 @@ impl TableRow for BookEventRow {
         Column::U16("instrument_id", |row| row.instrument.0),
         Column::Text("kind", |row| kind_str(row.kind)),
         Column::Text("side", |row| row.side.map_or("none", Side::as_str)),
-        Column::Mantissa("price", |row| row.price.0),
-        Column::Mantissa("qty", |row| row.qty.0),
+        Column::Mantissa("price", |row| row.price.mantissa()),
+        Column::Mantissa("qty", |row| row.qty.mantissa()),
         Column::U64("update_id", |row| row.update_id),
     ];
 
@@ -72,11 +72,11 @@ impl TableRow for KlineRow {
         Column::U16("instrument_id", |row| row.instrument.0),
         Column::Text("interval", |row| row.interval.as_str()),
         Column::VenueTs("open_ts_us", |row| row.open_ts_us),
-        Column::Mantissa("open", |row| row.open.0),
-        Column::Mantissa("high", |row| row.high.0),
-        Column::Mantissa("low", |row| row.low.0),
-        Column::Mantissa("close", |row| row.close.0),
-        Column::Mantissa("base_volume", |row| row.base_volume.0),
+        Column::Mantissa("open", |row| row.open.mantissa()),
+        Column::Mantissa("high", |row| row.high.mantissa()),
+        Column::Mantissa("low", |row| row.low.mantissa()),
+        Column::Mantissa("close", |row| row.close.mantissa()),
+        Column::Mantissa("base_volume", |row| row.base_volume.mantissa()),
         Column::Mantissa("quote_volume", |row| row.quote_volume),
         Column::U32("trade_count", |row| row.trade_count),
         Column::Bool("is_closed", |row| row.is_closed),

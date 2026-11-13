@@ -23,7 +23,7 @@ impl ShadowBook {
             Side::Buy => &mut self.bids,
             Side::Sell => &mut self.asks,
         };
-        if qty == Qty(0) {
+        if qty == Qty::from_mantissa(0) {
             book.remove(&price);
         } else {
             book.insert(price, qty);
@@ -38,7 +38,7 @@ impl ShadowBook {
     fn fill(book: &mut BTreeMap<Price, Qty>, levels: &[Level]) {
         book.clear();
         for level in levels {
-            if level.qty != Qty(0) {
+            if level.qty != Qty::from_mantissa(0) {
                 book.insert(level.price, level.qty);
             }
         }
@@ -64,7 +64,7 @@ impl ShadowBook {
         ascending_levels: &[Level],
         side: Side,
     ) -> Option<BookMismatch> {
-        let venue_level = |level: &&Level| level.qty != Qty(0);
+        let venue_level = |level: &&Level| level.qty != Qty::from_mantissa(0);
         let mut shadow = book.iter().map(|(&price, &qty)| Level { price, qty });
         let mut venue = ascending_levels.iter().filter(venue_level).copied();
         loop {

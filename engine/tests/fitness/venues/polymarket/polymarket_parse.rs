@@ -114,9 +114,15 @@ mod price_change {
         assert_eq!(&*change.changes[0].asset_id, "TOKEN_UP");
         assert_eq!(change.changes[0].side, Side::Buy);
         assert_eq!(change.changes[0].level, level(1_000_000, 1_809_933_000_000));
-        assert_eq!(change.changes[0].best_bid, Some(Price(50_000_000)));
+        assert_eq!(
+            change.changes[0].best_bid,
+            Some(Price::from_mantissa(50_000_000))
+        );
         assert_eq!(change.changes[1].side, Side::Sell);
-        assert_eq!(change.changes[1].best_ask, Some(Price(50_000_000)));
+        assert_eq!(
+            change.changes[1].best_ask,
+            Some(Price::from_mantissa(50_000_000))
+        );
     }
 
     #[test]
@@ -224,8 +230,8 @@ mod trade {
             panic!("trade frame");
         };
         assert_eq!(&*trade.asset_id, "TOKEN_UP");
-        assert_eq!(trade.price, Price(51_000_000));
-        assert_eq!(trade.qty, Qty(784_313_600));
+        assert_eq!(trade.price, Price::from_mantissa(51_000_000));
+        assert_eq!(trade.qty, Qty::from_mantissa(784_313_600));
         assert_eq!(trade.side, Side::Buy);
         assert_eq!(
             trade.exchange_ts_us,
@@ -315,7 +321,7 @@ mod decimals {
         let PolyFrame::Trade(trade) = trade_size("112122.430000").expect("parses") else {
             panic!("trade");
         };
-        assert_eq!(trade.qty, Qty(11_212_243_000_000));
+        assert_eq!(trade.qty, Qty::from_mantissa(11_212_243_000_000));
     }
 
     #[test]

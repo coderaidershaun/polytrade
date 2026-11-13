@@ -185,7 +185,7 @@ const BID_TICK: i64 = 11_823_450;
 const ASK_TICK: i64 = 11_823_451;
 
 fn btc_feed() -> BtcFeed {
-    let tick = Price(FIXED_SCALE / 100);
+    let tick = Price::from_mantissa(FIXED_SCALE / 100);
     let mut feed = Feed::with_tick(1, FULL_FEATURES.len(), tick);
     feed.set_catalog(btc_catalog(tick));
     feed.lifecycle(SystemNote::Starting);
@@ -267,7 +267,7 @@ fn btc_catalog(tick: Price) -> UiCatalog {
             base_asset: BTC,
             quote_asset: USDT,
             tick_size: Some(tick),
-            lot_size: Some(Qty(FIXED_SCALE / 1000)),
+            lot_size: Some(Qty::from_mantissa(FIXED_SCALE / 1000)),
             qty_scale: FIXED_SCALE,
         }],
         feature_names: FULL_FEATURES

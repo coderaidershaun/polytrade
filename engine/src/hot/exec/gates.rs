@@ -2,9 +2,9 @@
 //! latch, and why a side is not quoting. Each verdict is a pure function, testable without an engine.
 
 use crate::hot::digest::{digest_by_hash, digest_fields};
-use crate::hot::ledger::{PositionLedger, narrow};
+use crate::hot::ledger::{PositionLedger, narrow_quote, wide};
 use crate::log::hot_warn;
-use crate::msg::ids::{InstrumentId, Price, Qty, Side};
+use crate::msg::ids::{InstrumentId, Notional, Price, Qty, Side};
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::time::LocalTs;
 
@@ -73,16 +73,16 @@ pub enum LossVerdict {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SessionPnl {
-    pub mark_to_market_quote: Option<i64>,
-    pub realised_quote: i64,
+    pub mark_to_market_quote: Option<Notional>,
+    pub realised_quote: Notional,
     pub position_base: Qty,
 }
 
 #[inline]
-pub fn assess_loss(pnl: SessionPnl, max_loss: i64) -> LossVerdict {
+pub fn assess_loss(pnl: SessionPnl, max_loss: Notional) -> LossVerdict {
     debug_assert!(
-        max_loss >= 0,
-        "session loss budget is a magnitude, got {max_loss}"
+        max_loss >= Notional::ZERO,
+        "session loss budget is a magnitude, got {max_loss:?}"
     );
     // Realised loss (no price recovery possible) triggers halt.
     if breaches(pnl.realised_quote, max_loss) {
@@ -102,14 +102,14 @@ pub fn assess_loss(pnl: SessionPnl, max_loss: i64) -> LossVerdict {
 }
 
 #[inline]
-fn breaches(pnl_quote: i64, max_loss: i64) -> bool {
-    pnl_quote < 0 && pnl_quote <= -max_loss
+fn breaches(pnl_quote: Notional, max_loss: Notional) -> bool {
+    pnl_quote < Notional::ZERO && pnl_quote <= -max_loss
 }
 
 /// The side that shrinks a held position, or `None` when there is nothing to shrink.
 #[inline]
 pub(super) fn reducing_side(position_base: Qty) -> Option<Side> {
-    match position_base.0.signum() {
+    match position_base.mantissa().signum() {
         1 => Some(Side::Sell),
         -1 => Some(Side::Buy),
         _ => None,
@@ -118,13 +118,13 @@ pub(super) fn reducing_side(position_base: Qty) -> Option<Side> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExposureCheck {
-    pub exposure_quote: i64,
+    pub exposure_quote: Notional,
     pub position_base: Qty,
     pub has_mark: bool,
     pub side: Side,
     pub price: Price,
     pub qty: Qty,
-    pub ceiling_quote: i64,
+    pub ceiling_quote: Notional,
 }
 
 #[inline]
@@ -141,23 +141,23 @@ pub fn assess_exposure(check: ExposureCheck) -> QuotePermission {
     if !check.has_mark {
         return QuotePermission::ReducingOnly { reducing };
     }
-    let projected =
-        i128::from(check.exposure_quote) + signed(check.side, check.price.notional(check.qty));
-    if projected.abs() > i128::from(check.ceiling_quote) {
+    let projected = i128::from(check.exposure_quote.mantissa())
+        + signed(check.side, check.price.notional(check.qty));
+    if projected.abs() > i128::from(check.ceiling_quote.mantissa()) {
         return QuotePermission::ReducingOnly { reducing };
     }
     QuotePermission::Both
 }
 
 #[inline]
-fn signed(side: Side, notional_quote: i64) -> i128 {
+fn signed(side: Side, notional_quote: Notional) -> i128 {
     debug_assert!(
-        notional_quote >= 0,
-        "an order's notional is unsigned by contract, got {notional_quote}"
+        notional_quote >= Notional::ZERO,
+        "an order's notional is unsigned by contract, got {notional_quote:?}"
     );
     match side {
-        Side::Buy => i128::from(notional_quote),
-        Side::Sell => -i128::from(notional_quote),
+        Side::Buy => i128::from(notional_quote.mantissa()),
+        Side::Sell => -i128::from(notional_quote.mantissa()),
     }
 }
 
@@ -377,9 +377,9 @@ impl ExecEngine {
             match assess_loss(
                 SessionPnl {
                     mark_to_market_quote: baseline.map(|baseline| row.pnl_quote() - baseline),
-                    realised_quote: narrow(
-                        i128::from(row.session_realised_quote())
-                            + i128::from(self.realised_carried_quote(instrument)),
+                    realised_quote: narrow_quote(
+                        wide(row.session_realised_quote())
+                            + wide(self.realised_carried_quote(instrument)),
                         "session realised including carried windows",
                     ),
                     position_base: row.position_base(),

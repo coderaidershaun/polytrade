@@ -71,21 +71,21 @@ fn the_recorded_quote_is_the_order_that_gets_placed() {
         });
         assert_eq!(
             order.price,
-            Price((recorded * FIXED_SCALE as f64).round() as i64),
+            Price::from_mantissa((recorded * FIXED_SCALE as f64).round() as i64),
             "{column} recorded {recorded}, but the order went out at {}: the research column now \
              describes a price nobody quoted",
             order.price.to_f64(),
         );
-        let wanted =
-            i128::from(ORDER_NOTIONAL) * i128::from(FIXED_SCALE) / i128::from(order.price.0);
+        let wanted = i128::from(ORDER_NOTIONAL) * i128::from(FIXED_SCALE)
+            / i128::from(order.price.mantissa());
         assert_eq!(
-            i128::from(order.qty.0),
+            i128::from(order.qty.mantissa()),
             wanted - wanted.rem_euclid(i128::from(STEP)),
             "order_notional {} at {} is {wanted} base, which snaps down to the {STEP} step — the \
              order asked for {} instead",
             ORDER_NOTIONAL,
             order.price.to_f64(),
-            order.qty.0,
+            order.qty.mantissa(),
         );
     }
 }

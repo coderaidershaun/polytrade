@@ -8,7 +8,7 @@ use crate::hot::ledger::LedgerRow;
 use crate::hot::sink::{UiBookSink, UiEventSink};
 #[cfg(debug_assertions)]
 use crate::msg::ids::ClientOrderId;
-use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use crate::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use crate::msg::inbound::{Level, MarketRotation, TradeEvent};
 use crate::msg::time::LocalTs;
 use crate::msg::ui::{
@@ -82,8 +82,8 @@ impl UiEmitter {
         row: &LedgerRow,
         event_ts: LocalTs,
     ) {
-        let exposure_quote_units = to_quote_units(row.exposure_quote());
-        let pnl_quote_units = to_quote_units(row.pnl_quote());
+        let exposure_quote_units = row.exposure_quote().to_f64();
+        let pnl_quote_units = row.pnl_quote().to_f64();
         self.event_sink
             .push_stamped(&mut self.event_seq, |seq| UiEvent::Position {
                 instrument,
@@ -263,14 +263,9 @@ digest_fields! {
     }
 }
 
-#[inline]
-fn to_quote_units(mantissa: i64) -> f64 {
-    mantissa as f64 / FIXED_SCALE as f64
-}
-
 const EMPTY_LEVEL: Level = Level {
-    price: Price(0),
-    qty: Qty(0),
+    price: Price::from_mantissa(0),
+    qty: Qty::from_mantissa(0),
 };
 
 fn copy_top_levels(levels: &[Level], out: &mut [Level; UI_BOOK_LEVELS]) -> u16 {

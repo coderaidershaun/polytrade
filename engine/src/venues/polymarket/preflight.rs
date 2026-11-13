@@ -12,10 +12,13 @@ use super::rest::{GammaError, GammaMarket, PolyRest};
 
 /// Quote ticks for btc-updown-5m: 0.01 normally, and 0.001 near the 0/1 bounds at resolution.
 /// Any other tick refuses the start.
-const POLY_ACCEPTED_TICKS: [Price; 2] = [Price(FIXED_SCALE / 100), Price(FIXED_SCALE / 1000)];
+const POLY_ACCEPTED_TICKS: [Price; 2] = [
+    Price::from_mantissa(FIXED_SCALE / 100),
+    Price::from_mantissa(FIXED_SCALE / 1000),
+];
 
 /// Polymarket sizes in shares to two decimals, whatever the tick.
-const POLY_SHARE_STEP: Qty = Qty(FIXED_SCALE / 100);
+const POLY_SHARE_STEP: Qty = Qty::from_mantissa(FIXED_SCALE / 100);
 
 /// Our own ceiling, not the venue's: Polymarket publishes no per-market order count, and an
 /// unstamped one leaves the edge's mirror sized zero and the first placement fatal. Four full
@@ -103,7 +106,7 @@ pub fn stamp_poly_scales(registry: &mut Registry, market: &GammaMarket) {
             PolyLimits {
                 min_qty: market.min_order_size,
                 max_num_orders: POLY_MAX_ORDERS,
-                max_price: Price(FIXED_SCALE - market.tick_size.0),
+                max_price: Price::from_mantissa(FIXED_SCALE - market.tick_size.mantissa()),
             },
         );
     }
@@ -122,7 +125,7 @@ pub fn check_poly_market(market: &GammaMarket) -> Result<(), ScaleError> {
             actual: market.tick_size,
         });
     }
-    if market.min_order_size.0 <= 0 {
+    if market.min_order_size.mantissa() <= 0 {
         return Err(ScaleError::MinSizeNotPositive {
             symbol: market.slug.clone(),
             value: market.min_order_size,

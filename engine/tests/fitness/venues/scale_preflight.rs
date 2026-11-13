@@ -6,7 +6,7 @@
 //! refuses. `check_symbol_scale` and `check_poly_market` are pure.
 
 use engine::hot::exec::{MAX_ORDER_BUDGET_WINDOWS, OrderBudgetWindow};
-use engine::msg::ids::{AssetId, Price, Qty};
+use engine::msg::ids::{AssetId, Notional, Price, Qty};
 use engine::msg::time::{DurationUs, VenueTs};
 use engine::runtime::config::{BinanceEnv, BinanceMarket, VenueMarket};
 use engine::runtime::registry::{InstrumentRow, OrderRateLimit, RateInterval, Registry};
@@ -64,9 +64,9 @@ fn each_market_parses_to_its_own_exact_grid_and_limits() {
             "perp",
             btc_perp(),
             perp_info(),
-            Price(10_000_000),
-            Qty(100_000),
-            Qty(100_000),
+            Price::from_mantissa(10_000_000),
+            Qty::from_mantissa(100_000),
+            Qty::from_mantissa(100_000),
             50 * ONE,
             200,
             None,
@@ -75,9 +75,9 @@ fn each_market_parses_to_its_own_exact_grid_and_limits() {
             "spot",
             btc_spot(),
             spot_info(),
-            Price(1_000_000),
-            Qty(1_000),
-            Qty(1_000),
+            Price::from_mantissa(1_000_000),
+            Qty::from_mantissa(1_000),
+            Qty::from_mantissa(1_000),
             500_000_000,
             200,
             Some(10),
@@ -95,7 +95,11 @@ fn each_market_parses_to_its_own_exact_grid_and_limits() {
         // LOT_SIZE.minQty — NOT MARKET_LOT_SIZE.minQty, which the spot fixture quotes as
         // "0.00000000"; reading the wrong filter yields a floor of zero, i.e. no floor at all.
         assert_eq!(limits.min_qty, min_qty, "{case}: LOT_SIZE.minQty");
-        assert_eq!(limits.min_notional, min_notional, "{case}: minNotional");
+        assert_eq!(
+            limits.min_notional,
+            Notional::from_mantissa(min_notional),
+            "{case}: minNotional"
+        );
         assert_eq!(
             limits.max_num_orders, max_orders,
             "{case}: max resting orders"
@@ -387,38 +391,59 @@ logging:
 #[test]
 fn poly_preflight_accepts_the_venue_ticks_and_stamps_the_accepted_grid() {
     // 0.01 at the 1e-8 scale = 1_000_000 — the tick book_capacity 128 and the 0..1 scale assume.
-    check_poly_market(&poly_market(Price(1_000_000), Qty(500_000_000)))
-        .expect("the 0.01 design tick with a positive min size passes");
+    check_poly_market(&poly_market(
+        Price::from_mantissa(1_000_000),
+        Qty::from_mantissa(500_000_000),
+    ))
+    .expect("the 0.01 design tick with a positive min size passes");
 
     // 0.001 = 100_000: the venue's endgame tick near the 0/1 bounds must not refuse a boot.
-    check_poly_market(&poly_market(Price(100_000), Qty(500_000_000)))
-        .expect("the 0.001 endgame tick passes");
+    check_poly_market(&poly_market(
+        Price::from_mantissa(100_000),
+        Qty::from_mantissa(500_000_000),
+    ))
+    .expect("the 0.001 endgame tick passes");
 
     assert!(
         matches!(
-            check_poly_market(&poly_market(Price(500_000), Qty(500_000_000)))
-                .expect_err("a 0.005 tick must refuse the start"),
+            check_poly_market(&poly_market(
+                Price::from_mantissa(500_000),
+                Qty::from_mantissa(500_000_000)
+            ))
+            .expect_err("a 0.005 tick must refuse the start"),
             PolyScaleError::TickNotAccepted { .. }
         ),
         "a tick outside the accepted set refuses",
     );
 
-    match check_poly_market(&poly_market(Price(2_000_000), Qty(500_000_000)))
-        .expect_err("a 0.02 tick must refuse the start")
+    match check_poly_market(&poly_market(
+        Price::from_mantissa(2_000_000),
+        Qty::from_mantissa(500_000_000),
+    ))
+    .expect_err("a 0.02 tick must refuse the start")
     {
         PolyScaleError::TickNotAccepted {
             actual, expected, ..
         } => {
-            assert_eq!(actual, Price(2_000_000));
-            assert_eq!(expected, [Price(1_000_000), Price(100_000)]);
+            assert_eq!(actual, Price::from_mantissa(2_000_000));
+            assert_eq!(
+                expected,
+                [
+                    Price::from_mantissa(1_000_000),
+                    Price::from_mantissa(100_000)
+                ]
+            );
         }
         other => panic!("expected TickNotAccepted, got {other:?}"),
     }
 
     assert!(
         matches!(
-            check_poly_market(&poly_market(Price(1_000_000), Qty(0)))
-                .expect_err("an absent orderMinSize must refuse"),
+            check_poly_market(&poly_market(
+                Price::from_mantissa(1_000_000),
+                Qty::from_mantissa(0)
+            ))
+            .expect_err("an absent orderMinSize must refuse"),
             PolyScaleError::MinSizeNotPositive { .. }
         ),
         "a non-positive min order size refuses",
@@ -434,7 +459,10 @@ fn poly_preflight_accepts_the_venue_ticks_and_stamps_the_accepted_grid() {
     );
 
     // The 0.01 design tick and a 5.0 min order size, both exact at the 1e-8 scale.
-    let current = poly_market(Price(1_000_000), Qty(500_000_000));
+    let current = poly_market(
+        Price::from_mantissa(1_000_000),
+        Qty::from_mantissa(500_000_000),
+    );
     stamp_poly_scales(&mut registry, &current);
 
     let poly_rows: Vec<&InstrumentRow> = registry
@@ -444,12 +472,24 @@ fn poly_preflight_accepts_the_venue_ticks_and_stamps_the_accepted_grid() {
         .collect();
     assert_eq!(poly_rows.len(), 4, "the series fans out to four slots");
     for row in poly_rows {
-        assert_eq!(row.tick_size, Some(Price(1_000_000)), "slot tick stamped");
+        assert_eq!(
+            row.tick_size,
+            Some(Price::from_mantissa(1_000_000)),
+            "slot tick stamped"
+        );
         // The venue's two-decimal share step, NOT the 5.0 minimum: a floor stamped as a step
         // quantises every order to whole multiples of the minimum. `poly_exec_rows` pins where the
         // minimum went and what else the same pass stamps.
-        assert_eq!(row.lot_size, Some(Qty(1_000_000)), "slot step stamped");
-        assert_eq!(row.min_qty, Some(Qty(500_000_000)), "slot floor stamped");
+        assert_eq!(
+            row.lot_size,
+            Some(Qty::from_mantissa(1_000_000)),
+            "slot step stamped"
+        );
+        assert_eq!(
+            row.min_qty,
+            Some(Qty::from_mantissa(500_000_000)),
+            "slot floor stamped"
+        );
     }
 }
 

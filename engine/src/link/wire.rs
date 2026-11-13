@@ -64,6 +64,22 @@ macro_rules! wire_newtype {
     };
 }
 
+macro_rules! wire_mantissa {
+    ($($ty:ident),+ $(,)?) => {
+        $(impl WireField for $ty {
+            #[inline]
+            fn write(&self, writer: &mut ByteWriter<'_>) {
+                self.mantissa().write(writer);
+            }
+
+            #[inline]
+            fn read(reader: &mut ByteReader<'_>) -> Result<Self, LinkDecodeError> {
+                Ok($ty::from_mantissa(i64::read(reader)?))
+            }
+        })+
+    };
+}
+
 /// An absent value still occupies its bytes, so the tail width never depends on the data. The reader
 /// therefore takes the value before it looks at the presence byte.
 macro_rules! wire_optional {
@@ -92,11 +108,11 @@ macro_rules! wire_optional_mantissa {
     ($($ty:ident),+ $(,)?) => {
         $(impl WireField for Option<$ty> {
             fn write(&self, writer: &mut ByteWriter<'_>) {
-                self.map(|value| value.0).write(writer);
+                self.map(|value| value.mantissa()).write(writer);
             }
 
             fn read(reader: &mut ByteReader<'_>) -> Result<Self, LinkDecodeError> {
-                Ok(Option::<i64>::read(reader)?.map($ty))
+                Ok(Option::<i64>::read(reader)?.map($ty::from_mantissa))
             }
         })+
     };
@@ -180,10 +196,10 @@ wire_newtype! {
     AssetId => u16,
     FeatureId => u16,
     ClientOrderId => u64,
-    Price => i64,
-    Qty => i64,
     LinkHash => u64,
 }
+
+wire_mantissa!(Price, Qty);
 
 pub(super) const OPTIONAL_MANTISSA_LEN: usize = 1 + 8;
 pub(super) const OPTIONAL_F64_LEN: usize = 1 + 8;
@@ -203,7 +219,8 @@ wire_optional_mantissa!(Price, Qty);
 impl WireField for Option<(Price, Qty)> {
     fn write(&self, writer: &mut ByteWriter<'_>) {
         self.map(|(price, _)| price).write(writer);
-        self.map_or(Qty(0), |(_, qty)| qty).write(writer);
+        self.map_or(Qty::from_mantissa(0), |(_, qty)| qty)
+            .write(writer);
     }
 
     fn read(reader: &mut ByteReader<'_>) -> Result<Self, LinkDecodeError> {

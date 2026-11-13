@@ -6,7 +6,7 @@ use crate::hot::ledger::{LedgerFill, PositionLedger};
 use crate::hot::strategy::Actions;
 use crate::log::{hot_error, hot_warn};
 use crate::msg::exec::{ExecEvent, ExecKind, RejectClass};
-use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Side};
+use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Side};
 use crate::msg::persist::{OrderLifecycle, OrderTransition};
 use crate::msg::time::LocalTs;
 use crate::runtime::config::MAX_QUOTE_LEVELS;
@@ -67,7 +67,7 @@ impl ExecEngine {
     pub(super) fn retry_reservation_releases(&mut self) {
         for index in 0..MAX_ORDER_SLOTS {
             let slot = self.orders.slot(index);
-            if slot.reserved_amount == 0 || slot.state == OrderState::PendingNew {
+            if slot.reserved_amount.is_none() || slot.state == OrderState::PendingNew {
                 continue;
             }
             self.release_reservation(index);
@@ -183,6 +183,7 @@ impl ExecEngine {
         let quote_asset = self.instruments[usize::from(slot.instrument.0)].quote_asset;
         let commission_quote =
             if event.commission_asset == quote_asset { event.commission } else { 0 };
+        let commission_quote = Notional::from_mantissa(commission_quote);
         ledger.apply_fill(&LedgerFill {
             instrument: slot.instrument,
             side: slot.side,
@@ -223,7 +224,7 @@ impl ExecEngine {
     /// drops `free` and releasing before it lands would double-spend.
     fn release_reservation(&mut self, index: usize) {
         let slot = self.orders.slot(index);
-        if slot.reserved_amount == 0 {
+        if slot.reserved_amount.is_none() {
             return;
         }
         let asset = self.instruments[usize::from(slot.instrument.0)].spend_asset(slot.side);
@@ -236,7 +237,7 @@ impl ExecEngine {
         if slot.state.is_working() {
             return;
         }
-        if slot.filled_base.0 == 0 {
+        if slot.filled_base.mantissa() == 0 {
             self.release_unsent_reservation(index);
             return;
         }
@@ -247,22 +248,23 @@ impl ExecEngine {
     /// held for the next spin to retry.
     fn gated_release(&mut self, index: usize, asset: AssetId) {
         let slot = self.orders.slot(index);
-        let outcome = self
-            .account
-            .release(asset, slot.reserved_amount, slot.reserved_at);
+        let Some(amount) = slot.reserved_amount else {
+            return;
+        };
+        let outcome = self.account.release(asset, amount, slot.reserved_at);
         if outcome == ReleaseOutcome::Released {
-            self.orders.slot_mut(index).reserved_amount = 0;
+            self.orders.slot_mut(index).reserved_amount = None;
         }
     }
 
     pub(super) fn release_unsent_reservation(&mut self, index: usize) {
         let slot = self.orders.slot(index);
-        if slot.reserved_amount == 0 {
+        let Some(amount) = slot.reserved_amount else {
             return;
-        }
+        };
         let asset = self.instruments[usize::from(slot.instrument.0)].spend_asset(slot.side);
-        self.account.release_unsent(asset, slot.reserved_amount);
-        self.orders.slot_mut(index).reserved_amount = 0;
+        self.account.release_unsent(asset, amount);
+        self.orders.slot_mut(index).reserved_amount = None;
     }
 
     /// A venue answer ends the reject streak, extends it, or leaves it alone. `Refused` leaves it

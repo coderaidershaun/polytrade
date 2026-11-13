@@ -63,7 +63,7 @@ impl Strategy for LedgerProbe {
     fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
         *self.latest.lock().expect("probe mutex poisoned") = Some(Reading {
             position_base: ctx.position_base(INSTRUMENT),
-            pnl_quote: ctx.pnl_quote(INSTRUMENT),
+            pnl_quote: ctx.pnl_quote(INSTRUMENT).mantissa(),
             resting_buy: ctx
                 .resting(INSTRUMENT, Side::Buy, engine::hot::exec::QuoteLevel::ZERO)
                 .is_some(),
@@ -130,11 +130,11 @@ fn prior_run_trade(
             kind: ExecKind::ReportTrade,
             provenance: Provenance::PriorRun,
             status: Some(VenueOrderStatus::PartiallyFilled),
-            qty: Qty(4 * ONE),
-            last_price: Price(price),
-            last_qty: Qty(last),
-            cumulative_qty: Qty(cumulative),
-            cumulative_quote: Price(price).notional(Qty(cumulative)),
+            qty: Qty::from_mantissa(4 * ONE),
+            last_price: Price::from_mantissa(price),
+            last_qty: Qty::from_mantissa(last),
+            cumulative_qty: Qty::from_mantissa(cumulative),
+            cumulative_quote: Price::from_mantissa(price).notional(Qty::from_mantissa(cumulative)),
             ..exec_event(INSTRUMENT, client_id, side, price, when)
         }),
     )
@@ -148,7 +148,7 @@ fn unanswered_order(when: i64) -> InboundMessage {
         ts(when),
         MessageBody::Exec(ExecEvent {
             kind: ExecKind::SnapshotOrder,
-            qty: Qty(4 * ONE),
+            qty: Qty::from_mantissa(4 * ONE),
             ..exec_event(INSTRUMENT, client_id, Side::Buy, 100 * ONE, when)
         }),
     )
@@ -180,7 +180,7 @@ fn a_prior_run_fill_moves_the_money_once_banks_its_rows_and_still_cancels() {
     let first = read(&mut fixture, 0, 20);
     assert_eq!(
         first.position_base,
-        Qty(ONE),
+        Qty::from_mantissa(ONE),
         "the venue filled an order this account owns and the position did not move"
     );
     assert_eq!(
@@ -198,7 +198,7 @@ fn a_prior_run_fill_moves_the_money_once_banks_its_rows_and_still_cancels() {
     );
     let fill = banked.fills[0];
     assert_eq!(fill.provenance, Provenance::PriorRun);
-    assert_eq!(fill.booked_qty, Qty(ONE));
+    assert_eq!(fill.booked_qty, Qty::from_mantissa(ONE));
     assert_eq!(fill.side, Side::Buy);
     assert!(
         banked
@@ -230,7 +230,7 @@ fn a_prior_run_fill_moves_the_money_once_banks_its_rows_and_still_cancels() {
     let redelivered = read(&mut fixture, 1, 40);
     assert_eq!(
         redelivered.position_base,
-        Qty(ONE),
+        Qty::from_mantissa(ONE),
         "a redelivered report carries totals already folded and must move nothing"
     );
     assert_eq!(redelivered.pnl_quote, -(100 * ONE));
@@ -249,7 +249,7 @@ fn a_prior_run_fill_moves_the_money_once_banks_its_rows_and_still_cancels() {
     let second = read(&mut fixture, 2, 60);
     assert_eq!(
         second.position_base,
-        Qty(2 * ONE),
+        Qty::from_mantissa(2 * ONE),
         "the second execution is a real one — its cumulative advanced"
     );
     assert_eq!(second.pnl_quote, -(200 * ONE));
@@ -279,7 +279,7 @@ fn a_prior_run_order_takes_no_slot_this_run_quotes_from() {
     let reading = read(&mut fixture, 0, 20);
     assert_eq!(
         reading.position_base,
-        Qty(ONE),
+        Qty::from_mantissa(ONE),
         "the fill still has to land — this test is about WHERE the order lives, not whether it paid"
     );
     assert!(

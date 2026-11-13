@@ -11,12 +11,12 @@ use engine::operator::workstation::format::price_decimals;
 
 use crate::fixture::{book, levels, px, qm};
 
-const TICK: Price = Price(FIXED_SCALE);
+const TICK: Price = Price::from_mantissa(FIXED_SCALE);
 const QTY_SCALE: i64 = FIXED_SCALE;
 const QUOTE_QTY_MILLI: i64 = 9_000;
 
 /// The grouped scene's grid: a 0.01 tick on a 118,000 mid, so 1 bp is 1,180 ticks, or 11.80 a row.
-const GROUPED_TICK: Price = Price(FIXED_SCALE / 100);
+const GROUPED_TICK: Price = Price::from_mantissa(FIXED_SCALE / 100);
 const GROUPED_MID_TICK: i64 = 11_800_000;
 const GROUPED_QUOTE_QTY_MILLI: i64 = 250;
 
@@ -356,7 +356,7 @@ fn order(id: u64, price: Price, milli: i64, status: OrderStatus) -> OrderCell {
         status,
         price,
         qty: qm(milli),
-        filled: Qty(0),
+        filled: Qty::from_mantissa(0),
         at: VenueTs::from_micros(0),
         quote_level: None,
     }
@@ -411,7 +411,7 @@ fn levels_from(base_tick: i64, offsets: &[(i64, i64)]) -> Vec<Level> {
 }
 
 fn grid_px(tick: i64) -> Price {
-    Price(tick * GROUPED_TICK.0)
+    Price::from_mantissa(tick * GROUPED_TICK.mantissa())
 }
 
 /// The best bid and ask of a BTC-sized book on the 0.01 grid: 117234.56 and 117234.57.

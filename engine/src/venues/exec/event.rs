@@ -5,7 +5,7 @@ use crate::msg::exec::{
     ACCOUNT_CHUNK_ASSETS, AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind,
     Provenance, RejectClass,
 };
-use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
+use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side};
 use crate::msg::time::{LocalTs, VenueTs};
 
 // A timed-out request may still have reached the venue, so its outcome is ambiguous and only a
@@ -89,12 +89,12 @@ pub(crate) fn blank(
         provenance: Provenance::Mine,
         side: Side::Buy,
         liquidity: None,
-        price: Price(0),
-        qty: Qty(0),
-        last_price: Price(0),
-        last_qty: Qty(0),
-        cumulative_qty: Qty(0),
-        cumulative_quote: 0,
+        price: Price::from_mantissa(0),
+        qty: Qty::from_mantissa(0),
+        last_price: Price::from_mantissa(0),
+        last_qty: Qty::from_mantissa(0),
+        cumulative_qty: Qty::from_mantissa(0),
+        cumulative_quote: Notional::ZERO,
         commission: 0,
         commission_asset: AssetId::UNKNOWN,
         reject_code: 0,

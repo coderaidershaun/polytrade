@@ -335,7 +335,7 @@ impl SimVenue {
             let taken = record.order.take(offered);
             let last_price = record.order.price;
             let is_complete = record.order.is_complete();
-            if taken.0 == 0 {
+            if taken.mantissa() == 0 {
                 return OwnFill { taken, is_complete };
             }
             let settlement = wallet.fill(
@@ -397,6 +397,6 @@ impl SimVenue {
 }
 
 const VACATE: OwnFill = OwnFill {
-    taken: Qty(0),
+    taken: Qty::from_mantissa(0),
     is_complete: true,
 };

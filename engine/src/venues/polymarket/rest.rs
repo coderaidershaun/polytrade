@@ -246,8 +246,8 @@ fn build_market(
         condition_id: raw.condition_id.as_str().into(),
         token_up: token_up.into(),
         token_down: token_down.into(),
-        tick_size: Price(mantissa(raw.tick_size)),
-        min_order_size: Qty(mantissa(raw.min_order_size)),
+        tick_size: Price::from_mantissa(mantissa(raw.tick_size)),
+        min_order_size: Qty::from_mantissa(mantissa(raw.min_order_size)),
         window_open_ts_us: seconds_to_us(window_start_s),
         window_close_ts_us: seconds_to_us(window_start_s) + series.window_len(),
     })

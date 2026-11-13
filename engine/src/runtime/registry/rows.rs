@@ -1,7 +1,7 @@
 //! `SourceSpec` -> instrument rows: one venue's config block becomes the dense, frozen rows every
 //! later stage addresses by [`InstrumentId`]. Row order fixes those ids, so it is replay-visible.
 
-use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId};
+use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Notional};
 use crate::runtime::config::{
     BinanceEnv, ConfigError, Instruments, KlineInterval, SourceSpec, Subscriptions, TrackerSpec,
     VenueMarket, validated_mantissa,
@@ -57,7 +57,9 @@ pub(super) fn build_instrument_rows(
                 subscriptions: *subscriptions,
                 kline_intervals: kline_intervals.clone(),
                 book_capacity: *book_capacity,
-                max_exposure_quote: validated_mantissa(*max_exposure_quote),
+                max_exposure_quote: Notional::from_mantissa(validated_mantissa(
+                    *max_exposure_quote,
+                )),
                 tracker: tracker.clone(),
             };
             let names = RowNames {
@@ -87,7 +89,9 @@ pub(super) fn build_instrument_rows(
                 subscriptions: Subscriptions::from(*subscriptions),
                 kline_intervals: Vec::new(),
                 book_capacity: *book_capacity,
-                max_exposure_quote: validated_mantissa(*max_exposure_quote),
+                max_exposure_quote: Notional::from_mantissa(validated_mantissa(
+                    *max_exposure_quote,
+                )),
                 tracker: tracker.clone(),
             };
             // The base asset is the LEG, not the underlying. Every slot here is a distinct
@@ -122,7 +126,7 @@ struct SourceRowSpec {
     subscriptions: Subscriptions,
     kline_intervals: Vec<KlineInterval>,
     book_capacity: usize,
-    max_exposure_quote: i64,
+    max_exposure_quote: Notional,
     tracker: TrackerSpec,
 }
 

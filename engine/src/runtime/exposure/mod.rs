@@ -30,7 +30,7 @@ pub struct InstrumentExposure {
 impl InstrumentExposure {
     pub const EMPTY: InstrumentExposure = InstrumentExposure {
         instrument: InstrumentId(0),
-        position_base: Qty(0),
+        position_base: Qty::from_mantissa(0),
         cash_quote: 0,
         basis_quote: 0,
     };
@@ -38,7 +38,7 @@ impl InstrumentExposure {
     /// An all-zero row can be dropped on a config change without losing anything.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.position_base.0 == 0 && self.cash_quote == 0 && self.basis_quote == 0
+        self.position_base.mantissa() == 0 && self.cash_quote == 0 && self.basis_quote == 0
     }
 }
 
@@ -217,7 +217,7 @@ pub fn load(
         };
         instruments.push(InstrumentExposure {
             instrument: row.instrument_id,
-            position_base: Qty(entry.position_base),
+            position_base: Qty::from_mantissa(entry.position_base),
             cash_quote: entry.cash_quote,
             basis_quote: entry.basis_quote,
         });
@@ -241,7 +241,11 @@ fn aggregate_assets(instruments: &[InstrumentExposure], registry: &Registry) -> 
     let mut amounts = vec![0i128; registry.assets().len()];
     for exposure in instruments {
         let row = registry.instrument(exposure.instrument);
-        add_amount(&mut amounts, row.base_asset, exposure.position_base.0);
+        add_amount(
+            &mut amounts,
+            row.base_asset,
+            exposure.position_base.mantissa(),
+        );
         add_amount(&mut amounts, row.quote_asset, exposure.cash_quote);
     }
     asset_amounts(&amounts)

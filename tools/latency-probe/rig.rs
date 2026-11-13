@@ -12,7 +12,7 @@ use engine::hot::dispatch::{ExposureWiring, HotEngine, HotEngineSetup};
 use engine::hot::sink::{ExposureSink, StrategyLogSink, UiBookSink, UiEventSink};
 use engine::hot::strategy::{EngineView, Strategy, StrategyConfig};
 use engine::log::{LogConfig, LogHandle};
-use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty};
+use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Notional, Price, Qty};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick, TradeEvent};
 use engine::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, Stamper};
 use engine::runtime::config::{
@@ -62,10 +62,10 @@ pub fn instrument() -> InstrumentRow {
         quote: "USDT".into(),
         base_asset: AssetId(0),
         quote_asset: AssetId(1),
-        tick_size: Some(Price(FIXED_SCALE / 100)),
-        lot_size: Some(Qty(1_000)),
-        min_qty: Some(Qty(1_000)),
-        min_notional: Some(5 * FIXED_SCALE),
+        tick_size: Some(Price::from_mantissa(FIXED_SCALE / 100)),
+        lot_size: Some(Qty::from_mantissa(1_000)),
+        min_qty: Some(Qty::from_mantissa(1_000)),
+        min_notional: Some(Notional::from_mantissa(5 * FIXED_SCALE)),
         max_num_orders: None,
         max_num_order_amends: None,
         max_price: None,
@@ -73,7 +73,7 @@ pub fn instrument() -> InstrumentRow {
         subscriptions: Subscriptions::default(),
         kline_intervals: vec![KlineInterval::OneMinute],
         book_capacity: 128,
-        max_exposure_quote: 1_000_000 * FIXED_SCALE,
+        max_exposure_quote: Notional::from_mantissa(1_000_000 * FIXED_SCALE),
         tracker: TrackerSpec::default(),
     }
 }

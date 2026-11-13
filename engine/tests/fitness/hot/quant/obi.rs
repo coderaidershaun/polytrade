@@ -10,8 +10,8 @@ const SCALE: i64 = 100_000_000;
 
 fn level(price: i64, qty: i64) -> Level {
     Level {
-        price: Price(price * SCALE),
-        qty: Qty(qty * SCALE),
+        price: Price::from_mantissa(price * SCALE),
+        qty: Qty::from_mantissa(qty * SCALE),
     }
 }
 

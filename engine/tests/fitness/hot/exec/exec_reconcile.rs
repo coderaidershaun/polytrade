@@ -23,7 +23,9 @@ use engine::hot::exec::{
 use engine::msg::exec::{
     ExecEvent, ExecKind, OrderStyle, Provenance, RejectClass, VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, VenueOrderId};
+use engine::msg::ids::{
+    AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, VenueOrderId,
+};
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use proptest::prelude::*;
 
@@ -41,8 +43,8 @@ fn grid() -> TickGrid {
     TickGrid {
         tick: TICK,
         step: STEP,
-        min_qty: Qty(STEP),
-        min_notional: 0,
+        min_qty: Qty::from_mantissa(STEP),
+        min_notional: Notional::from_mantissa(0),
         max_amends: 10,
         max_price: None,
     }
@@ -54,23 +56,23 @@ fn limits() -> ExecLimits {
         // Wide enough that the band is not what any of these cases is testing; the band has its own.
         max_quote_distance_centi_bps: 100 * 100 * 100,
         max_book_age: DurationUs::from_secs(2),
-        max_order_notional_quote: i64::MAX / 2,
+        max_order_notional_quote: Notional::from_mantissa(i64::MAX / 2),
     }
 }
 
 fn want(price: i64, qty: i64) -> Option<DesiredQuote> {
     Some(DesiredQuote {
-        price: Price(price),
-        qty: Qty(qty),
+        price: Price::from_mantissa(price),
+        qty: Qty::from_mantissa(qty),
         style: OrderStyle::PostOnly,
     })
 }
 
 fn live(price: i64, qty: i64) -> Option<RestingOrder> {
     Some(RestingOrder {
-        price: Price(price),
-        qty: Qty(qty),
-        filled: Qty(0),
+        price: Price::from_mantissa(price),
+        qty: Qty::from_mantissa(qty),
+        filled: Qty::from_mantissa(0),
         amends_used: 0,
     })
 }
@@ -81,8 +83,8 @@ fn amending_slot(qty: i64) -> OrderSlot {
         client_id: ClientOrderId(1),
         state: OrderState::AmendInFlight,
         side: Side::Buy,
-        price: Price(passive(Side::Buy)),
-        qty: Qty(qty),
+        price: Price::from_mantissa(passive(Side::Buy)),
+        qty: Qty::from_mantissa(qty),
         ..OrderSlot::EMPTY
     }
 }
@@ -100,12 +102,12 @@ fn amend_answer(kind: ExecKind, qty: i64) -> ExecEvent {
         provenance: Provenance::Mine,
         side: Side::Buy,
         liquidity: None,
-        price: Price(passive(Side::Buy)),
-        qty: Qty(qty),
-        last_price: Price(0),
-        last_qty: Qty(0),
-        cumulative_qty: Qty(0),
-        cumulative_quote: 0,
+        price: Price::from_mantissa(passive(Side::Buy)),
+        qty: Qty::from_mantissa(qty),
+        last_price: Price::from_mantissa(0),
+        last_qty: Qty::from_mantissa(0),
+        cumulative_qty: Qty::from_mantissa(0),
+        cumulative_quote: Notional::from_mantissa(0),
         commission: 0,
         commission_asset: AssetId::UNKNOWN,
         reject_code: 0,
@@ -171,7 +173,7 @@ fn apply(resting: Option<RestingOrder>, outcome: ReconcileOutcome) -> Option<Res
         ReconcileOutcome::Place(intent) => Some(RestingOrder {
             price: intent.price,
             qty: intent.qty,
-            filled: Qty(0),
+            filled: Qty::from_mantissa(0),
             amends_used: 0,
         }),
         ReconcileOutcome::AmendQty(qty) => resting.map(|order| RestingOrder {
@@ -228,13 +230,13 @@ proptest! {
         if let Some(intent) = placed(outcome) {
             match side {
                 Side::Buy => prop_assert!(
-                    intent.price < Price(100 * ONE + TICK),
+                    intent.price < Price::from_mantissa(100 * ONE + TICK),
                     "emitted a buy at {:?} against a best ask of {:?}",
                     intent.price,
                     100 * ONE + TICK
                 ),
                 Side::Sell => prop_assert!(
-                    intent.price > Price(100 * ONE),
+                    intent.price > Price::from_mantissa(100 * ONE),
                     "emitted a sell at {:?} against a best bid of {:?}",
                     intent.price,
                     100 * ONE
@@ -261,18 +263,18 @@ proptest! {
             ..input(side, want(wanted_price, qty), None)
         });
         let Some(intent) = placed(outcome) else { return Ok(()); };
-        prop_assert_eq!(intent.price.0 % TICK, 0, "price {:?} is off the tick grid", intent.price);
-        prop_assert_eq!(intent.qty.0 % STEP, 0, "qty {:?} is off the step grid", intent.qty);
-        prop_assert!(intent.qty <= Qty(qty), "size grew from {} to {:?}", qty, intent.qty);
+        prop_assert_eq!(intent.price.mantissa() % TICK, 0, "price {:?} is off the tick grid", intent.price);
+        prop_assert_eq!(intent.qty.mantissa() % STEP, 0, "qty {:?} is off the step grid", intent.qty);
+        prop_assert!(intent.qty <= Qty::from_mantissa(qty), "size grew from {} to {:?}", qty, intent.qty);
         match side {
             Side::Buy => prop_assert!(
-                intent.price <= Price(wanted_price),
+                intent.price <= Price::from_mantissa(wanted_price),
                 "a bid snapped UP, from {} to {:?}",
                 wanted_price,
                 intent.price
             ),
             Side::Sell => prop_assert!(
-                intent.price >= Price(wanted_price),
+                intent.price >= Price::from_mantissa(wanted_price),
                 "an ask snapped DOWN, from {} to {:?}",
                 wanted_price,
                 intent.price
@@ -301,7 +303,7 @@ proptest! {
         let desired = want(passive(side) + want_ticks * TICK, qty_steps * STEP);
         let mut resting = live(passive(side) + resting_ticks * TICK, resting_steps * STEP)
             .map(|order| RestingOrder {
-                filled: Qty(filled_steps.min(resting_steps - 1) * STEP),
+                filled: Qty::from_mantissa(filled_steps.min(resting_steps - 1) * STEP),
                 ..order
             });
         let mut issued = Vec::new();
@@ -345,7 +347,7 @@ proptest! {
         if let Some(intent) = placed(outcome) {
             prop_assert_eq!(
                 intent.price,
-                Price(resting_price),
+                Price::from_mantissa(resting_price),
                 "requoted from {} to {:?} for a {}-tick move inside the band",
                 resting_price,
                 intent.price,
@@ -377,7 +379,7 @@ proptest! {
         } else {
             prop_assert_eq!(
                 outcome,
-                ReconcileOutcome::AmendQty(Qty(5 * STEP)),
+                ReconcileOutcome::AmendQty(Qty::from_mantissa(5 * STEP)),
                 "an amend was available at {} used, yet the outcome was {:?}",
                 amends_used,
                 outcome
@@ -500,7 +502,7 @@ fn an_amend_answer_lands_the_size_once_and_spends_exactly_one_amend_per_command(
         }
         assert_eq!(
             slot.qty,
-            Qty(4 * STEP),
+            Qty::from_mantissa(4 * STEP),
             "the slot did not settle on the venue's size after {answers:?}"
         );
         assert_eq!(
@@ -561,7 +563,7 @@ fn a_definitive_zero_retires_the_amend_and_an_unknown_leaves_it_alone() {
     );
     assert_eq!(
         reconcile_side(input(Side::Buy, shrink, resting_of(&unclaimed))),
-        ReconcileOutcome::AmendQty(Qty(4 * STEP)),
+        ReconcileOutcome::AmendQty(Qty::from_mantissa(4 * STEP)),
         "an event claiming nothing about the budget spent it anyway"
     );
 }
@@ -590,7 +592,7 @@ fn a_late_amend_answer_never_restores_a_larger_size() {
     );
     assert_eq!(
         slot.qty,
-        Qty(3 * STEP),
+        Qty::from_mantissa(3 * STEP),
         "a stale amend answer restored a size the venue has left"
     );
 }
@@ -617,7 +619,7 @@ fn an_amend_that_never_left_releases_the_slot_and_the_shrink_is_decided_again() 
     );
     assert_eq!(
         slot.qty,
-        Qty(10 * STEP),
+        Qty::from_mantissa(10 * STEP),
         "an amend that never left moved the resting size anyway"
     );
     assert_eq!(
@@ -628,7 +630,7 @@ fn an_amend_that_never_left_releases_the_slot_and_the_shrink_is_decided_again() 
     let shrink = want(passive(Side::Buy), 4 * STEP);
     assert_eq!(
         reconcile_side(input(Side::Buy, shrink, resting_of(&slot))),
-        ReconcileOutcome::AmendQty(Qty(4 * STEP)),
+        ReconcileOutcome::AmendQty(Qty::from_mantissa(4 * STEP)),
         "the shrink was abandoned with the order still resting at its original size"
     );
 

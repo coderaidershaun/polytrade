@@ -1,6 +1,6 @@
 //! Simulated order state.
 
-use crate::msg::ids::{ClientOrderId, Price, Qty, Side, VenueOrderId};
+use crate::msg::ids::{ClientOrderId, Notional, Price, Qty, Side, VenueOrderId};
 
 pub const CORPUS_VENUE_ORDER_ID: VenueOrderId = VenueOrderId(12_510_053_279);
 
@@ -12,7 +12,7 @@ pub struct SimOrder {
     pub price: Price,
     pub qty: Qty,
     pub filled: Qty,
-    pub filled_quote: i64,
+    pub filled_quote: Notional,
 }
 
 impl SimOrder {
@@ -22,21 +22,22 @@ impl SimOrder {
 
     pub fn take(&mut self, qty: Qty) -> Qty {
         assert!(
-            qty.0 >= 0,
+            qty.mantissa() >= 0,
             "cannot take a negative quantity {} from a simulated order",
-            qty.0
+            qty.mantissa()
         );
         let remaining = self
             .qty
-            .0
-            .checked_sub(self.filled.0)
+            .mantissa()
+            .checked_sub(self.filled.mantissa())
             .expect("simulated order filled beyond its total");
-        let taken = Qty(qty.0.min(remaining));
-        self.filled = Qty(self
-            .filled
-            .0
-            .checked_add(taken.0)
-            .expect("simulated cumulative fill quantity overflowed"));
+        let taken = Qty::from_mantissa(qty.mantissa().min(remaining));
+        self.filled = Qty::from_mantissa(
+            self.filled
+                .mantissa()
+                .checked_add(taken.mantissa())
+                .expect("simulated cumulative fill quantity overflowed"),
+        );
         self.filled_quote = self.price.notional(self.filled);
         taken
     }

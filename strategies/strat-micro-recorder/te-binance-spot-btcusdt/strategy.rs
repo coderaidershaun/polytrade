@@ -347,7 +347,7 @@ fn record_spin(
     let spread = tracker.last_spread();
     // Ledger seeded from persisted cost basis → restart resumes real inventory. Read once per spin so all columns describe same position.
     let exposure_quote = ctx.exposure_quote(instrument);
-    let inventory = exposure_quote as f64 / FIXED_SCALE as f64;
+    let inventory = exposure_quote.to_f64();
 
     if let Some(mid) = mid {
         model.spin_mids.push(mid);
@@ -467,8 +467,10 @@ fn record_spin(
         order_notional: cfg.order_notional,
         max_exposure_quote,
     };
-    let bid_quote = bid_model.filter(|_| !budget.would_breach(exposure_quote, Side::Buy));
-    let ask_quote = ask_model.filter(|_| !budget.would_breach(exposure_quote, Side::Sell));
+    let bid_quote =
+        bid_model.filter(|_| !budget.would_breach(exposure_quote.mantissa(), Side::Buy));
+    let ask_quote =
+        ask_model.filter(|_| !budget.would_breach(exposure_quote.mantissa(), Side::Sell));
     // A log record carries at most six words, so each spin's values go out as several short
     // lines, in a fixed order, each led by the same words a reader searches for.
     engine::note!(

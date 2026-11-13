@@ -31,8 +31,8 @@ const QUOTE_ASSET: AssetId = AssetId(1);
 
 /// One BTC at $60,000 in 1e-8 mantissas, so a scale slip anywhere shows as a factor of 1e8 rather
 /// than as a plausible-looking number.
-const PRICE: Price = Price(60_000 * FIXED_SCALE);
-const QTY: Qty = Qty(FIXED_SCALE / 10_000);
+const PRICE: Price = Price::from_mantissa(60_000 * FIXED_SCALE);
+const QTY: Qty = Qty::from_mantissa(FIXED_SCALE / 10_000);
 
 fn ts(offset: i64) -> LocalTs {
     LocalTs::from_micros(BASE_TS_US + offset)
@@ -59,7 +59,7 @@ fn order_rows() -> Vec<OrderRow> {
         style: Some(OrderStyle::PostOnly),
         price: PRICE,
         qty: QTY,
-        filled_qty: Qty(0),
+        filled_qty: Qty::from_mantissa(0),
         filled_quote: 0,
         reject: None,
         reject_code: 0,
@@ -82,8 +82,8 @@ fn order_rows() -> Vec<OrderRow> {
             transition: OrderTransition::ReportTrade,
             state: OrderLifecycle::Live,
             previous_state: OrderLifecycle::Live,
-            filled_qty: Qty(QTY.0 / 2),
-            filled_quote: PRICE.notional(Qty(QTY.0 / 2)),
+            filled_qty: Qty::from_mantissa(QTY.mantissa() / 2),
+            filled_quote: (PRICE.notional(Qty::from_mantissa(QTY.mantissa() / 2))).mantissa(),
             exchange_ts_us: venue_ts(4),
             received_ts_us: ts(5),
             ..sent
@@ -124,9 +124,9 @@ fn fill_rows() -> Vec<FillRow> {
         side: Side::Buy,
         liquidity: Some(Liquidity::Maker),
         last_price: PRICE,
-        last_qty: Qty(QTY.0 / 2),
-        booked_qty: Qty(QTY.0 / 2),
-        booked_quote: PRICE.notional(Qty(QTY.0 / 2)),
+        last_qty: Qty::from_mantissa(QTY.mantissa() / 2),
+        booked_qty: Qty::from_mantissa(QTY.mantissa() / 2),
+        booked_quote: (PRICE.notional(Qty::from_mantissa(QTY.mantissa() / 2))).mantissa(),
         commission: 4_720,
         commission_asset: QUOTE_ASSET,
         exchange_ts_us: venue_ts(4),
@@ -150,9 +150,9 @@ fn fill_rows() -> Vec<FillRow> {
             trade_id: None,
             venue_order_id: None,
             liquidity: None,
-            last_qty: Qty(QTY.0 / 4),
+            last_qty: Qty::from_mantissa(QTY.mantissa() / 4),
             booked_qty: QTY,
-            booked_quote: PRICE.notional(QTY),
+            booked_quote: PRICE.notional(QTY).mantissa(),
             commission: 0,
             exchange_ts_us: venue_ts(10),
             received_ts_us: ts(11),
@@ -394,9 +394,9 @@ fn order_cells(row: &OrderRow) -> Vec<Cell> {
         Cell::Str(provenance_str(row.provenance).to_owned()),
         Cell::Str(side_str(row.side).to_owned()),
         Cell::Str(style_str(row.style).to_owned()),
-        Cell::I64(row.price.0),
-        Cell::I64(row.qty.0),
-        Cell::I64(row.filled_qty.0),
+        Cell::I64(row.price.mantissa()),
+        Cell::I64(row.qty.mantissa()),
+        Cell::I64(row.filled_qty.mantissa()),
         Cell::I64(row.filled_quote),
         Cell::Str(reject_str(row.reject).to_owned()),
         Cell::I32(row.reject_code),
@@ -416,9 +416,9 @@ fn fill_cells(row: &FillRow) -> Vec<Cell> {
         Cell::Str(provenance_str(row.provenance).to_owned()),
         Cell::Str(side_str(row.side).to_owned()),
         Cell::Str(liquidity_str(row.liquidity).to_owned()),
-        Cell::I64(row.last_price.0),
-        Cell::I64(row.last_qty.0),
-        Cell::I64(row.booked_qty.0),
+        Cell::I64(row.last_price.mantissa()),
+        Cell::I64(row.last_qty.mantissa()),
+        Cell::I64(row.booked_qty.mantissa()),
         Cell::I64(row.booked_quote),
         Cell::I64(row.commission),
         Cell::U16(row.commission_asset.0),

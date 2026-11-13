@@ -76,7 +76,7 @@ fn a_binding_is_incomplete_until_the_tick_and_both_neg_risk_flags_land() {
     assert_eq!(tokens.len(), 2, "one neg-risk read per outcome token");
 
     assert_eq!(
-        bindings.on_market(CONDITION, Price(1_000_000)),
+        bindings.on_market(CONDITION, Price::from_mantissa(1_000_000)),
         BindingStep::Wait,
         "tick alone is not enough"
     );
@@ -88,7 +88,11 @@ fn a_binding_is_incomplete_until_the_tick_and_both_neg_risk_flags_land() {
 
     let ready = ready_bindings(bindings.on_neg_risk(CONDITION, DOWN, false));
     assert_eq!(ready.len(), 2);
-    assert!(ready.iter().all(|entry| entry.tick == Price(1_000_000)));
+    assert!(
+        ready
+            .iter()
+            .all(|entry| entry.tick == Price::from_mantissa(1_000_000))
+    );
     assert!(
         ready.iter().all(|entry| !entry.is_neg_risk),
         "a false answer must reach the binding unchanged"
@@ -96,7 +100,7 @@ fn a_binding_is_incomplete_until_the_tick_and_both_neg_risk_flags_land() {
 
     let mut true_flag = Bindings::default();
     true_flag.on_assignment(&assignment(0, 300_000_000));
-    true_flag.on_market(CONDITION, Price(1_000_000));
+    true_flag.on_market(CONDITION, Price::from_mantissa(1_000_000));
     true_flag.on_neg_risk(CONDITION, UP, true);
     let ready_true = ready_bindings(true_flag.on_neg_risk(CONDITION, DOWN, true));
     assert!(
@@ -141,7 +145,7 @@ fn an_enrichment_read_is_retried_alone_then_given_up_when_it_never_answers() {
     );
 
     // The retry succeeds and the binding completes.
-    let ready = ready_bindings(bindings.on_market(CONDITION, Price(1_000_000)));
+    let ready = ready_bindings(bindings.on_market(CONDITION, Price::from_mantissa(1_000_000)));
     assert_eq!(
         ready.len(),
         2,
@@ -164,7 +168,7 @@ fn an_enrichment_read_is_retried_alone_then_given_up_when_it_never_answers() {
         "past the attempt cap the binding is gone, so no read is due"
     );
     assert_eq!(
-        bindings.on_market(CONDITION, Price(1_000_000)),
+        bindings.on_market(CONDITION, Price::from_mantissa(1_000_000)),
         BindingStep::Wait,
         "a late answer for a given-up binding settles nothing"
     );
@@ -180,7 +184,7 @@ fn the_close_margin_backstop_fires_once_per_window_and_rearms_for_the_next() {
     let margin = DurationUs::from_micros(3_000_000);
     let mut bindings = Bindings::default();
     bindings.on_assignment(&assignment(0, close));
-    bindings.on_market(CONDITION, Price(1_000_000));
+    bindings.on_market(CONDITION, Price::from_mantissa(1_000_000));
     bindings.on_neg_risk(CONDITION, UP, false);
     bindings.on_neg_risk(CONDITION, DOWN, false);
 
@@ -203,7 +207,7 @@ fn the_close_margin_backstop_fires_once_per_window_and_rearms_for_the_next() {
         ..assignment(300_000_000, 600_000_000)
     };
     bindings.on_assignment(&next);
-    bindings.on_market("0xnext", Price(1_000_000));
+    bindings.on_market("0xnext", Price::from_mantissa(1_000_000));
     bindings.on_neg_risk("0xnext", UP, false);
     bindings.on_neg_risk("0xnext", DOWN, false);
     assert_eq!(
@@ -429,8 +433,8 @@ fn mine(client_id: u64, side: Side, price: i64, qty: i64) -> MirroredOrder {
         instrument: UP,
         client_id: ClientOrderId(client_id),
         side,
-        price: Price(price),
-        qty: Qty(qty),
+        price: Price::from_mantissa(price),
+        qty: Qty::from_mantissa(qty),
         provenance: Provenance::Mine,
         has_sent_cancel: false,
         is_ambiguous: false,
@@ -451,9 +455,9 @@ fn resting(side: Side, price: i64, qty: i64) -> UnmappedOrder {
         instrument: UP,
         venue_order_id: "0xvenue".into(),
         side,
-        price: Price(price),
-        qty: Qty(qty),
-        filled: Qty(0),
+        price: Price::from_mantissa(price),
+        qty: Qty::from_mantissa(qty),
+        filled: Qty::from_mantissa(0),
         status: VenueOrderStatus::New,
     }
 }
@@ -637,8 +641,8 @@ fn restates_balances_classifies_every_exec_kind() {
     for case in cases {
         let event = ExecEvent {
             kind: case.kind,
-            last_qty: Qty(case.last_qty),
-            cumulative_qty: Qty(case.cumulative_qty),
+            last_qty: Qty::from_mantissa(case.last_qty),
+            cumulative_qty: Qty::from_mantissa(case.cumulative_qty),
             ..base()
         };
         assert_eq!(

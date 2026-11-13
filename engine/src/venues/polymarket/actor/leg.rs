@@ -131,7 +131,7 @@ impl Leg {
     }
 
     fn observe_level(&mut self, side: Side, level: &Level, exchange_ts_us: VenueTs) {
-        if level.qty == Qty(0) {
+        if level.qty == Qty::from_mantissa(0) {
             return;
         }
         self.collapse.observe(LevelUpdate {

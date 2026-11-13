@@ -276,18 +276,18 @@ impl UiModel {
         self.selected = instrument;
     }
 
-    /// The selected instrument's grid, as every panel that renders a number needs it. `Price(0)` and
+    /// The selected instrument's grid, as every panel that renders a number needs it. `Price::from_mantissa(0)` and
     /// the default scale are the reading before a catalog lands, not a venue's real grid.
     pub(crate) fn instrument_scales(&self) -> InstrumentScales {
         let Some(instrument) = self.selected_instrument() else {
             return InstrumentScales {
-                tick: Price(0),
+                tick: Price::from_mantissa(0),
                 qty_scale: FIXED_SCALE,
                 qty_decimals: qty_decimals(None),
             };
         };
         InstrumentScales {
-            tick: instrument.tick_size.unwrap_or(Price(0)),
+            tick: instrument.tick_size.unwrap_or(Price::from_mantissa(0)),
             qty_scale: instrument.qty_scale,
             qty_decimals: qty_decimals(instrument.lot_size),
         }

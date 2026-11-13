@@ -81,7 +81,7 @@ pub fn apply_exec_event(
 
         ExecKind::ReportTrade => {
             let is_complete = event.status == Some(VenueOrderStatus::Filled)
-                || (slot.qty.0 > 0 && slot.filled_base.0 >= slot.qty.0);
+                || (slot.qty.mantissa() > 0 && slot.filled_base.mantissa() >= slot.qty.mantissa());
             if is_complete {
                 close_or_keep(previous_state, CloseReason::Filled)
             } else {
@@ -112,7 +112,7 @@ pub fn apply_exec_event(
         if previous_state == OrderState::AmendInFlight {
             slot.amends_used = slot.amends_used.saturating_add(1);
         }
-        if event.qty.0 > 0 {
+        if event.qty.mantissa() > 0 {
             slot.qty = slot.qty.min(event.qty);
         }
     }
@@ -121,7 +121,7 @@ pub fn apply_exec_event(
     }
     if event.kind == ExecKind::SnapshotOrder {
         slot.seen_recon_seq = slot.seen_recon_seq.max(event.recon_seq);
-        if event.qty.0 > 0 {
+        if event.qty.mantissa() > 0 {
             slot.price = event.price;
             slot.qty = event.qty;
         }

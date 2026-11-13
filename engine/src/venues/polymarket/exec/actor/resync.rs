@@ -255,8 +255,8 @@ impl Actor {
                     "polymarket execution left an unmapped order alone on instrument {}: {:?} {} @ {} (venue id {}) — nothing this run placed matches it",
                     unmapped.instrument.0,
                     unmapped.side,
-                    unmapped.qty.0,
-                    unmapped.price.0,
+                    unmapped.qty.mantissa(),
+                    unmapped.price.mantissa(),
                     unmapped.venue_order_id
                 );
                 return;

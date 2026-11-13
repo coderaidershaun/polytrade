@@ -16,6 +16,20 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
+/// A type test: it compiles only while the type lacks the bound. A second impl that the bound
+/// switches on would make the call ambiguous, so the build fails on the line that names the bound.
+/// Defined before the `mod` lines, so that each module of the suite can use it.
+macro_rules! assert_lacks {
+    ($type:ty: $($bound:tt)+) => {{
+        trait Ambiguous<Marker> {
+            fn check() {}
+        }
+        impl<T> Ambiguous<()> for T {}
+        impl<T: $($bound)+> Ambiguous<u8> for T {}
+        <$type as Ambiguous<_>>::check();
+    }};
+}
+
 mod engine_support;
 mod exec_support;
 mod hot;

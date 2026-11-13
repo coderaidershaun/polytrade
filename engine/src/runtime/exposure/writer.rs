@@ -201,7 +201,7 @@ impl WriterState {
                 let facts = self.facts(exposure.instrument)?;
                 Some(InstrumentEntry {
                     symbol: facts.symbol.as_ref().to_owned(),
-                    position_base: exposure.position_base.0,
+                    position_base: exposure.position_base.mantissa(),
                     cash_quote: exposure.cash_quote,
                     basis_quote: exposure.basis_quote,
                 })
@@ -215,7 +215,11 @@ impl WriterState {
             let Some(facts) = self.facts(exposure.instrument) else {
                 continue;
             };
-            add_amount(&mut amounts, facts.base_asset, exposure.position_base.0);
+            add_amount(
+                &mut amounts,
+                facts.base_asset,
+                exposure.position_base.mantissa(),
+            );
             add_amount(&mut amounts, facts.quote_asset, exposure.cash_quote);
         }
         // Same fold as load path; human section can never disagree with recomputed.

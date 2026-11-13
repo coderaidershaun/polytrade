@@ -221,7 +221,7 @@ impl RiskBudget {
 /// # Panics
 /// On a zero price, which is a caller bug: armed and quoted levels are guaranteed positive.
 pub(crate) fn qty_at(notional: i64, price: Price) -> Qty {
-    Qty((notional as i128 * FIXED_SCALE as i128 / price.0 as i128) as i64)
+    Qty::from_mantissa((notional as i128 * FIXED_SCALE as i128 / price.mantissa() as i128) as i64)
 }
 
 /// The quantity resting at this price on this side, which is the queue a quote would join. Zero
@@ -230,7 +230,7 @@ pub(crate) fn level_qty_at(levels: &[Level], price: Price) -> Qty {
     levels
         .iter()
         .find(|level| level.price == price)
-        .map_or(Qty(0), |level| level.qty)
+        .map_or(Qty::from_mantissa(0), |level| level.qty)
 }
 
 /// Per-instrument recorder state: model bundle, quote ceiling, recorded flag. Position lives in engine.
@@ -246,17 +246,17 @@ impl InstrumentState {
     /// Fill notional exceeds budget: no side could quote. Prevented at startup, not gated every spin.
     pub(crate) fn new(row: &InstrumentRow, is_recorded: bool, setup: InstrumentSetup) -> Self {
         assert!(
-            setup.order_notional <= row.max_exposure_quote,
+            setup.order_notional <= row.max_exposure_quote.mantissa(),
             "order_notional mantissa {} exceeds max_exposure_quote {} on {} — one fill \
              could never fit the budget, so no side would ever quote; lower the order or raise the budget",
             setup.order_notional,
-            row.max_exposure_quote,
+            row.max_exposure_quote.mantissa(),
             row.venue_symbol
         );
         Self {
             is_recorded,
             binance: BinanceVol::new(row, setup),
-            max_exposure_quote: row.max_exposure_quote,
+            max_exposure_quote: row.max_exposure_quote.mantissa(),
         }
     }
 }
@@ -407,10 +407,10 @@ impl GueantScale {
         // A half-spread wider than the whole price would put the bid through zero, which is
         // invalid. Both conditions here gate negative and wrapped prices.
         if tick_index > 0
-            && let Some(mantissa) = tick_index.checked_mul(self.tick.0)
+            && let Some(mantissa) = tick_index.checked_mul(self.tick.mantissa())
         {
-            ctx.emit(price, instrument, Price(mantissa).to_f64());
-            return Some(Price(mantissa));
+            ctx.emit(price, instrument, Price::from_mantissa(mantissa).to_f64());
+            return Some(Price::from_mantissa(mantissa));
         }
         None
     }

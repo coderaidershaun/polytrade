@@ -1,7 +1,7 @@
 //! The risk scenes: a fixed stream of books and fills folded through the real chart and position
 //! models, so no curve is drawn by hand. The risk chart takes the mid chart's window.
 
-use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side};
 use engine::msg::time::{DurationUs, VenueTs};
 use engine::msg::ui::{UiBookState, UiEvent};
 use engine::operator::workstation::chart::model::{BookContinuity, ChartModel};
@@ -14,13 +14,13 @@ const WINDOW_BUCKETS: i64 = 300;
 
 const COMMITS_PER_BUCKET: i64 = 2;
 
-const TICK: Price = Price(FIXED_SCALE);
+const TICK: Price = Price::from_mantissa(FIXED_SCALE);
 
 /// BTC scale, one dollar to a tick.
 const BASE_BID: i64 = 65_990;
 
 /// 0.01 of the base asset, so a handful of fills spans the axis at this price.
-const ORDER_QTY: Qty = Qty(FIXED_SCALE / 100);
+const ORDER_QTY: Qty = Qty::from_mantissa(FIXED_SCALE / 100);
 
 pub struct PositionScene {
     pub name: &'static str,
@@ -149,7 +149,7 @@ fn no_tick_grid() -> PositionScene {
     feed.buy(60);
     feed.walk(60..WINDOW_BUCKETS);
     PositionScene {
-        tick: Price(0),
+        tick: Price::from_mantissa(0),
         ..feed.finish(
             "no tick grid — no window, so no risk chart either",
             "KNOWN RULED LIMITATION, not a bug: no stamped tick = no window = no risk chart",
@@ -210,14 +210,14 @@ impl Feed {
     /// An absolute position, sent only once there is a mark. It becomes `f64` here, as on the link.
     fn emit(&mut self, step: i64) {
         let Some(mark) = self.mark else { return };
-        let exposure = mark.notional(Qty(self.position_base));
+        let exposure = mark.notional(Qty::from_mantissa(self.position_base));
         self.seq += 1;
         self.positions.apply_event(&UiEvent::Position {
             instrument: INSTRUMENT,
             seq: self.seq,
             event_ts_us: VenueTs::from_micros(self.at(step, COMMITS_PER_BUCKET - 1)),
-            exposure_quote: exposure as f64 / FIXED_SCALE as f64,
-            pnl_quote: (self.cash_quote + exposure) as f64 / FIXED_SCALE as f64,
+            exposure_quote: exposure.to_f64(),
+            pnl_quote: (Notional::from_mantissa(self.cash_quote) + exposure).to_f64(),
         });
     }
 
@@ -234,12 +234,12 @@ impl Feed {
         let notional = price.notional(ORDER_QTY);
         match side {
             Side::Buy => {
-                self.position_base += ORDER_QTY.0;
-                self.cash_quote -= notional;
+                self.position_base += ORDER_QTY.mantissa();
+                self.cash_quote -= notional.mantissa();
             }
             Side::Sell => {
-                self.position_base -= ORDER_QTY.0;
-                self.cash_quote += notional;
+                self.position_base -= ORDER_QTY.mantissa();
+                self.cash_quote += notional.mantissa();
             }
         }
         self.seq += 1;

@@ -9,7 +9,7 @@
 use crate::hot::digest::digest_by_hash;
 use crate::msg::exec::{Liquidity, RejectClass};
 use crate::msg::ids::{
-    AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId,
+    AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, TradeId, VenueOrderId,
 };
 use crate::msg::time::LocalTs;
 
@@ -72,7 +72,7 @@ pub struct Fill {
     pub level: QuoteLevel,
     pub price: Price,
     pub qty: Qty,
-    pub notional: i64,
+    pub notional: Notional,
     pub commission: i64,
     pub commission_asset: AssetId,
     pub liquidity: Option<Liquidity>,

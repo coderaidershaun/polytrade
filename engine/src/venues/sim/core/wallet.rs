@@ -1,7 +1,7 @@
 //! Exact balances, reservations, fills, and fees for simulated execution.
 
 use crate::msg::exec::AssetBalance;
-use crate::msg::ids::{AssetId, FIXED_SCALE, Price, Qty, Side};
+use crate::msg::ids::{AssetId, FIXED_SCALE, Notional, Price, Qty, Side};
 
 const WHOLE_FILL_BPS: i64 = 10_000;
 
@@ -36,8 +36,8 @@ impl FeeBps {
 pub struct SimWalletSetup {
     pub base_asset: AssetId,
     pub quote_asset: AssetId,
-    pub opening_base: i64,
-    pub opening_quote: i64,
+    pub opening_base: Qty,
+    pub opening_quote: Notional,
     pub maker_fee_bps: FeeBps,
 }
 
@@ -67,7 +67,7 @@ pub struct Reservation {
     total_qty: Qty,
     total_reservation: i64,
     cumulative_qty: Qty,
-    cumulative_quote: i64,
+    cumulative_quote: Notional,
     cumulative_debit: i64,
     state: ReservationState,
 }
@@ -81,9 +81,9 @@ impl Reservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FillSettlement {
     pub last_qty: Qty,
-    pub last_quote: i64,
+    pub last_quote: Notional,
     pub cumulative_qty: Qty,
-    pub cumulative_quote: i64,
+    pub cumulative_quote: Notional,
     pub debit: i64,
     pub received_gross: i64,
     pub received_net: i64,
@@ -149,8 +149,8 @@ impl SimWallet {
             });
         }
         for (asset, amount) in [
-            (setup.base_asset, setup.opening_base),
-            (setup.quote_asset, setup.opening_quote),
+            (setup.base_asset, setup.opening_base.mantissa()),
+            (setup.quote_asset, setup.opening_quote.mantissa()),
         ] {
             if amount < 0 {
                 return Err(WalletError::NegativeOpeningBalance { asset, amount });
@@ -160,11 +160,11 @@ impl SimWallet {
             base_asset: setup.base_asset,
             quote_asset: setup.quote_asset,
             base: AssetFunds {
-                free: setup.opening_base,
+                free: setup.opening_base.mantissa(),
                 locked: 0,
             },
             quote: AssetFunds {
-                free: setup.opening_quote,
+                free: setup.opening_quote.mantissa(),
                 locked: 0,
             },
             maker_fee_bps: setup.maker_fee_bps,
@@ -173,7 +173,8 @@ impl SimWallet {
     }
 
     pub fn reserve(&mut self, request: ReservationRequest) -> ReserveOutcome {
-        let amount = request.side.spend(request.price, request.qty);
+        // The wallet keeps one row for each asset, and the side picks the row.
+        let amount = request.side.spend(request.price, request.qty).mantissa();
         let funds = self.funds_mut(WalletSlot::of(request.side, Reserved));
         if funds.free < amount {
             return ReserveOutcome::InsufficientFunds;
@@ -187,8 +188,8 @@ impl SimWallet {
             price: request.price,
             total_qty: request.qty,
             total_reservation: amount,
-            cumulative_qty: Qty(0),
-            cumulative_quote: 0,
+            cumulative_qty: Qty::from_mantissa(0),
+            cumulative_quote: Notional::ZERO,
             cumulative_debit: 0,
             state: ReservationState::Live,
         })
@@ -202,32 +203,36 @@ impl SimWallet {
             ReservationState::Live,
             "filled an order whose reservation was already settled"
         );
-        assert!(last_qty.0 > 0, "filled {} of an order", last_qty.0);
-        let cumulative_qty = Qty(checked_add(
-            reservation.cumulative_qty.0,
-            last_qty.0,
+        assert!(
+            last_qty.mantissa() > 0,
+            "filled {} of an order",
+            last_qty.mantissa()
+        );
+        let cumulative_qty = Qty::from_mantissa(checked_add(
+            reservation.cumulative_qty.mantissa(),
+            last_qty.mantissa(),
             "cumulative fill quantity",
         ));
         assert!(
             cumulative_qty <= reservation.total_qty,
             "filled {} cumulative against a total of {}",
-            cumulative_qty.0,
-            reservation.total_qty.0
+            cumulative_qty.mantissa(),
+            reservation.total_qty.mantissa()
         );
 
         let cumulative_quote = reservation.price.notional(cumulative_qty);
         let last_quote = cumulative_quote - reservation.cumulative_quote;
         let (debit, received_gross) = match reservation.side {
-            Side::Buy => (last_quote, last_qty.0),
-            Side::Sell => (last_qty.0, last_quote),
+            Side::Buy => (last_quote.mantissa(), last_qty.mantissa()),
+            Side::Sell => (last_qty.mantissa(), last_quote.mantissa()),
         };
 
         let reserved = WalletSlot::of(reservation.side, Reserved);
         let received = WalletSlot::of(reservation.side, Received);
         let fee_slot = self.fee_slot(received);
         let fee_basis = match fee_slot {
-            WalletSlot::Base => last_qty.0,
-            WalletSlot::Quote => last_quote,
+            WalletSlot::Base => last_qty.mantissa(),
+            WalletSlot::Quote => last_quote.mantissa(),
         };
         let fee = self.maker_fee_bps.charge(fee_basis);
         let received_net = match fee_slot == received {
@@ -284,16 +289,19 @@ impl SimWallet {
         assert!(
             total_qty < reservation.total_qty,
             "amended {} up from {} — an increase is a cancel and replace",
-            total_qty.0,
-            reservation.total_qty.0
+            total_qty.mantissa(),
+            reservation.total_qty.mantissa()
         );
         assert!(
             total_qty > reservation.cumulative_qty,
             "amended {} below the {} already filled",
-            total_qty.0,
-            reservation.cumulative_qty.0
+            total_qty.mantissa(),
+            reservation.cumulative_qty.mantissa()
         );
-        let new_total = reservation.side.spend(reservation.price, total_qty);
+        let new_total = reservation
+            .side
+            .spend(reservation.price, total_qty)
+            .mantissa();
         let released = reservation.total_reservation - new_total;
         reservation.total_qty = total_qty;
         reservation.total_reservation = new_total;

@@ -81,22 +81,22 @@ fn book_frame(token: &str, now_secs: i64) -> PolyFrame {
         asset_id: token.into(),
         bids: vec![
             Level {
-                price: Price(50_000_000),
-                qty: Qty(100),
+                price: Price::from_mantissa(50_000_000),
+                qty: Qty::from_mantissa(100),
             },
             Level {
-                price: Price(49_000_000),
-                qty: Qty(200),
+                price: Price::from_mantissa(49_000_000),
+                qty: Qty::from_mantissa(200),
             },
         ],
         asks: vec![
             Level {
-                price: Price(51_000_000),
-                qty: Qty(150),
+                price: Price::from_mantissa(51_000_000),
+                qty: Qty::from_mantissa(150),
             },
             Level {
-                price: Price(52_000_000),
-                qty: Qty(250),
+                price: Price::from_mantissa(52_000_000),
+                qty: Qty::from_mantissa(250),
             },
         ],
         exchange_ts_us: venue_ts_secs(now_secs),

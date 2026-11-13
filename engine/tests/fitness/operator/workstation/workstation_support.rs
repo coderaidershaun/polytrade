@@ -14,7 +14,7 @@ pub type NamedCase = (&'static str, fn(&str));
 
 /// One-mantissa tick, so a price mantissa reads directly as its tick index and a mid reads as the
 /// plain sum of the two best indices (half-ticks).
-pub const TICK: Price = Price(1);
+pub const TICK: Price = Price::from_mantissa(1);
 
 /// The shipped one-second spin, so the five-minute window is exactly 300 buckets and a bucket index
 /// reads as its second.
@@ -34,21 +34,21 @@ pub struct BookFixture<'a> {
 
 pub fn book_snapshot(fixture: BookFixture) -> UiBookSnapshot {
     let empty = Level {
-        price: Price(0),
-        qty: Qty(0),
+        price: Price::from_mantissa(0),
+        qty: Qty::from_mantissa(0),
     };
     let mut bid_levels = [empty; UI_BOOK_LEVELS];
     let mut ask_levels = [empty; UI_BOOK_LEVELS];
     for (slot, &(price, qty)) in bid_levels.iter_mut().zip(fixture.bids) {
         *slot = Level {
-            price: Price(price),
-            qty: Qty(qty),
+            price: Price::from_mantissa(price),
+            qty: Qty::from_mantissa(qty),
         };
     }
     for (slot, &(price, qty)) in ask_levels.iter_mut().zip(fixture.asks) {
         *slot = Level {
-            price: Price(price),
-            qty: Qty(qty),
+            price: Price::from_mantissa(price),
+            qty: Qty::from_mantissa(qty),
         };
     }
     UiBookSnapshot {

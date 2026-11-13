@@ -26,7 +26,7 @@ use crate::operator::workstation::workstation_support::{
 
 /// A one-mantissa tick, so a price mantissa reads directly as its tick index and the ladder math is
 /// legible in the assertions.
-const TICK: Price = Price(1);
+const TICK: Price = Price::from_mantissa(1);
 
 fn book(
     instrument: u16,
@@ -55,7 +55,8 @@ fn book(
 fn anchor_math_holds_at_both_mid_parities_and_a_locked_book() {
     // Best bid 100 and best ask 102 give 202 half-ticks, which is even, so the mid is the whole tick
     // 101 and it is the separator's own tick.
-    let mid = mid_half_ticks(Price(100), Price(102), TICK).expect("on-grid");
+    let mid = mid_half_ticks(Price::from_mantissa(100), Price::from_mantissa(102), TICK)
+        .expect("on-grid");
     assert_eq!(mid, 202);
     assert_eq!(
         ask_anchor(mid),
@@ -78,9 +79,9 @@ fn anchor_math_holds_at_both_mid_parities_and_a_locked_book() {
 
     let asks = view.ask_rows();
     assert_eq!(asks[0].tick_index, 102);
-    assert_eq!(asks[0].public_qty, Some(Qty(5)));
+    assert_eq!(asks[0].public_qty, Some(Qty::from_mantissa(5)));
     assert_eq!(asks[1].tick_index, 103);
-    assert_eq!(asks[1].public_qty, Some(Qty(7)));
+    assert_eq!(asks[1].public_qty, Some(Qty::from_mantissa(7)));
     assert_eq!(
         asks[2].public_qty, None,
         "the far ask tick is empty, not zero"
@@ -88,9 +89,9 @@ fn anchor_math_holds_at_both_mid_parities_and_a_locked_book() {
 
     let bids = view.bid_rows();
     assert_eq!(bids[0].tick_index, 100);
-    assert_eq!(bids[0].public_qty, Some(Qty(4)));
+    assert_eq!(bids[0].public_qty, Some(Qty::from_mantissa(4)));
     assert_eq!(bids[1].tick_index, 99);
-    assert_eq!(bids[1].public_qty, Some(Qty(2)));
+    assert_eq!(bids[1].public_qty, Some(Qty::from_mantissa(2)));
     assert_eq!(bids[2].public_qty, None);
 
     // Wide spread: best bid 100 and best ask 105 give 205 half-ticks, which is odd, so the mid is
@@ -114,13 +115,13 @@ fn anchor_math_holds_at_both_mid_parities_and_a_locked_book() {
     );
     assert_eq!(odd_asks[1].public_qty, None);
     assert_eq!(odd_asks[2].tick_index, 105);
-    assert_eq!(odd_asks[2].public_qty, Some(Qty(5)));
+    assert_eq!(odd_asks[2].public_qty, Some(Qty::from_mantissa(5)));
 
     let odd_bids = odd_view.bid_rows();
     assert_eq!(odd_bids[0].tick_index, 102);
     assert_eq!(odd_bids[0].public_qty, None);
     assert_eq!(odd_bids[2].tick_index, 100);
-    assert_eq!(odd_bids[2].public_qty, Some(Qty(4)));
+    assert_eq!(odd_bids[2].public_qty, Some(Qty::from_mantissa(4)));
 
     // Best bid and best ask are both 100, which gives 200 half-ticks, so the mid is 100. The first
     // ask row is 101 and the first bid row is 99, so both skip tick 100 entirely.
@@ -161,14 +162,19 @@ fn anchor_math_holds_at_both_mid_parities_and_a_locked_book() {
     write_mid(&mut label, 131_983);
     assert_eq!(label, "65991.5", "an odd mid_half renders the half-tick");
 
-    write_qty(&mut label, Qty(-FIXED_SCALE / 2), FIXED_SCALE, 3);
+    write_qty(
+        &mut label,
+        Qty::from_mantissa(-FIXED_SCALE / 2),
+        FIXED_SCALE,
+        3,
+    );
     assert_eq!(
         label, "-0.500",
         "a negative magnitude below one unit keeps its sign even though the integer part is zero"
     );
     write_opt_qty(&mut label, None, FIXED_SCALE, 3);
     assert_eq!(label, MISSING, "absent is em-dash");
-    write_opt_qty(&mut label, Some(Qty(0)), FIXED_SCALE, 3);
+    write_opt_qty(&mut label, Some(Qty::from_mantissa(0)), FIXED_SCALE, 3);
     assert_eq!(
         label, "0.000",
         "a real zero is distinguishable from missing"
@@ -179,10 +185,10 @@ fn anchor_math_holds_at_both_mid_parities_and_a_locked_book() {
 fn every_desired_ladder_level_is_projected_and_wide_buckets_accumulate() {
     let snapshot = book(0, 0, 10, &[(100, 4)], &[(102, 5)]);
     let mut quote = DomQuote::default();
-    quote.bids[0] = Some((Price(100), Qty(3)));
-    quote.bids[1] = Some((Price(99), Qty(4)));
-    quote.asks[0] = Some((Price(102), Qty(5)));
-    quote.asks[1] = Some((Price(103), Qty(6)));
+    quote.bids[0] = Some((Price::from_mantissa(100), Qty::from_mantissa(3)));
+    quote.bids[1] = Some((Price::from_mantissa(99), Qty::from_mantissa(4)));
+    quote.asks[0] = Some((Price::from_mantissa(102), Qty::from_mantissa(5)));
+    quote.asks[1] = Some((Price::from_mantissa(103), Qty::from_mantissa(6)));
 
     let view = build_dom_view(DomViewInput {
         snapshot: Some(&snapshot),
@@ -194,10 +200,10 @@ fn every_desired_ladder_level_is_projected_and_wide_buckets_accumulate() {
     });
     assert_eq!(view.bid_placement, QuotePlacement::Visible);
     assert_eq!(view.ask_placement, QuotePlacement::Visible);
-    assert_eq!(view.bid_rows()[0].strategy_qty, Some(Qty(3)));
-    assert_eq!(view.bid_rows()[1].strategy_qty, Some(Qty(4)));
-    assert_eq!(view.ask_rows()[0].strategy_qty, Some(Qty(5)));
-    assert_eq!(view.ask_rows()[1].strategy_qty, Some(Qty(6)));
+    assert_eq!(view.bid_rows()[0].strategy_qty, Some(Qty::from_mantissa(3)));
+    assert_eq!(view.bid_rows()[1].strategy_qty, Some(Qty::from_mantissa(4)));
+    assert_eq!(view.ask_rows()[0].strategy_qty, Some(Qty::from_mantissa(5)));
+    assert_eq!(view.ask_rows()[1].strategy_qty, Some(Qty::from_mantissa(6)));
     assert_eq!(
         view.ask_rows()[2].strategy_qty,
         None,
@@ -224,7 +230,10 @@ fn every_desired_ladder_level_is_projected_and_wide_buckets_accumulate() {
         rows_per_side: 3,
         feed: FeedStatus::default(),
     });
-    assert_eq!(grouped.ask_rows()[0].strategy_qty, Some(Qty(11)));
+    assert_eq!(
+        grouped.ask_rows()[0].strategy_qty,
+        Some(Qty::from_mantissa(11))
+    );
 }
 
 /// A book that cannot yield a trustworthy mid — off-grid, one-sided, or simply absent — projects no
@@ -235,19 +244,25 @@ fn every_desired_ladder_level_is_projected_and_wide_buckets_accumulate() {
 #[test]
 fn adverse_book_and_feed_conditions_yield_no_mid_or_the_right_status() {
     assert_eq!(
-        tick_index(Price(105), Price(10)),
+        tick_index(Price::from_mantissa(105), Price::from_mantissa(10)),
         None,
         "105 is off a 10 grid"
     );
-    assert_eq!(tick_index(Price(100), Price(10)), Some(10));
     assert_eq!(
-        tick_index(Price(5), Price(0)),
+        tick_index(Price::from_mantissa(100), Price::from_mantissa(10)),
+        Some(10)
+    );
+    assert_eq!(
+        tick_index(Price::from_mantissa(5), Price::from_mantissa(0)),
         None,
         "a non-positive tick has no grid"
     );
-    assert_eq!(price_for_row(Price(10), 5), Some(Price(50)));
     assert_eq!(
-        price_for_row(Price(i64::MAX), 2),
+        price_for_row(Price::from_mantissa(10), 5),
+        Some(Price::from_mantissa(50))
+    );
+    assert_eq!(
+        price_for_row(Price::from_mantissa(i64::MAX), 2),
         None,
         "overflow yields None, not a wrap"
     );
@@ -257,7 +272,7 @@ fn adverse_book_and_feed_conditions_yield_no_mid_or_the_right_status() {
     let off_grid_view = build_dom_view(DomViewInput {
         snapshot: Some(&off_grid_snapshot),
         overlay: DomOverlay::default(),
-        tick: Price(10),
+        tick: Price::from_mantissa(10),
         grouping: DomGrouping::default(),
         rows_per_side: 3,
         feed: FeedStatus::default(),
@@ -405,7 +420,10 @@ fn model_judges_quote_liveness_in_event_time() {
         instrument: inst,
         seq: 0,
         event_ts_us: VenueTs::from_micros(1_000_000),
-        quote: DomQuote::top(Some((Price(100), Qty(1))), None),
+        quote: DomQuote::top(
+            Some((Price::from_mantissa(100), Qty::from_mantissa(1))),
+            None,
+        ),
     });
 
     model.apply_book(book(0, 1, 1_200_000, &[(100, 1)], &[(102, 1)]));
@@ -432,9 +450,9 @@ fn working(id: u64, tick: i64, qty: i64, status: OrderStatus) -> OrderCell {
         client_id: ClientOrderId(id),
         quote_level: None,
         status,
-        price: Price(tick * TICK.0),
-        qty: Qty(qty),
-        filled: Qty(0),
+        price: Price::from_mantissa(tick * TICK.mantissa()),
+        qty: Qty::from_mantissa(qty),
+        filled: Qty::from_mantissa(0),
         at: VenueTs::from_micros(0),
     }
 }
@@ -459,7 +477,10 @@ fn order_overlay_rules() {
         let view = build_dom_view(DomViewInput {
             snapshot: Some(&snapshot),
             overlay: DomOverlay {
-                desired: Some(DomQuote::top(Some((Price(98), Qty(3))), None)),
+                desired: Some(DomQuote::top(
+                    Some((Price::from_mantissa(98), Qty::from_mantissa(3))),
+                    None,
+                )),
                 bid_orders: &bid_orders,
                 ask_orders: &[],
             },
@@ -470,7 +491,11 @@ fn order_overlay_rules() {
         });
 
         let order_row = row_at(view.bid_rows(), 99);
-        assert_eq!(order_row.order_qty, Some(Qty(7)), "{name}: order qty");
+        assert_eq!(
+            order_row.order_qty,
+            Some(Qty::from_mantissa(7)),
+            "{name}: order qty"
+        );
         assert_eq!(
             order_row.order_status,
             Some(OrderStatus::Confirmed),
@@ -484,7 +509,7 @@ fn order_overlay_rules() {
         let desired_row = row_at(view.bid_rows(), 98);
         assert_eq!(
             desired_row.strategy_qty,
-            Some(Qty(3)),
+            Some(Qty::from_mantissa(3)),
             "{name}: desired qty"
         );
         assert_eq!(
@@ -496,7 +521,7 @@ fn order_overlay_rules() {
     fn a_partially_filled_order_shows_only_what_remains(name: &str) {
         let snapshot = valid_snapshot(&[(100, 5)], &[(102, 5)]);
         let mut order = working(1, 99, 10, OrderStatus::Confirmed);
-        order.filled = Qty(4);
+        order.filled = Qty::from_mantissa(4);
         let orders = [order];
         let view = build_dom_view(DomViewInput {
             snapshot: Some(&snapshot),
@@ -512,7 +537,7 @@ fn order_overlay_rules() {
         });
         assert_eq!(
             row_at(view.bid_rows(), 99).order_qty,
-            Some(Qty(6)),
+            Some(Qty::from_mantissa(6)),
             "{name}"
         );
     }
@@ -543,7 +568,7 @@ fn order_overlay_rules() {
             .unwrap_or_else(|| panic!("{name}: both orders fall inside the window"));
         assert_eq!(
             bucket.order_qty,
-            Some(Qty(10)),
+            Some(Qty::from_mantissa(10)),
             "{name}: the bucket sums its members"
         );
         assert_eq!(

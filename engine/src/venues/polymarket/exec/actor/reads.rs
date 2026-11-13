@@ -296,7 +296,7 @@ impl Actor {
                 "polymarket execution bound instrument {} to token {} (tick {}, neg-risk {}) until {}",
                 entry.instrument.0,
                 entry.token_id,
-                entry.tick.0,
+                entry.tick.mantissa(),
                 entry.is_neg_risk,
                 entry.window_close_ts_us.micros()
             );

@@ -21,7 +21,9 @@ use engine::log::{HotRecord, LaneReader, TextRecord, open_hot_lane, open_text_la
 use engine::msg::exec::{
     AccountChunk, ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{
+    AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
+};
 use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::time::{DurationUs, LocalTs, Stamper, VenueTs};
@@ -78,7 +80,7 @@ fn intensity_spec() -> TrackerSpec {
 #[test]
 fn intensity_accumulator_and_fit_do_not_allocate() {
     let tick = ONE / 100;
-    let mut tracker = MicroTracker::new(&intensity_spec(), &[], Some(Price(tick)));
+    let mut tracker = MicroTracker::new(&intensity_spec(), &[], Some(Price::from_mantissa(tick)));
     let book = seeded_book();
     tracker.on_book(&book);
 
@@ -796,7 +798,7 @@ impl Venue {
                     kind: ExecKind::AckPlaced,
                     status: Some(VenueOrderStatus::New),
                     qty,
-                    ..exec_event(instrument, client_id, side, price.0, when)
+                    ..exec_event(instrument, client_id, side, price.mantissa(), when)
                 }
             }
             ExecCommand::Cancel {
@@ -862,7 +864,7 @@ impl Venue {
                     order.instrument,
                     order.client_id,
                     order.side,
-                    order.price.0,
+                    order.price.mantissa(),
                     when,
                 )
             };
@@ -878,10 +880,10 @@ fn recorder_row_at(id: u16) -> InstrumentRow {
     let mut row = instrument_row(id, tracker_spec_all(100), 128);
     row.market = VenueMarket::Binance(BinanceMarket::Spot);
     row.venue_symbol = format!("btcusdt-{id}").into();
-    row.tick_size = Some(Price(MICRO_TICK));
-    row.lot_size = Some(Qty(1_000));
-    row.min_qty = Some(Qty(1_000));
-    row.min_notional = Some(5 * ONE);
+    row.tick_size = Some(Price::from_mantissa(MICRO_TICK));
+    row.lot_size = Some(Qty::from_mantissa(1_000));
+    row.min_qty = Some(Qty::from_mantissa(1_000));
+    row.min_notional = Some(Notional::from_mantissa(5 * ONE));
     if id == 0 {
         row.tracker.intensity = intensity_spec().intensity;
         // The long VPIN window is 250 buckets, but tracker_spec_all retains only 64 closed bars — a
@@ -912,17 +914,17 @@ fn publisher_row_at(id: u16) -> InstrumentRow {
         display: format!("btc-updown-5m-{leg}").into(),
         base: "BTC".into(),
         quote: "USDC".into(),
-        tick_size: Some(Price(POLY_TICK)),
-        lot_size: Some(Qty(FIXED_SCALE / 100)),
-        min_qty: Some(Qty(POLY_SHARES)),
-        max_price: Some(Price(FIXED_SCALE * 99 / 100)),
+        tick_size: Some(Price::from_mantissa(POLY_TICK)),
+        lot_size: Some(Qty::from_mantissa(FIXED_SCALE / 100)),
+        min_qty: Some(Qty::from_mantissa(POLY_SHARES)),
+        max_price: Some(Price::from_mantissa(FIXED_SCALE * 99 / 100)),
         max_num_orders: Some(32),
         subscriptions: Subscriptions {
             klines: false,
             ..Subscriptions::default()
         },
         kline_intervals: Vec::new(),
-        max_exposure_quote: 500 * FIXED_SCALE,
+        max_exposure_quote: Notional::from_mantissa(500 * FIXED_SCALE),
         tracker: TrackerSpec {
             intensity: Some(IntensitySpec {
                 max_depth_ticks: 32,

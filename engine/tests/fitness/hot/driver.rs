@@ -21,7 +21,7 @@ use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, Provenance, StampedExecCommand,
     VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Price, Qty, QueueId, Side};
+use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, QueueId, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick, TradeEvent};
 use engine::msg::latency::{Category, CommandKind, Stage, WireSample};
 use engine::msg::persist::PersistRecord;
@@ -270,13 +270,13 @@ fn settings(fee_model: FeeModel, holds_reservations_until_settled: bool) -> Exec
             requote_threshold_ticks: 1,
             max_quote_distance_centi_bps: 100_000_000,
             max_book_age: DurationUs::from_secs(3_600),
-            max_order_notional_quote: 1_000_000 * ONE,
+            max_order_notional_quote: Notional::from_mantissa(1_000_000 * ONE),
         },
         max_orders_per_side: 1,
-        min_base_balance: 0,
-        min_quote_balance: 0,
+        min_base_balance: Qty::from_mantissa(0),
+        min_quote_balance: Notional::from_mantissa(0),
         max_consecutive_rejects: 5,
-        max_session_loss_quote: 1_000_000 * ONE,
+        max_session_loss_quote: Notional::from_mantissa(1_000_000 * ONE),
         inflight_timeout: DurationUs::from_secs(5),
         exec_silence_spins: u32::MAX,
         order_reap_window: DurationUs::from_secs(3_600),
@@ -292,10 +292,10 @@ fn settings(fee_model: FeeModel, holds_reservations_until_settled: bool) -> Exec
 fn recorder_row() -> InstrumentRow {
     let mut row = instrument_row(0, tracker_spec_all(100), 128);
     row.market = VenueMarket::Binance(BinanceMarket::Spot);
-    row.tick_size = Some(Price(ONE / 100));
-    row.lot_size = Some(Qty(1_000));
-    row.min_qty = Some(Qty(1_000));
-    row.min_notional = Some(5 * ONE);
+    row.tick_size = Some(Price::from_mantissa(ONE / 100));
+    row.lot_size = Some(Qty::from_mantissa(1_000));
+    row.min_qty = Some(Qty::from_mantissa(1_000));
+    row.min_notional = Some(Notional::from_mantissa(5 * ONE));
     row.tracker.intensity = Some(IntensitySpec {
         max_depth_ticks: 16,
         half_life_secs: 600.0,
@@ -314,17 +314,17 @@ fn publisher_rows() -> Vec<InstrumentRow> {
             display: format!("btc-updown-5m-{leg}").into(),
             base: "BTC".into(),
             quote: "USDC".into(),
-            tick_size: Some(Price(FIXED_SCALE / 100)),
-            lot_size: Some(Qty(FIXED_SCALE / 100)),
-            min_qty: Some(Qty(5 * FIXED_SCALE)),
-            max_price: Some(Price(FIXED_SCALE * 99 / 100)),
+            tick_size: Some(Price::from_mantissa(FIXED_SCALE / 100)),
+            lot_size: Some(Qty::from_mantissa(FIXED_SCALE / 100)),
+            min_qty: Some(Qty::from_mantissa(5 * FIXED_SCALE)),
+            max_price: Some(Price::from_mantissa(FIXED_SCALE * 99 / 100)),
             max_num_orders: Some(32),
             subscriptions: Subscriptions {
                 klines: false,
                 ..Subscriptions::default()
             },
             kline_intervals: Vec::new(),
-            max_exposure_quote: 500 * FIXED_SCALE,
+            max_exposure_quote: Notional::from_mantissa(500 * FIXED_SCALE),
             tracker: TrackerSpec {
                 intensity: Some(IntensitySpec {
                     max_depth_ticks: 32,
@@ -409,11 +409,11 @@ fn prior_run_fill(price: i64, cumulative: i64, at: i64) -> InboundMessage {
             kind: ExecKind::ReportTrade,
             provenance: Provenance::PriorRun,
             status: Some(VenueOrderStatus::PartiallyFilled),
-            qty: Qty(4 * cumulative),
-            last_price: Price(price),
-            last_qty: Qty(cumulative / 2),
-            cumulative_qty: Qty(cumulative),
-            cumulative_quote: Price(price).notional(Qty(cumulative)),
+            qty: Qty::from_mantissa(4 * cumulative),
+            last_price: Price::from_mantissa(price),
+            last_qty: Qty::from_mantissa(cumulative / 2),
+            cumulative_qty: Qty::from_mantissa(cumulative),
+            cumulative_quote: Price::from_mantissa(price).notional(Qty::from_mantissa(cumulative)),
             ..exec_event(InstrumentId(0), client_id, Side::Buy, price, at)
         }),
     )
@@ -1085,8 +1085,8 @@ impl Strategy for ThreeBids {
                 Side::Buy,
                 QuoteLevel::ZERO,
                 Some(DesiredQuote {
-                    price: Price(99 * ONE),
-                    qty: Qty(ONE / 10),
+                    price: Price::from_mantissa(99 * ONE),
+                    qty: Qty::from_mantissa(ONE / 10),
                     style: OrderStyle::PostOnly,
                 }),
             );
@@ -1113,8 +1113,8 @@ fn held_command_keeps_its_issue_tick() {
     const INTERVAL_US: i64 = 60_000_000;
     let mut harness = Harness::new(10);
     let instruments = BID_INSTRUMENTS.map(|id| InstrumentRow {
-        tick_size: Some(Price(ONE)),
-        lot_size: Some(Qty(1)),
+        tick_size: Some(Price::from_mantissa(ONE)),
+        lot_size: Some(Qty::from_mantissa(1)),
         ..instrument_row(id, TrackerSpec::default(), 64)
     });
     let (commands_producer, mut lane) = RingBuffer::<ExecLaneItem>::new(2);

@@ -5,6 +5,7 @@
 
 use crate::hot::exec::MAX_ORDER_INSTRUMENTS;
 use crate::info;
+use crate::msg::ids::{Notional, Qty};
 use crate::msg::run_state::RunState;
 use crate::msg::time::DurationUs;
 use crate::runtime::config::{SimConfig, validated_mantissa};
@@ -201,8 +202,8 @@ fn wallet_setup(row: &InstrumentRow, sim: &SimConfig) -> Result<SimWalletSetup, 
     Ok(SimWalletSetup {
         base_asset: row.base_asset,
         quote_asset: row.quote_asset,
-        opening_base: validated_mantissa(sim.opening_base_balance),
-        opening_quote: validated_mantissa(sim.opening_quote_balance),
+        opening_base: Qty::from_mantissa(validated_mantissa(sim.opening_base_balance)),
+        opening_quote: Notional::from_mantissa(validated_mantissa(sim.opening_quote_balance)),
         // SMELL: no test reaches this conversion. The fee type counts hundred-millionths of a
         // basis point, so passing the configured number in unscaled still compiles and charges
         // almost nothing.
