@@ -81,7 +81,7 @@ pub struct SessionPnl {
 
 #[inline]
 pub fn assess_loss(pnl: SessionPnl, max_loss: Notional) -> LossVerdict {
-    debug_assert!(
+    assert!(
         max_loss >= Notional::ZERO,
         "session loss budget is a magnitude, got {max_loss:?}"
     );
@@ -152,7 +152,7 @@ pub fn assess_exposure(check: ExposureCheck) -> QuotePermission {
 
 #[inline]
 fn signed(side: Side, notional_quote: Notional) -> i128 {
-    debug_assert!(
+    assert!(
         notional_quote >= Notional::ZERO,
         "an order's notional is unsigned by contract, got {notional_quote:?}"
     );

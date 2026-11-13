@@ -99,7 +99,7 @@ impl Side {
     /// Snap PASSIVE direction: buy DOWN, sell UP. Rounding opposite = aggression + crossing risk. Method (not match) catches inversions at compile time.
     #[inline]
     pub fn snap_passive(self, price: Price, increment: i64) -> Price {
-        debug_assert!(
+        assert!(
             increment > 0,
             "snapping onto a non-positive grid increment {increment}"
         );

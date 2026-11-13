@@ -99,7 +99,7 @@ pub fn plan_flatten(input: FlattenInput) -> FlattenOutcome {
         fee_model,
         taker_fee_rate,
     } = input;
-    debug_assert!(
+    assert!(
         grid.tick > 0 && grid.step > 0,
         "grid increments must be positive, got tick {} step {}",
         grid.tick,

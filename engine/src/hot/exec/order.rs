@@ -32,9 +32,9 @@ pub struct ClientIdLayout {
 impl ClientIdLayout {
     #[inline]
     pub fn encode(self, slot_index: usize, generation: u16) -> ClientOrderId {
-        debug_assert!(
+        assert!(
             slot_index < MAX_ORDER_SLOTS,
-            "slot index {slot_index} beyond the table"
+            "slot index {slot_index} beyond the table of {MAX_ORDER_SLOTS} slots"
         );
         ClientOrderId(
             (u64::from(self.run_nonce) << 32)

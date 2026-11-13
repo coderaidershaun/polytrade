@@ -102,7 +102,7 @@ digest_fields! { PositionLedger { rows } }
 
 impl PositionLedger {
     pub(crate) fn new(instrument_count: usize, restored: &[InstrumentExposure]) -> Self {
-        debug_assert!(
+        assert!(
             instrument_count <= usize::from(u16::MAX),
             "{instrument_count} instrument rows exceed the u16 instrument-id space"
         );
@@ -115,7 +115,7 @@ impl PositionLedger {
             row.cash_quote = Notional::from_mantissa(exposure.cash_quote);
             row.basis_quote = Notional::from_mantissa(exposure.basis_quote);
             row.realised_at_boot = row.realised_quote();
-            debug_assert_eq!(
+            assert_eq!(
                 row.session_realised_quote(),
                 Notional::ZERO,
                 "a restored row must boot having realised nothing THIS session, or the kill switch \
@@ -148,7 +148,7 @@ impl PositionLedger {
         // Side already carries the direction, so a negative size is not a sell — it is a bug that
         // would move the position and the cash the same way and never be visible again. Zero is
         // legitimate: a size rounded down at the scale boundary is a fill of nothing.
-        debug_assert!(
+        assert!(
             fill.base.mantissa() >= 0 && fill.notional_quote >= Notional::ZERO,
             "a fill's size and value are unsigned by contract, got base {} quote {}",
             fill.base.mantissa(),

@@ -248,7 +248,7 @@ pub fn reconcile_side(input: ReconcileInput) -> ReconcileOutcome {
         limits,
         funds,
     } = input;
-    debug_assert!(
+    assert!(
         grid.tick > 0 && grid.step > 0,
         "grid increments must be positive, got tick {} step {}",
         grid.tick,
