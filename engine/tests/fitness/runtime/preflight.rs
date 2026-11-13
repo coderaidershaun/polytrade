@@ -313,6 +313,21 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         assert!(is_expected(&error), "{case}: wrong refusal {error}");
     }
 
+    // A build without the export refuses a config that asks for one, so the run never goes quiet.
+    #[cfg(not(feature = "otlp"))]
+    {
+        let asked = format!(
+            "{}otlp:\n  collector: 127.0.0.1:4318\n",
+            sim_document(&state, "")
+        );
+        let refused = Config::<NoParams>::from_yaml(&asked).err();
+        assert!(
+            matches!(&refused, Some(ConfigError::Parse { detail }) if detail.contains("otlp")),
+            "a build without otlp refuses the block, got {}",
+            refused.map_or_else(|| "Ok".to_owned(), |error| error.to_string())
+        );
+    }
+
     // A config refusal: an engine that spins with no hot core. Only Linux refuses it.
     let spinning = config_with_source(BINANCE_PERP_SOURCE).replace("  hot_core_id: 0\n", "");
     let spun = Config::<NoParams>::from_yaml(&spinning);
