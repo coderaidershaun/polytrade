@@ -1,5 +1,5 @@
-//! The OTLP/JSON bodies that the exporter posts, and how each line and each row becomes them. Field names are
-//! lowerCamelCase, and times and 64-bit integers are decimal strings, as in the official examples.
+//! The OTLP/JSON bodies that the exporter posts, and how each line and each row becomes them.
+//! As in the official examples, field names are lowerCamelCase and 64-bit integers are strings.
 
 use serde::Serialize;
 

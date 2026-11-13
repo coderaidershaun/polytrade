@@ -204,7 +204,7 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         "{core}"
     );
 
-    // E-O1: a collector that is not on this host's loopback.
+    // A collector that is not on this host's loopback.
     #[cfg(feature = "otlp")]
     {
         let remote = refusal(
@@ -231,7 +231,7 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         );
     }
 
-    // E-O2: no room inside the engine's drain deadline for the exporter to stop.
+    // No room inside the engine's drain deadline for the exporter to stop.
     #[cfg(feature = "otlp")]
     {
         let tight = format!(
