@@ -765,7 +765,7 @@ const RECORDER_OUTPUTS: [Digest; 8] = [
 
 const PUBLISHER_OUTPUTS: [Digest; 8] = [
     recorded("tape rows", 11, 0x22fa_8faf_4d66_cae5),
-    recorded("commands", 80, 0xad4e_f8d5_f78b_5301),
+    recorded("commands", 80, 0xc4c1_7609_303b_edd7),
     recorded("ui books", 1_734, 0x4116_b312_52d1_9732),
     recorded("ui events", 1_245, 0xc5fe_6b6d_338d_87c0),
     recorded("exposure", 2, 0xe632_e3fd_5bf1_4ad7),
