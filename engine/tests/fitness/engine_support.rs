@@ -11,7 +11,8 @@ use engine::hot::exec::{
     side_base,
 };
 use engine::hot::sink::{
-    ExecSink, ExposureSink, LinkSink, PersistSink, StrategyLogSink, UiBookSink, UiEventSink,
+    ExecSink, ExposureReceiver, ExposureSink, LinkSink, PersistSink, StrategyLogSink, UiBookSink,
+    UiEventSink,
 };
 use engine::hot::strategy::{EngineView, Strategy, StrategyConfig};
 use engine::link::OutboundLink;
@@ -560,11 +561,31 @@ pub fn ui_event_ring(capacity: usize) -> (UiEventSink, Consumer<UiEvent>) {
     (UiEventSink::new(producer), consumer)
 }
 
-/// The exposure ring, mirroring [`persist_ring`]. Keep the consumer to read the cost basis the
-/// engine publishes; [`detached_setup`] is the shape for a test that does not.
-pub fn exposure_ring(capacity: usize) -> (ExposureSink, Consumer<ExposureSnapshot>) {
-    let (producer, consumer) = RingBuffer::<ExposureSnapshot>::new(capacity);
-    (ExposureSink::new(producer), consumer)
+/// The exposure lane of an engine of `instruments` instruments, mirroring [`persist_ring`]. Keep
+/// the reader to read the cost basis the engine publishes; [`detached_setup`] is the shape for a
+/// test that does not.
+pub fn exposure_ring(capacity: usize, instruments: usize) -> (ExposureSink, ExposureLane) {
+    let (sink, receiver) = ExposureSink::lane(capacity, instruments);
+    let lane = ExposureLane {
+        receiver,
+        copy: ExposureSnapshot::for_instruments(instruments),
+    };
+    (sink, lane)
+}
+
+/// The read end of the exposure lane as a test reads it: each snapshot is copied out, and the
+/// lane gets its room back.
+pub struct ExposureLane {
+    receiver: ExposureReceiver,
+    copy: ExposureSnapshot,
+}
+
+impl ExposureLane {
+    pub fn pop(&mut self) -> Option<ExposureSnapshot> {
+        self.receiver
+            .pop_into(&mut self.copy)
+            .then(|| self.copy.clone())
+    }
 }
 
 /// An engine wired to nothing: no venue, persistence, link or warmup, no restored position, and
@@ -589,7 +610,7 @@ pub fn detached_setup(
         exec: None,
         exposure: ExposureWiring {
             restored: &[],
-            sink: exposure_ring(16).0,
+            sink: exposure_ring(16, instruments.len()).0,
         },
     }
 }

@@ -11,6 +11,7 @@ use engine::msg::ids::{Notional, Price, Qty};
 use engine::runtime::config::{
     Config, ConfigError, ExecutionMode, NoParams, RunIdentity, SourceSpec,
 };
+use engine::runtime::exposure::ExposureError;
 use engine::runtime::registry::{BinanceLimits, Registry};
 use engine::runtime::{ExecutionLease, Preflight, StartError, exposure};
 use engine::venues::VenueError;
@@ -237,6 +238,26 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
     assert!(
         matches!(unreadable, StartError::Exposure(_)),
         "{unreadable}"
+    );
+    // The position file is of version 2, which names each row by its symbol alone.
+    fs::write(
+        &ledger,
+        format!(
+            r#"{{"version":2,"strategy_id":"{STRATEGY}","te_id":"{ENGINE}","written_ts_us":1,"seq":1,"fixed_scale":{ONE},"instruments":[]}}"#
+        ),
+    )
+    .expect("the test writes the position file");
+    let version_2 = refusal(&sim_document(&state, ""), stamped, &state);
+    assert!(
+        matches!(
+            version_2,
+            StartError::Exposure(ExposureError::UnknownVersion {
+                found: 2,
+                expected: 3,
+                ..
+            })
+        ),
+        "{version_2}"
     );
     fs::remove_file(&ledger).expect("the test removes the position file");
 

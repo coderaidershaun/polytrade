@@ -42,7 +42,7 @@ use crate::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, S
 use crate::msg::ui::UiCatalog;
 use crate::msg::ui::channel::{UiLifecycle, UiWiring, ui_channel};
 use crate::runtime::config::{Config, ExecutionMode, SenderPlacement};
-use crate::runtime::exposure::{ExposureHandle, ExposureWriter, ExposureWriterConfig};
+use crate::runtime::exposure::{ExposureHandle, ExposureWriter, ExposureWriterSetup, WriterStatus};
 use crate::runtime::pin::PinCall;
 use crate::runtime::shutdown::{DrainSignal, FatalSignal, RunControlGate, TaskHandle};
 use crate::tape::PersistHandle;
@@ -272,19 +272,6 @@ impl Engine {
             rotations: rotations_rx,
         });
 
-        // This runs before the hot thread is built, so the writer knows the disk state before
-        // anything changes it. `mode` names the ledger file, so it must be the same value the load
-        // was given, or this run writes a ledger it did not read.
-        let (exposure, exposure_sink) = ExposureWriter::spawn(
-            ExposureWriterConfig::new(
-                config.exposure.dir.clone(),
-                identity.clone(),
-                mode,
-                &registry,
-            ),
-            &restored_exposure,
-        );
-
         let SampleProducers {
             stages,
             counters,
@@ -332,6 +319,7 @@ impl Engine {
 
         let instruments = registry.instruments().to_vec();
         let restored = restored_exposure.instruments().to_vec();
+        let (exposure_sink, exposure_lane) = ExposureWriter::lane(instruments.len());
         let warmup = DurationUs::from_secs(config.engine.warmup_secs as i64);
         let HotBringUp {
             thread: hot,
@@ -370,7 +358,21 @@ impl Engine {
             timer: timer_producer,
             link: link_producer,
             exec: exec_producer,
+            writer_status,
         } = producers;
+        let exposure = ExposureWriter::spawn(ExposureWriterSetup {
+            dir: config.exposure.dir.clone(),
+            identity: identity.clone(),
+            mode,
+            registry: &registry,
+            status: writer_status.map(|queue| WriterStatus {
+                queue,
+                clock: clock.clone(),
+                max_failed_writes: config.exposure.max_failed_writes,
+            }),
+            restored: &restored_exposure,
+            lane: exposure_lane,
+        });
 
         let ExecBringUp {
             spawn: exec_spawn,

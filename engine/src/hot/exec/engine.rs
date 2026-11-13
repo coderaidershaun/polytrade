@@ -169,11 +169,7 @@ digest_fields! {
     ExecEngine {
         orders, prior_orders, account, pending, sink, halt, readiness, refusals, reject_streak,
         budget, instruments, settings, silence, recon_seq, incidents,
-        pnl_at_baseline,
-    }
-    not_state {
-        // Summed again from the ledger and the instruments before each read.
-        loss_sums,
+        pnl_at_baseline, loss_sums,
     }
 }
 

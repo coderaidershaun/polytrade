@@ -143,6 +143,12 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
                 )?;
             }
         }
+        check_range(
+            "exposure.max_failed_writes",
+            u64::from(self.exposure.max_failed_writes),
+            1..=u64::from(u32::MAX),
+            "1 or more",
+        )?;
         self.logging.validate(self.engine.drain_deadline_ms)?;
         self.source.validate()?;
         self.latency.validate()?;
@@ -296,12 +302,17 @@ pub struct PersistenceConfig {
 pub struct ExposureConfig {
     #[serde(default = "default_exposure_dir")]
     pub dir: PathBuf,
+    /// Failed writes of the file in a row, after which the writer reports once and quoting halts. A
+    /// write that succeeds starts the count again.
+    #[serde(default = "default_max_failed_writes")]
+    pub max_failed_writes: u32,
 }
 
 impl Default for ExposureConfig {
     fn default() -> Self {
         ExposureConfig {
             dir: default_exposure_dir(),
+            max_failed_writes: default_max_failed_writes(),
         }
     }
 }
@@ -388,4 +399,9 @@ fn default_retention_hours() -> u64 {
 
 fn default_exposure_dir() -> PathBuf {
     PathBuf::from("./exposure")
+}
+
+/// Three tries of a local file write take about 300 ms at the writer's poll.
+fn default_max_failed_writes() -> u32 {
+    3
 }

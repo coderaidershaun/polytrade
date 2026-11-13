@@ -14,21 +14,26 @@ use engine::hot::spawn::{
 use engine::log::open_hot_lane;
 use engine::msg::failure::{FailureClass, Halt};
 use engine::msg::ids::{QueueId, Side, SourceId};
-use engine::msg::inbound::{InboundMessage, MarketTapItem, MessageBody, SpinTick, VenueMeta};
+use engine::msg::inbound::{
+    FileWriter, InboundMessage, MarketTapItem, MessageBody, SpinTick, VenueMeta, WriterFailure,
+};
 use engine::msg::latency::StageSample;
 use engine::msg::persist::PersistRecord;
 use engine::msg::ui::{UiEvent, UiHalt};
-use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
+use engine::runtime::config::{Config, RecordedTables, TableKind, TrackerSpec};
+use engine::runtime::registry::Registry;
 use engine::runtime::shutdown::{DrainSignal, FatalReason, FatalSignal};
 use engine::runtime::{DrainDeadline, DrainOutcome, Exit, Trigger, pin_to_core};
 use rtrb::{Consumer, RingBuffer};
 use std::num::NonZeroU32;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::engine_support::{
     Idle, detached_setup, engine_with_ui_and_exec, idle_at, instrument_row, run_control,
     running_at, strategy_log_ring, trade, ts,
 };
+use crate::micro_strategy::MicroRecorderParams;
 
 fn spin_at(seq: u64, when: i64) -> InboundMessage {
     InboundMessage::new(ts(when), MessageBody::SpinTick(SpinTick { seq }))
@@ -37,55 +42,20 @@ fn spin_at(seq: u64, when: i64) -> InboundMessage {
 /// CONTRACT: an input queue that the engine feeds halts the engine when it is full, and the link
 /// queue, which an untrusted peer fills, drops the frame and counts it. A full input queue that
 /// dropped would fold a hole in the order of messages, and a full link queue that halted would let
-/// any peer stop the engine.
+/// any peer stop the engine. The writer-status queue is one that the engine feeds: its own file
+/// writers fill it.
 #[test]
 fn each_lane_full_gives_its_class() {
     let queue = QueueId::new(0).unwrap();
-    let (producer, consumer) = RingBuffer::<InboundMessage>::new(1);
-    let fatal = FatalSignal::new();
-    let mut input = QueueProducer::new(producer, fatal.clone(), queue, SourceId(0));
-    input.push(spin_at(0, 1_000));
-    assert!(!fatal.is_tripped(), "one message fits a ring of one slot");
-    input.push(spin_at(1, 2_000));
-    let reason = fatal
-        .reason()
-        .expect("the second push trips the fatal latch");
-    assert_eq!(reason, FatalReason::InputQueueFull { queue, capacity: 1 });
-    assert_eq!(reason.failure_class(), FailureClass::Halt(Halt::Engine));
-    assert_eq!(reason.failure_class(), QueueProducer::WHEN_FULL);
-    assert_eq!(
-        consumer.slots(),
-        1,
-        "the producer waited for nothing and added nothing"
+    full_engine_fed_queue_halts(queue, [spin_at(0, 1_000), spin_at(1, 2_000)]);
+    let writer_failed = InboundMessage::new(
+        ts(1_000),
+        MessageBody::WriterFailed(WriterFailure {
+            writer: FileWriter::Exposure,
+            consecutive_failures: 3,
+        }),
     );
-
-    let instruments = [instrument_row(0, TrackerSpec::default(), 64)];
-    let engine = HotEngine::new(detached_setup(&instruments, Box::new(Idle)));
-    let hot_fatal = fatal.clone();
-    let hot = spawn_hot_thread(
-        HotThreadConfig {
-            core_id: None,
-            tag: "fitness-lanes",
-        },
-        pin_to_core,
-    )
-    .expect("a thread with no core never refuses its pin")
-    .start(move || HotLoop {
-        driver: HotDriver::new(IngressQueues::new(vec![consumer]), engine, None),
-        idle: IdleWait::Park(std::time::Duration::from_micros(50)),
-        fatal: hot_fatal,
-        drain: DrainSignal::new(),
-    });
-    hot.join()
-        .expect("the hot thread reads the latch and stops");
-    let exit = Exit::decide(DrainOutcome {
-        trigger: Trigger::Fatal(reason),
-        fatal: fatal.reason(),
-        failures: Vec::new(),
-        deadline: DrainDeadline::Kept,
-    });
-    assert_eq!(exit, Exit::Halted(reason));
-    assert_ne!(exit.code(), 0);
+    full_engine_fed_queue_halts(shipped_writer_status_queue(), [writer_failed; 2]);
 
     let (producer, _peer_frames) = RingBuffer::<InboundMessage>::new(1);
     let mut link = LinkQueueProducer::new(producer, QueueId::new(1).unwrap());
@@ -137,6 +107,69 @@ fn each_lane_full_gives_its_class() {
         PersistSink::SEAL_PAST_CAP,
         FailureClass::Halt(Halt::Quoting)
     );
+}
+
+/// Pushes two messages into an input queue of one slot that the engine feeds. The second trips the
+/// fatal latch with no wait and leaves the first in the ring, and a hot thread over the ring reads
+/// the latch and stops.
+fn full_engine_fed_queue_halts(queue: QueueId, [first, second]: [InboundMessage; 2]) {
+    let (producer, consumer) = RingBuffer::<InboundMessage>::new(1);
+    let fatal = FatalSignal::new();
+    let mut input = QueueProducer::new(producer, fatal.clone(), queue, SourceId(0));
+    input.push(first);
+    assert!(!fatal.is_tripped(), "one message fits a ring of one slot");
+    input.push(second);
+    let reason = fatal
+        .reason()
+        .expect("the second push trips the fatal latch");
+    assert_eq!(reason, FatalReason::InputQueueFull { queue, capacity: 1 });
+    assert_eq!(reason.failure_class(), FailureClass::Halt(Halt::Engine));
+    assert_eq!(reason.failure_class(), QueueProducer::WHEN_FULL);
+    assert_eq!(
+        consumer.slots(),
+        1,
+        "the producer waited for nothing and added nothing"
+    );
+
+    let instruments = [instrument_row(0, TrackerSpec::default(), 64)];
+    let engine = HotEngine::new(detached_setup(&instruments, Box::new(Idle)));
+    let hot_fatal = fatal.clone();
+    let hot = spawn_hot_thread(
+        HotThreadConfig {
+            core_id: None,
+            tag: "fitness-lanes",
+        },
+        pin_to_core,
+    )
+    .expect("a thread with no core never refuses its pin")
+    .start(move || HotLoop {
+        driver: HotDriver::new(IngressQueues::new(vec![consumer]), engine, None),
+        idle: IdleWait::Park(std::time::Duration::from_micros(50)),
+        fatal: hot_fatal,
+        drain: DrainSignal::new(),
+    });
+    hot.join()
+        .expect("the hot thread reads the latch and stops");
+    let exit = Exit::decide(DrainOutcome {
+        trigger: Trigger::Fatal(reason),
+        fatal: fatal.reason(),
+        failures: Vec::new(),
+        deadline: DrainDeadline::Kept,
+    });
+    assert_eq!(exit, Exit::Halted(reason));
+    assert_ne!(exit.code(), 0);
+}
+
+/// The writer-status queue of the binance engine that ships, which trades.
+fn shipped_writer_status_queue() -> QueueId {
+    let config = Config::<MicroRecorderParams>::load(Path::new(
+        "../strategies/strat-micro-recorder/te-binance-spot-btcusdt/config.yaml",
+    ))
+    .expect("the shipped binance config loads");
+    Registry::build(&config)
+        .expect("the shipped binance registry builds")
+        .writer_status_queue_id()
+        .expect("an engine that trades has a writer-status queue")
 }
 
 /// A tape that records the link-frame table, so that each run-control message writes one row.

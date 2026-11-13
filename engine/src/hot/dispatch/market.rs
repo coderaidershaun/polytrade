@@ -2,6 +2,7 @@
 //! body for readability.
 
 use crate::hot::book::{BookState, SnapshotOutcome};
+use crate::hot::exec::RotationFacts;
 use crate::hot::strategy::WindowInfo;
 use crate::log::hot_warn;
 use crate::msg::ids::{InstrumentId, Price};
@@ -147,15 +148,21 @@ impl HotEngine {
         received_ts_us: LocalTs,
     ) {
         let index = usize::from(rotation.instrument.0);
-        self.state.windows[index] = Some(WindowInfo {
+        let closing = self.state.windows[index].replace(WindowInfo {
             open_ts_us: rotation.window_open_ts_us,
             close_ts_us: rotation.window_close_ts_us,
         });
         self.state.derived.trackers[index].on_rotation();
-        // Before the reset, which is what erases the realised leg it carries away.
+        // Before the reset, which is what erases the realised leg and the position it reads.
+        let facts = RotationFacts {
+            instrument: rotation.instrument,
+            closing_window_close_ts_us: closing.map(|window| window.close_ts_us),
+            exchange_ts_us: rotation.window_open_ts_us,
+            received_ts_us,
+        };
         self.state
             .exec
-            .on_market_rotation(&self.state.ledger, rotation.instrument);
+            .on_market_rotation(&self.state.ledger, facts, &mut self.state.actions);
         self.state.ledger.reset_instrument(rotation.instrument);
         if let Some(ewma) = self.state.derived.ewma[index].as_mut() {
             ewma.reset();

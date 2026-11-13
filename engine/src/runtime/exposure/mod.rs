@@ -1,21 +1,21 @@
 //! The durable cost basis, one JSON file for each engine, written off the hot path. Position is
-//! keyed by venue symbol, because an instrument id can change between runs.
+//! keyed by venue and venue symbol, because an instrument id can change between runs.
 
 mod file;
 mod writer;
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
+use crate::hot::digest::digest_fields;
+use crate::msg::failure::{FailureClass, Halt};
 use crate::msg::ids::{AssetId, InstrumentId, Qty};
 use crate::msg::time::LocalTs;
-use crate::runtime::config::{ExecutionMode, RunIdentity};
+use crate::runtime::config::{ExecutionMode, RunIdentity, VenueMarket};
 use crate::runtime::registry::Registry;
 use crate::warn;
 
-pub use writer::{ExposureHandle, ExposureWriter, ExposureWriterConfig};
-
-/// Max instruments per snapshot (engine serves one source).
-pub const MAX_EXPOSURE_INSTRUMENTS: usize = 16;
+pub use writer::{ExposureHandle, ExposureWriter, ExposureWriterSetup, WriterStatus};
 
 /// Quote amounts are mantissas at the global fixed scale, never currency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,11 +42,14 @@ impl InstrumentExposure {
     }
 }
 
-/// Whole-ledger snapshot (fixed-size, absolute state): atomic file write, avoid half-updated ledger.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The whole ledger at one sequence number, so a file never holds half of an update. It has room
+/// for a row of each instrument of the registry, made once at start, and is filled in place, so the
+/// hot thread never allocates or frees one.
+#[derive(Clone)]
 pub struct ExposureSnapshot {
-    pub instruments: [InstrumentExposure; MAX_EXPOSURE_INSTRUMENTS],
-    pub len: u8,
+    rows: Box<[InstrumentExposure]>,
+    /// The rows in use, each one that is not empty. The rows past it are room.
+    len: usize,
     /// Sequence (monotone, starts at 1): 0 = boot-restored state (writer skips if already written).
     pub seq: u64,
     /// Mark-to-market at emission (0 if no honest mark yet); written for human, ignored on load.
@@ -55,24 +58,89 @@ pub struct ExposureSnapshot {
     pub emitted_ts_us: LocalTs,
 }
 
-impl ExposureSnapshot {
-    pub const EMPTY: ExposureSnapshot = ExposureSnapshot {
-        instruments: [InstrumentExposure::EMPTY; MAX_EXPOSURE_INSTRUMENTS],
-        len: 0,
-        seq: 0,
-        exposure_quote: 0,
-        emitted_ts_us: LocalTs::from_micros(0),
-    };
+digest_fields! { ExposureSnapshot { rows, len, seq, exposure_quote, emitted_ts_us } }
 
-    /// Filled prefix (capacity invariant trapped here).
+impl ExposureSnapshot {
+    /// Room for a row of each of `instruments` instruments, and no row in use.
+    pub fn for_instruments(instruments: usize) -> Self {
+        ExposureSnapshot {
+            rows: vec![InstrumentExposure::EMPTY; instruments].into_boxed_slice(),
+            len: 0,
+            seq: 0,
+            exposure_quote: 0,
+            emitted_ts_us: LocalTs::from_micros(0),
+        }
+    }
+
     #[inline]
     pub fn active(&self) -> &[InstrumentExposure] {
-        debug_assert!(
-            self.len as usize <= MAX_EXPOSURE_INSTRUMENTS,
-            "snapshot len {} exceeds capacity {MAX_EXPOSURE_INSTRUMENTS}",
-            self.len
-        );
-        &self.instruments[..self.len as usize]
+        &self.rows[..self.len]
+    }
+
+    /// Takes each row that is not empty, in order. An all-zero row is the same as no row.
+    ///
+    /// # Panics
+    /// More rows than the instruments that the snapshot has room for. The ledger and the snapshot
+    /// are sized by one registry, so that is a bug.
+    pub fn set_rows(&mut self, rows: impl IntoIterator<Item = InstrumentExposure>) {
+        let mut len = 0;
+        for row in rows.into_iter().filter(|row| !row.is_empty()) {
+            let Some(slot) = self.rows.get_mut(len) else {
+                room_overrun(self.rows.len());
+            };
+            *slot = row;
+            len += 1;
+        }
+        self.len = len;
+    }
+
+    /// Takes the rows and the stamps of `other`, in place.
+    ///
+    /// # Panics
+    /// `other` holds more rows than this snapshot has room for. Each snapshot of a run is sized by
+    /// one registry, so that is a bug.
+    pub fn copy_from(&mut self, other: &ExposureSnapshot) {
+        let rows = other.active();
+        let Some(room) = self.rows.get_mut(..rows.len()) else {
+            room_overrun(self.rows.len());
+        };
+        room.copy_from_slice(rows);
+        self.len = rows.len();
+        self.seq = other.seq;
+        self.exposure_quote = other.exposure_quote;
+        self.emitted_ts_us = other.emitted_ts_us;
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn room_overrun(room: usize) -> ! {
+    panic!(
+        "an exposure snapshot has room for {room} instruments, and was given more rows than that"
+    )
+}
+
+/// The rows past the ones in use are room, so two snapshots of one state are equal.
+impl PartialEq for ExposureSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.active() == other.active()
+            && self.seq == other.seq
+            && self.exposure_quote == other.exposure_quote
+            && self.emitted_ts_us == other.emitted_ts_us
+    }
+}
+
+impl Eq for ExposureSnapshot {}
+
+impl fmt::Debug for ExposureSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExposureSnapshot")
+            .field("instruments", &self.active())
+            .field("seq", &self.seq)
+            .field("exposure_quote", &self.exposure_quote)
+            .field("emitted_ts_us", &self.emitted_ts_us)
+            .finish()
     }
 }
 
@@ -143,11 +211,12 @@ pub enum ExposureError {
         expected: i64,
     },
     #[error(
-        "exposure file at {} holds {symbol} with position {position_base} and cash {cash_quote}, and this config names no such instrument — the next write would erase it",
+        "exposure file at {} holds {symbol} of {venue} with position {position_base} and cash {cash_quote}, and this config names no such instrument — the next write would erase it",
         .path.display()
     )]
     UnknownInstrument {
         path: PathBuf,
+        venue: Box<str>,
         symbol: Box<str>,
         position_base: i64,
         cash_quote: i64,
@@ -162,6 +231,26 @@ pub enum ExposureError {
     WriterPanicked { payload: Box<str> },
     #[error("exposure writer drain was interrupted before the thread could be joined")]
     DrainInterrupted,
+}
+
+impl ExposureError {
+    /// A file that a start cannot trust refuses the start. A failed write is tried again at the
+    /// writer's next poll, and its limit halts quoting. A writer that died, or a drain that could
+    /// not wait for it, leaves the file behind the position, so the engine halts.
+    pub fn failure_class(&self) -> FailureClass {
+        match self {
+            ExposureError::Read { .. }
+            | ExposureError::Malformed { .. }
+            | ExposureError::WrongIdentity { .. }
+            | ExposureError::UnknownVersion { .. }
+            | ExposureError::ScaleMismatch { .. }
+            | ExposureError::UnknownInstrument { .. } => FailureClass::Halt(Halt::Start),
+            ExposureError::Write { .. } => FailureClass::Retry,
+            ExposureError::WriterPanicked { .. } | ExposureError::DrainInterrupted => {
+                FailureClass::Halt(Halt::Engine)
+            }
+        }
+    }
 }
 
 /// Adds `-sim` to simulated exposure filenames.
@@ -191,16 +280,15 @@ pub fn load(
 
     let mut instruments = Vec::with_capacity(document.instruments.len());
     for entry in &document.instruments {
-        let Some(row) = registry
-            .instruments()
-            .iter()
-            .find(|row| row.venue_symbol.as_ref() == entry.symbol.as_str())
-        else {
+        let Some(row) = registry.instruments().iter().find(|row| {
+            venue_of(row.market) == entry.venue && row.venue_symbol.as_ref() == entry.symbol
+        }) else {
             if entry.is_zero() {
                 continue;
             }
             return Err(ExposureError::UnknownInstrument {
                 path,
+                venue: entry.venue.as_str().into(),
                 symbol: entry.symbol.as_str().into(),
                 position_base: entry.position_base,
                 cash_quote: entry.cash_quote,
@@ -225,6 +313,14 @@ pub fn load(
         instruments,
         assets,
     })
+}
+
+/// The venue half of the key of a row: a symbol names an instrument only within its venue.
+pub(super) fn venue_of(market: VenueMarket) -> &'static str {
+    match market {
+        VenueMarket::Binance(_) => "binance",
+        VenueMarket::Polymarket(_) => "polymarket",
+    }
 }
 
 /// Fold cost basis into per-asset amounts: position = BASE amount, cash = signed QUOTE amount. Exact even with shared assets.

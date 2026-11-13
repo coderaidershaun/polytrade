@@ -5,7 +5,7 @@
 use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{
     ClientIdLayout, DesiredQuote, ExecSettings, ExposureCheck, LossVerdict, QuoteLevel,
-    QuotePermission, SessionPnl, assess_exposure, assess_loss, side_base,
+    QuotePermission, RejectReason, SessionPnl, assess_exposure, assess_loss, side_base,
 };
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{Strategy, StrategyCtx};
@@ -24,12 +24,12 @@ use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
     FillPen, Idle, ONE, book_reset, detached_setup, exec_event, exposure_ring, instrument_row,
-    rotation, snapshot_pair, ts,
+    local_refusals, rotation, snapshot_pair, ts,
 };
 use crate::exec_support::{
-    ASK, BID, CEILING, INSTRUMENT, QUOTE_QTY, QuotingEngine, QuotingSetup, built_quoting_engine,
-    drain_commands, exec_settings, has_halted, is_placing, make_ready, quoting_engine, reseat_book,
-    spin_at,
+    ASK, BID, CEILING, INSTRUMENT, QUOTE_QTY, QuotingEngine, QuotingSetup, TwoSidedQuoter,
+    built_quoting_engine, drain_commands, exec_settings, has_halted, is_placing, make_ready,
+    quoting_engine, reseat_book, spin_at,
 };
 use crate::micro_strategy::models::{RiskBudget, signed};
 
@@ -455,11 +455,23 @@ fn losses_realised_before_a_rotation_still_count_against_the_budget() {
 /// a rotation must not manufacture a loss out of the profit it just erased.
 ///
 /// The mark-to-market leg is measured against a baseline taken at the first honest valuation, and a
-/// rotation zeroes the row that baseline was taken from. Left standing, the next spin reads the
-/// whole baseline as this instant's loss — and reads it while FLAT, which is the one shape that
-/// halts rather than merely restricting a side. The engine would kill itself for making money.
+/// rotation zeroes the row that baseline was taken from, so the baseline must clear with it. The
+/// position is closed before the rotation: a position held across one is stranded, and its basis
+/// counts against the budget on purpose.
 fn a_rotation_does_not_leave_a_stale_baseline_reading_as_a_loss() {
-    let mut fixture = fixture(BUDGET);
+    // A quoter, so that a side the loss gate refuses shows as a refusal. Nothing is placed before
+    // the engine is ready.
+    let mut fixture = built_quoting_engine(QuotingSetup {
+        row: instrument_row(0, TrackerSpec::default(), 64),
+        strategy: Box::new(TwoSidedQuoter),
+        restored: &[],
+        settings: ExecSettings {
+            max_session_loss_quote: Notional::from_mantissa(BUDGET),
+            ..exec_settings()
+        },
+        tables: RecordedTables::new(&[TableKind::Orders]),
+        run_nonce: 0,
+    });
     let mut pen = FillPen::new(0);
 
     // Bought below where the book then marks it, and bought BEFORE any book exists so the baseline
@@ -471,6 +483,7 @@ fn a_rotation_does_not_leave_a_stale_baseline_reading_as_a_loss() {
         !has_halted(&mut fixture.commands),
         "a position ten units in profit has breached nothing"
     );
+    dispatch_all(&mut fixture, &pen.fill(Side::Sell, 100 * ONE, ONE, 35));
 
     rotate(&mut fixture, 40);
     spin_at(&mut fixture.engine, 1, 50);
@@ -480,13 +493,26 @@ fn a_rotation_does_not_leave_a_stale_baseline_reading_as_a_loss() {
          ten-unit loss this run has to answer for"
     );
 
-    // And the gate is silenced, not disarmed: a real loss on the new window still kills the run.
+    // A long opened in the new window at its mark has lost nothing. A baseline left from the old
+    // window would read the profit of ten it held as a loss, and refuse the side that adds.
+    make_ready(&mut fixture.engine, 52);
     dispatch_all(&mut fixture, &pen.fill(Side::Buy, 100 * ONE, ONE, 60));
-    dispatch_all(&mut fixture, &pen.fill(Side::Sell, 94 * ONE, ONE, 70));
-    spin_at(&mut fixture.engine, 2, 80);
+    dispatch_all(&mut fixture, &reseat_book(99 * ONE, 101 * ONE, 62));
+    local_refusals(&mut fixture.ui_events);
+    spin_at(&mut fixture.engine, 2, 65);
+    let refusals = local_refusals(&mut fixture.ui_events);
+    assert!(
+        !refusals.contains(&RejectReason::SessionReducingOnly),
+        "the buy that adds to a long opened at its mark was refused for a loss: {refusals:?}"
+    );
+
+    // And the gate is silenced, not disarmed: a real loss on the new window still kills the run.
+    dispatch_all(&mut fixture, &pen.fill(Side::Sell, 84 * ONE, ONE, 70));
+    spin_at(&mut fixture.engine, 3, 80);
     assert!(
         has_halted(&mut fixture.commands),
-        "six units realised on the new window is past the budget however clean the slate was"
+        "sixteen units realised on the new window, less the ten carried, is past the budget \
+         however clean the slate was"
     );
 }
 
@@ -811,7 +837,7 @@ fn markets(
         }),
         exposure: ExposureWiring {
             restored,
-            sink: exposure_ring(64).0,
+            sink: exposure_ring(64, rows.len()).0,
         },
         ..detached_setup(rows, strategy)
     });

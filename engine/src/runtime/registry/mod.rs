@@ -123,6 +123,9 @@ pub struct Registry {
     /// Acks and stream reports share one queue: their relative order can race over the
     /// network, but sharing one queue keeps that order deterministic for replay.
     exec_queue_id: Option<QueueId>,
+    /// `None` unless execution is armed: a writer that gives up halts quoting, and with execution
+    /// off no quote can halt.
+    writer_status_queue_id: Option<QueueId>,
     input_queue_count: usize,
 }
 
@@ -141,10 +144,16 @@ impl Registry {
             .as_ref()
             .map(|_| queue_id_at(timer_queue_id.index() + 1))
             .transpose()?;
-        // Exec is appended last: queue ids are recorded on messages, and shifting one
-        // would re-attribute an entire recorded tape.
+        // Exec and then the writer status are appended last: queue ids are recorded on messages,
+        // and shifting one would re-attribute an entire recorded tape.
         let exec_queue_id = execution_queue_id(config, link_queue_id.unwrap_or(timer_queue_id))?;
-        let last_queue_id = exec_queue_id.or(link_queue_id).unwrap_or(timer_queue_id);
+        let writer_status_queue_id = exec_queue_id
+            .map(|exec| queue_id_at(exec.index() + 1))
+            .transpose()?;
+        let last_queue_id = writer_status_queue_id
+            .or(exec_queue_id)
+            .or(link_queue_id)
+            .unwrap_or(timer_queue_id);
         let input_queue_count = last_queue_id.index() + 1;
 
         Ok(Registry {
@@ -156,6 +165,7 @@ impl Registry {
             timer_queue_id,
             link_queue_id,
             exec_queue_id,
+            writer_status_queue_id,
             input_queue_count,
         })
     }
@@ -239,6 +249,10 @@ impl Registry {
 
     pub fn exec_queue_id(&self) -> Option<QueueId> {
         self.exec_queue_id
+    }
+
+    pub fn writer_status_queue_id(&self) -> Option<QueueId> {
+        self.writer_status_queue_id
     }
 }
 
