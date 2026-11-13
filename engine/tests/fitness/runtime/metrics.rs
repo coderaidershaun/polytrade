@@ -224,7 +224,7 @@ impl Harness {
         latest
     }
 
-    fn trade(&self) -> StageSample {
+    pub(crate) fn trade(&self) -> StageSample {
         self.message(Category::Trade, POP_TICK, DONE_TICK)
     }
 
@@ -256,7 +256,7 @@ impl Harness {
     }
 }
 
-fn spin_counters(spin_us: i64, backlog: [u32; 2]) -> CounterSample {
+pub(crate) fn spin_counters(spin_us: i64, backlog: [u32; 2]) -> CounterSample {
     let mut waiting = [0; 20];
     waiting[..2].copy_from_slice(&backlog);
     CounterSample {

@@ -8,6 +8,8 @@ mod identity;
 mod latency;
 mod link;
 mod logging;
+#[cfg(feature = "otlp")]
+mod otlp;
 mod senders;
 mod simulated;
 mod sources;
@@ -27,6 +29,8 @@ pub use identity::{RunIdentity, StrategyId, TradingEngineId};
 pub use latency::{LatencyBudgets, LatencyConfig, StageBudget};
 pub use link::{ControllerLoss, LinkConfig, PeerSubscription};
 pub use logging::LoggingConfig;
+#[cfg(feature = "otlp")]
+pub use otlp::OtlpConfig;
 pub use senders::{SenderPlacement, SendersConfig};
 pub use simulated::SimConfig;
 pub use sources::{
@@ -68,6 +72,8 @@ pub struct Config<P = NoParams> {
     pub latency: LatencyConfig,
     #[serde(default)]
     pub senders: SendersConfig,
+    #[cfg(feature = "otlp")]
+    pub otlp: Option<OtlpConfig>,
 }
 
 impl<P: serde::de::DeserializeOwned + Default> Config<P> {
