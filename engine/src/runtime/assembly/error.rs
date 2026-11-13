@@ -1,6 +1,8 @@
 //! Every way a run can refuse to start, after the config itself parsed: an unavailable core, an
 //! unreachable venue, a scale or limit the engine cannot represent, a lease another process holds.
 
+use crate::error;
+use crate::log::LogHandle;
 use crate::msg::failure::{FailureClass, Halt};
 use crate::runtime::config::ConfigError;
 use crate::runtime::exposure::ExposureError;
@@ -151,4 +153,18 @@ impl StartError {
             source,
         }
     }
+}
+
+/// A refusal after the log started: each thread that started before it stops first, so the log
+/// waits for no lane of a running thread, then the log drains.
+#[cold]
+pub(super) fn refuse(
+    error: StartError,
+    log_handle: LogHandle,
+    stop_started: impl FnOnce(),
+) -> StartError {
+    error!("startup failed after the hot thread pinned: {error}");
+    stop_started();
+    log_handle.drain();
+    error
 }

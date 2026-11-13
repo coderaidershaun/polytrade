@@ -48,9 +48,10 @@ use crate::runtime::shutdown::{DrainSignal, FatalSignal, RunControlGate, TaskHan
 use crate::tape::PersistHandle;
 use crate::venues::exec::EdgeHandle;
 use crate::venues::venue::{MarketDataWiring, WindowAssignment, spawn_market_data, tap_heartbeat};
-use crate::{error, info, warn};
+use crate::{info, warn};
 
 use drain::install_panic_hook;
+use error::refuse;
 use exec::{CommandLane, ExecBringUp, ExecBringUpSetup, exec_bring_up, open_command_lane};
 use hot::{HotBringUp, HotBringUpSetup, hot_bring_up};
 use metrics::{
@@ -478,16 +479,6 @@ impl Engine {
             drain_deadline,
         })
     }
-}
-
-/// A refusal after the log started: each thread that started before it stops first, so the log
-/// waits for no lane of a running thread, then the log drains.
-#[cold]
-fn refuse(error: StartError, log_handle: LogHandle, stop_started: impl FnOnce()) -> StartError {
-    error!("startup failed after the hot thread pinned: {error}");
-    stop_started();
-    log_handle.drain();
-    error
 }
 
 fn build_runtime(workers: usize) -> Result<Runtime, StartError> {
