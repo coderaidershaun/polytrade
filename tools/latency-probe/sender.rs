@@ -1,6 +1,5 @@
 //! Mode `sender`: commands enter the lane at a fixed rate, and the engine's sender loop takes them
-//! to a loopback socket that stands in for a venue. The metrics core times each command from the
-//! moment it entered the lane to the moment the socket took its bytes, with the placement given.
+//! to a loopback socket in place of a venue. The metrics core times each one from lane to socket.
 
 use std::net::UdpSocket;
 use std::sync::Arc;

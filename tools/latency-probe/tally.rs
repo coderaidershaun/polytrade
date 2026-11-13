@@ -1,6 +1,5 @@
-//! The numbers of a run: percentiles of each timed region, with the count, the drops and the
-//! backward pairs beside them, and never a mean. Every line says "development" until it comes from
-//! the host that trades.
+//! The numbers of a run: percentiles of each timed region with count, drops and backward pairs,
+//! never a mean. Each line says "development" until it comes from the host that trades.
 
 use hdrhistogram::Histogram;
 

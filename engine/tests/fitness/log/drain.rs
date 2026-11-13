@@ -1,6 +1,5 @@
-//! The log drain as a value: lanes in, lines out to a writer the test owns. A full lane drops and
-//! counts, a stalled drain never holds up a producer, shutdown drains every lane under a deadline,
-//! and a failing log file is reopened and then given up for stderr, each with its counts.
+//! The log drain as a value, with a writer the test owns: a full lane drops, a stall holds up no
+//! producer, shutdown drains under a deadline, a failing file falls back to stderr, each counted.
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

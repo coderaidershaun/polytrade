@@ -1,6 +1,5 @@
-//! A thread that cannot pin itself to its core refuses the start on Linux, before any thread that
-//! trades exists and before any edge connects. Elsewhere no pin holds for sure, so the thread runs
-//! where it is put.
+//! A thread that cannot pin to its core refuses the start on Linux, before any trading thread or
+//! edge exists. Elsewhere no pin holds for sure, so the thread runs where it is put.
 
 use engine::msg::time::EngineClock;
 use engine::runtime::metrics::{MetricsThread, MetricsThreadSetup};

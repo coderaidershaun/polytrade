@@ -1,6 +1,5 @@
-//! What the metrics thread tells people: the report that the workstation paints about once a
-//! second, the log lines of each closed interval, and the check of each stage against its budget.
-//! No cell and no line holds a mean.
+//! What the metrics thread tells people: the workstation report, the log lines of each closed
+//! interval, and the budget check of each stage. No cell and no line holds a mean.
 
 use crate::msg::latency::{Category, EngineCounters, Stage};
 use crate::msg::ui::{

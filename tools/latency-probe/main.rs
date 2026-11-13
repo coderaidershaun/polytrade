@@ -1,6 +1,5 @@
-//! The timing harness: it times the hot loop's step, the sender, the idle wait and a full engine
-//! start, each in its own mode, without changing what it times. Numbers from a host that is not the
-//! trading host are for development only.
+//! The timing harness times the step, the sender, the idle wait and a full start, each in its own
+//! mode and unchanged. A number from a host that does not trade is for development only.
 
 mod clock;
 mod config;

@@ -1,7 +1,5 @@
-//! Message time must come from one clock. Two clocks can stamp the same moment apart, and then a
-//! replay folds an order of messages that the live run never saw. So each place in the library that
-//! starts an engine clock is named here, with the reason that it may, and so is each file that names
-//! the latency tick a command carries, and each file that the clock lint lets read a clock.
+//! Message time comes from one clock, or a replay folds an order the live run never saw. So each
+//! clock start, each file that names a command's latency tick, and each allowed clock read is here.
 
 use std::collections::BTreeMap;
 use std::path::Path;

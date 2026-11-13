@@ -1,6 +1,5 @@
-//! Mode `idle`: messages arrive with gaps between them, and the hot thread either spins or parks
-//! while its queues are empty. The metrics core times how long each message waited in its queue
-//! and how long it took to reach its decision.
+//! Mode `idle`: messages arrive with gaps, and the hot thread spins or parks between them. The
+//! metrics core times how long each message waited in its queue and took to reach its decision.
 
 use std::time::Duration;
 

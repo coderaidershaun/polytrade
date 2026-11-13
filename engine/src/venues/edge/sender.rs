@@ -1,6 +1,5 @@
-//! The one loop that takes commands off the lane to a venue. It pops each command once and in lane
-//! order, stamps its pop and the moment its transport takes the bytes, and waits between wakes in
-//! the way its placement asks.
+//! The one loop that takes commands off a venue's lane, each once and in lane order. It stamps the
+//! pop and the moment the transport takes the bytes, and waits between wakes as its placement asks.
 
 use std::future::Future;
 

@@ -1,7 +1,5 @@
-//! The metrics thread through what it makes public: samples go into its rings, message time is
-//! passed in, and rows, reports and the workstation's panel come out. Every failure here is silent:
-//! a stage that subtracts the wrong stamps, a window that never forgets, or a drop that nobody
-//! counts all still print plausible numbers.
+//! The metrics thread through its public part: samples and message time in, rows and reports out.
+//! Each failure here is silent: a wrong stage or a lost drop still prints plausible numbers.
 
 use std::sync::Arc;
 

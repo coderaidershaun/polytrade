@@ -1,6 +1,5 @@
-//! The timing harness refuses a config that would start a live engine. A full start with execution
-//! live loads the venue keys and signs a call, and the harness runs where nobody watches it, so the
-//! refusal is code that runs before a runtime exists, not a rule for the person who runs it.
+//! The timing harness refuses a config that would start a live engine. A live start loads the keys
+//! and signs, and nobody watches the harness, so the refusal is code, not a rule for a person.
 
 #[path = "../../../../tools/latency-probe/config.rs"]
 mod probe_config;

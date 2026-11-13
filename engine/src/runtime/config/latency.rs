@@ -1,6 +1,5 @@
-//! Latency config: how long one interval of the metrics thread lasts, how many intervals its window
-//! holds, how often it reports to the workstation, how many samples each ring buffers, and the
-//! budget of each stage.
+//! The `latency:` block: the interval and window of the metrics thread, its report rate to the
+//! workstation, the size of each sample ring, and the budget of each stage.
 
 use serde::Deserialize;
 

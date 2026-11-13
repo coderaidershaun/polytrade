@@ -1,6 +1,5 @@
-//! The core of the metrics thread: samples in, a histogram of each stage for each tumbling interval
-//! and a rolling window of them, and rows out when an interval closes. Time moves only when the
-//! caller passes it in, so message time drives it in a test.
+//! The core of the metrics thread: samples in, histograms for each interval and the window, rows
+//! out. Time moves only when the caller passes it in, so a test drives it with message time.
 
 use hdrhistogram::Histogram;
 

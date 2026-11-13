@@ -1,6 +1,5 @@
 //! The sender between the command lane and a venue: each command leaves once and in lane order,
-//! stamped when it is popped and when the transport takes its bytes, and each placement waits in its
-//! own way between wakes.
+//! stamped at its pop and at the wire, and each placement waits in its own way between wakes.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
