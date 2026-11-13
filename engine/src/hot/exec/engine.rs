@@ -2,6 +2,7 @@
 //! event folds through. Apply is ungated — a fill during warmup is money — and only the callback
 //! a strategy receives is gated.
 
+use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::hot::ledger::PositionLedger;
 use crate::hot::sink::{ExecSink, PendingCommands};
 use crate::hot::strategy::Actions;
@@ -133,6 +134,20 @@ pub struct ExecEngine {
     /// The PnL baseline at the first honest valuation; the session loss gate compares
     /// against this. `None` until that first mark.
     pub(super) pnl_at_baseline: Vec<Option<i64>>,
+}
+
+digest_by_hash!(ExecSettings);
+digest_fields! {
+    InstrumentExec {
+        grid, base_asset, quote_asset, max_exposure_quote, last_commit_ts_us,
+        is_prior_run_cancel_sent, flatten_refusal, realised_carried_quote,
+    }
+}
+digest_fields! {
+    ExecEngine {
+        orders, prior_orders, account, pending, sink, halt, readiness, refusals, reject_streak,
+        budget, instruments, settings, spins_since_exec_event, recon_seq, pnl_at_baseline,
+    }
 }
 
 impl ExecEngine {

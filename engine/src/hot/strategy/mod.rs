@@ -9,6 +9,7 @@ mod declare;
 use std::collections::HashSet;
 
 use crate::hot::book::Book;
+use crate::hot::digest::digest_by_hash;
 use crate::hot::exec::{DesiredBook, ExecEngine};
 use crate::hot::ledger::PositionLedger;
 use crate::hot::quant::volatility::EwmaVol;
@@ -141,6 +142,8 @@ pub struct WindowInfo {
     pub open_ts_us: TsUs,
     pub close_ts_us: TsUs,
 }
+
+digest_by_hash!(WindowInfo);
 
 impl WindowInfo {
     /// Whether a quote may rest here at `at` — the stamp on the message being processed, never a

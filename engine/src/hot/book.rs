@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 
+use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::log::hot_warn;
 use crate::msg::ids::{Price, Qty, Side};
 use crate::msg::inbound::{BookChunk, Level};
@@ -61,6 +62,9 @@ struct BookSide {
     order: SortOrder,
     is_trim_warned: bool,
 }
+
+digest_by_hash!(BookState, BookVoice, SortOrder);
+digest_fields! { BookSide { levels, capacity, order, is_trim_warned } }
 
 enum ApplyOutcome {
     Applied,
@@ -196,6 +200,13 @@ pub struct Book {
     crossed_count: u64,
     remove_missing_count: u64,
     is_crossed_warned: bool,
+}
+
+digest_fields! {
+    Book {
+        bids, asks, state, voice, capacity_per_side, trimmed_count, locked_count, crossed_count,
+        remove_missing_count, is_crossed_warned,
+    }
 }
 
 impl Book {

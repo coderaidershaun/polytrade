@@ -1,6 +1,7 @@
 //! Safety gates and what they report: readiness, the loss and exposure limits, the one-way halt
 //! latch, and why a side is not quoting. Each verdict is a pure function, testable without an engine.
 
+use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::hot::ledger::{PositionLedger, narrow};
 use crate::log::hot_warn;
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
@@ -223,6 +224,9 @@ pub struct RefusalLatch {
     pending: [Option<OrderReject>; MAX_REFUSALS],
     len: usize,
 }
+
+digest_by_hash!(ExecHalt, Readiness);
+digest_fields! { RefusalLatch { current, pending, len } }
 
 impl RefusalLatch {
     fn observe(

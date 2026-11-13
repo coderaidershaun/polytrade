@@ -6,6 +6,7 @@
 //! `remaining()` computed at the call site cannot go stale, whereas a `remaining` field written at
 //! one moment and read at another can.
 
+use crate::hot::digest::digest_by_hash;
 use crate::msg::exec::{Liquidity, RejectClass};
 use crate::msg::ids::{
     AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId,
@@ -108,6 +109,8 @@ pub struct OrderReject {
     pub origin: RejectOrigin,
     pub event_ts_us: TsUs,
 }
+
+digest_by_hash!(OrderReject);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExecCallback {

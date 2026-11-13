@@ -6,6 +6,7 @@
 
 use std::ops::Range;
 
+use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::msg::exec::{ExecEvent, OrderStyle};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side, VenueOrderId};
 use crate::msg::persist::OrderLifecycle;
@@ -158,7 +159,7 @@ pub struct ReconcilePass {
     pub recon_ts_us: TsUs,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OrderSlot {
     pub client_id: ClientOrderId,
     pub venue_order_id: Option<VenueOrderId>,
@@ -259,6 +260,9 @@ pub struct OrderTable {
     slots: Box<[OrderSlot; MAX_ORDER_SLOTS]>,
     layout: ClientIdLayout,
 }
+
+digest_by_hash!(ClientIdLayout, OrderSlot);
+digest_fields! { OrderTable { slots, layout } }
 
 impl OrderTable {
     pub fn new(run_nonce: u32) -> Self {

@@ -4,6 +4,7 @@
 //! Order load-bearing: UI tee + engine tees need consistent sequence.
 //! No ORDER/QUOTE lane: strategy declares desired quote into engine-owned level-triggered state.
 
+use crate::hot::digest::digest_fields;
 use crate::hot::sink::{LinkSink, PersistSink, StrategyLogSink, UiEventSink};
 use crate::link::{LinkHash, LinkPayload, OutboundLink, TopicId};
 use crate::log::HotRecord;
@@ -55,6 +56,9 @@ pub(crate) struct Actions {
     link_schema_hash: LinkHash,
     dropped: LaneDrops,
 }
+
+// The lanes hold what the execution pass banked after the last drain, until the next message.
+digest_fields! { Actions { features, persist, logs, link, tables, link_schema_hash, dropped } }
 
 impl Actions {
     pub(crate) fn new(setup: ActionsSetup) -> Self {

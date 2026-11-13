@@ -214,6 +214,33 @@ fn e2e_replay_is_identical_across_runs() {
     }
 }
 
+/// FITNESS: the threaded runtime is a pure function of its input. Two runs of one sequence through
+/// real rings, the hot thread and the writer drain without a fatal and write the same rows to each
+/// table, so nothing that the tape does not carry reaches the output.
+#[test]
+fn two_threaded_runs_give_equal_tables_and_drain_clean() {
+    let dir_a = TempDir::new("threaded-a");
+    let dir_b = TempDir::new("threaded-b");
+    let first = run_e2e(dir_a.path());
+    let second = run_e2e(dir_b.path());
+
+    assert!(
+        !first.fatal_tripped && !second.fatal_tripped,
+        "a clean run must never trip the input-queue fatal signal"
+    );
+    for expect in &TABLES {
+        let rows_a = table_rows(dir_a.path(), expect.name);
+        let rows_b = table_rows(dir_b.path(), expect.name);
+        assert!(!rows_a.is_empty(), "{} produced rows", expect.name);
+        assert_eq!(
+            rows_a, rows_b,
+            "{} row contents differ between two runs of the same input sequence, so the run is \
+             reading something the tape does not carry",
+            expect.name
+        );
+    }
+}
+
 struct RunOutcome {
     fatal_tripped: bool,
 }

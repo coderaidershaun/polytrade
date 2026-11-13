@@ -2,6 +2,7 @@
 //! into fixed-size records, so nothing here allocates, and the link sends them on from the rings.
 
 use crate::hot::book::{Book, BookState};
+use crate::hot::digest::digest_fields;
 use crate::hot::exec::{Balance, ExecHalt, Fill, OrderReject, OrderUpdate, WorkingOrderView};
 use crate::hot::ledger::LedgerRow;
 use crate::hot::sink::{UiBookSink, UiEventSink};
@@ -244,6 +245,16 @@ impl UiEmitter {
 
     pub(crate) fn dropped_events(&self) -> u64 {
         self.event_sink.dropped()
+    }
+}
+
+digest_fields! {
+    UiEmitter { event_seq, book_seqs }
+    not_state {
+        // Output rings: whether a record fits depends on how fast the reader drains them. A drop
+        // still advances its sequence, so the sequences above are state.
+        event_sink,
+        book_sink,
     }
 }
 

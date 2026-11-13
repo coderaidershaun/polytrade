@@ -24,6 +24,7 @@ pub(crate) mod ledger;
 pub mod tracker;
 
 // building blocks the owners above hold
+pub(crate) mod digest;
 pub mod quant;
 pub mod series;
 

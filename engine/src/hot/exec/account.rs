@@ -1,5 +1,6 @@
 //! Absolute balances only. Guard against double-spend: ack beats update.
 
+use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::msg::exec::{AccountChunk, AccountChunkKind, AssetBalance};
 use crate::msg::ids::AssetId;
 
@@ -50,6 +51,10 @@ pub struct AccountTable {
     watermark: AccountWatermark,
     has_snapshot: bool,
 }
+
+digest_by_hash!(AccountWatermark);
+digest_fields! { AccountRow { free, locked } }
+digest_fields! { AccountTable { rows, reserved, is_known, watermark, has_snapshot } }
 
 impl AccountTable {
     pub fn new() -> Self {

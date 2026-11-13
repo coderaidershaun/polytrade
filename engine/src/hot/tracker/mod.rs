@@ -9,6 +9,7 @@ use sampling::SpinSampler;
 use volume::VolumeClock;
 
 use crate::hot::book::Book;
+use crate::hot::digest::digest_fields;
 use crate::hot::quant::intensity::IntensityCounts;
 use crate::hot::quant::micro;
 use crate::hot::series::FastQueue;
@@ -63,11 +64,15 @@ impl Windows {
     }
 }
 
+digest_fields! { Windows { series } }
+
 #[derive(Debug, Clone, PartialEq)]
 struct ImbalanceStream {
     top_n: usize,
     series: Windows,
 }
+
+digest_fields! { ImbalanceStream { top_n, series } }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 struct Latest {
@@ -87,6 +92,8 @@ impl Latest {
     }
 }
 
+digest_fields! { Latest { microprice, spread, imbalance, best_bid, best_ask } }
+
 /// Per-instrument tracker (series optional when unconfigured).
 #[derive(Debug, Clone, PartialEq)]
 pub struct MicroTracker {
@@ -102,6 +109,13 @@ pub struct MicroTracker {
     latest: Latest,
     last_trade: Option<TradeEvent>,
     unconfigured_klines: u64,
+}
+
+digest_fields! {
+    MicroTracker {
+        trades_all, trades_buy, trades_sell, microprice, imbalance, candles, spin, volume,
+        intensity, latest, last_trade, unconfigured_klines,
+    }
 }
 
 impl MicroTracker {

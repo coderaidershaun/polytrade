@@ -3,6 +3,7 @@
 
 use rtrb::Producer;
 
+use crate::hot::digest::{Digest, Digester, digest_fields};
 use crate::hot::exec::{MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS};
 use crate::msg::exec::{ExecCommand, ExecLaneItem, StampedExecCommand};
 use crate::msg::time::{DurationUs, Stamper, Tick, TsUs};
@@ -51,6 +52,12 @@ impl ExecSink {
     }
 }
 
+/// The write end of the command lane holds no fold state, so only whether the engine has one
+/// counts, through the `Option` that holds it.
+impl Digest for ExecSink {
+    fn digest(&self, _digester: &mut Digester) {}
+}
+
 #[derive(Debug, Clone, Copy)]
 struct BankedCommand {
     command: ExecCommand,
@@ -61,6 +68,17 @@ pub(crate) struct PendingCommands {
     banked: Vec<BankedCommand>,
     banked_total: u64,
     stamper: Stamper,
+}
+
+digest_fields! {
+    PendingCommands { banked_total }
+    not_state {
+        // The commands that the lane has not taken yet: how many wait depends on how fast the edge
+        // reads, and the latency tick of each is a clock reading.
+        banked,
+        // The latency clock that stamps each banked command.
+        stamper,
+    }
 }
 
 impl PendingCommands {

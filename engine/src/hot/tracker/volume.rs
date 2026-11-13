@@ -4,6 +4,7 @@
 
 use super::sampling::{FieldSeries, TradeAggregates, notional_i128};
 use super::{BACKING_MULTIPLE, CandleSeries, Latest};
+use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::hot::quant::toxicity::VolumeBar;
 use crate::hot::series::{Element, FastQueue};
 use crate::msg::ids::{FIXED_SCALE, Side};
@@ -17,6 +18,7 @@ const MIN_TARGET_NOTIONAL: i128 = FIXED_SCALE as i128;
 
 impl crate::hot::series::sealed::Sealed for VolumeBar {}
 impl Element for VolumeBar {}
+digest_by_hash!(VolumeBar);
 
 impl VolumeBar {
     fn opening(open_ts_us: TsUs, target: i64) -> Self {
@@ -50,6 +52,9 @@ pub(super) struct VolumeClock {
     trades: TradeAggregates,
     sampled: Option<FieldSeries>,
 }
+
+digest_fields! { VolumeBarSeries { closed, open } }
+digest_fields! { VolumeClock { fixed_target, next_target, bars, trades, sampled } }
 
 impl VolumeClock {
     /// # Panics

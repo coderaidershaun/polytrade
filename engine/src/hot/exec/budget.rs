@@ -5,6 +5,7 @@
 //! closes a position. Metering locally turns that into a choice: quoting stops first, and the
 //! headroom left over belongs to the way out.
 
+use crate::hot::digest::digest_fields;
 use crate::msg::time::{DurationUs, TsUs};
 
 /// The venues wired so far declare at most two order buckets per market. Four leaves room for one
@@ -69,6 +70,8 @@ pub(super) struct BudgetMeter {
     len: usize,
 }
 
+digest_fields! { BudgetMeter { windows, len } }
+
 impl BudgetMeter {
     pub(super) fn new(budget: OrderBudget) -> Self {
         let mut windows = [WindowMeter::EMPTY; MAX_ORDER_BUDGET_WINDOWS];
@@ -111,6 +114,8 @@ struct WindowMeter {
     newest_slot: i64,
     places: [u32; COUNTED_SLOTS],
 }
+
+digest_fields! { WindowMeter { slot_width_us, max_places, newest_slot, places } }
 
 impl WindowMeter {
     /// Nothing declared and nothing counted. The one-microsecond slot width is a divisor rather

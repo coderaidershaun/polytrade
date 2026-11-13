@@ -2,6 +2,7 @@
 //! Hot thread: [`IntensityCounts`] (in-place, zero alloc). Strategy: [`IntensityFit`] (warm-started Poisson MLE).
 //! Depth in ticks behind same-side best; A in /sec, k in /tick.
 
+use crate::hot::digest::digest_fields;
 use crate::hot::quant::MIN_RATE;
 use crate::hot::quant::optimise::NelderMead;
 use crate::msg::ids::{Price, Side};
@@ -38,6 +39,14 @@ struct Group {
     exchange_ts_us: TsUs,
     deepest_bucket: usize,
     anchor: Price,
+}
+
+digest_fields! { Group { side, exchange_ts_us, deepest_bucket, anchor } }
+digest_fields! {
+    IntensityCounts {
+        tick, decay_per_sec, min_events, bid_reach, ask_reach, exposure_secs, last_decay_ts,
+        open_group, inside_spread, without_book,
+    }
 }
 
 impl IntensityCounts {

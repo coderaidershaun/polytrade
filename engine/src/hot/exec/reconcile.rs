@@ -17,6 +17,7 @@
 use core::fmt;
 use core::mem::discriminant;
 
+use crate::hot::digest::digest_by_hash;
 use crate::log::{LogValue, Spec};
 use crate::msg::exec::OrderStyle;
 use crate::msg::ids::{Price, Qty, Side};
@@ -24,6 +25,8 @@ use crate::msg::time::{DurationUs, TsUs};
 
 use super::desired::DesiredQuote;
 use super::gates::ReadinessGap;
+
+digest_by_hash!(TickGrid, RejectReason);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TickGrid {

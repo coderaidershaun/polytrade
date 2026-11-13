@@ -3,6 +3,7 @@
 //! quote mantissas throughout (no float). Only division is average cost (roll_basis) when closing a
 //! partial position. Fills fold during their message, before the strategy sees on_fill.
 
+use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
 use crate::runtime::exposure::InstrumentExposure;
 
@@ -100,6 +101,9 @@ impl LedgerRow {
 pub(crate) struct PositionLedger {
     rows: Vec<LedgerRow>,
 }
+
+digest_by_hash!(LedgerRow);
+digest_fields! { PositionLedger { rows } }
 
 impl PositionLedger {
     pub(crate) fn new(instrument_count: usize, restored: &[InstrumentExposure]) -> Self {

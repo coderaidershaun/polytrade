@@ -2,6 +2,7 @@
 //! the clock, so a replay calls back at the same points. Peer link frames are recorded here rather
 //! than at the link actor, so a frame dropped on a full ring never reaches the tape.
 
+use crate::hot::digest::digest_fields;
 use crate::hot::sink::LinkSink;
 use crate::link::{InboundLink, TopicId};
 use crate::log::hot_info;
@@ -48,6 +49,8 @@ impl Warmup {
         self.is_complete = self.span <= DurationUs::ZERO;
     }
 }
+
+digest_fields! { Warmup { span, first_message_ts, is_complete } }
 
 /// Link wiring (paired facts: engine without link has no outbound ring or run-state reporter).
 pub struct LinkWiring {

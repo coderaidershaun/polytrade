@@ -1,6 +1,8 @@
 //! Rolling windows of a fixed size for the hot thread. Each window is one contiguous slice that
 //! never allocates after it is built, and its sum is kept as samples arrive.
 
+use crate::hot::digest::{Digest, Digester};
+
 pub(crate) mod sealed {
     pub trait Sealed {}
     impl Sealed for i64 {}
@@ -135,6 +137,29 @@ pub struct FastQueue<T: Copy> {
     head: usize,
     sum_exact: i128,
     sum_running: f64,
+}
+
+/// The slots of the buffer outside the live window hold samples that the window evicted and never
+/// reads again, so they are not state.
+impl<T: Copy + Digest> Digest for FastQueue<T> {
+    fn digest(&self, digester: &mut Digester) {
+        let FastQueue {
+            buf,
+            window,
+            backing,
+            start,
+            head,
+            sum_exact,
+            sum_running,
+        } = self;
+        buf[*start..*head].digest(digester);
+        window.digest(digester);
+        backing.digest(digester);
+        start.digest(digester);
+        head.digest(digester);
+        sum_exact.digest(digester);
+        sum_running.digest(digester);
+    }
 }
 
 impl<T: Copy> FastQueue<T> {

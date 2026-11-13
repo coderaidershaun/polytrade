@@ -1,6 +1,7 @@
 //! Spin/volume-clock field samplers: same SpinField set from committed inputs (latest/trade/agg).
 
 use super::{BACKING_MULTIPLE, Latest};
+use crate::hot::digest::digest_fields;
 use crate::hot::series::FastQueue;
 use crate::msg::ids::{FIXED_SCALE, Price, Qty, Side};
 use crate::msg::inbound::TradeEvent;
@@ -15,6 +16,8 @@ pub(super) struct TradeAggregates {
     buy_count: u64,
     sell_count: u64,
 }
+
+digest_fields! { TradeAggregates { qty, notional, count, buy_count, sell_count } }
 
 impl TradeAggregates {
     #[inline]
@@ -47,6 +50,8 @@ impl TradeAggregates {
 pub(super) struct FieldSeries {
     series: Vec<(SpinField, FastQueue<f64>)>,
 }
+
+digest_fields! { FieldSeries { series } }
 
 impl FieldSeries {
     pub(super) fn new(fields: &[SpinField], window: usize) -> Self {
@@ -106,6 +111,8 @@ pub(super) struct SpinSampler {
     pub(super) series: FieldSeries,
     pub(super) trades: TradeAggregates,
 }
+
+digest_fields! { SpinSampler { series, trades } }
 
 impl SpinSampler {
     pub(super) fn new(fields: &[SpinField], window: usize) -> Self {

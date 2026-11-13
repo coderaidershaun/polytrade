@@ -1,6 +1,7 @@
 //! Folding a venue event: the slot transition, the money it moves, the reservation it releases and
 //! the audit rows it earns, for this run's orders and for those an earlier run left resting.
 
+use crate::hot::digest::digest_fields;
 use crate::hot::ledger::{LedgerFill, PositionLedger};
 use crate::hot::strategy::Actions;
 use crate::log::hot_error;
@@ -276,6 +277,8 @@ const PRIOR_RUN_SLOTS: usize = MAX_QUOTE_LEVELS * 2 * MAX_ORDER_INSTRUMENTS;
 pub(super) struct PriorRunOrders {
     slots: Box<[OrderSlot; PRIOR_RUN_SLOTS]>,
 }
+
+digest_fields! { PriorRunOrders { slots } }
 
 impl PriorRunOrders {
     pub(super) fn new() -> Self {

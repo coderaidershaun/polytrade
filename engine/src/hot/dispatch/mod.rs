@@ -1,6 +1,7 @@
 //! The body of the hot loop: each message updates state, calls the strategy back, drains the
 //! actions and runs the execution pass. It reads no clock, so state depends on messages alone.
 
+mod digest;
 mod exposure;
 mod gate;
 mod market;
@@ -29,6 +30,7 @@ use crate::runtime::config::RecordedTables;
 use crate::runtime::exposure::{ExposureSnapshot, MAX_EXPOSURE_INSTRUMENTS};
 use crate::runtime::shutdown::RunStateCell;
 
+pub use digest::StateDigest;
 pub use exposure::ExposureWiring;
 pub use gate::LinkWiring;
 pub use setup::{ExecWiring, HotEngineSetup, PersistWiring};
