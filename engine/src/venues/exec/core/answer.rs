@@ -67,7 +67,8 @@ impl ExecCore {
         Ok(())
     }
 
-    /// Cancels carry fills. Caller must answer "filled?" or ledger wrong -> sweep completion.
+    /// An order can leave the book with fills on it, so the caller passes what it executed. A fill
+    /// that is not in the ledger by then is lost when the sweep completes.
     pub fn on_order_gone(
         &mut self,
         client_id: ClientOrderId,
@@ -85,13 +86,15 @@ impl ExecCore {
         self.settle_if_swept(emit);
     }
 
-    /// NOT called for ambiguous (cancel in-flight, probe out). Re-arms on probe answer.
+    /// Not for an ambiguous answer, where the cancel is still in flight and a probe is out: the
+    /// answer to the probe re-arms the cancel there.
     pub fn re_arm_cancel(&mut self, client_id: ClientOrderId) {
         self.mirror.re_arm_cancel(client_id);
     }
 
-    /// Answer left state unknown — the venue's "unknown order" covers never-existed AND just-filled
-    /// (binance -2011, polymarket `order not found`). Recon must resolve.
+    /// The answer left the state unknown. The venue's "unknown order" covers an order that never
+    /// existed and one that just filled (Binance -2011, Polymarket `order not found`), so only a
+    /// read can tell them apart.
     pub fn on_ambiguous(&mut self, client_id: ClientOrderId, emit: &mut dyn FnMut(ExecEffect)) {
         let Some(order) = self.mirror.find_mut(client_id) else {
             return;
@@ -107,9 +110,9 @@ impl ExecCore {
         );
     }
 
-    /// Prior-run leftovers get one cancel. NOT for Foreign orders -> no distinct client ids
-    /// -> all collide on ClientOrderId(0) -> driver reports them directly from open-orders.
-    /// Defense in depth: [`ExecCore::on_command`] also refuses them.
+    /// An order of a prior run gets one cancel. A foreign order is never mirrored: it has no client
+    /// id of this engine, so every foreign order would share id 0, and the driver reports them from
+    /// the open-orders read instead. [`ExecCore::on_command`] refuses them as well.
     pub fn observe_venue_order(&mut self, order: MirroredOrder) -> Result<(), ObserveOrderError> {
         if matches!(order.provenance, Provenance::Foreign) {
             warn!(
@@ -142,7 +145,8 @@ impl ExecCore {
         Ok(())
     }
 
-    /// Unanswered past REQUEST_TIMEOUT -> reconcile, never retry (order may exist -> second live one).
+    /// A request with no answer past the in-flight timeout is read back, never sent again: the
+    /// order may exist, and a second send could rest a second one.
     pub fn on_request_timeout(
         &mut self,
         instrument: InstrumentId,

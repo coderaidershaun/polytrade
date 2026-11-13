@@ -7,7 +7,7 @@ use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{DesiredQuote, QuoteLevel, RejectReason};
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{Registration, Strategy, StrategyCtx, StrategyGate};
-use engine::msg::exec::{ExecCommand, ExecLaneItem, OrderStyle};
+use engine::msg::exec::{ExecCommand, ExecLaneItem};
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BookChunk, InboundMessage, MessageBody, SpinTick, TradeEvent};
 use engine::msg::persist::{FeatureId, PersistRecord};
@@ -277,7 +277,6 @@ impl Strategy for LateProbe {
             let quote = DesiredQuote {
                 price: bid.price,
                 qty: QUOTE_QTY,
-                style: OrderStyle::PostOnly,
             };
             ctx.quote(market, Side::Buy, QuoteLevel::ZERO, Some(quote));
         }

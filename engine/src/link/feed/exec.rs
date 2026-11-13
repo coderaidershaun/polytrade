@@ -44,6 +44,9 @@ wire_enum! {
 // Each gap in the numbering is a discriminant with no payload of its own. The local arm's
 // 4 padding bytes line up with the venue arm's code field; giving that space dual meaning
 // would only confuse a reader.
+//
+// Never give code 7 to a new reason. It named a quote whose order style was refused, and a
+// workstation built before that reason went still reads 7 that way.
 wire_enum! {
     RejectReason, "reject reason";
     (RejectReason::QtyBelowMin) = 1,
@@ -52,7 +55,6 @@ wire_enum! {
     (RejectReason::WouldCross) = 4,
     (RejectReason::OutsideBand) = 5,
     (RejectReason::Underfunded) = 6,
-    (RejectReason::StyleNotPermitted) = 7,
     (RejectReason::NotReady(ReadinessGap::Stream)) = 8,
     (RejectReason::NotReady(ReadinessGap::Balances)) = 9,
     (RejectReason::NotReady(ReadinessGap::OpenOrders)) = 10,

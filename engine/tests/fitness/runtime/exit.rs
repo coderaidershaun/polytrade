@@ -159,6 +159,11 @@ fn each_start_refusal() -> Vec<StartError> {
             max: 64,
         },
         StartError::ExecutionNonceEmpty { path: path() },
+        StartError::ExecutionHttpTimeout {
+            venue: "binance",
+            http_timeout_ms: 4_000,
+            inflight_timeout_ms: 4_000,
+        },
     ]
 }
 
@@ -186,6 +191,7 @@ fn start_variant_index(error: &StartError) -> usize {
         StartError::LinkBind { .. } => 17,
         StartError::LinkNameTooLong { .. } => 18,
         StartError::ExecutionNonceEmpty { .. } => 19,
+        StartError::ExecutionHttpTimeout { .. } => 20,
     }
 }
 
@@ -376,7 +382,7 @@ fn fatal_is_never_a_graceful_exit() {
     let start_indexes: Vec<usize> = refusals.iter().map(start_variant_index).collect();
     assert_eq!(
         start_indexes,
-        (0..20).collect::<Vec<_>>(),
+        (0..21).collect::<Vec<_>>(),
         "one refusal of each variant, once"
     );
     for refusal in &refusals {

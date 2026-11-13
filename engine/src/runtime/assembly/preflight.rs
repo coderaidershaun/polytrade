@@ -11,7 +11,7 @@ use crate::venues::edge::rest_quiet::SharedRestQuiet;
 use crate::venues::port::{NetworkPort, VenuePort};
 
 use super::StartError;
-use super::exec::{ExecCheck, ExecPlan, check_execution};
+use super::exec::{ExecCheck, ExecPlan, check_execution, check_order_client_timeout};
 use super::link::{BoundLink, link_bring_up};
 
 /// The checks of one start: the run, its parsed config, and the strategy, whose features and link
@@ -65,6 +65,10 @@ impl<P> Preflight<'_, P> {
         let mut registry = Registry::build(config)?;
         if let Some(core_id) = config.engine.hot_core_id {
             validate_core_id(core_id)?;
+        }
+        if let (Some(source), Some(execution)) = (live_execution_source(config), &config.execution)
+        {
+            check_order_client_timeout(source, execution)?;
         }
         // Every venue's grid is checked against the deployment the registry names rather than a
         // constant, so a production run is checked against the production grid.

@@ -18,7 +18,7 @@ use engine::hot::spawn::{HotDriver, HotLoop, HotThreadConfig, IdleWait, Step, sp
 use engine::hot::strategy::{Strategy, StrategyConfig, StrategyCtx};
 use engine::log::{HotRecord, LaneReader, TextRecord, open_hot_lane, open_text_lane};
 use engine::msg::exec::{
-    ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, Provenance, StampedExecCommand,
+    ExecCommand, ExecEvent, ExecKind, ExecLaneItem, Provenance, StampedExecCommand,
     VenueOrderStatus,
 };
 use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, QueueId, Side};
@@ -1088,7 +1088,6 @@ impl Strategy for ThreeBids {
                 Some(DesiredQuote {
                     price: Price::from_mantissa(99 * ONE),
                     qty: Qty::from_mantissa(ONE / 10),
-                    style: OrderStyle::PostOnly,
                 }),
             );
         }

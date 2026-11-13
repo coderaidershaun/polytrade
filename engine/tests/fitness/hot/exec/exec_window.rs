@@ -131,7 +131,6 @@ impl Strategy for LadderQuoter {
                 Some(DesiredQuote {
                     price: Price::from_mantissa(BID - level as i64 * ONE),
                     qty: QUOTE_QTY,
-                    style: OrderStyle::PostOnly,
                 }),
             );
         }

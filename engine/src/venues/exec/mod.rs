@@ -14,7 +14,7 @@ mod resync;
 mod session;
 
 pub(crate) use capabilities::VenueCapabilities;
-pub use core::{ExecCore, ObserveOrderError, Phase, REQUEST_TIMEOUT};
+pub use core::{ExecCore, ObserveOrderError, Phase};
 pub use effect::{
     ExecEffect, ExecRequest, Outgoing, PlaceNotSentReason, RequestId, SkipReason, TimeoutFallout,
 };

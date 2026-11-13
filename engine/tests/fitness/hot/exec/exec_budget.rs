@@ -247,7 +247,6 @@ impl Strategy for QuoteThenFlatten {
                 Some(DesiredQuote {
                     price: Price::from_mantissa(price),
                     qty: QUOTE_QTY,
-                    style: OrderStyle::PostOnly,
                 }),
             );
         }
@@ -353,7 +352,6 @@ impl Strategy for FlattenThenQuote {
             Some(DesiredQuote {
                 price: Price::from_mantissa(BID),
                 qty: QUOTE_QTY,
-                style: OrderStyle::PostOnly,
             }),
         );
     }

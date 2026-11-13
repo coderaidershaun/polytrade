@@ -3,7 +3,7 @@
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::Path;
 
-use crate::runtime::durable_file;
+use crate::runtime::durable_file::{self, WriteError};
 use crate::venues::exec::{EngineIdentity, LeaseNamespace, TeTag};
 
 use super::StartError;
@@ -70,12 +70,17 @@ fn advance_nonce(path: &Path) -> Result<u32, StartError> {
         .ok_or_else(|| StartError::ExecutionIdentityExhausted {
             path: path.to_path_buf(),
         })?;
-    durable_file::write(path, format!("{run_nonce}\n").as_bytes()).map_err(|error| {
-        StartError::ExecutionIdentityIo {
-            path: error.path,
-            source: error.source,
-        }
-    })?;
+    // Unlike the exposure file, an unsynced folder refuses the start: a power cut could bring back
+    // the previous nonce, and the next run would then mint the client ids of this one.
+    durable_file::write(path, format!("{run_nonce}\n").as_bytes()).map_err(
+        |error| match error {
+            WriteError::NotWritten { path, source }
+            | WriteError::FolderNotSynced {
+                directory: path,
+                source,
+            } => StartError::ExecutionIdentityIo { path, source },
+        },
+    )?;
     Ok(run_nonce)
 }
 

@@ -72,6 +72,14 @@ pub enum StartError {
         "the run nonce file at {path} is empty — a run stopped while it wrote the file; do not delete it, write the highest run nonce that the venue's order history shows into it, then start again"
     )]
     ExecutionNonceEmpty { path: PathBuf },
+    #[error(
+        "the {venue} execution client gives up on a request after {http_timeout_ms} ms, at or above execution.inflight_timeout_ms = {inflight_timeout_ms} — the in-flight timeout must outlast the HTTP verdict; raise it above {http_timeout_ms}"
+    )]
+    ExecutionHttpTimeout {
+        venue: &'static str,
+        http_timeout_ms: u64,
+        inflight_timeout_ms: u64,
+    },
     #[error("tokio runtime build failed")]
     Runtime(#[source] std::io::Error),
     #[error("hot_core_id {core_id} is not an available core (found {available})")]
@@ -126,6 +134,7 @@ impl StartError {
             | StartError::ExecutionIdentityState { .. }
             | StartError::ExecutionIdentityExhausted { .. }
             | StartError::ExecutionNonceEmpty { .. }
+            | StartError::ExecutionHttpTimeout { .. }
             | StartError::Runtime(_)
             | StartError::CoreId { .. }
             | StartError::HotPin { .. }

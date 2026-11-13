@@ -11,8 +11,7 @@ use engine::hot::dispatch::{
 };
 use engine::hot::sink::{ExecSink, LinkSink};
 use engine::hot::strategy::{
-    DesiredQuote, Fill, OrderReject, OrderStyle, OrderUpdate, QuoteLevel, Registration, Strategy,
-    StrategyCtx,
+    DesiredQuote, Fill, OrderReject, OrderUpdate, QuoteLevel, Registration, Strategy, StrategyCtx,
 };
 use engine::link::{LinkFrame, LinkHash, LinkOrigin, LinkPayload, OutboundLink, TopicId};
 use engine::log::{HotRecord, LaneReader, TextRecord, open_hot_lane, open_text_lane};
@@ -88,7 +87,6 @@ impl Probe {
             let quote = DesiredQuote {
                 price,
                 qty: QUOTE_QTY,
-                style: OrderStyle::PostOnly,
             };
             ctx.quote(instrument, side, QuoteLevel::ZERO, Some(quote));
         }

@@ -9,7 +9,7 @@ use engine::hot::exec::{
 };
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{Strategy, StrategyCtx};
-use engine::msg::exec::{CancelReason, ExecCommand, ExecEvent, ExecLaneItem, OrderStyle};
+use engine::msg::exec::{CancelReason, ExecCommand, ExecEvent, ExecLaneItem};
 use engine::msg::ids::{AssetId, InstrumentId, Notional, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::{DurationUs, LocalTs, Stamper};
@@ -69,7 +69,6 @@ impl Strategy for TwoSidedQuoter {
                 Some(DesiredQuote {
                     price,
                     qty: QUOTE_QTY,
-                    style: OrderStyle::PostOnly,
                 }),
             );
         }

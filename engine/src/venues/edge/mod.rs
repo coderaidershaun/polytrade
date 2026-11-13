@@ -69,6 +69,7 @@ pub(crate) struct EdgeSettings {
     /// the operator's judgment.
     pub(crate) disconnect_sweep_after: DurationUs,
     pub(crate) max_orders_per_side: usize,
+    pub(crate) inflight_timeout: DurationUs,
 }
 
 /// What preflight checks a venue's bring-up against, before any thread starts or the lease spends a
