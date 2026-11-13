@@ -6,14 +6,9 @@ mod command;
 
 use crate::msg::exec::{CancelReason, Provenance};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Side};
-use crate::msg::time::DurationUs;
 
 use super::effect::{ExecEffect, ExecRequest, PlaceNotSentReason, RequestId, SkipReason};
 use super::mirror::{MirroredOrder, OrderMirror};
-
-// After this interval, treat unanswered requests as unknown (reconcile instead of retry).
-// Retrying risks two live orders at the same price.
-pub const REQUEST_TIMEOUT: DurationUs = DurationUs::from_micros(5_000_000);
 
 // Lifecycle gate. Only Quoting accepts new orders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

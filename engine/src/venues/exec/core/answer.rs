@@ -142,7 +142,8 @@ impl ExecCore {
         Ok(())
     }
 
-    /// Unanswered past REQUEST_TIMEOUT -> reconcile, never retry (order may exist -> second live one).
+    /// A request with no answer past the in-flight timeout is read back, never sent again: the
+    /// order may exist, and a second send could rest a second one.
     pub fn on_request_timeout(
         &mut self,
         instrument: InstrumentId,

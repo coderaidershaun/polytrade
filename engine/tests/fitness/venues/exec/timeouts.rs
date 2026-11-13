@@ -11,7 +11,8 @@ use engine::runtime::config::RecordedTables;
 use engine::venues::exec::{ExecRequest, TimeoutFallout};
 
 use super::exec_session::{
-    INSTRUMENT, NOW, Session, kinds, new_session, place, record, send, sent, status_request,
+    INFLIGHT_TIMEOUT, INSTRUMENT, NOW, Session, kinds, new_session, place, record, send, sent,
+    status_request,
 };
 use crate::engine_support::ts;
 use crate::exec_support::{
@@ -19,7 +20,6 @@ use crate::exec_support::{
     exec_settings, make_ready, reseat_book, row_with_ceiling, spin_at,
 };
 
-const INFLIGHT_TIMEOUT: DurationUs = DurationUs::from_millis(5_000);
 const SECOND: i64 = 1_000_000;
 
 /// Connected, its pass finished and readiness armed at `at`: the only state that quotes.

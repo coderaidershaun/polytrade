@@ -52,7 +52,8 @@ engine branches solely on the normalised enums.
    marking, disconnect, expiry, resync polling and readiness arming), `EventSink` (where the
    session's synthesised events go: the venue's input queue, or a plain list in the simulator
    and the fitness suite), `InFlightTable` (request tracking; an expired request is
-   reconciled, never re-sent), `ResyncPass` (numbered passes, bounded retries, give-up drops
+   reconciled, never re-sent; each removal keeps the rest in the order they were sent, so
+   the oldest match answers), `ResyncPass` (numbered passes, bounded retries, give-up drops
    the connection), `ExecStop`/`EdgeHandle` (the stop latch and the one shutdown body), the
    synthesised-event constructors (every refused or timed-out command still answers the hot
    slot), `VenueCapabilities`/`LeaseNamespace` (declared beside each other in every venue
@@ -95,7 +96,11 @@ engine branches solely on the normalised enums.
      `venue_update_ts_ms` that advances only when money moved. A delta stream is converted
      to snapshots at the edge; a lagging balance read is never presented as fresh.
    - Timeouts and ambiguity reconcile — a status probe resolves them; nothing is re-sent.
-     Re-sending risks two live orders, which no reconciliation can undo.
+     Re-sending risks two live orders, which no reconciliation can undo. The deadline is
+     `execution.inflight_timeout_ms`, the one value that the hot slot and the in-flight table
+     both read (`SessionSetup.inflight_timeout`). A venue's order client gives its HTTP verdict
+     before that deadline: it declares its request deadline (`ORDER_REQUEST_TIMEOUT`), and the
+     start refuses an in-flight timeout at or below it.
    - `AckCanceled`/`ReportCanceled` are a finality promise: this order can no longer fill.
      A venue that cannot promise that reports `PendingCancel` and stays silent until it
      can. The hot side holds the slot and blocks the side until finality lands.

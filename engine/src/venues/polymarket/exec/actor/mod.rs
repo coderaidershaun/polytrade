@@ -184,6 +184,7 @@ impl Actor {
                 instruments: instruments.iter().map(|row| row.instrument_id).collect(),
                 events: EventFunnel::new(producer, edge.clock.clone()),
                 fatal: edge.fatal.clone(),
+                inflight_timeout: edge.inflight_timeout,
             }),
             tokens: TokenTable::with_retired_capacity(RETIRED_BINDINGS),
             orders: OrderIndex::with_capacity(ORDER_INDEX_CAPACITY),

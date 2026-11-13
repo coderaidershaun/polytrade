@@ -160,6 +160,7 @@ pub(crate) fn bring_up(plan: SimPlan, inputs: EdgeInputs<'_>) -> VenueEdge {
         wire: VenueWire::new(identity),
         instrument,
         fatal: settings.fatal.clone(),
+        inflight_timeout: settings.inflight_timeout,
     });
     let actor = SimActor {
         is_parked: settings.run_state.state() == RunState::Idle,

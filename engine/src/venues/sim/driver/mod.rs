@@ -12,7 +12,7 @@ use summary::SimRunSummary;
 use crate::msg::exec::{CancelReason, StampedExecCommand};
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId};
 use crate::msg::inbound::{InboundMessage, MessageBody};
-use crate::msg::time::LocalTs;
+use crate::msg::time::{DurationUs, LocalTs};
 use crate::runtime::registry::AssetDictionary;
 use crate::runtime::shutdown::FatalSignal;
 use crate::venues::binance::exec::{DecodeContext, ResponseContext};
@@ -67,6 +67,7 @@ impl SimExecDriver {
                 instruments: vec![setup.instrument],
                 events: Vec::new(),
                 fatal: setup.fatal,
+                inflight_timeout: setup.inflight_timeout,
             }),
             venue: setup.venue,
             schedule: setup.schedule,
@@ -326,6 +327,7 @@ pub struct SimExecDriverSetup {
     pub wire: VenueWire,
     pub instrument: InstrumentId,
     pub fatal: FatalSignal,
+    pub inflight_timeout: DurationUs,
 }
 
 fn asset_name(assets: &AssetDictionary, asset: AssetId) -> &str {

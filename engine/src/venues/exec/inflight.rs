@@ -52,16 +52,11 @@ impl InFlightTable {
     }
 
     pub fn take(&mut self, request_id: RequestId) -> Option<InFlightRequest> {
-        let position = self
-            .entries
-            .iter()
-            .position(|entry| entry.request_id == request_id)?;
-        Some(self.entries.swap_remove(position))
+        self.take_where(|entry| entry.request_id == request_id)
     }
 
     /// Takes the oldest entry that matches, keeping the rest in the order they were recorded: when
-    /// several entries could match one answer, the oldest is the one it answers. [`Self::take`]
-    /// reorders the table, so a caller that relies on this order must not mix the two.
+    /// several entries could match one answer, the oldest is the one it answers.
     pub fn take_where(
         &mut self,
         matches: impl FnMut(&InFlightRequest) -> bool,

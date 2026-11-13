@@ -267,6 +267,7 @@ pub(super) fn exec_bring_up(setup: ExecBringUpSetup<'_>) -> ExecBringUp {
                     execution.disconnect_sweep_secs as i64,
                 ),
                 max_orders_per_side: execution.max_orders_per_side as usize,
+                inflight_timeout: inflight_timeout(execution),
             },
             groups: setup.groups,
             lane_capacity,
@@ -357,7 +358,7 @@ fn settings(execution: &ExecutionConfig, capabilities: &VenueCapabilities) -> Ex
             execution.max_session_loss_quote,
         )),
 
-        inflight_timeout: DurationUs::from_millis(execution.inflight_timeout_ms as i64),
+        inflight_timeout: inflight_timeout(execution),
         exec_silence_spins: execution.exec_silence_spins,
         order_reap_window: DurationUs::from_secs(execution.order_reap_secs as i64),
         quote_stop_margin: DurationUs::from_millis(execution.quote_stop_margin_ms as i64),
@@ -367,6 +368,12 @@ fn settings(execution: &ExecutionConfig, capabilities: &VenueCapabilities) -> Ex
         taker_fee_rate: validated_mantissa(execution.taker_fee_rate),
         holds_reservations_until_settled: capabilities.holds_reservations_until_settled,
     }
+}
+
+/// One deadline for a request with no answer, read by the hot slot and by the in-flight table of the
+/// edge alike.
+fn inflight_timeout(execution: &ExecutionConfig) -> DurationUs {
+    DurationUs::from_millis(execution.inflight_timeout_ms as i64)
 }
 
 /// An edge that cannot reach its venue waits at most the cap of its backoff before it tries again,

@@ -10,8 +10,7 @@ use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::runtime::shutdown::FatalSignal;
 use engine::venues::exec::{
     ExecCore, ExecEffect, ExecRequest, ExecSession, InFlightRequest, MAX_RESYNC_ATTEMPTS,
-    MirroredOrder, Outgoing, Phase, PlaceNotSentReason, REQUEST_TIMEOUT, ResyncPoll, SessionSetup,
-    TimeoutFallout,
+    MirroredOrder, Outgoing, Phase, PlaceNotSentReason, ResyncPoll, SessionSetup,
 };
 
 use crate::exec_support::SentEvents;
@@ -22,6 +21,7 @@ const VENUE: &str = "test-venue";
 pub(super) const INSTRUMENT: InstrumentId = InstrumentId(0);
 const OTHER_INSTRUMENT: InstrumentId = InstrumentId(1);
 pub(super) const NOW: LocalTs = LocalTs::from_micros(1_785_000_000_000_000);
+pub(super) const INFLIGHT_TIMEOUT: DurationUs = DurationUs::from_millis(5_000);
 const PRICE: Price = Price::from_mantissa(11_800_000_000_000);
 
 pub(super) fn new_session() -> (Session, FatalSignal) {
@@ -32,6 +32,7 @@ pub(super) fn new_session() -> (Session, FatalSignal) {
         instruments: vec![INSTRUMENT, OTHER_INSTRUMENT],
         events: SentEvents::default(),
         fatal: fatal.clone(),
+        inflight_timeout: INFLIGHT_TIMEOUT,
     });
     (session, fatal)
 }
@@ -445,59 +446,6 @@ fn losing_the_connection_dooms_every_outstanding_request_then_resets_the_stream_
     assert!(session.inflight.take_all().is_empty());
     assert_eq!(session.core.phase(), Phase::Down);
     assert!(session.core.mirror().iter().all(|order| order.is_ambiguous));
-}
-
-/// FITNESS: a request past its deadline is reconciled with a status probe under the hot sequence
-/// it belonged to, never resent; an unanswered read is handed back to the venue to decide; and only
-/// a lost placement is flagged as one.
-///
-/// Resending risks a second live order. The probe's answer must land in the reconcile pass that
-/// asked, or the hot side settles the wrong pass. A lost placement may sit on the venue under an id
-/// this run never learned, which is why a venue may need to look for it.
-#[test]
-fn an_unanswered_request_is_reconciled_with_a_status_probe_under_its_own_hot_sequence() {
-    let (mut session, _) = quoting_session();
-    session.core.on_command(place(1, Side::Sell), &mut |_| {});
-    let reconcile_order = ExecCommand::ReconcileOrder {
-        instrument: INSTRUMENT,
-        client_id: ClientOrderId(1),
-        recon_seq: 41,
-    };
-    send(&mut session, reconcile_order, NOW);
-    let reconcile_open = ExecCommand::ReconcileOpenOrders {
-        instrument: INSTRUMENT,
-        recon_seq: 42,
-    };
-    send(&mut session, reconcile_open, NOW);
-
-    let early = session.expire(NOW + REQUEST_TIMEOUT - DurationUs::from_micros(1));
-    assert!(early.outgoing.is_empty() && early.unanswered_reads.is_empty());
-    assert!(session.events.is_empty());
-
-    let expired = session.expire(NOW + REQUEST_TIMEOUT);
-    assert_eq!(sent(&expired.outgoing), [(status_request(1), 41)]);
-    assert_eq!(
-        expired.unanswered_reads,
-        [
-            TimeoutFallout::StreamUnusable,
-            TimeoutFallout::ReadAbandoned
-        ]
-    );
-    assert!(!expired.has_lost_placement);
-    assert_eq!(kinds(&session.events), [ExecKind::AckFailed]);
-    assert_eq!(session.events[0].side, Side::Sell);
-    assert!(
-        session
-            .core
-            .mirrored(ClientOrderId(1))
-            .is_some_and(|order| order.is_ambiguous)
-    );
-
-    let (mut placing, _) = quoting_session();
-    send(&mut placing, place(2, Side::Buy), NOW);
-    let lost = placing.expire(NOW + REQUEST_TIMEOUT);
-    assert!(lost.has_lost_placement);
-    assert_eq!(sent(&lost.outgoing), [(status_request(2), 0)]);
 }
 
 /// FITNESS: a failed resync pass is re-read under a fresh sequence once its backoff is due, and the
