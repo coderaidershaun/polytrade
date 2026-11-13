@@ -4,13 +4,13 @@
 use crate::msg::exec::{CancelReason, ExecEvent};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Side};
 use crate::msg::inbound::{InboundMessage, MessageBody};
-use crate::msg::time::LocalTs;
+use crate::msg::time::{DurationUs, LocalTs};
 use crate::runtime::shutdown::{FatalReason, FatalSignal};
 use crate::{error, warn};
 
 use super::{
     ExecCore, ExecEffect, ExecRequest, InFlightTable, MAX_RESYNC_ATTEMPTS, Outgoing,
-    PlaceNotSentReason, REQUEST_TIMEOUT, ResyncPass, ResyncStep, TimeoutFallout, amend_not_sent,
+    PlaceNotSentReason, ResyncPass, ResyncStep, TimeoutFallout, amend_not_sent,
     open_orders_snapshot_end, place_not_sent, request_timed_out, stream_reset,
 };
 
@@ -33,6 +33,9 @@ pub struct SessionSetup<S> {
     pub instruments: Vec<InstrumentId>,
     pub events: S,
     pub fatal: FatalSignal,
+    /// `execution.inflight_timeout_ms`, the deadline that the hot slot of a request also reads, so
+    /// the edge and the fold give up on an unanswered request at the same time.
+    pub inflight_timeout: DurationUs,
 }
 
 /// What a deadline pass leaves for the venue: status probes to send, reads nobody answered, and
@@ -66,7 +69,7 @@ impl<S: EventSink> ExecSession<S> {
     pub fn new(setup: SessionSetup<S>) -> Self {
         Self {
             core: setup.core,
-            inflight: InFlightTable::new(REQUEST_TIMEOUT),
+            inflight: InFlightTable::new(setup.inflight_timeout),
             resync: ResyncPass::default(),
             events: setup.events,
             fatal: setup.fatal,

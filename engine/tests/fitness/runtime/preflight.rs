@@ -21,8 +21,10 @@ use engine::venues::exec::TeTag;
 use engine::venues::port::{ProbedVenue, VenuePort, VenueScales};
 use engine::venues::sim;
 
+use proptest::prelude::*;
+
 use super::config_guards::{
-    BINANCE_KLINES_VOLUME_BARS, BINANCE_PERP_SOURCE, BINANCE_SPOT_SOURCE, SIM_BLOCK,
+    BINANCE_KLINES_VOLUME_BARS, BINANCE_PERP_SOURCE, BINANCE_SPOT_SOURCE, POLY_SOURCE, SIM_BLOCK,
     config_with_execution_on, config_with_source, execution_block_with, link_block,
 };
 use crate::engine_support::Idle;
@@ -252,6 +254,24 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         "{probe}"
     );
 
+    // The order client waits for an answer as long as the in-flight timeout does.
+    let http_timeout = refusal(
+        &live_document(BINANCE_SPOT_SOURCE, 4_000, &state),
+        stamped,
+        &state,
+    );
+    assert!(
+        matches!(
+            http_timeout,
+            StartError::ExecutionHttpTimeout {
+                venue: "binance",
+                http_timeout_ms: 4_000,
+                inflight_timeout_ms: 4_000,
+            }
+        ),
+        "{http_timeout}"
+    );
+
     // E9: the link address is taken.
     let taken = UdpSocket::bind("127.0.0.1:0").expect("the test binds a loopback port");
     let address = taken.local_addr().expect("a bound address").to_string();
@@ -341,6 +361,68 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         assert!(
             spun.is_ok(),
             "only linux requires a hot core for a spinning engine"
+        );
+    }
+}
+
+/// A live engine on `source` whose in-flight timeout is `inflight_timeout_ms`.
+fn live_document(source: &str, inflight_timeout_ms: u64, state: &Path) -> String {
+    let execution = execution_block_with(
+        "live",
+        &format!("  inflight_timeout_ms: {inflight_timeout_ms}\n"),
+    );
+    with_state(config_with_execution_on(source, &execution), state)
+}
+
+/// The request deadline of the order client of each venue with one, in milliseconds.
+const ORDER_CLIENT_TIMEOUT_MS: u64 = 4_000;
+
+proptest! {
+    /// FITNESS: the order client of a live venue gives its verdict on a request before the
+    /// in-flight table gives up on it. If the table gave up first, it would read back a request
+    /// whose answer is still on its way, and its expiry would be the normal path rather than the
+    /// exception. So the start is refused exactly when the in-flight timeout is at or below the
+    /// deadline of the order client, before any venue is asked anything; otherwise the start goes
+    /// on to its next check, here a scale read that the stand-in refuses.
+    #[test]
+    fn http_timeout_at_or_above_inflight_timeout_refuses_start(
+        is_binance in any::<bool>(),
+        inflight_timeout_ms in 1_u64..=2 * ORDER_CLIENT_TIMEOUT_MS,
+    ) {
+        let (venue, source) = match is_binance {
+            true => ("binance", BINANCE_SPOT_SOURCE),
+            false => ("polymarket", POLY_SOURCE),
+        };
+        let root = TempDir::new("http-timeout");
+        let state = root.path().join("state");
+        let refused = refusal(
+            &live_document(source, inflight_timeout_ms, &state),
+            Scales::Refused,
+            &state,
+        );
+        if inflight_timeout_ms > ORDER_CLIENT_TIMEOUT_MS {
+            prop_assert!(
+                matches!(refused, StartError::Venue(VenueError::BinanceScale(_))),
+                "an in-flight timeout of {inflight_timeout_ms} ms outlasts the order client: {refused}"
+            );
+            return Ok(());
+        }
+        let StartError::ExecutionHttpTimeout {
+            venue: named,
+            http_timeout_ms,
+            inflight_timeout_ms: found,
+        } = refused
+        else {
+            panic!("{venue} at {inflight_timeout_ms} ms must refuse with its own variant: {refused}");
+        };
+        prop_assert_eq!(named, venue);
+        prop_assert_eq!(http_timeout_ms, ORDER_CLIENT_TIMEOUT_MS);
+        prop_assert_eq!(found, inflight_timeout_ms);
+        let text = refused.to_string();
+        prop_assert!(
+            text.contains(&format!("{ORDER_CLIENT_TIMEOUT_MS} ms"))
+                && text.contains(&format!("= {inflight_timeout_ms}")),
+            "the refusal names both values: {}", text
         );
     }
 }

@@ -8,8 +8,11 @@ use serde::de::DeserializeOwned;
 use crate::msg::time::EngineClock;
 use crate::runtime::config::BinanceMarket;
 use crate::runtime::secrets::Credentials;
-use crate::venues::binance::exec::{ClockOffset, RecvWindow, RequestParams, RequestSigner};
+use crate::venues::binance::exec::{
+    ClockOffset, ORDER_REQUEST_TIMEOUT, RecvWindow, RequestParams, RequestSigner,
+};
 use crate::venues::edge::backoff::BackoffCaps;
+use crate::venues::edge::http::Deadlines;
 use crate::venues::edge::rest_quiet::SharedRestQuiet;
 use crate::warn;
 
@@ -71,7 +74,14 @@ impl SignedRestClient {
     ) -> Result<Self, RestError> {
         let signer = RequestSigner::new(credentials.api_secret());
         Ok(Self {
-            rest: RestClient::new(BinanceMarket::Spot, config.env)?,
+            rest: RestClient::with_deadlines(
+                BinanceMarket::Spot,
+                config.env,
+                Deadlines {
+                    request: ORDER_REQUEST_TIMEOUT,
+                    ..Deadlines::STANDARD
+                },
+            )?,
             credentials,
             signer,
             clock: EngineClock::start(),

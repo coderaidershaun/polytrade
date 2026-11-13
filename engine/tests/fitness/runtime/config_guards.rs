@@ -22,7 +22,7 @@ fn build_from(yaml: &str) -> Registry {
     Registry::build(&config).expect("registry builds")
 }
 
-const POLY_SOURCE: &str = "  exchange: polymarket
+pub(super) const POLY_SOURCE: &str = "  exchange: polymarket
   max_exposure_quote: 500
   series: btc-updown-5m
   tracker: {}

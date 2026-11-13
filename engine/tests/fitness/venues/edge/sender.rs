@@ -12,7 +12,7 @@ use engine::msg::exec::{ExecCommand, ExecKind, ExecLaneItem, OrderStyle, Stamped
 use engine::msg::ids::{ClientOrderId, Price, QueueId, Side};
 use engine::msg::inbound::SpinTick;
 use engine::msg::latency::{Category, Stage, WireSample};
-use engine::msg::time::LocalTs;
+use engine::msg::time::{DurationUs, LocalTs};
 use engine::runtime::config::SenderPlacement;
 use engine::runtime::metrics::{Metrics, SampleProducers};
 use engine::runtime::shutdown::FatalSignal;
@@ -101,6 +101,7 @@ fn quoting_session() -> Session {
         instruments: vec![INSTRUMENT],
         events: SentEvents::default(),
         fatal: FatalSignal::new(),
+        inflight_timeout: DurationUs::from_millis(5_000),
     });
     for Outgoing { effect, recon_seq } in session.connect() {
         if let ExecEffect::Send {

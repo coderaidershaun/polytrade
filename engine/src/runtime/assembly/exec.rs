@@ -19,7 +19,7 @@ use crate::msg::latency::WireSample;
 use crate::msg::time::{DurationUs, EngineClock, Stamper};
 use crate::runtime::config::{
     DEFAULT_QUOTE_STOP_MARGIN_MS, ExecutionConfig, ExecutionMode, RunIdentity, SendersConfig,
-    validated_mantissa,
+    SourceSpec, validated_mantissa,
 };
 use crate::runtime::registry::Registry;
 use crate::runtime::shutdown::{FatalSignal, RunStateCell};
@@ -28,7 +28,7 @@ use crate::venues::edge::{
     EdgeCheck, EdgeInputs, EdgeSettings, EdgeSpawn, SenderSettings, VenueEdge,
 };
 use crate::venues::exec::{TeTag, VenueCapabilities};
-use crate::venues::venue::{CheckedVenue, ExecutionVenue, WindowAssignment};
+use crate::venues::venue::{CheckedVenue, ExecutionVenue, WindowAssignment, order_client_timeout};
 
 use super::StartError;
 use super::exec_identity::ExecutionLease;
@@ -124,6 +124,30 @@ pub(super) fn check_execution(check: ExecCheck<'_>) -> Result<Option<ExecPlan>, 
         queue,
         te_tag,
     }))
+}
+
+/// The order client of a live venue must give its verdict on a request before the in-flight table
+/// gives up on it. Otherwise the table reads back a request whose answer is still on its way, and
+/// its expiry becomes the normal path rather than the exception. Only the config is read, so a run
+/// that breaks this asks no venue anything.
+///
+/// # Errors
+/// [`StartError::ExecutionHttpTimeout`] when `execution.inflight_timeout_ms` is at or below the
+/// request deadline of the order client of the venue that `source` names.
+pub(super) fn check_order_client_timeout(
+    source: &SourceSpec,
+    execution: &ExecutionConfig,
+) -> Result<(), StartError> {
+    let (venue, http_timeout) = order_client_timeout(source);
+    let http_timeout_ms = u64::try_from(http_timeout.as_millis()).unwrap_or(u64::MAX);
+    if execution.inflight_timeout_ms > http_timeout_ms {
+        return Ok(());
+    }
+    Err(StartError::ExecutionHttpTimeout {
+        venue,
+        http_timeout_ms,
+        inflight_timeout_ms: execution.inflight_timeout_ms,
+    })
 }
 
 /// The command lane of an armed run. Its write end goes into the engine, which the hot thread
@@ -243,6 +267,7 @@ pub(super) fn exec_bring_up(setup: ExecBringUpSetup<'_>) -> ExecBringUp {
                     execution.disconnect_sweep_secs as i64,
                 ),
                 max_orders_per_side: execution.max_orders_per_side as usize,
+                inflight_timeout: inflight_timeout(execution),
             },
             groups: setup.groups,
             lane_capacity,
@@ -333,7 +358,7 @@ fn settings(execution: &ExecutionConfig, capabilities: &VenueCapabilities) -> Ex
             execution.max_session_loss_quote,
         )),
 
-        inflight_timeout: DurationUs::from_millis(execution.inflight_timeout_ms as i64),
+        inflight_timeout: inflight_timeout(execution),
         exec_silence_spins: execution.exec_silence_spins,
         order_reap_window: DurationUs::from_secs(execution.order_reap_secs as i64),
         quote_stop_margin: DurationUs::from_millis(execution.quote_stop_margin_ms as i64),
@@ -343,6 +368,12 @@ fn settings(execution: &ExecutionConfig, capabilities: &VenueCapabilities) -> Ex
         taker_fee_rate: validated_mantissa(execution.taker_fee_rate),
         holds_reservations_until_settled: capabilities.holds_reservations_until_settled,
     }
+}
+
+/// One deadline for a request with no answer, read by the hot slot and by the in-flight table of
+/// the edge alike.
+fn inflight_timeout(execution: &ExecutionConfig) -> DurationUs {
+    DurationUs::from_millis(execution.inflight_timeout_ms as i64)
 }
 
 /// An edge that cannot reach its venue waits at most the cap of its backoff before it tries again,

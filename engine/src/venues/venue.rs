@@ -199,6 +199,14 @@ impl CheckedVenue {
     }
 }
 
+/// The venue that `source` names, and how long its order client waits for an answer.
+pub(crate) fn order_client_timeout(source: &SourceSpec) -> (&'static str, Duration) {
+    match source {
+        SourceSpec::Binance { .. } => ("binance", binance_exec::ORDER_REQUEST_TIMEOUT),
+        SourceSpec::Polymarket { .. } => ("polymarket", polymarket_exec::ORDER_REQUEST_TIMEOUT),
+    }
+}
+
 pub(crate) fn tap_heartbeat<P>(config: &Config<P>) -> Duration {
     let sim = config
         .execution
