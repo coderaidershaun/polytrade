@@ -63,6 +63,7 @@ fn each_instrument_with_a_position_survives_restart() {
     a_fill_reaches_the_file_that_the_next_start_reads();
     the_last_snapshot_leaves_the_sink_when_its_owner_ends();
     a_restored_position_with_no_mark_is_not_flat();
+    a_snapshot_holds_a_row_for_each_instrument_with_a_position();
 }
 
 fn a_missing_file_is_a_cold_start() {
@@ -222,10 +223,9 @@ fn a_fill_reaches_the_file_that_the_next_start_reads() {
 /// The snapshot that a sink still holds when its owner ends is the run's final position. The ring
 /// is one deep and full, so the last push has nowhere to go until the writer's next poll.
 fn the_last_snapshot_leaves_the_sink_when_its_owner_ends() {
-    let (producer, mut consumer) = RingBuffer::<ExposureSnapshot>::new(1);
-    let mut sink = ExposureSink::new(producer);
-    sink.push(final_position(1, ONE));
-    sink.push(final_position(2, 2 * ONE));
+    let (mut sink, mut lane) = ExposureSink::lane(1, 1);
+    sink.push(&final_position(1, ONE));
+    sink.push(&final_position(2, 2 * ONE));
     assert!(
         sink.is_pending(),
         "a one-deep ring cannot hold the second snapshot, so the sink still carries it"
@@ -234,14 +234,15 @@ fn the_last_snapshot_leaves_the_sink_when_its_owner_ends() {
     // The writer's poll, which comes only after the hot side has let go of the sink.
     let reader = std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(20));
+        let mut copy = ExposureSnapshot::for_instruments(1);
         let mut seen = Vec::new();
         for _ in 0..2_000 {
-            match consumer.pop() {
-                Ok(snapshot) => seen.push(snapshot),
-                Err(_) if seen.len() < 2 => {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
-                Err(_) => break,
+            if lane.pop_into(&mut copy) {
+                seen.push(copy.clone());
+            } else if seen.len() < 2 {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            } else {
+                break;
             }
             if seen.len() == 2 {
                 break;
@@ -283,6 +284,46 @@ fn a_restored_position_with_no_mark_is_not_flat() {
         },
         "the restored position is there from the first message, with no valuation, so its \
          exposure is zero and its raw PnL reads as the whole cost basis lost"
+    );
+}
+
+/// A snapshot has room for each instrument of the registry. A row that a fixed size dropped would
+/// be gone from the next start, with no record that it was held.
+fn a_snapshot_holds_a_row_for_each_instrument_with_a_position() {
+    const INSTRUMENTS: u16 = 17;
+    let instruments: Vec<InstrumentRow> = (0..INSTRUMENTS)
+        .map(|id| instrument_row(id, TrackerSpec::default(), 64))
+        .collect();
+    let (sink, mut lane) = exposure_ring(64, instruments.len());
+    let (mut engine, _commands, _ui_events) = engine_with_exposure(
+        &instruments,
+        ExposureWiring {
+            restored: &[],
+            sink,
+        },
+    );
+    make_ready(&mut engine, 0);
+    for id in 0..INSTRUMENTS {
+        let when = 10 + i64::from(id);
+        for message in FillPen::new(id).fill(Side::Buy, 60_000 * ONE, ONE / 100, when) {
+            engine.dispatch(&message);
+        }
+    }
+
+    let newest = std::iter::from_fn(|| lane.pop())
+        .last()
+        .expect("the fills published the position");
+    let held: Vec<(InstrumentId, Qty)> = newest
+        .active()
+        .iter()
+        .map(|exposure| (exposure.instrument, exposure.position_base))
+        .collect();
+    let bought: Vec<(InstrumentId, Qty)> = (0..INSTRUMENTS)
+        .map(|id| (InstrumentId(id), Qty::from_mantissa(ONE / 100)))
+        .collect();
+    assert_eq!(
+        held, bought,
+        "the newest snapshot holds the position of each of the {INSTRUMENTS} instruments"
     );
 }
 
@@ -554,7 +595,7 @@ fn a_folder_that_does_not_sync_counts_as_a_failed_write() {
         File::open(root.path()).is_err(),
         "this case needs a user that file permissions bind, not root"
     );
-    sink.push(snapshot(1, &[row(0, ONE, -60_000 * ONE, 60_000 * ONE)]));
+    sink.push(&snapshot(1, &[row(0, ONE, -60_000 * ONE, 60_000 * ONE)]));
 
     let report = wait_for_report(&mut reports);
     assert_eq!(
@@ -589,7 +630,7 @@ fn a_write_that_passes_starts_the_count_again() {
     let path = file_path(root.path(), &identity(), Some(ExecutionMode::Live));
     let folder = FolderMode::set(root.path(), 0o300);
     for seq in 1..=2 {
-        sink.push(snapshot(seq, &[row(0, seq as i64 * ONE, 0, 0)]));
+        sink.push(&snapshot(seq, &[row(0, seq as i64 * ONE, 0, 0)]));
         folder.change_to(0o300);
         wait_for_try(&path);
         wait_for_try(&path);
@@ -611,7 +652,7 @@ fn a_writer_that_died_gives_an_exit_that_is_not_graceful() {
     let root = TempDir::new("exposure-writer-panic");
     let registry = registry_for(BINANCE_SOURCE);
     let (writer, mut sink) = spawn_live_writer(root.path(), &registry, &ExposureState::default());
-    sink.push(snapshot(1, &[row(5, ONE, 0, 0)]));
+    sink.push(&snapshot(1, &[row(5, ONE, 0, 0)]));
     drop(sink);
 
     let error = drain_writer(writer).expect_err("a writer that died cannot drain clean");
@@ -769,7 +810,7 @@ fn restored_engine(
     instruments: &[InstrumentRow],
     restored: &[InstrumentExposure],
 ) -> (HotEngine, Consumer<ExecLaneItem>) {
-    let (sink, _snapshots) = exposure_ring(64);
+    let (sink, _snapshots) = exposure_ring(64, instruments.len());
     let (engine, commands, _ui_events) =
         engine_with_exposure(instruments, ExposureWiring { restored, sink });
     (engine, commands)
@@ -984,16 +1025,7 @@ fn a_restored_position_without_a_mark_is_not_flat() {
 }
 
 fn final_position(seq: u64, position_base: i64) -> ExposureSnapshot {
-    let mut snapshot = ExposureSnapshot::EMPTY;
-    snapshot.instruments[0] = InstrumentExposure {
-        instrument: INSTRUMENT,
-        position_base: Qty::from_mantissa(position_base),
-        cash_quote: 0,
-        basis_quote: 0,
-    };
-    snapshot.len = 1;
-    snapshot.seq = seq;
-    snapshot
+    snapshot(seq, &[row(0, position_base, 0, 0)])
 }
 
 /// What the ledger says, read through the strategy, the only view a test has of it.

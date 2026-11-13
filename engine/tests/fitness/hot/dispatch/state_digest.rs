@@ -32,10 +32,11 @@ use proptest::test_runner::{Config, TestCaseError, TestRunner};
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
-    ALL_TABLES, FillPen, ONE, account_chunk, book_reset, call_codes, delta_chunk, detached_setup,
-    exec_event, exposure_ring, instrument_row, kline, last_snapshot_chunk, partial_snapshot_chunk,
-    persist_ring_for, rotation, run_control, snapshot_pair, spin, strategy_log_ring, stream_ready,
-    tracker_spec_all, trade, ts, ui_book_ring, ui_event_ring, venue_ts,
+    ALL_TABLES, ExposureLane, FillPen, ONE, account_chunk, book_reset, call_codes, delta_chunk,
+    detached_setup, exec_event, exposure_ring, instrument_row, kline, last_snapshot_chunk,
+    partial_snapshot_chunk, persist_ring_for, rotation, run_control, snapshot_pair, spin,
+    strategy_log_ring, stream_ready, tracker_spec_all, trade, ts, ui_book_ring, ui_event_ring,
+    venue_ts,
 };
 use crate::exec_support::exec_settings;
 
@@ -241,7 +242,7 @@ struct Readers {
     commands: Consumer<ExecLaneItem>,
     ui_books: Consumer<UiBookSnapshot>,
     ui_events: Consumer<UiEvent>,
-    exposure: Consumer<ExposureSnapshot>,
+    exposure: ExposureLane,
     strategy_log: Consumer<HotRecord>,
 }
 
@@ -251,7 +252,7 @@ fn engine(start: Start, stamper: Stamper) -> (HotEngine, Readers) {
     let (strategy_log_sink, strategy_log) = strategy_log_ring(LANE);
     let (ui_book_sink, ui_books) = ui_book_ring(LANE);
     let (ui_event_sink, ui_events) = ui_event_ring(LANE);
-    let (exposure_sink, exposure) = exposure_ring(LANE);
+    let (exposure_sink, exposure) = exposure_ring(LANE, rows.len());
     let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(LANE);
     let exec = start.has_venue().then(|| ExecWiring {
         sink: ExecSink::new(commands_producer, stamper),
@@ -392,7 +393,9 @@ fn fold_on_this_thread(start: Start, sequence: &[InboundMessage], measure: Measu
         drain(&mut readers.commands, &mut folded.commands);
         drain(&mut readers.ui_books, &mut folded.ui_books);
         drain(&mut readers.ui_events, &mut folded.ui_events);
-        drain(&mut readers.exposure, &mut folded.exposure);
+        folded
+            .exposure
+            .extend(std::iter::from_fn(|| readers.exposure.pop()));
         drain(&mut readers.strategy_log, &mut folded.strategy_log);
         while let Some(record) = hot_log.pop() {
             folded.hot_log.push(record);

@@ -31,7 +31,7 @@ use engine::runtime::config::{
     BinanceMarket, Instruments, IntensitySpec, LatencyBudgets, PolySeries, RecordedTables,
     StageBudget, StrategySpec, Subscriptions, TableKind, TrackerSpec, VenueMarket,
 };
-use engine::runtime::exposure::ExposureSnapshot;
+use engine::runtime::exposure::{ExposureSnapshot, InstrumentExposure};
 use engine::runtime::metrics::{SampleProducers, SinkKind};
 use engine::runtime::pin_to_core;
 use engine::runtime::registry::InstrumentRow;
@@ -49,7 +49,7 @@ use engine::venues::polymarket::rotation::{OutcomeLeg, TokenId, WindowAssignment
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
-    Idle, ONE, account_chunk, detached_setup, engine_view, exec_event, exposure_ring,
+    ExposureLane, Idle, ONE, account_chunk, detached_setup, engine_view, exec_event, exposure_ring,
     instrument_row, level, persist_ring_for, snapshot_pair, spin, strategy_log_ring, stream_ready,
     tracker_spec_all, ts, ui_book_ring, ui_event_ring, venue_ts,
 };
@@ -199,13 +199,32 @@ fn digest(lane: &'static str, records: &[String]) -> Digest {
     }
 }
 
+/// The text that each recorded digest of the exposure lane hashes: the rows of a snapshot, then
+/// empty rows up to sixteen, then the count of its rows.
+fn recorded_exposure_text(snapshot: &ExposureSnapshot) -> String {
+    const RECORDED_ROWS: usize = 16;
+    let rows = snapshot.active();
+    let mut padded = rows.to_vec();
+    padded.extend(std::iter::repeat_n(
+        InstrumentExposure::EMPTY,
+        RECORDED_ROWS.saturating_sub(rows.len()),
+    ));
+    format!(
+        "ExposureSnapshot {{ instruments: {padded:?}, len: {}, seq: {}, exposure_quote: {}, emitted_ts_us: {:?} }}",
+        rows.len(),
+        snapshot.seq,
+        snapshot.exposure_quote,
+        snapshot.emitted_ts_us
+    )
+}
+
 /// The readers of every output of one engine, drained after each message so no ring fills.
 struct Lanes {
     persist: Consumer<PersistRecord>,
     commands: Consumer<ExecLaneItem>,
     ui_books: Consumer<UiBookSnapshot>,
     ui_events: Consumer<UiEvent>,
-    exposure: Consumer<ExposureSnapshot>,
+    exposure: ExposureLane,
     strategy_log: Consumer<HotRecord>,
     strategy_log_drops: Arc<AtomicU64>,
 }
@@ -229,8 +248,8 @@ impl Lanes {
         while let Ok(event) = self.ui_events.pop() {
             outputs.ui_events.push(event);
         }
-        while let Ok(snapshot) = self.exposure.pop() {
-            outputs.exposure.push(format!("{snapshot:?}"));
+        while let Some(snapshot) = self.exposure.pop() {
+            outputs.exposure.push(recorded_exposure_text(&snapshot));
         }
     }
 
@@ -623,7 +642,7 @@ fn armed_engine(shipped: Shipped, log_lane: usize, stamper: Stamper) -> (HotEngi
     let strategy_log_drops = strategy_log_sink.drops_handle();
     let (ui_book_sink, ui_books) = ui_book_ring(OUTPUT_RING);
     let (ui_event_sink, ui_events) = ui_event_ring(OUTPUT_RING);
-    let (exposure_sink, exposure) = exposure_ring(OUTPUT_RING);
+    let (exposure_sink, exposure) = exposure_ring(OUTPUT_RING, rows.len());
     let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(OUTPUT_RING);
     let engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),

@@ -19,7 +19,7 @@ use crate::msg::persist::{
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{DurationUs, FoldTime, LocalTs, VenueTs};
 use crate::runtime::config::{KlineInterval, RecordedTables, SpinField};
-use crate::runtime::exposure::{ExposureSnapshot, InstrumentExposure};
+use crate::runtime::exposure::InstrumentExposure;
 
 /// The multiplier of the FxHash step.
 const MULTIPLIER: u64 = 0x517c_c1b7_2722_0a95;
@@ -293,7 +293,6 @@ digest_fields! {
     }
 }
 digest_fields! { OutboundLink { topic, payload } }
-digest_fields! { ExposureSnapshot { instruments, len, seq, exposure_quote, emitted_ts_us } }
 
 impl Digest for PersistRecord {
     fn digest(&self, digester: &mut Digester) {

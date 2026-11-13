@@ -4,8 +4,10 @@
 mod file;
 mod writer;
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
+use crate::hot::digest::digest_fields;
 use crate::msg::failure::{FailureClass, Halt};
 use crate::msg::ids::{AssetId, InstrumentId, Qty};
 use crate::msg::time::LocalTs;
@@ -14,9 +16,6 @@ use crate::runtime::registry::Registry;
 use crate::warn;
 
 pub use writer::{ExposureHandle, ExposureWriter, ExposureWriterSetup, WriterStatus};
-
-/// Max instruments per snapshot (engine serves one source).
-pub const MAX_EXPOSURE_INSTRUMENTS: usize = 16;
 
 /// Quote amounts are mantissas at the global fixed scale, never currency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -43,11 +42,14 @@ impl InstrumentExposure {
     }
 }
 
-/// Whole-ledger snapshot (fixed-size, absolute state): atomic file write, avoid half-updated ledger.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The whole ledger at one sequence number, so a file never holds half of an update. It has room
+/// for a row of each instrument of the registry, made once at start, and is filled in place, so the
+/// hot thread never allocates or frees one.
+#[derive(Clone)]
 pub struct ExposureSnapshot {
-    pub instruments: [InstrumentExposure; MAX_EXPOSURE_INSTRUMENTS],
-    pub len: u8,
+    rows: Box<[InstrumentExposure]>,
+    /// The rows in use, each one that is not empty. The rows past it are room.
+    len: usize,
     /// Sequence (monotone, starts at 1): 0 = boot-restored state (writer skips if already written).
     pub seq: u64,
     /// Mark-to-market at emission (0 if no honest mark yet); written for human, ignored on load.
@@ -56,24 +58,89 @@ pub struct ExposureSnapshot {
     pub emitted_ts_us: LocalTs,
 }
 
-impl ExposureSnapshot {
-    pub const EMPTY: ExposureSnapshot = ExposureSnapshot {
-        instruments: [InstrumentExposure::EMPTY; MAX_EXPOSURE_INSTRUMENTS],
-        len: 0,
-        seq: 0,
-        exposure_quote: 0,
-        emitted_ts_us: LocalTs::from_micros(0),
-    };
+digest_fields! { ExposureSnapshot { rows, len, seq, exposure_quote, emitted_ts_us } }
 
-    /// Filled prefix (capacity invariant trapped here).
+impl ExposureSnapshot {
+    /// Room for a row of each of `instruments` instruments, and no row in use.
+    pub fn for_instruments(instruments: usize) -> Self {
+        ExposureSnapshot {
+            rows: vec![InstrumentExposure::EMPTY; instruments].into_boxed_slice(),
+            len: 0,
+            seq: 0,
+            exposure_quote: 0,
+            emitted_ts_us: LocalTs::from_micros(0),
+        }
+    }
+
     #[inline]
     pub fn active(&self) -> &[InstrumentExposure] {
-        debug_assert!(
-            self.len as usize <= MAX_EXPOSURE_INSTRUMENTS,
-            "snapshot len {} exceeds capacity {MAX_EXPOSURE_INSTRUMENTS}",
-            self.len
-        );
-        &self.instruments[..self.len as usize]
+        &self.rows[..self.len]
+    }
+
+    /// Takes each row that is not empty, in order. An all-zero row is the same as no row.
+    ///
+    /// # Panics
+    /// More rows than the instruments that the snapshot has room for. The ledger and the snapshot
+    /// are sized by one registry, so that is a bug.
+    pub fn set_rows(&mut self, rows: impl IntoIterator<Item = InstrumentExposure>) {
+        let mut len = 0;
+        for row in rows.into_iter().filter(|row| !row.is_empty()) {
+            let Some(slot) = self.rows.get_mut(len) else {
+                room_overrun(self.rows.len());
+            };
+            *slot = row;
+            len += 1;
+        }
+        self.len = len;
+    }
+
+    /// Takes the rows and the stamps of `other`, in place.
+    ///
+    /// # Panics
+    /// `other` holds more rows than this snapshot has room for. Each snapshot of a run is sized by
+    /// one registry, so that is a bug.
+    pub fn copy_from(&mut self, other: &ExposureSnapshot) {
+        let rows = other.active();
+        let Some(room) = self.rows.get_mut(..rows.len()) else {
+            room_overrun(self.rows.len());
+        };
+        room.copy_from_slice(rows);
+        self.len = rows.len();
+        self.seq = other.seq;
+        self.exposure_quote = other.exposure_quote;
+        self.emitted_ts_us = other.emitted_ts_us;
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn room_overrun(room: usize) -> ! {
+    panic!(
+        "an exposure snapshot has room for {room} instruments, and was given more rows than that"
+    )
+}
+
+/// The rows past the ones in use are room, so two snapshots of one state are equal.
+impl PartialEq for ExposureSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.active() == other.active()
+            && self.seq == other.seq
+            && self.exposure_quote == other.exposure_quote
+            && self.emitted_ts_us == other.emitted_ts_us
+    }
+}
+
+impl Eq for ExposureSnapshot {}
+
+impl fmt::Debug for ExposureSnapshot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ExposureSnapshot")
+            .field("instruments", &self.active())
+            .field("seq", &self.seq)
+            .field("exposure_quote", &self.exposure_quote)
+            .field("emitted_ts_us", &self.emitted_ts_us)
+            .finish()
     }
 }
 

@@ -93,7 +93,7 @@ pub fn engine(instruments: &[InstrumentRow]) -> HotEngine {
         exec: None,
         exposure: ExposureWiring {
             restored: &[],
-            sink: ExposureSink::new(RingBuffer::new(OUTPUT_RING).0),
+            sink: ExposureSink::lane(OUTPUT_RING, instruments.len()).0,
         },
     })
 }

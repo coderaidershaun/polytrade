@@ -6,9 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use rtrb::{Consumer, RingBuffer};
-
-use crate::hot::sink::ExposureSink;
+use crate::hot::sink::{ExposureReceiver, ExposureSink};
 use crate::hot::spawn::QueueProducer;
 use crate::msg::failure::FailureClass;
 use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId};
@@ -21,8 +19,7 @@ use crate::{error, info};
 
 use super::file::{self, AssetEntry, ExposureDocument, FORMAT_VERSION, InstrumentEntry};
 use super::{
-    ExposureError, ExposureSnapshot, ExposureState, MAX_EXPOSURE_INSTRUMENTS, add_amount,
-    asset_amounts, file_path, venue_of,
+    ExposureError, ExposureSnapshot, ExposureState, add_amount, asset_amounts, file_path, venue_of,
 };
 
 /// Ring capacity: absorb burst between polls (absolute state, sink keeps newest).
@@ -43,7 +40,7 @@ pub struct ExposureWriterSetup<'a> {
     pub status: Option<WriterStatus>,
     /// The state on disk, which seeds the writer.
     pub restored: &'a ExposureState,
-    pub lane: Consumer<ExposureSnapshot>,
+    pub lane: ExposureReceiver,
 }
 
 /// Where the writer reports that it gave up, and after how many failed writes in a row.
@@ -119,11 +116,11 @@ struct InstrumentFacts {
 pub struct ExposureWriter;
 
 impl ExposureWriter {
-    /// The lane from the hot thread to the writer. The start makes it before the hot thread, and
-    /// hands its read end to the writer once the writer-status queue exists.
-    pub fn lane() -> (ExposureSink, Consumer<ExposureSnapshot>) {
-        let (producer, consumer) = RingBuffer::<ExposureSnapshot>::new(RING_CAPACITY);
-        (ExposureSink::new(producer), consumer)
+    /// The lane from the hot thread to the writer, with room for `instruments` instruments in each
+    /// snapshot. The start makes it before the hot thread, and hands its read end to the writer
+    /// once the writer-status queue exists.
+    pub fn lane(instruments: usize) -> (ExposureSink, ExposureReceiver) {
+        ExposureSink::lane(RING_CAPACITY, instruments)
     }
 
     pub fn spawn(setup: ExposureWriterSetup<'_>) -> ExposureHandle {
@@ -136,10 +133,12 @@ impl ExposureWriter {
             restored,
             lane,
         } = setup;
+        let mut latest = ExposureSnapshot::for_instruments(registry.instruments().len());
+        latest.set_rows(restored.instruments().iter().copied());
         let state = WriterState {
             config: ExposureWriterConfig::new(dir, identity, mode, registry, status),
-            consumer: lane,
-            latest: seed_snapshot(restored),
+            lane,
+            latest,
             // Sequence 0 is the state already on disk. Every snapshot the hot side emits starts at
             // 1, so the first genuine change is the first write.
             written_seq: Some(0),
@@ -149,20 +148,6 @@ impl ExposureWriter {
             state.run(&drain)
         }))
     }
-}
-
-/// Restored rows as initial snapshot (excess dropped: writer wrote file, can't hold more).
-fn seed_snapshot(restored: &ExposureState) -> ExposureSnapshot {
-    let mut snapshot = ExposureSnapshot::EMPTY;
-    for (slot, exposure) in snapshot
-        .instruments
-        .iter_mut()
-        .zip(restored.instruments().iter())
-    {
-        *slot = *exposure;
-    }
-    snapshot.len = restored.instruments().len().min(MAX_EXPOSURE_INSTRUMENTS) as u8;
-    snapshot
 }
 
 pub struct ExposureHandle(WriterThread<ExposureError>);
@@ -184,7 +169,7 @@ impl ExposureHandle {
 
 struct WriterState {
     config: ExposureWriterConfig,
-    consumer: Consumer<ExposureSnapshot>,
+    lane: ExposureReceiver,
     latest: ExposureSnapshot,
     /// Sequence of last write (None until first, so static position still writes once).
     written_seq: Option<u64>,
@@ -233,9 +218,7 @@ impl WriterState {
 
     /// Keep only newest snapshot (earlier = same state, old time; writing all = unnecessary fsyncs).
     fn take_latest(&mut self) {
-        while let Ok(snapshot) = self.consumer.pop() {
-            self.latest = snapshot;
-        }
+        while self.lane.pop_into(&mut self.latest) {}
     }
 
     fn write_if_changed(&mut self) -> Result<(), ExposureError> {

@@ -55,11 +55,8 @@ pub fn identity() -> RunIdentity {
 }
 
 pub fn snapshot(seq: u64, rows: &[InstrumentExposure]) -> ExposureSnapshot {
-    let mut snapshot = ExposureSnapshot::EMPTY;
-    for (slot, row) in snapshot.instruments.iter_mut().zip(rows) {
-        *slot = *row;
-    }
-    snapshot.len = rows.len() as u8;
+    let mut snapshot = ExposureSnapshot::for_instruments(rows.len());
+    snapshot.set_rows(rows.iter().copied());
     snapshot.seq = seq;
     snapshot.exposure_quote = 999_999;
     snapshot.emitted_ts_us = LocalTs::from_micros(1_700_000_000_000_000);
@@ -94,7 +91,7 @@ pub fn write_from(
 ) {
     let (handle, mut sink) = spawn_live_writer(dir, registry, restored);
     for snapshot in snapshots {
-        sink.push(*snapshot);
+        sink.push(snapshot);
     }
     // Standing in for the hot thread ending: the sink's destructor flushes what it is still holding,
     // because that snapshot is the run's final position. The boot fitness tests pin that flush directly.
@@ -117,7 +114,7 @@ pub fn spawn_reporting_writer(
     restored: &ExposureState,
     status: Option<WriterStatus>,
 ) -> (ExposureHandle, ExposureSink) {
-    let (sink, lane) = ExposureWriter::lane();
+    let (sink, lane) = ExposureWriter::lane(registry.instruments().len());
     let handle = ExposureWriter::spawn(ExposureWriterSetup {
         dir: dir.to_path_buf(),
         identity: identity(),

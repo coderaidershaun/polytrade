@@ -30,7 +30,6 @@ use engine::runtime::config::{
     BinanceMarket, Instruments, IntensitySpec, KlineInterval, PolySeries, RecordedTables,
     StrategySpec, Subscriptions, TableKind, TrackerSpec, VenueMarket,
 };
-use engine::runtime::exposure::ExposureSnapshot;
 use engine::runtime::metrics::{SampleProducers, SinkKind};
 use engine::runtime::registry::InstrumentRow;
 use engine::runtime::shutdown::RunControlGate;
@@ -38,10 +37,10 @@ use engine::venues::exec::open_orders_snapshot_end;
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::engine_support::{
-    ONE, account_chunk, book_reset, delta_chunk, detached_setup, engine_view, exec_event,
-    exposure_ring, idle_at, instrument_row, kline, persist_ring_for, recorder_feature_id,
-    recorder_spec, rotation, run_control, running_at, snapshot_pair, spin, strategy_log_ring,
-    tracker_spec_all, trade, ts, ui_book_ring, ui_event_ring,
+    ExposureLane, ONE, account_chunk, book_reset, delta_chunk, detached_setup, engine_view,
+    exec_event, exposure_ring, idle_at, instrument_row, kline, persist_ring_for,
+    recorder_feature_id, recorder_spec, rotation, run_control, running_at, snapshot_pair, spin,
+    strategy_log_ring, tracker_spec_all, trade, ts, ui_book_ring, ui_event_ring,
 };
 use crate::hot::driver::{Shipped, exec_settings, readiness};
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
@@ -470,6 +469,10 @@ impl Case {
 }
 
 const OUTPUT_RING: usize = 65_536;
+
+/// The pool of the exposure lane holds a snapshot with room for each instrument for each slot of
+/// its ring. A message publishes one snapshot at most, and the readers drain after each step.
+const EXPOSURE_RING: usize = 64;
 
 /// The stage sample ring is read only in the first half of the window, so it is full in the second.
 const STAGE_RING: u64 = 4_096;
@@ -1060,7 +1063,7 @@ struct Readers {
     commands: Consumer<ExecLaneItem>,
     ui_books: Consumer<UiBookSnapshot>,
     ui_events: Consumer<UiEvent>,
-    exposure: Consumer<ExposureSnapshot>,
+    exposure: ExposureLane,
     strategy_log: Consumer<HotRecord>,
     strategy_log_drops: Arc<AtomicU64>,
     link: Consumer<OutboundLink>,
@@ -1082,7 +1085,7 @@ fn armed_at_capacity(case: Case, rows: &[InstrumentRow], stamper: Stamper) -> (H
     let strategy_log_drops = strategy_log_sink.drops_handle();
     let (ui_book_sink, ui_books) = ui_book_ring(OUTPUT_RING);
     let (ui_event_sink, ui_events) = ui_event_ring(OUTPUT_RING);
-    let (exposure_sink, exposure) = exposure_ring(OUTPUT_RING);
+    let (exposure_sink, exposure) = exposure_ring(EXPOSURE_RING, rows.len());
     let (command_producer, commands) = RingBuffer::<ExecLaneItem>::new(OUTPUT_RING);
     let (link_producer, link) = RingBuffer::<OutboundLink>::new(OUTPUT_RING);
     let control = RunControlGate::new();
@@ -1187,7 +1190,7 @@ impl Readers {
             std::hint::black_box(snapshot);
         }
         drain_ui_kinds(&mut self.ui_events, &mut window.tees);
-        while let Ok(snapshot) = self.exposure.pop() {
+        while let Some(snapshot) = self.exposure.pop() {
             std::hint::black_box(snapshot);
         }
         while let Ok(record) = self.strategy_log.pop() {

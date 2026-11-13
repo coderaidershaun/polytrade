@@ -11,7 +11,7 @@ mod telemetry;
 mod ui_emit;
 
 use derived::Derived;
-use exposure::{moves_position, restored_snapshot, warn_uncovered_instruments};
+use exposure::{moves_position, restored_snapshot};
 use gate::MarketGates;
 
 use crate::hot::book::Book;
@@ -31,7 +31,7 @@ use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{FoldTime, LocalTs};
 use crate::msg::ui::{DomQuote, UI_QUOTE_LEVELS};
 use crate::runtime::config::RecordedTables;
-use crate::runtime::exposure::{ExposureSnapshot, MAX_EXPOSURE_INSTRUMENTS};
+use crate::runtime::exposure::ExposureSnapshot;
 use crate::runtime::shutdown::RunStateCell;
 
 pub use digest::StateDigest;
@@ -122,9 +122,6 @@ impl HotEngine {
             exec,
             exposure,
         } = setup;
-        if instruments.len() > MAX_EXPOSURE_INSTRUMENTS {
-            warn_uncovered_instruments(instruments.len());
-        }
         let (books, trackers, ewma) = per_instrument_state(instruments);
         let declarations = Declarations::resolve(strategy.as_mut(), instruments);
         let (persist_sink, tables) = match persistence {
@@ -145,7 +142,7 @@ impl HotEngine {
                     exposure.restored,
                 ),
                 exposure: exposure.sink,
-                published_exposure: restored_snapshot(exposure.restored),
+                published_exposure: restored_snapshot(instruments.len(), exposure.restored),
                 spin_seq: 0,
                 fold_time: FoldTime::BEFORE_FIRST,
                 gates: MarketGates::new(warmup, instruments.len()),

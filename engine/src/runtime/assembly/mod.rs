@@ -319,7 +319,7 @@ impl Engine {
 
         let instruments = registry.instruments().to_vec();
         let restored = restored_exposure.instruments().to_vec();
-        let (exposure_sink, exposure_lane) = ExposureWriter::lane();
+        let (exposure_sink, exposure_lane) = ExposureWriter::lane(instruments.len());
         let warmup = DurationUs::from_secs(config.engine.warmup_secs as i64);
         let HotBringUp {
             thread: hot,
