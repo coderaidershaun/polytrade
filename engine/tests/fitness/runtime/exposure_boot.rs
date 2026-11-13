@@ -25,7 +25,7 @@ use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetu
 use engine::hot::exec::{DesiredQuote, ExecSettings, QuoteLevel};
 use engine::hot::sink::{ExecSink, ExposureSink};
 use engine::hot::strategy::{Strategy, StrategyCtx};
-use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle};
+use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem};
 use engine::msg::ids::{ClientOrderId, InstrumentId, Notional, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::Stamper;
@@ -75,7 +75,6 @@ impl Strategy for TwoSidedQuoter {
             Some(DesiredQuote {
                 price: bid.price,
                 qty,
-                style: OrderStyle::PostOnly,
             }),
         );
         ctx.quote(
@@ -85,7 +84,6 @@ impl Strategy for TwoSidedQuoter {
             Some(DesiredQuote {
                 price: ask.price,
                 qty,
-                style: OrderStyle::PostOnly,
             }),
         );
     }

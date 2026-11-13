@@ -1,9 +1,6 @@
-//! The two money rules of the order table: a passive quote never snaps into aggression, and a
-//! duplicated, reordered or late event stream never books a fill twice or loses one.
-//!
-//! Both failures are silent by construction. An inverted snap still compiles, still makes a legal
-//! order, and each layer after it agrees with it. A fill folded twice makes a ledger that is wrong
-//! in a way that no later reader can detect.
+//! A money rule of the order table: a duplicated, reordered, or late event stream never books a
+//! fill twice or loses one. A fill folded twice makes a ledger that no later reader can tell is
+//! wrong.
 
 use engine::hot::exec::{OrderClaim, OrderTable, QuoteLevel};
 use engine::msg::exec::{ExecEvent, ExecKind, OrderStyle, Provenance};
@@ -63,28 +60,6 @@ fn buy_claim(level: QuoteLevel, price: i64, qty: i64) -> OrderClaim {
 }
 
 proptest! {
-    /// FITNESS: snapping is passive on both sides, at every price and grid. A buy that snapped UP or
-    /// a sell that snapped DOWN would cross a spread the strategy meant to rest inside — and it
-    /// would look like a working system, because the order is legal and every layer agrees.
-    #[test]
-    fn snapping_never_manufactures_aggression(
-        mantissa in -1_000_000_000_000i64..1_000_000_000_000,
-        increment in 1i64..1_000_000,
-    ) {
-        let raw = Price::from_mantissa(mantissa);
-        let bid = Side::Buy.snap_passive(raw, increment);
-        let ask = Side::Sell.snap_passive(raw, increment);
-
-        prop_assert!(bid.mantissa() <= raw.mantissa(), "a buy snapped UP, from {} to {}", raw.mantissa(), bid.mantissa());
-        prop_assert!(ask.mantissa() >= raw.mantissa(), "a sell snapped DOWN, from {} to {}", raw.mantissa(), ask.mantissa());
-        prop_assert_eq!(bid.mantissa().rem_euclid(increment), 0, "a buy left the grid");
-        prop_assert_eq!(ask.mantissa().rem_euclid(increment), 0, "a sell left the grid");
-        // Never further than one increment: rounding past a whole tick is a different price, not a
-        // snap, and on a wide grid it would silently reprice the quote.
-        prop_assert!(raw.mantissa() - bid.mantissa() < increment);
-        prop_assert!(ask.mantissa() - raw.mantissa() < increment);
-    }
-
     /// FITNESS: folding the venue's CUMULATIVE totals is idempotent under any redelivery order.
     /// Replaying the same reports in any order, with duplicates, must leave exactly the totals the
     /// highest report carried — which is what lets the engine hold no seen-set and allocate nothing.

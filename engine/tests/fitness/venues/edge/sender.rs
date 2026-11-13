@@ -65,7 +65,6 @@ impl Strategy for OneBid {
             Some(DesiredQuote {
                 price: bid.price,
                 qty: QUOTE_QTY,
-                style: OrderStyle::PostOnly,
             }),
         );
     }

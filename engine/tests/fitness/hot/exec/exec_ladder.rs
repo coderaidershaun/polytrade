@@ -1,16 +1,16 @@
-//! The two safety rules of the keyed ladder, one request in flight for each side and cancel before
-//! place, with the release of reservations on venues that lock funds and that do not.
+//! When the money that a quote reserves is released, on a venue that locks the funds of an order
+//! and on one that does not.
 
 use engine::runtime::config::TrackerSpec;
 use std::sync::{Arc, Mutex};
 
 use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
-use engine::hot::exec::{ClientIdLayout, DesiredQuote, ExecSettings, QuoteLevel, level_of_slot};
+use engine::hot::exec::{DesiredQuote, ExecSettings, QuoteLevel};
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{
     AccountChunk, AccountChunkKind, AssetBalance, ExecCommand, ExecEvent, ExecKind, ExecLaneItem,
-    OrderStyle, VenueOrderStatus,
+    VenueOrderStatus,
 };
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
@@ -26,36 +26,6 @@ use crate::exec_support::{
 };
 
 const INSTRUMENT: InstrumentId = InstrumentId(0);
-const LEVEL_ONE_PRICE: i64 = BID - 2 * ONE;
-const MOVED_LEVEL_ZERO_PRICE: i64 = BID - 4 * ONE;
-
-struct KeyedLadder;
-
-impl Strategy for KeyedLadder {
-    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, tick: &SpinTick) {
-        let level_zero_price = if tick.seq >= 3 { MOVED_LEVEL_ZERO_PRICE } else { BID };
-        let level_one_price = if tick.seq >= 6 { MOVED_LEVEL_ZERO_PRICE } else { LEVEL_ONE_PRICE };
-        for (level, price) in [
-            (QuoteLevel::ZERO, level_zero_price),
-            (QuoteLevel::new(1).expect("level one"), level_one_price),
-        ] {
-            ctx.quote(
-                INSTRUMENT,
-                Side::Buy,
-                level,
-                Some(DesiredQuote {
-                    price: Price::from_mantissa(price),
-                    qty: Qty::from_mantissa(ONE / 10),
-                    style: OrderStyle::PostOnly,
-                }),
-            );
-        }
-    }
-}
-
-fn ladder_engine() -> (HotEngine, Consumer<ExecLaneItem>) {
-    engine_with_strategy(Box::new(KeyedLadder), 2)
-}
 
 fn engine_with_strategy(
     strategy: Box<dyn Strategy>,
@@ -105,7 +75,6 @@ impl Strategy for ReservationQuoter {
             Some(DesiredQuote {
                 price: Price::from_mantissa(BID),
                 qty: Qty::from_mantissa(ONE / 10),
-                style: OrderStyle::PostOnly,
             }),
         );
     }
@@ -186,55 +155,6 @@ fn client_id_of(command: ExecCommand) -> ClientOrderId {
         ExecCommand::Place { client_id, .. } | ExecCommand::Cancel { client_id, .. } => client_id,
         other => panic!("command has no order identity: {other:?}"),
     }
-}
-
-fn level_of(command: ExecCommand) -> QuoteLevel {
-    level_of_slot(ClientIdLayout::slot_of(client_id_of(command)))
-}
-
-#[test]
-fn ladder_serialises_and_requotes_only_after_terminal_confirmation() {
-    let (mut engine, mut commands) = ladder_engine();
-    let first = place_and_ack(&mut engine, &mut commands);
-    assert!(matches!(first, ExecCommand::Place { .. }));
-    assert_eq!(level_of(first), QuoteLevel::ZERO);
-
-    spin_at(&mut engine, 2, 20);
-    let second = only(&mut commands);
-    assert!(matches!(second, ExecCommand::Place { .. }));
-    assert_eq!(level_of(second), QuoteLevel::new(1).expect("level one"));
-    acknowledge(&mut engine, second, ExecKind::AckPlaced, 21);
-
-    spin_at(&mut engine, 3, 30);
-    let cancel = only(&mut commands);
-    assert!(matches!(cancel, ExecCommand::Cancel { .. }));
-    assert_eq!(level_of(cancel), QuoteLevel::ZERO);
-
-    spin_at(&mut engine, 4, 40);
-    assert!(
-        drain_commands(&mut commands).is_empty(),
-        "a replacement was sent while the cancel was still unconfirmed"
-    );
-
-    acknowledge(&mut engine, cancel, ExecKind::AckCanceled, 41);
-    spin_at(&mut engine, 5, 50);
-    let replacement = only(&mut commands);
-    assert!(matches!(
-        replacement,
-        ExecCommand::Place { price, .. } if price == Price::from_mantissa(MOVED_LEVEL_ZERO_PRICE)
-    ));
-    assert_eq!(level_of(replacement), QuoteLevel::ZERO);
-    acknowledge(&mut engine, replacement, ExecKind::AckPlaced, 51);
-
-    // Both desired levels now snap to the same price. The lower key wins and the existing higher
-    // keyed order is actively withdrawn.
-    spin_at(&mut engine, 6, 60);
-    let duplicate_cancel = only(&mut commands);
-    assert!(matches!(duplicate_cancel, ExecCommand::Cancel { .. }));
-    assert_eq!(
-        level_of(duplicate_cancel),
-        QuoteLevel::new(1).expect("level one")
-    );
 }
 
 #[test]

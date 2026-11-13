@@ -3,18 +3,19 @@
 //! declaration is an order that nobody asked for, and nothing downstream can tell it apart.
 
 use std::cell::Cell;
+use std::sync::{Arc, Mutex};
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::exec::{
-    BookTop, ClientIdLayout, CloseReason, DesiredQuote, ExecLimits, ExecSettings, FundsView,
-    OrderState, PlaceIntent, QuoteLevel, ReconcileInput, ReconcileOutcome, RejectReason,
+    BookTop, ClientIdLayout, CloseReason, DesiredQuote, ExecLimits, ExecSettings, FeeModel,
+    FundsView, OrderState, PlaceIntent, QuoteLevel, ReconcileInput, ReconcileOutcome, RejectReason,
     RestingOrder, TickGrid, level_of_slot, reconcile_side,
 };
 use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, VenueOrderStatus,
 };
-use engine::msg::ids::{ClientOrderId, Notional, Price, Qty, Side};
+use engine::msg::ids::{AssetId, ClientOrderId, FIXED_SCALE, Notional, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::{DurationUs, LocalTs};
 use engine::msg::ui::UiEvent;
@@ -25,10 +26,13 @@ use proptest::strategy::{Just, Strategy as Generator};
 use proptest::test_runner::{Config, TestCaseError, TestRunner};
 use rtrb::Consumer;
 
-use crate::engine_support::{ALL_TABLES, ONE, exec_event, instrument_row, rich, top, ts};
+use crate::engine_support::{
+    ALL_TABLES, FillPen, ONE, account_chunk, exec_event, instrument_row, rich, snapshot_pair,
+    stream_ready, top, ts,
+};
 use crate::exec_support::{
-    ASK, BID, INSTRUMENT, QuotingEngine, QuotingSetup, built_quoting_engine, drain_commands,
-    exec_settings, make_ready, reseat_book, spin_at,
+    ASK, BID, CEILING, INSTRUMENT, QuotingEngine, QuotingSetup, built_quoting_engine,
+    drain_commands, exec_settings, make_ready, open_orders_snapshot, reseat_book, spin_at,
 };
 
 /// The grid of the named cases: a tick of a hundredth of a unit and a lot of 1e-5.
@@ -60,7 +64,6 @@ fn want(price: i64, qty: i64) -> Option<DesiredQuote> {
     Some(DesiredQuote {
         price: Price::from_mantissa(price),
         qty: Qty::from_mantissa(qty),
-        style: OrderStyle::PostOnly,
     })
 }
 
@@ -136,9 +139,10 @@ fn emits_command(outcome: ReconcileOutcome) -> bool {
 /// a size only shrinks, a price inside the requote band sends nothing, a shrink past the amend
 /// budget cancels first, a crossing quote is refused with the resting order left alone, and a book
 /// that cannot be used withdraws. The named cases, the two recorded seeds, and the ladder of an
-/// engine hold their values.
+/// engine hold their values, and a quote holds a price and a size only.
 #[test]
 fn emitted_quote_never_crosses_and_settles_in_two_commands() {
+    a_quote_is_a_price_and_a_size();
     crossing_and_unusable_books();
     recorded_seeds();
     ladder_withdraws_before_it_places();
@@ -175,6 +179,19 @@ fn outcome_kind(outcome: ReconcileOutcome) -> usize {
         ReconcileOutcome::AmendQty(_) => 3,
         ReconcileOutcome::Reject(_) => 4,
     }
+}
+
+/// A strategy cannot ask a quote to take liquidity: a quote has no field that could say so. This
+/// destructure names each field, so a new one, such as an order style, fails the build here.
+fn a_quote_is_a_price_and_a_size() {
+    let DesiredQuote { price, qty } = want(passive(Side::Buy), ONE).expect("declared");
+    assert_eq!(
+        (price, qty),
+        (
+            Price::from_mantissa(passive(Side::Buy)),
+            Qty::from_mantissa(ONE)
+        )
+    );
 }
 
 fn crossing_and_unusable_books() {
@@ -712,6 +729,351 @@ fn answer(engine: &mut HotEngine, order: (ClientOrderId, Side), kind: ExecKind, 
             ..exec_event(INSTRUMENT, client_id, side, 0, when)
         }),
     ));
+}
+
+/// A trade of `qty` at `price` that fills the order whole, or in part when `status` says so.
+fn trade(
+    client_id: ClientOrderId,
+    side: Side,
+    order_qty: Qty,
+    fill: (Price, Qty),
+    status: VenueOrderStatus,
+    when: i64,
+) -> InboundMessage {
+    let (price, qty) = fill;
+    InboundMessage::new(
+        ts(when),
+        MessageBody::Exec(ExecEvent {
+            kind: ExecKind::ReportTrade,
+            status: Some(status),
+            qty: order_qty,
+            last_price: price,
+            last_qty: qty,
+            cumulative_qty: qty,
+            cumulative_quote: price.notional(qty),
+            ..exec_event(INSTRUMENT, client_id, side, price.mantissa(), when)
+        }),
+    )
+}
+
+const GET_FLAT_SPIN: u64 = 9;
+const HALF: Qty = Qty::from_mantissa(ONE / 2);
+
+/// Holds a bid and an offer of half a unit. From spin 9 it still quotes the bid, then asks to
+/// get flat. It keeps the position that it reads at each spin.
+struct Exiter {
+    positions: Arc<Mutex<Vec<Qty>>>,
+}
+
+impl Strategy for Exiter {
+    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, tick: &SpinTick) {
+        let position = ctx.position_base(INSTRUMENT);
+        self.positions.lock().expect("positions").push(position);
+        ctx.quote(
+            INSTRUMENT,
+            Side::Buy,
+            QuoteLevel::ZERO,
+            want(BID, HALF.mantissa()),
+        );
+        if tick.seq >= GET_FLAT_SPIN {
+            ctx.flatten(INSTRUMENT);
+            return;
+        }
+        ctx.quote(
+            INSTRUMENT,
+            Side::Sell,
+            QuoteLevel::ZERO,
+            want(ASK, HALF.mantissa()),
+        );
+    }
+}
+
+/// CONTRACT: a market that gets flat holds no quote. Its resting quotes are cancelled in the spin
+/// that declares it, the marketable order goes out once the side is free, and a partial fill sends
+/// what is left in the next spin. A quote left resting while the engine sells out of a position
+/// can fill and open the position again.
+#[test]
+fn get_flat_withdraws_each_quote_of_its_market() {
+    let positions = Arc::new(Mutex::new(Vec::new()));
+    let QuotingEngine {
+        mut engine,
+        mut commands,
+        ..
+    } = quoting_engine(
+        instrument_row(0, TrackerSpec::default(), 64),
+        Box::new(Exiter {
+            positions: Arc::clone(&positions),
+        }),
+        exec_settings(),
+    );
+    make_ready(&mut engine, 0);
+    for message in reseat_book(BID, ASK, 1) {
+        engine.dispatch(&message);
+    }
+    let (bid, ask) = long_half_with_two_quotes(&mut engine, &mut commands);
+    for seq in 3..GET_FLAT_SPIN {
+        spin_at(&mut engine, seq, 10 * seq as i64);
+        assert!(
+            drain_commands(&mut commands).is_empty(),
+            "spin {seq} sent a command"
+        );
+    }
+
+    spin_at(&mut engine, GET_FLAT_SPIN, 90);
+    let sent = drain_commands(&mut commands);
+    let cancelled: Vec<ClientOrderId> = sent
+        .iter()
+        .filter_map(|command| match command {
+            ExecCommand::Cancel { client_id, .. } => Some(*client_id),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        sent.len() == 2 && cancelled.contains(&bid) && cancelled.contains(&ask),
+        "getting flat cancels the bid and the ask in its spin, and sends no marketable order \
+         while the offer still rests: {sent:?}"
+    );
+    for order in [(bid, Side::Buy), (ask, Side::Sell)] {
+        answer(&mut engine, order, ExecKind::AckCanceled, 95);
+    }
+
+    spin_at(&mut engine, GET_FLAT_SPIN + 1, 100);
+    let take = only(&mut commands);
+    let ExecCommand::Place {
+        side: Side::Sell,
+        qty,
+        style: OrderStyle::Immediate,
+        client_id,
+        ..
+    } = take
+    else {
+        panic!("getting flat from a long sends one marketable sell, got {take:?}");
+    };
+    assert_eq!(qty, HALF, "the whole position");
+    engine.dispatch(&trade(
+        client_id,
+        Side::Sell,
+        HALF,
+        (Price::from_mantissa(BID), HALF),
+        VenueOrderStatus::Filled,
+        105,
+    ));
+
+    spin_at(&mut engine, GET_FLAT_SPIN + 2, 110);
+    assert!(
+        drain_commands(&mut commands).is_empty(),
+        "a flat market that gets flat sends nothing, and quotes nothing"
+    );
+    let positions = positions.lock().expect("positions");
+    assert_eq!(
+        positions.last(),
+        Some(&Qty::from_mantissa(0)),
+        "{positions:?}"
+    );
+
+    flatten_values_hold();
+}
+
+/// Spin 1 places a bid and an offer of half a unit. The bid fills whole, and spin 2 places it
+/// again. Gives the client ids of the bid and the offer that rest.
+fn long_half_with_two_quotes(
+    engine: &mut HotEngine,
+    commands: &mut Consumer<ExecLaneItem>,
+) -> (ClientOrderId, ClientOrderId) {
+    spin_at(engine, 1, 10);
+    let placed = drain_commands(commands);
+    assert_eq!(placed.len(), 2, "a bid and an offer: {placed:?}");
+    let side_of = |command: &ExecCommand| match command {
+        ExecCommand::Place { side, .. } => *side,
+        other => panic!("expected a placement, got {other:?}"),
+    };
+    for command in &placed {
+        answer(
+            engine,
+            (client_id_of(*command), side_of(command)),
+            ExecKind::AckPlaced,
+            11,
+        );
+    }
+    let first_bid = placed.iter().find(|command| side_of(command) == Side::Buy);
+    let ask = placed.iter().find(|command| side_of(command) == Side::Sell);
+    let (Some(first_bid), Some(ask)) = (first_bid, ask) else {
+        panic!("expected a bid and an offer: {placed:?}");
+    };
+    engine.dispatch(&trade(
+        client_id_of(*first_bid),
+        Side::Buy,
+        HALF,
+        (Price::from_mantissa(BID), HALF),
+        VenueOrderStatus::Filled,
+        15,
+    ));
+
+    spin_at(engine, 2, 20);
+    let bid = only(commands);
+    assert!(matches!(
+        bid,
+        ExecCommand::Place {
+            side: Side::Buy,
+            ..
+        }
+    ));
+    answer(
+        engine,
+        (client_id_of(bid), Side::Buy),
+        ExecKind::AckPlaced,
+        21,
+    );
+    (client_id_of(bid), client_id_of(*ask))
+}
+
+/// A polymarket-shaped grid: prices are probabilities on a 0.01 tick, sizes are shares to two
+/// decimals, and the venue refuses anything below five shares or above `1 − tick`.
+const POLY_TICK: i64 = FIXED_SCALE / 100;
+const SHARE_STEP: i64 = FIXED_SCALE / 100;
+const MIN_SHARES: Qty = Qty::from_mantissa(5 * FIXED_SCALE);
+const MAX_PRICE: Price = Price::from_mantissa(FIXED_SCALE - POLY_TICK);
+const POLY_BID: i64 = 40 * POLY_TICK;
+const POLY_ASK: i64 = 42 * POLY_TICK;
+const SLACK_TICKS: u32 = 2;
+
+/// Gets flat at each spin while `is_declaring`, and quotes nothing.
+struct Flattener {
+    is_declaring: bool,
+}
+
+impl Strategy for Flattener {
+    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
+        if self.is_declaring {
+            ctx.flatten(INSTRUMENT);
+        }
+    }
+}
+
+/// On a share market long ten shares: one take of all ten in a spin, nothing once the strategy
+/// stops asking, and after four of ten trade, a take of the six that are left in the next spin.
+fn flatten_values_hold() {
+    let ten = Qty::from_mantissa(10 * FIXED_SCALE);
+    let (mut engine, mut commands) = long_ten_shares(Flattener { is_declaring: true });
+    spin_at(&mut engine, 1, 30);
+    let takes = placements(&drain_commands(&mut commands));
+    assert_eq!(takes.len(), 1, "one take a spin: {takes:?}");
+    assert_eq!(
+        takes[0].0,
+        (Side::Sell, ten, OrderStyle::Immediate),
+        "a long is closed by one marketable sell of all of it"
+    );
+
+    let (mut engine, mut commands) = long_ten_shares(Flattener {
+        is_declaring: false,
+    });
+    spin_at(&mut engine, 1, 30);
+    assert!(
+        placements(&drain_commands(&mut commands)).is_empty(),
+        "the same position with nothing declared sends nothing"
+    );
+
+    let (mut engine, mut commands) = long_ten_shares(Flattener { is_declaring: true });
+    spin_at(&mut engine, 1, 30);
+    let client_id = placements(&drain_commands(&mut commands))[0].1;
+    let price = Price::from_mantissa(POLY_BID - i64::from(SLACK_TICKS) * POLY_TICK);
+    let four = Qty::from_mantissa(4 * FIXED_SCALE);
+    let partial = VenueOrderStatus::PartiallyFilled;
+    engine.dispatch(&trade(
+        client_id,
+        Side::Sell,
+        ten,
+        (price, four),
+        partial,
+        40,
+    ));
+    engine.dispatch(&InboundMessage::new(
+        ts(41),
+        MessageBody::Exec(ExecEvent {
+            kind: ExecKind::ReportExpired,
+            status: Some(VenueOrderStatus::Expired),
+            qty: ten,
+            cumulative_qty: four,
+            cumulative_quote: price.notional(four),
+            ..exec_event(INSTRUMENT, client_id, Side::Sell, price.mantissa(), 41)
+        }),
+    ));
+    drain_commands(&mut commands);
+    spin_at(&mut engine, 2, 50);
+    let rest = placements(&drain_commands(&mut commands));
+    assert_eq!(rest.len(), 1, "the rest still wants closing: {rest:?}");
+    assert_eq!(
+        (rest[0].0).1,
+        Qty::from_mantissa(6 * FIXED_SCALE),
+        "six shares are left"
+    );
+}
+
+/// Each placement, with its client id.
+fn placements(commands: &[ExecCommand]) -> Vec<((Side, Qty, OrderStyle), ClientOrderId)> {
+    commands
+        .iter()
+        .filter_map(|command| match *command {
+            ExecCommand::Place {
+                side,
+                qty,
+                style,
+                client_id,
+                ..
+            } => Some(((side, qty, style), client_id)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A share market with a binary-outcome taker fee, long ten shares bought at 0.41 through the
+/// real inbound path, with a share balance far past what any case sells.
+fn long_ten_shares(strategy: Flattener) -> (HotEngine, Consumer<ExecLaneItem>) {
+    let row = InstrumentRow {
+        tick_size: Some(Price::from_mantissa(POLY_TICK)),
+        lot_size: Some(Qty::from_mantissa(SHARE_STEP)),
+        min_qty: Some(MIN_SHARES),
+        max_num_orders: Some(32),
+        max_num_order_amends: Some(0),
+        max_price: Some(MAX_PRICE),
+        max_exposure_quote: Notional::from_mantissa(CEILING),
+        ..instrument_row(0, TrackerSpec::default(), 64)
+    };
+    let settings = ExecSettings {
+        flatten_slack_ticks: SLACK_TICKS,
+        fee_model: FeeModel::BinaryOutcome,
+        taker_fee_rate: 7 * FIXED_SCALE / 100,
+        ..exec_settings()
+    };
+    let QuotingEngine {
+        mut engine,
+        mut commands,
+        ..
+    } = quoting_engine(row, Box::new(strategy), settings);
+    engine.dispatch(&stream_ready(INSTRUMENT, 0));
+    let shares = [
+        (AssetId(0), 10_000 * FIXED_SCALE),
+        (AssetId(1), 10_000 * FIXED_SCALE),
+    ];
+    engine.dispatch(&InboundMessage::new(
+        ts(0),
+        MessageBody::Account(account_chunk(&shares, 0)),
+    ));
+    open_orders_snapshot(&mut engine, 0);
+    let (bids, asks) = snapshot_pair(
+        0,
+        &[(POLY_BID, 100 * FIXED_SCALE)],
+        &[(POLY_ASK, 100 * FIXED_SCALE)],
+        10,
+    );
+    engine.dispatch(&InboundMessage::new(ts(10), MessageBody::Book(bids)));
+    engine.dispatch(&InboundMessage::new(ts(10), MessageBody::Book(asks)));
+    let mut pen = FillPen::new(0);
+    for message in pen.fill(Side::Buy, 41 * POLY_TICK, 10 * FIXED_SCALE, 20) {
+        engine.dispatch(&message);
+    }
+    drain_commands(&mut commands);
+    (engine, commands)
 }
 
 /// Bids one unit at 100 in spin 4 only.

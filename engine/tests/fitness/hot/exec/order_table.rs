@@ -500,7 +500,6 @@ fn shrink_to(qty: i64) -> Option<DesiredQuote> {
     Some(DesiredQuote {
         price: Price::from_mantissa(PASSIVE_BUY),
         qty: Qty::from_mantissa(qty),
-        style: OrderStyle::PostOnly,
     })
 }
 
