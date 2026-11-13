@@ -189,7 +189,7 @@ impl MetricsRun {
             clock,
         )
         .context("the harness cannot start the engine's log")?;
-        let stamper = Stamper::Counter(quanta::Clock::new());
+        let stamper = clock::counter_stamper();
         let scale = clock::first_scale(&stamper, clock);
         let clock_source = ClockSource::check(InvariantCounter::detect())
             .unwrap_or_else(|refusal| refusal.fallback());

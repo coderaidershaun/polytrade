@@ -161,15 +161,16 @@ fn stands_alone(code: &str, at: usize, word: &str) -> bool {
     !(is_glued_before || is_glued_after)
 }
 
-/// The code of a Rust source with each comment, string and character literal removed, so the words
-/// of a log template or a doc line are never read as code.
-fn without_comments_and_literals(source: &str) -> String {
+/// The code of a Rust source with each comment, string and character literal blanked out, so the
+/// words of a log template or a doc line are never read as code. Each blanked character becomes a
+/// space and each line break stays, so an offset into the code is an offset into the source.
+pub(super) fn without_comments_and_literals(source: &str) -> String {
     let characters: Vec<char> = source.chars().collect();
     let mut code = String::with_capacity(source.len());
     let mut index = 0;
     while index < characters.len() {
         let rest = &characters[index..];
-        index += match rest {
+        let blanked = match rest {
             ['/', '/', ..] => rest
                 .iter()
                 .take_while(|&&character| character != '\n')
@@ -181,10 +182,18 @@ fn without_comments_and_literals(source: &str) -> String {
             ['\'', _, '\'', ..] => 3,
             [character, ..] => {
                 code.push(*character);
-                1
+                index += 1;
+                continue;
             }
             [] => unreachable!("the loop stops at the end of the source"),
         };
+        let blanked = blanked.min(rest.len());
+        code.extend(
+            rest[..blanked]
+                .iter()
+                .map(|&character| if character == '\n' { '\n' } else { ' ' }),
+        );
+        index += blanked;
     }
     code
 }
