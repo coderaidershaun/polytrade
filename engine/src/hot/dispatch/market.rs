@@ -14,7 +14,7 @@ use super::HotEngine;
 impl HotEngine {
     pub(super) fn on_trade(&mut self, event: &TradeEvent, received_ts_us: LocalTs) {
         let index = usize::from(event.instrument.0);
-        let closed = self.state.trackers[index].on_trade(event, received_ts_us);
+        let closed = self.state.derived.trackers[index].on_trade(event, received_ts_us);
         // Tape ahead of warmup (operators see prints).
         self.ui.emit_trade(event, received_ts_us);
         if !self.state.gates.is_live(event.instrument) {
@@ -35,7 +35,7 @@ impl HotEngine {
         closed: usize,
         received_ts_us: LocalTs,
     ) {
-        let retained = self.state.trackers[index]
+        let retained = self.state.derived.trackers[index]
             .volume_bars()
             .map_or(0, |series| series.closed.len());
         let deliverable = closed.min(retained);
@@ -43,7 +43,7 @@ impl HotEngine {
             self.record_unretained_volume_bars(closed - deliverable);
         }
         for offset in (0..deliverable).rev() {
-            let bar = self.state.trackers[index]
+            let bar = self.state.derived.trackers[index]
                 .volume_bars()
                 .and_then(|series| series.closed.get(series.closed.len() - 1 - offset));
             if let Some(bar) = bar {
@@ -79,8 +79,10 @@ impl HotEngine {
         }
         // Commit boundary only (mid-update microprices decay EWMA). One-sided = None.
         if chunk.is_last_chunk && self.state.books[index].state() == BookState::Valid {
-            let microprice = self.state.trackers[index].on_book(&self.state.books[index]);
-            if let (Some(ewma), Some(microprice)) = (self.state.ewma[index].as_mut(), microprice) {
+            let microprice = self.state.derived.trackers[index].on_book(&self.state.books[index]);
+            if let (Some(ewma), Some(microprice)) =
+                (self.state.derived.ewma[index].as_mut(), microprice)
+            {
                 ewma.on_microprice(microprice);
             }
             self.mark_ledger(chunk.instrument);
@@ -130,8 +132,8 @@ impl HotEngine {
     /// Reset or implicit snapshot reset (rare).
     #[cold]
     fn reset_derived_state(&mut self, index: usize) {
-        self.state.trackers[index].on_book_reset();
-        if let Some(ewma) = self.state.ewma[index].as_mut() {
+        self.state.derived.trackers[index].on_book_reset();
+        if let Some(ewma) = self.state.derived.ewma[index].as_mut() {
             ewma.reset_continuity();
         }
     }
@@ -148,13 +150,13 @@ impl HotEngine {
             open_ts_us: rotation.window_open_ts_us,
             close_ts_us: rotation.window_close_ts_us,
         });
-        self.state.trackers[index].on_rotation();
+        self.state.derived.trackers[index].on_rotation();
         // Before the reset, which is what erases the realised leg it carries away.
         self.state
             .exec
             .on_market_rotation(&self.state.ledger, rotation.instrument);
         self.state.ledger.reset_instrument(rotation.instrument);
-        if let Some(ewma) = self.state.ewma[index].as_mut() {
+        if let Some(ewma) = self.state.derived.ewma[index].as_mut() {
             ewma.reset();
         }
         // Refresh UI (re-stamps identity). Ahead of warmup.
@@ -170,7 +172,7 @@ impl HotEngine {
 
     pub(super) fn on_kline(&mut self, event: &KlineEvent, received_ts_us: LocalTs) {
         let index = usize::from(event.instrument.0);
-        self.state.trackers[index].on_kline(event);
+        self.state.derived.trackers[index].on_kline(event);
         if !self.state.gates.is_live(event.instrument) {
             return;
         }

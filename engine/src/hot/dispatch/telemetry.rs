@@ -33,6 +33,7 @@ impl HotEngine {
 
     fn intensity_counts_sum(&self, metric: fn(&IntensityCounts) -> u64) -> u64 {
         self.state
+            .derived
             .trackers
             .iter()
             .filter_map(MicroTracker::intensity)
@@ -53,6 +54,7 @@ impl HotEngine {
                 .sum(),
             klines_unconfigured: self
                 .state
+                .derived
                 .trackers
                 .iter()
                 .map(MicroTracker::unconfigured_kline_count)

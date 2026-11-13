@@ -1,6 +1,7 @@
 //! The body of the hot loop: each message updates state, calls the strategy back, drains the
 //! actions and runs the execution pass. It reads no clock, so state depends on messages alone.
 
+mod derived;
 mod digest;
 mod exposure;
 mod gate;
@@ -9,6 +10,7 @@ mod setup;
 mod telemetry;
 mod ui_emit;
 
+use derived::Derived;
 use exposure::{moves_position, restored_snapshot, warn_uncovered_instruments};
 use gate::MarketGates;
 
@@ -16,10 +18,8 @@ use crate::hot::book::Book;
 use crate::hot::dispatch::ui_emit::UiEmitter;
 use crate::hot::exec::{DesiredBook, ExecCallback, ExecEngine, HaltReason, QuoteLevel, SpinInput};
 use crate::hot::ledger::PositionLedger;
-use crate::hot::quant::volatility::EwmaVol;
 use crate::hot::sink::{ExposureSink, LinkSink, PersistSink, StrategyLogSink};
 use crate::hot::strategy::{Actions, ActionsSetup, DrainSinks, Strategy, StrategyCtx, WindowInfo};
-use crate::hot::tracker::MicroTracker;
 use crate::log::hot_error;
 use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
@@ -41,8 +41,7 @@ use setup::{Declarations, per_instrument_state};
 /// Split for borrow: callback borrows immutably, engine holds strategy mutably.
 struct HotState {
     books: Vec<Book>,
-    trackers: Vec<MicroTracker>,
-    ewma: Vec<Option<EwmaVol>>,
+    derived: Derived,
     windows: Vec<Option<WindowInfo>>,
     ledger: PositionLedger,
     /// Ledger's durable half (next boot restore).
@@ -78,8 +77,8 @@ impl HotState {
     fn ctx(&mut self, event_ts: LocalTs) -> StrategyCtx<'_> {
         StrategyCtx {
             books: &self.books,
-            trackers: &self.trackers,
-            ewma: &self.ewma,
+            trackers: &self.derived.trackers,
+            ewma: &self.derived.ewma,
             windows: &self.windows,
             ledger: &self.ledger,
             exec: &self.exec,
@@ -136,8 +135,7 @@ impl HotEngine {
         Self {
             state: HotState {
                 books,
-                trackers,
-                ewma,
+                derived: Derived { trackers, ewma },
                 windows: vec![None; instruments.len()],
                 ledger: PositionLedger::new(instruments.len(), exposure.restored),
                 exposure: exposure.sink,
@@ -287,7 +285,7 @@ impl HotEngine {
     }
 
     fn sample_trackers(&mut self) {
-        for tracker in &mut self.state.trackers {
+        for tracker in &mut self.state.derived.trackers {
             tracker.on_spin();
         }
     }
