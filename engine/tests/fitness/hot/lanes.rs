@@ -289,7 +289,7 @@ fn seal_retry_reaches_cap_then_halts() {
     assert!(
         matches!(
             halt,
-            Some(ExecHalt::Halted {
+            Some(UiHalt::Halted {
                 reason: HaltReason::SealNotAccepted,
                 ..
             })
