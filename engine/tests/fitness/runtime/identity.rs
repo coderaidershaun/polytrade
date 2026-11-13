@@ -150,7 +150,7 @@ fn nonce_file_names_and_keys_are_exact() {
 /// again. That run would mint client order ids that the venue has already seen, and the answers for
 /// an order of the earlier run would land on an order of this one. So an empty file refuses the
 /// start and stays as it is, for a person to fill in. A missing file is a first run, and each new
-/// nonce replaces the file by a rename, so a stop in the middle leaves the old nonce or the new one.
+/// nonce replaces the file by a rename, so a stop in the middle leaves the old or the new nonce.
 #[test]
 fn empty_nonce_file_refuses_start() {
     let root = TempDir::new("empty-nonce");

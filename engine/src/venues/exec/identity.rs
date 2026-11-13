@@ -22,7 +22,7 @@ impl TeTag {
         const OFFSET: u32 = 0x811c_9dc5;
         const PRIME: u32 = 0x0100_0193;
         let mut hash = OFFSET;
-        // Separator prevents ("ab", "c") and ("a", "bc") hash collision.
+        // The separator keeps ("ab", "c") and ("a", "bc") from hashing alike.
         for byte in identity
             .strategy_id
             .as_str()

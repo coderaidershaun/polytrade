@@ -1,4 +1,5 @@
-//! Durable on-disk document: temp write + fsync + atomic rename protects against kill-mid-write.
+//! The exposure file on disk: its form, the checks of its header, and its read and write. A write
+//! never leaves half a file, so a kill in the middle keeps the last position.
 
 use std::path::Path;
 
@@ -10,20 +11,21 @@ use crate::runtime::durable_file;
 
 use super::ExposureError;
 
-/// Format version; v2 added basis_quote (no migration: v1 files unrecoverable, reintroduce silent defect).
+/// Version 2 added `basis_quote`. A file of version 1 is not migrated: it has no basis, and a
+/// guessed basis would bring back a defect that nothing reports.
 pub(super) const FORMAT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ExposureDocument {
     pub(super) version: u32,
-    /// Identity (strategy + te_id) redundancy catches hand-copied/renamed files.
+    /// The ids repeat what the file name says, so a file that a person copied or renamed is caught.
     pub(super) strategy_id: String,
     pub(super) te_id: String,
     pub(super) written_ts_us: i64,
     pub(super) seq: u64,
     pub(super) fixed_scale: i64,
-    /// Load-bearing rows; below written for human only.
+    /// The rows that a load reads. The fields below them are written for a person only.
     pub(super) instruments: Vec<InstrumentEntry>,
     #[serde(default)]
     pub(super) assets: Vec<AssetEntry>,
@@ -34,11 +36,12 @@ pub(super) struct ExposureDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct InstrumentEntry {
-    /// Venue symbol, not dense id (index is wrong key).
+    /// The venue symbol, because an instrument id can change between runs.
     pub(super) symbol: String,
     pub(super) position_base: i64,
     pub(super) cash_quote: i64,
-    /// Defaulted so v1 docs parse + are refused by version check (not die as corrupt); no accepted doc uses it.
+    /// Defaulted so that a file of version 1 parses and the version check refuses it, rather than
+    /// reading as corrupt. No accepted file uses the default.
     #[serde(default)]
     pub(super) basis_quote: i64,
 }
@@ -49,7 +52,8 @@ impl InstrumentEntry {
     }
 }
 
-/// Asset entries (derived from instruments at write for human readability; load recomputes, avoids second source of truth).
+/// Totals by asset, derived from the instruments and written for a person. A load computes them
+/// again, so the file holds one source of truth.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct AssetEntry {
@@ -93,7 +97,7 @@ impl ExposureDocument {
     }
 }
 
-/// Read document; Ok(None) for missing (cold start, not fault). Errors on unreadable/malformed.
+/// `None` for a missing file: a cold start, not a fault.
 pub(super) fn read(path: &Path) -> Result<Option<ExposureDocument>, ExposureError> {
     let contents = match std::fs::read_to_string(path) {
         Ok(contents) => contents,
