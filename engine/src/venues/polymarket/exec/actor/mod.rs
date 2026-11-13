@@ -312,6 +312,11 @@ impl CommandTransport for LaneTransport<'_> {
     async fn flush(&mut self) -> Result<(), SessionOutcome> {
         Ok(())
     }
+
+    /// Never asked: no command here is handed over as fed.
+    fn has_reached_wire(&self, _fed: usize) -> bool {
+        false
+    }
 }
 
 impl EdgeDriver for Actor {

@@ -24,7 +24,7 @@ use engine::venues::edge::sender::{
 };
 use engine::venues::exec::{
     ExecCore, ExecEffect, ExecRequest, ExecSession, InFlightRequest, Outgoing, PlaceNotSentReason,
-    SessionOutcome, SessionSetup,
+    RequestId, SessionOutcome, SessionSetup,
 };
 use futures_util::FutureExt;
 use rtrb::{Consumer, Producer, RingBuffer};
@@ -46,6 +46,9 @@ const EXEC_QUEUE: QueueId = QueueId(3);
 const ISSUE: u64 = 100;
 const POP: u64 = 150;
 const WIRE: u64 = 400;
+
+/// Earlier than [`ISSUE`], so a wire sample of B would be the largest decision-to-wire time.
+const B_ISSUE: u64 = 50;
 
 /// Declares one bid at the touch, so a spin banks exactly one placement.
 struct OneBid;
@@ -145,13 +148,18 @@ trait Venue: CommandTransport {
     fn session(&self) -> &Session;
 }
 
-/// The shape of a venue that feeds each request to its socket and puts a wake's requests on the
-/// wire with one flush. With its socket down it refuses a placement and still sends a cancel.
+/// The shape of a venue that encodes and feeds each request at the flush and puts a wake's
+/// requests on the wire with that one flush. With its socket down it refuses a placement and still
+/// sends a cancel. A request of `unencodable` fails to encode at the flush and is answered as not
+/// sent there.
 struct SocketVenue {
     session: Session,
     mock: Arc<quanta::Mock>,
     is_socket_up: bool,
-    fed: Vec<ExecRequest>,
+    unencodable: Option<ClientOrderId>,
+    fed: Vec<Outgoing>,
+    /// The requests of each command of this wake that was handed over as fed.
+    fed_requests: Vec<Vec<RequestId>>,
     wire: Vec<ExecRequest>,
 }
 
@@ -161,15 +169,38 @@ impl SocketVenue {
             session: quoting_session(),
             mock,
             is_socket_up,
+            unencodable: None,
             fed: Vec::new(),
+            fed_requests: Vec::new(),
             wire: Vec::new(),
         }
+    }
+
+    fn failing_to_encode(mock: Arc<quanta::Mock>, client: ClientOrderId) -> SocketVenue {
+        SocketVenue {
+            unencodable: Some(client),
+            ..SocketVenue::new(mock, true)
+        }
+    }
+
+    fn is_unencodable(&self, request: &ExecRequest) -> bool {
+        let client = match *request {
+            ExecRequest::Place { client_id, .. }
+            | ExecRequest::Cancel { client_id, .. }
+            | ExecRequest::AmendQty { client_id, .. }
+            | ExecRequest::OrderStatus { client_id, .. } => Some(client_id),
+            ExecRequest::OpenOrders { .. } | ExecRequest::SubscribeUserStream => None,
+        };
+        client.is_some() && client == self.unencodable
     }
 }
 
 impl CommandTransport for SocketVenue {
     async fn hand_over(&mut self, command: ExecCommand) -> Result<Handover, SessionOutcome> {
-        let mut handover = Handover::NotSent;
+        if self.fed.is_empty() {
+            self.fed_requests.clear();
+        }
+        let mut requests = Vec::new();
         for Outgoing { effect, recon_seq } in decide(&mut self.session, command) {
             let ExecEffect::Send {
                 request_id,
@@ -184,24 +215,57 @@ impl CommandTransport for SocketVenue {
                     .refuse(request, PlaceNotSentReason::NoTransport, NOW);
                 continue;
             }
+            self.fed.push(Outgoing {
+                effect: ExecEffect::Send {
+                    request_id,
+                    request,
+                },
+                recon_seq,
+            });
+            requests.push(request_id);
+        }
+        if requests.is_empty() {
+            return Ok(Handover::NotSent);
+        }
+        self.fed_requests.push(requests);
+        Ok(Handover::Fed)
+    }
+
+    async fn flush(&mut self) -> Result<(), SessionOutcome> {
+        if self.fed.is_empty() {
+            return Ok(());
+        }
+        for Outgoing { effect, recon_seq } in std::mem::take(&mut self.fed) {
+            let ExecEffect::Send {
+                request_id,
+                request,
+            } = effect
+            else {
+                continue;
+            };
+            if self.is_unencodable(&request) {
+                self.session
+                    .refuse(request, PlaceNotSentReason::Encoding, NOW);
+                continue;
+            }
             self.session.inflight.record(InFlightRequest {
                 request_id,
                 request,
                 sent_at: NOW,
                 recon_seq,
             });
-            self.fed.push(request);
-            handover = Handover::Fed;
+            self.wire.push(request);
         }
-        Ok(handover)
+        move_counter(&self.mock, WIRE);
+        Ok(())
     }
 
-    async fn flush(&mut self) -> Result<(), SessionOutcome> {
-        if !self.fed.is_empty() {
-            move_counter(&self.mock, WIRE);
-            self.wire.append(&mut self.fed);
-        }
-        Ok(())
+    fn has_reached_wire(&self, fed: usize) -> bool {
+        self.fed_requests.get(fed).is_some_and(|requests| {
+            requests
+                .iter()
+                .any(|&request| self.session.inflight.holds(request))
+        })
     }
 }
 
@@ -266,6 +330,10 @@ impl CommandTransport for LaneVenue {
 
     async fn flush(&mut self) -> Result<(), SessionOutcome> {
         Ok(())
+    }
+
+    fn has_reached_wire(&self, _fed: usize) -> bool {
+        false
     }
 }
 
@@ -349,22 +417,30 @@ fn stage_of(rows: &Rows, stage: Stage) -> Option<(u64, u64)> {
 }
 
 fn lane_item(counter: &Counter, command: ExecCommand) -> ExecLaneItem {
+    lane_item_at(counter, command, ISSUE)
+}
+
+fn lane_item_at(counter: &Counter, command: ExecCommand, issue: u64) -> ExecLaneItem {
     ExecLaneItem::Command(StampedExecCommand {
         command,
         issued_ts_us: TsUs::from_micros(10),
-        issue_tick: counter.at(ISSUE),
+        issue_tick: counter.at(issue),
     })
 }
 
-fn place_a() -> ExecCommand {
+fn place(client: u64) -> ExecCommand {
     ExecCommand::Place {
         instrument: INSTRUMENT,
-        client_id: ClientOrderId(0xA),
+        client_id: ClientOrderId(client),
         side: Side::Buy,
         price: Price(BID),
         qty: QUOTE_QTY,
         style: OrderStyle::PostOnly,
     }
+}
+
+fn place_a() -> ExecCommand {
+    place(0xA)
 }
 
 fn cancel_b() -> ExecCommand {
@@ -381,6 +457,19 @@ fn lane_of_a_b_watermark(counter: &Counter) -> (Producer<ExecLaneItem>, Consumer
         lane_item(counter, place_a()),
         lane_item(counter, cancel_b()),
         ExecLaneItem::Watermark(TsUs::from_micros(10)),
+    ] {
+        producer.push(item).expect("room on the lane");
+    }
+    (producer, consumer)
+}
+
+/// A lane that holds `Place` A, `Place` B and `Place` C, with B banked at [`B_ISSUE`].
+fn lane_of_places_a_b_c(counter: &Counter) -> (Producer<ExecLaneItem>, Consumer<ExecLaneItem>) {
+    let (mut producer, consumer) = RingBuffer::new(LANE_CAPACITY);
+    for item in [
+        lane_item(counter, place(0xA)),
+        lane_item_at(counter, place(0xB), B_ISSUE),
+        lane_item(counter, place(0xC)),
     ] {
         producer.push(item).expect("room on the lane");
     }
@@ -447,6 +536,16 @@ fn command_is_stamped_at_bank_and_sent_on_arrival() {
 /// Runs the lane of A, B and a watermark through one wake to `venue`, and returns the venue and
 /// how many wire samples the wake wrote.
 fn a_b_watermark_through<V: Venue>(make_venue: impl FnOnce(Arc<quanta::Mock>) -> V) -> (V, u64) {
+    let (venue, decision_to_wire) = wakes_through(lane_of_a_b_watermark, make_venue);
+    (venue, decision_to_wire.map_or(0, |(count, _)| count))
+}
+
+/// Runs `lane` through one wake to `venue`, then a second wake with the lane empty, and returns the
+/// venue and the count and largest value of the decision-to-wire stage.
+fn wakes_through<V: Venue>(
+    lane: fn(&Counter) -> (Producer<ExecLaneItem>, Consumer<ExecLaneItem>),
+    make_venue: impl FnOnce(Arc<quanta::Mock>) -> V,
+) -> (V, Option<(u64, u64)>) {
     let Harness {
         counter,
         mut metrics,
@@ -455,7 +554,7 @@ fn a_b_watermark_through<V: Venue>(make_venue: impl FnOnce(Arc<quanta::Mock>) ->
         ..
     } = Harness::new(10);
     let SampleProducers { wires, .. } = samples;
-    let (producer, lane) = lane_of_a_b_watermark(&counter);
+    let (producer, lane) = lane(&counter);
     let mut venue = make_venue(Arc::clone(&counter.mock));
     let (mut sender, ticks) = built_sender(lane, &counter, wires, SenderPlacement::Shared);
 
@@ -471,8 +570,7 @@ fn a_b_watermark_through<V: Venue>(make_venue: impl FnOnce(Arc<quanta::Mock>) ->
     runtime().block_on(pass(&mut sender, &mut venue));
 
     pass_interval(&mut metrics, &mut rows);
-    let samples = stage_of(&rows, Stage::DecisionToWire).map_or(0, |(count, _)| count);
-    (venue, samples)
+    (venue, stage_of(&rows, Stage::DecisionToWire))
 }
 
 #[test]
@@ -515,6 +613,24 @@ fn each_lane_command_reaches_the_wire_one_time_in_lane_order() {
     );
     assert!(full_lane.wire().is_empty(), "{:?}", full_lane.wire());
     assert_eq!(samples, 0, "a refused command has no wire time");
+
+    let (failed_encoding, decision_to_wire) = wakes_through(lane_of_places_a_b_c, |mock| {
+        SocketVenue::failing_to_encode(mock, ClientOrderId(0xB))
+    });
+    let wire = failed_encoding.wire();
+    assert_eq!(wire.len(), 2, "{wire:?}");
+    assert!(is_place(&wire[0], 0xA), "A first: {wire:?}");
+    assert!(is_place(&wire[1], 0xC), "then C: {wire:?}");
+    assert!(
+        answered_not_sent(failed_encoding.session(), 0xB),
+        "a placement that fails to encode at the flush is answered as not sent: {:?}",
+        failed_encoding.session().events
+    );
+    assert_eq!(
+        decision_to_wire,
+        Some((2, WIRE - ISSUE)),
+        "one wire sample for A and one for C, and none for B, whose request never reached the wire"
+    );
 }
 
 #[test]

@@ -55,6 +55,10 @@ impl CommandTransport for LoopbackVenue {
     async fn flush(&mut self) -> Result<(), SessionOutcome> {
         Ok(())
     }
+
+    fn has_reached_wire(&self, _fed: usize) -> bool {
+        false
+    }
 }
 
 impl SenderRun {
