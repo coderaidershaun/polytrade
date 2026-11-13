@@ -301,7 +301,6 @@ impl OrderTable {
         }
     }
 
-    /// Folds one venue event into the slot at `index`.
     #[inline]
     pub fn apply(&mut self, index: usize, event: &ExecEvent, now: LocalTs) -> Applied {
         apply_exec_event(&mut self.slots[index], event, now)
