@@ -1,5 +1,5 @@
-//! Per-aggressor-side arrival monitor: the rolling window the fitter reads, the paced re-solve that
-//! keeps it current, and the resident evaluator answering λ between fits.
+//! The trade arrivals of one aggressor side: the window that the fitter reads, the fit that each
+//! read paces, and the live intensity between fits.
 
 use core::num::NonZeroUsize;
 
@@ -87,8 +87,8 @@ pub enum HawkesChoiceError {
     NoRefitCadence,
 }
 
-/// Aggressor side Hawkes monitor: rolling event window, warm-start fitter, current fit, O(1) live intensity.
-/// Buy -> ask, sells -> bid (intensity convention).
+/// The Hawkes model of one aggressor side. Buys feed the ask side and sells the bid side, as the
+/// intensity calculator counts them.
 pub struct HawkesSide {
     choice: HawkesChoice,
     events: HawkesEvents,
@@ -112,8 +112,9 @@ impl HawkesSide {
         }
     }
 
-    /// Fold trade arrival. Multi-sweep shares exchange_ts_us -> same-stamp folds (prevent zero-gap).
-    /// received_ts_us is replay-pure clock. Evaluator advances every arrival (O(1), ungated). Fit gated.
+    /// The prints of one sweep share an exchange stamp, so only the first of them counts: the others
+    /// would add gaps of zero. The window takes the received stamp, which a replay gives again. The
+    /// live sum moves with each arrival, and only the fit waits for its cadence.
     pub fn on_arrival(&mut self, exchange_ts_us: VenueTs, received_ts_us: LocalTs) {
         if self.last_exchange_ts_us == Some(exchange_ts_us) {
             return;
@@ -165,7 +166,7 @@ impl HawkesSide {
         self.events.out_of_order_count()
     }
 
-    /// Reset to post-new state keeping allocator. Window + fitter (warm-start inline) rebuilt from floor.
+    /// Back to the state of `new`, keeping the buffer of the window. The next fit starts cold.
     pub fn reset(&mut self) {
         self.events.clear();
         self.fitter = HawkesMle::new(self.choice);

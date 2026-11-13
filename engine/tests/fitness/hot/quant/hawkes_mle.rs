@@ -1,6 +1,6 @@
-//! Simplex MLE fitter over a simulated path with known truth. A fitter that quietly returns its
-//! seed, or a warm start that silently re-does the cold search, costs nothing at run time and
-//! everything in the research columns downstream.
+//! Simplex MLE fitter and the side that paces it, over a simulated path with known truth. A fitter
+//! that quietly returns its seed, or a warm start that silently re-does the cold search, costs
+//! nothing at run time and everything in the research columns downstream.
 
 use super::{ExpSimulation, START, exponential_fixture, exponential_path, window};
 use engine::hot::quant::hawkes::{
