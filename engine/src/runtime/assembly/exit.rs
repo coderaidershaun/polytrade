@@ -103,6 +103,18 @@ impl Exit {
         }
     }
 
+    /// The exit of a start that its own check refused, from the class of the error.
+    ///
+    /// # Panics
+    /// If the class is not a refused start: a start error of another class is a bug of the start
+    /// code.
+    pub fn refused(class: FailureClass) -> Self {
+        match class {
+            FailureClass::Halt(Halt::Start) => Exit::StartRefused,
+            other => panic!("a start error of class {other:?} has no exit"),
+        }
+    }
+
     pub fn code(&self) -> u8 {
         match self {
             Exit::Graceful { .. } => 0,

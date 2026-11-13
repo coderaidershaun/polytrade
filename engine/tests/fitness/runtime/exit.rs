@@ -10,17 +10,25 @@ use engine::msg::exec::{CancelReason, Provenance};
 use engine::msg::failure::{FailureClass, Halt};
 use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, QueueId, Side, SourceId, TradeId};
 use engine::msg::time::LocalTs;
-use engine::runtime::config::ConfigError;
+use engine::runtime::config::{Config, ConfigError, NoParams, RunIdentity};
 use engine::runtime::exposure::ExposureError;
 use engine::runtime::shutdown::{AnswerPart, FatalReason, FatalSignal};
 use engine::runtime::{
-    DrainDeadline, DrainFailure, DrainOutcome, DrainWatchdog, Exit, StartError, Trigger,
+    DrainDeadline, DrainFailure, DrainOutcome, DrainWatchdog, ExecutionLease, Exit, Preflight,
+    StartError, Trigger,
 };
 use engine::tape::PersistError;
 use engine::venues::VenueError;
 use engine::venues::binance::exec::ProbeError;
-use engine::venues::exec::{ExecCore, ExitPlan, MirroredOrder, SessionOutcome, SweepFailure};
+use engine::venues::exec::{
+    ExecCore, ExitPlan, MirroredOrder, SessionOutcome, SweepFailure, TeTag,
+};
+use engine::venues::sim;
 use parquet::errors::ParquetError;
+
+use super::preflight::{Scales, StandInVenue, sim_document, snapshot};
+use crate::engine_support::Idle;
+use crate::parquet_readback::TempDir;
 
 const REQUESTS: [&str; 3] = ["SIGTERM", "SIGINT", "shutdown request"];
 
@@ -580,6 +588,58 @@ fn fatal_is_never_a_graceful_exit() {
             );
         }
     }
+}
+
+/// CONTRACT: a start that preflight or the config refuses exits by the class of its error: a
+/// refused start, with a code that is not 0, and with the run nonce unspent.
+#[test]
+fn start_refusal_exits_by_its_class() {
+    let root = TempDir::new("exit-start-refusal");
+    let state = root.path().join("state");
+    // A lease locks one identity on the whole host, so no other test takes this identity.
+    let identity = RunIdentity::new("strat-exit", "te-start-refusal").expect("a valid identity");
+    let held = ExecutionLease::acquire(&state, TeTag::of(&identity), &sim::lease_namespace())
+        .expect("the test takes the lease of this engine identity");
+    let document = sim_document(&state, "");
+    let config = Config::<NoParams>::from_yaml(&document).expect("the document passes config");
+    let before = snapshot(&state);
+
+    let refused = Preflight {
+        identity: &identity,
+        config: &config,
+        strategy: &Idle,
+    }
+    .run_with(&mut StandInVenue {
+        scales: Scales::Stamped {
+            max_num_orders: 200,
+        },
+    });
+    let Err(refused) = refused else {
+        panic!("a held lease refuses the start");
+    };
+    assert!(
+        matches!(refused, StartError::ExecutionIdentityInUse { .. }),
+        "{refused}"
+    );
+    assert_eq!(refused.failure_class(), FailureClass::Halt(Halt::Start));
+    let exit = Exit::refused(refused.failure_class());
+    assert_eq!(exit, Exit::StartRefused);
+    assert_eq!(exit.code(), 1);
+    assert_eq!(snapshot(&state), before, "the refusal spent no nonce");
+    drop(held);
+
+    let misspelt = document.replacen("heartbeat_ms:", "heartbeat_msec:", 1);
+    let Err(unparsed) = Config::<NoParams>::from_yaml(&misspelt) else {
+        panic!("a misspelt key refuses the config");
+    };
+    assert!(
+        matches!(&unparsed, ConfigError::Parse { detail } if detail.contains("heartbeat_msec")),
+        "{unparsed}"
+    );
+    assert_eq!(unparsed.failure_class(), FailureClass::Halt(Halt::Start));
+    let exit = Exit::refused(unparsed.failure_class());
+    assert_eq!(exit, Exit::StartRefused);
+    assert_eq!(exit.code(), 1);
 }
 
 /// CONTRACT: an exit sweep that passes its deadline with orders still mirrored as resting ends by
