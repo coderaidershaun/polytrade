@@ -16,7 +16,7 @@ pub mod wire;
 
 /// The only way to stand this venue up: a caller hands over its inputs here and reaches nothing
 /// deeper.
-pub(crate) use bringup::bring_up;
+pub(crate) use bringup::{SimPlan, bring_up, plan};
 pub use error::SimVenueError;
 
 use crate::hot::exec::OrderBudget;

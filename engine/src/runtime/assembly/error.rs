@@ -1,13 +1,14 @@
 //! Every way a run can refuse to start, after the config itself parsed: an unavailable core, an
 //! unreachable venue, a scale or limit the engine cannot represent, a lease another process holds.
 
+use crate::msg::failure::{FailureClass, Halt};
 use crate::runtime::config::ConfigError;
 use crate::runtime::exposure::ExposureError;
 use crate::venues::VenueError;
 use std::path::{Path, PathBuf};
 
 #[derive(thiserror::Error, Debug)]
-pub enum EngineError {
+pub enum StartError {
     #[error("config invalid")]
     Config(#[from] ConfigError),
     #[error("exposure could not be restored")]
@@ -97,7 +98,30 @@ pub enum EngineError {
     },
 }
 
-impl EngineError {
+impl StartError {
+    pub const fn failure_class(&self) -> FailureClass {
+        match self {
+            StartError::Config(_)
+            | StartError::Exposure(_)
+            | StartError::Venue(_)
+            | StartError::ExecutionNotWired { .. }
+            | StartError::ExecutionTooManyInstruments { .. }
+            | StartError::ExecutionFieldInert { .. }
+            | StartError::ExecutionBaseFloorOnPosition { .. }
+            | StartError::ExecutionOrderCapacity { .. }
+            | StartError::ExecutionIdentityInUse { .. }
+            | StartError::ExecutionIdentityIo { .. }
+            | StartError::ExecutionIdentityState { .. }
+            | StartError::ExecutionIdentityExhausted { .. }
+            | StartError::Runtime(_)
+            | StartError::CoreId { .. }
+            | StartError::HousekeepingPin { .. }
+            | StartError::SenderPin { .. }
+            | StartError::LinkBind { .. }
+            | StartError::LinkNameTooLong { .. } => FailureClass::Halt(Halt::Start),
+        }
+    }
+
     pub(super) fn identity_io_at(path: &Path) -> impl FnOnce(std::io::Error) -> Self + '_ {
         move |source| Self::ExecutionIdentityIo {
             path: path.to_path_buf(),

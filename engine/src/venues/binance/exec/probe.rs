@@ -35,8 +35,9 @@ pub enum ProbeError {
 
 /// Startup gate result (probe + client + credentials). Caller trades with same resources.
 pub struct ExecutionPreflight {
-    /// The probed client, offset already learned, carried on so the run trades with the connection
-    /// the gate proved rather than a fresh one.
+    /// The probed client, carried on so the run keeps its learned clock offset, its signer, its
+    /// weight budget and its quiet window. Its connection does not carry over: the probe ran on a
+    /// runtime that has ended, so the first request of the run opens a new one.
     pub rest: SignedRestClient,
     /// Second key copy (WS=param signer, REST=header). One read, no Clone secret.
     pub credentials: Credentials,

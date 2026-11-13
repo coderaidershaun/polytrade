@@ -40,7 +40,7 @@ use crate::msg::persist::RotationRow;
 use crate::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, Stamper};
 use crate::msg::ui::UiCatalog;
 use crate::msg::ui::channel::{UiLifecycle, UiWiring, ui_channel};
-use crate::runtime::config::{Config, ExecutionMode, IdleMode, RunIdentity, SenderPlacement};
+use crate::runtime::config::{Config, ExecutionMode, IdleMode, SenderPlacement};
 use crate::runtime::exposure::{ExposureHandle, ExposureWriter, ExposureWriterConfig};
 use crate::runtime::shutdown::{DrainSignal, FatalSignal, RunControlGate, TaskHandle};
 use crate::tape::PersistHandle;
@@ -50,19 +50,18 @@ use crate::{error, info, warn};
 
 use drain::install_panic_hook;
 use exec::{ExecBringUp, ExecBringUpSetup, exec_bring_up};
-use link::link_bring_up;
 use metrics::{
     MetricsBringUp, MetricsBringUpSetup, MetricsThread, SampleProducers, metrics_bring_up,
 };
 use persist::{PersistBringUp, PersistBringUpSetup, persist_bring_up};
-use preflight::{Prepared, prepare};
 use queues::{InputQueues, QueueCapacities, build_input_queues};
 use timer::spawn_timer;
 
 pub use drain::{DrainWatchdog, ForcedExit};
-pub use error::EngineError;
+pub use error::StartError;
 pub use exec_identity::ExecutionLease;
 pub use exit::{DrainDeadline, DrainFailure, DrainOutcome, Exit, Trigger};
+pub use preflight::{Preflight, StartPlan};
 // SMELL: `check_symbol_order_capacity` is public only because the fitness suite calls it. A test is
 // not a reason to make an item public, so its check should move onto a public entry point and it
 // should go back to crate visibility.
@@ -107,21 +106,21 @@ struct Engine {
 }
 
 impl Engine {
-    /// Brings everything up in dependency order: logging, registry, runtime, persistence,
+    /// Brings up what `plan` checked, in dependency order: logging, runtime, persistence,
     /// metrics, the pinned senders' thread, hot thread, timer, adapters.
     ///
     /// # Errors
-    /// Invalid config, unavailable hot_core_id, runtime build failure, failed preflights, or a
-    /// pinned senders' thread that cannot pin.
+    /// A log, metrics or senders' thread that cannot pin, or a runtime that cannot be built. Each
+    /// comes after the threads before it have started.
     #[expect(
         clippy::disallowed_methods,
         reason = "the one clock of the process, started before any producer of message stamps"
     )]
     fn start<P>(
-        identity: RunIdentity,
         config: Config<P>,
         strategy: Box<dyn Strategy>,
-    ) -> Result<Engine, EngineError> {
+        plan: StartPlan,
+    ) -> Result<Engine, StartError> {
         // The one clock of the process: every producer of message stamps reads it.
         let clock = EngineClock::start();
         let latency_clock = ClockSource::check(InvariantCounter::detect());
@@ -137,7 +136,8 @@ impl Engine {
             events: ui_event_sink,
         } = wiring;
 
-        let mode = config.execution.as_ref().map(|execution| execution.mode);
+        let identity = plan.identity.clone();
+        let mode = plan.mode;
         let log_handle = log::init(
             &LogConfig {
                 dir: config.logging.dir.clone(),
@@ -149,7 +149,7 @@ impl Engine {
             },
             &clock,
         )
-        .map_err(|refused| EngineError::HousekeepingPin {
+        .map_err(|refused| StartError::HousekeepingPin {
             core_id: refused.core_id,
             thread: "log",
         })?;
@@ -160,16 +160,19 @@ impl Engine {
             Err(refusal) => warn!("{refusal}"),
         }
 
-        let Prepared {
+        plan.log_report();
+        let StartPlan {
             registry,
-            runtime,
             exposure: restored_exposure,
-            execution: execution_venue,
             rest_quiet,
-        } = match prepare(&config, &identity, mode) {
-            Ok(prepared) => prepared,
+            link: bound_link,
+            execution: execution_plan,
+            ..
+        } = plan;
+        let runtime = match build_runtime(config.engine.tokio_workers) {
+            Ok(runtime) => runtime,
             Err(error) => {
-                error!("startup failed before any thread spawned: {error}");
+                error!("startup failed after the log thread started: {error}");
                 log_handle.drain();
                 return Err(error);
             }
@@ -186,16 +189,6 @@ impl Engine {
             .map(|name| (*name).into())
             .collect();
 
-        // The socket is bound before anything spawns, so a port already taken fails the run early.
-        let bound_link =
-            match link_bring_up(&config, &identity, strategy.as_ref(), &registry, &runtime) {
-                Ok(bound) => bound,
-                Err(error) => {
-                    error!("startup failed before any thread spawned: {error}");
-                    log_handle.drain();
-                    return Err(error);
-                }
-            };
         let control = RunControlGate::new();
         let on_controller_loss = config
             .link
@@ -280,20 +273,15 @@ impl Engine {
 
         let drain_deadline = Duration::from_millis(config.engine.drain_deadline_ms);
         let spin_interval = config.engine.spin_interval();
-        // SMELL: this start refusal, the execution lease among them, comes after the log, Parquet,
-        // exposure and metrics threads have started, so a refused start has already started
-        // threads. The simulator tap also repeats a config check as a panic. Each refusal belongs
-        // before the first thread starts.
         let ExecBringUp {
             wiring: exec_wiring,
             spawn: exec_spawn,
             tap_gate: exec_tap_gate,
             lease: execution_lease,
-        } = match exec_bring_up(ExecBringUpSetup {
+        } = exec_bring_up(ExecBringUpSetup {
+            plan: execution_plan,
             execution: config.execution.as_ref(),
-            venue: execution_venue,
             registry: &registry,
-            identity: &identity,
             producer: exec_producer,
             groups: &mut group_producers,
             window_assignments: assignments_rx,
@@ -306,15 +294,7 @@ impl Engine {
             drain_deadline,
             spin_interval,
             input_capacity: config.queues.input_capacity,
-            lease_dir: &config.exposure.dir,
-        }) {
-            Ok(brought_up) => brought_up,
-            Err(error) => {
-                error!("startup failed before the hot thread spawned: {error}");
-                log_handle.drain();
-                return Err(error);
-            }
-        };
+        });
 
         // Before the first edge spawns, so a sender that cannot pin refuses the start while no edge
         // has connected.
@@ -421,7 +401,11 @@ impl Engine {
         let link = bound_link.map(|bound| {
             LinkActor::spawn(
                 LinkActorSetup {
-                    socket: bound.socket,
+                    socket: {
+                        let _on_edge_runtime = edge_runtime.enter();
+                        tokio::net::UdpSocket::from_std(bound.socket)
+                            .expect("a bound socket registers with the runtime that runs the link")
+                    },
                     identity: bound.identity,
                     guard: bound.guard,
                     peers: bound.peers,
@@ -462,4 +446,13 @@ impl Engine {
             drain_deadline,
         })
     }
+}
+
+fn build_runtime(workers: usize) -> Result<Runtime, StartError> {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(workers.max(1))
+        .enable_all()
+        .thread_name("polysim-tokio")
+        .build()
+        .map_err(StartError::Runtime)
 }

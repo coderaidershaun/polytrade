@@ -8,8 +8,14 @@ use engine::msg::exec::{CancelReason, Provenance};
 use engine::msg::failure::{FailureClass, Halt};
 use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, QueueId, Side, SourceId, TradeId};
 use engine::msg::time::LocalTs;
+use engine::runtime::config::ConfigError;
+use engine::runtime::exposure::ExposureError;
 use engine::runtime::shutdown::{AnswerPart, FatalReason, FatalSignal};
-use engine::runtime::{DrainDeadline, DrainFailure, DrainOutcome, DrainWatchdog, Exit, Trigger};
+use engine::runtime::{
+    DrainDeadline, DrainFailure, DrainOutcome, DrainWatchdog, Exit, StartError, Trigger,
+};
+use engine::venues::VenueError;
+use engine::venues::binance::exec::ProbeError;
 use engine::venues::exec::{ExecCore, ExitPlan, MirroredOrder, SessionOutcome, SweepFailure};
 
 const REQUESTS: [&str; 3] = ["SIGTERM", "SIGINT", "shutdown request"];
@@ -85,6 +91,95 @@ fn variant_index(reason: FatalReason) -> usize {
         FatalReason::OrderIndexFull { .. } => 13,
         FatalReason::SubscribeUnbuildable { .. } => 14,
         FatalReason::SettlementFailed { .. } => 15,
+    }
+}
+
+/// One value of each variant of a refused start, listed in the order of `start_variant_index`.
+fn each_start_refusal() -> Vec<StartError> {
+    let path = || std::path::PathBuf::from("state/te.nonce");
+    let io = || std::io::Error::other("refused");
+    vec![
+        StartError::Config(ConfigError::SpinWithoutHotCore),
+        StartError::Exposure(ExposureError::Malformed {
+            path: path(),
+            detail: "not a ledger".into(),
+        }),
+        StartError::Venue(VenueError::BinanceGate(ProbeError::TradingDisabled)),
+        StartError::ExecutionNotWired {
+            mode: "live",
+            detail: "the startup permission probe was never run",
+        },
+        StartError::ExecutionTooManyInstruments { found: 17, max: 16 },
+        StartError::ExecutionFieldInert {
+            field: "quote_stop_margin_ms",
+            value: "9000".into(),
+            venue_fact: "this venue's instruments never expire",
+        },
+        StartError::ExecutionBaseFloorOnPosition {
+            value: "0.1".into(),
+        },
+        StartError::ExecutionOrderCapacity {
+            instrument: 0,
+            symbol: "BTCUSDT".into(),
+            configured_per_side: 4,
+            required_total: 8,
+            venue_max: 2,
+        },
+        StartError::ExecutionIdentityInUse { path: path() },
+        StartError::ExecutionIdentityIo {
+            path: path(),
+            source: io(),
+        },
+        StartError::ExecutionIdentityState {
+            path: path(),
+            value: "garbage".into(),
+        },
+        StartError::ExecutionIdentityExhausted { path: path() },
+        StartError::Runtime(io()),
+        StartError::CoreId {
+            core_id: 4_096,
+            available: 8,
+        },
+        StartError::HousekeepingPin {
+            core_id: 5,
+            thread: "log",
+        },
+        StartError::SenderPin { core_id: 7 },
+        StartError::LinkBind {
+            bind: "127.0.0.1:9000".into(),
+            trading_engine: "strat-te".into(),
+            source: io(),
+        },
+        StartError::LinkNameTooLong {
+            name: "a feature".into(),
+            found: 80,
+            max: 64,
+        },
+    ]
+}
+
+/// The match has no catch-all arm, so a new variant does not compile here until the list above
+/// holds a value of it.
+fn start_variant_index(error: &StartError) -> usize {
+    match error {
+        StartError::Config(_) => 0,
+        StartError::Exposure(_) => 1,
+        StartError::Venue(_) => 2,
+        StartError::ExecutionNotWired { .. } => 3,
+        StartError::ExecutionTooManyInstruments { .. } => 4,
+        StartError::ExecutionFieldInert { .. } => 5,
+        StartError::ExecutionBaseFloorOnPosition { .. } => 6,
+        StartError::ExecutionOrderCapacity { .. } => 7,
+        StartError::ExecutionIdentityInUse { .. } => 8,
+        StartError::ExecutionIdentityIo { .. } => 9,
+        StartError::ExecutionIdentityState { .. } => 10,
+        StartError::ExecutionIdentityExhausted { .. } => 11,
+        StartError::Runtime(_) => 12,
+        StartError::CoreId { .. } => 13,
+        StartError::HousekeepingPin { .. } => 14,
+        StartError::SenderPin { .. } => 15,
+        StartError::LinkBind { .. } => 16,
+        StartError::LinkNameTooLong { .. } => 17,
     }
 }
 
@@ -271,6 +366,20 @@ fn fatal_is_never_a_graceful_exit() {
         0,
         "a refused start never exits 0"
     );
+    let refusals = each_start_refusal();
+    let start_indexes: Vec<usize> = refusals.iter().map(start_variant_index).collect();
+    assert_eq!(
+        start_indexes,
+        (0..18).collect::<Vec<_>>(),
+        "one refusal of each variant, once"
+    );
+    for refusal in &refusals {
+        assert_eq!(
+            refusal.failure_class(),
+            FailureClass::Halt(Halt::Start),
+            "{refusal} refuses the start, which halts it"
+        );
+    }
     assert_ne!(Exit::DeadlinePassed.code(), 0);
 
     for first in reasons {

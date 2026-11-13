@@ -4,4 +4,5 @@
 mod cargo_bins;
 mod clock_sites;
 mod log_lane_ownership;
+mod preflight_threads;
 mod suite_integrity;

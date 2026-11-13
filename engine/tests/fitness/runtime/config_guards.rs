@@ -39,7 +39,7 @@ const POLY_SLOT_SYMBOLS: &[&str] = &[
     "btc-updown-5m-b-down",
 ];
 
-fn config_with_source(source_block: &str) -> String {
+pub(super) fn config_with_source(source_block: &str) -> String {
     config_with_strategy(source_block, "  instruments: all\n")
 }
 
@@ -74,7 +74,7 @@ source:
     )
 }
 
-fn link_block(bind: &str, extra: &str) -> String {
+pub(super) fn link_block(bind: &str, extra: &str) -> String {
     format!("link:\n  bind: \"{bind}\"\n{extra}")
 }
 
@@ -87,7 +87,7 @@ fn config_with_link(link_block: &str) -> String {
     )
 }
 
-const BINANCE_PERP_SOURCE: &str = "  exchange: binance
+pub(super) const BINANCE_PERP_SOURCE: &str = "  exchange: binance
   max_exposure_quote: 500
   market: perpetual
   base: BTC
@@ -418,7 +418,7 @@ fn spin_without_hot_core_refuses_start() {
     }
 }
 
-const BINANCE_KLINES_VOLUME_BARS: &str = "  exchange: binance
+pub(super) const BINANCE_KLINES_VOLUME_BARS: &str = "  exchange: binance
   max_exposure_quote: 500
   market: perpetual
   base: BTC
@@ -833,7 +833,7 @@ fn config_with_execution(block: &str) -> String {
     config_with_execution_on(BINANCE_PERP_SOURCE, block)
 }
 
-fn config_with_execution_on(source_block: &str, block: &str) -> String {
+pub(super) fn config_with_execution_on(source_block: &str, block: &str) -> String {
     with_link(
         source_block,
         "  instruments: all\n",
@@ -842,7 +842,7 @@ fn config_with_execution_on(source_block: &str, block: &str) -> String {
     )
 }
 
-const SIM_BLOCK: &str = "  sim:
+pub(super) const SIM_BLOCK: &str = "  sim:
     order_entry_latency_ms: 15
     ack_latency_ms: 15
     max_market_data_delay_ms: 1000
@@ -852,7 +852,7 @@ const SIM_BLOCK: &str = "  sim:
     maker_fee_bps: 10.0
 ";
 
-const BINANCE_SPOT_SOURCE: &str = "  exchange: binance
+pub(super) const BINANCE_SPOT_SOURCE: &str = "  exchange: binance
   max_exposure_quote: 500
   market: spot
   base: BTC
@@ -864,7 +864,7 @@ fn execution_block(mode: &str) -> String {
     execution_block_overriding(mode, "", "")
 }
 
-fn execution_block_with(mode: &str, extra: &str) -> String {
+pub(super) fn execution_block_with(mode: &str, extra: &str) -> String {
     format!("{}{extra}", execution_block(mode))
 }
 

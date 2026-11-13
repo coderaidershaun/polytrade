@@ -21,7 +21,7 @@ use crate::venues::binance::preflight as binance_preflight;
 use crate::venues::binance::rest::BinanceEnv;
 use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::rest_quiet::SharedRestQuiet;
-use crate::venues::edge::{EdgeInputs, VenueEdge};
+use crate::venues::edge::{EdgeCheck, EdgeInputs, VenueEdge};
 use crate::venues::exec::{LeaseNamespace, VenueCapabilities};
 use crate::venues::polymarket::actor::{PolymarketAdapter, PolymarketAdapterContext};
 use crate::venues::polymarket::exec as polymarket_exec;
@@ -29,7 +29,8 @@ use crate::venues::polymarket::exec::handle::{
     self as polymarket_handle, PolymarketPreflight, PolymarketPreflightError, preflight_polymarket,
 };
 use crate::venues::polymarket::preflight as polymarket_preflight;
-use crate::venues::sim::{self, SimVenueError};
+use crate::venues::port::VenueScales;
+use crate::venues::sim::{self, SimPlan, SimVenueError};
 
 pub(crate) use crate::venues::polymarket::rotation::WindowAssignment;
 
@@ -57,14 +58,15 @@ pub enum VenueError {
     Simulated(#[from] SimVenueError),
 }
 
-/// Confirms every instrument fits the engine's fixed-point range on its venue, and stamps the venue's
-/// grid and order limits onto the registry. A venue with no instrument in this run is skipped.
-pub(crate) async fn preflight_scales(registry: &mut Registry) -> Result<(), VenueError> {
-    if let Some(env) = registry.binance_env() {
-        binance_preflight::preflight_scales(registry, env).await?;
-    }
-    polymarket_preflight::preflight_poly(registry).await?;
-    Ok(())
+/// Reads what every instrument's venue says of its grid and order limits, for preflight to check and
+/// stamp onto the registry. A venue with no instrument in this run is skipped.
+pub(crate) async fn read_scales(registry: &Registry) -> Result<VenueScales, VenueError> {
+    let mut scales = match registry.binance_env() {
+        Some(env) => binance_preflight::preflight_scales(registry, env).await?,
+        None => VenueScales::default(),
+    };
+    scales.polymarket = polymarket_preflight::preflight_poly(registry).await?;
+    Ok(scales)
 }
 
 /// The venue this run places orders on, carrying what that venue's edge needs. The variant IS the
@@ -126,6 +128,34 @@ impl ExecutionVenue {
         })
     }
 
+    /// Checks everything the venue's bring-up needs from the config and the registry, so the build
+    /// at the start cannot refuse once the lease has spent a run nonce.
+    pub(crate) fn check(self, check: EdgeCheck<'_>) -> Result<CheckedVenue, VenueError> {
+        Ok(match self {
+            Self::Simulated => CheckedVenue::Simulated(Box::new(sim::plan(check)?)),
+            Self::Binance { gate, env } => CheckedVenue::Binance {
+                gate,
+                env,
+                recv_window: binance_exec::RecvWindow::from_millis(check.execution.recv_window_ms)
+                    .map_err(VenueError::BinanceRecvWindow)?,
+            },
+            Self::Polymarket(gate) => CheckedVenue::Polymarket(gate),
+        })
+    }
+}
+
+/// A venue whose bring-up preflight has checked, with what each venue carries into its edge.
+pub(crate) enum CheckedVenue {
+    Simulated(Box<SimPlan>),
+    Binance {
+        gate: Box<ExecutionPreflight>,
+        env: BinanceEnv,
+        recv_window: binance_exec::RecvWindow,
+    },
+    Polymarket(Box<PolymarketPreflight>),
+}
+
+impl CheckedVenue {
     /// Lends the venue's lease namespace to `acquire` rather than returning it, because the
     /// namespace borrows account bytes the venue holds or derives, and a secret is never copied out.
     pub(crate) fn with_lease_namespace<R>(
@@ -133,8 +163,8 @@ impl ExecutionVenue {
         acquire: impl FnOnce(&LeaseNamespace<'_>) -> R,
     ) -> R {
         match self {
-            Self::Simulated => acquire(&sim::lease_namespace()),
-            Self::Binance { gate, env } => acquire(&binance_exec::lease_namespace(
+            Self::Simulated(_) => acquire(&sim::lease_namespace()),
+            Self::Binance { gate, env, .. } => acquire(&binance_exec::lease_namespace(
                 *env,
                 gate.credentials.api_key().expose_bytes(),
             )),
@@ -147,7 +177,7 @@ impl ExecutionVenue {
 
     pub(crate) fn describe(&self) -> String {
         match self {
-            Self::Simulated => "the simulated binance spot venue".to_owned(),
+            Self::Simulated(_) => "the simulated binance spot venue".to_owned(),
             Self::Binance { env, .. } => format!("binance {}", env.as_str()),
             Self::Polymarket(_) => "polymarket".to_owned(),
         }
@@ -158,13 +188,15 @@ impl ExecutionVenue {
         self,
         inputs: EdgeInputs<'_>,
         assignments: mpsc::Receiver<WindowAssignment>,
-    ) -> Result<VenueEdge, VenueError> {
+    ) -> VenueEdge {
         match self {
-            Self::Simulated => Ok(sim::bring_up(inputs)?),
-            Self::Binance { gate, env } => {
-                binance_exec::bring_up(*gate, env, inputs).map_err(VenueError::BinanceRecvWindow)
-            }
-            Self::Polymarket(gate) => Ok(polymarket_handle::bring_up(*gate, inputs, assignments)),
+            Self::Simulated(plan) => sim::bring_up(*plan, inputs),
+            Self::Binance {
+                gate,
+                env,
+                recv_window,
+            } => binance_exec::bring_up(*gate, env, recv_window, inputs),
+            Self::Polymarket(gate) => polymarket_handle::bring_up(*gate, inputs, assignments),
         }
     }
 }

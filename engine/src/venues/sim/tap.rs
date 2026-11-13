@@ -127,6 +127,9 @@ pub(super) fn attach_market_taps(
         tapped.push(producer.with_tap(tap_producer, Arc::clone(&gate)));
     }
 
+    // SMELL: these two expects repeat a config check as a panic at the start, after threads run.
+    // Config validation already refuses a simulated run off Binance spot, so the check belongs
+    // in preflight, as a typed refusal of the start.
     let taps = MarketTaps {
         trades: trades.expect("simulator requires a binance spot trades producer group"),
         depth: depth.expect("simulator requires a binance spot depth producer group"),
