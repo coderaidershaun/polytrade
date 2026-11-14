@@ -9,6 +9,7 @@
 //! noun naming what it returns (`intensity`, `volatility`, `quote`), never `value`. Teardown splits
 //! the same way — `clear` wipes a stored window, `reset` a recursion that stores none, and
 //! `reset_continuity` drops only the chain link, keeping the accumulation.
+//! `estimate` is the paced read of a fitter: it refits when due and gives the fit in force.
 
 /// Floors a rate before its `ln` so an underflowed one can't feed `-inf` into an objective.
 pub(crate) const MIN_RATE: f64 = 1e-300;
