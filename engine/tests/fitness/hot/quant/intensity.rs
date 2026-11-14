@@ -5,7 +5,7 @@ use super::Lcg;
 use engine::hot::book::{Book, SnapshotOutcome};
 use engine::hot::quant::intensity::{IntensityFit, PacedIntensity, SideEstimate};
 use engine::hot::quant::optimise::NelderMead;
-use engine::hot::quant::pricing::{GueantParams, Objective};
+use engine::hot::quant::pricing::{GueantParams, Objective, SideRates, Ticks};
 use engine::hot::tracker::MicroTracker;
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BookChunk, BookChunkKind, Level, TradeEvent};
@@ -468,7 +468,12 @@ fn an_intensity_overflow_gives_no_quote() {
         at_the_bound
             .a_mid_per_sec(half_spread_ticks)
             .and_then(|a_mid| {
-                params.coefficients(a_mid, at_the_bound.k_per_tick, sigma_per_sqrt_sec)
+                params.coefficients(SideRates {
+                    a_per_sec: a_mid,
+                    k_per_depth: at_the_bound.k_per_tick,
+                    sigma_per_sqrt_sec,
+                    unit: Ticks,
+                })
             })
     };
 

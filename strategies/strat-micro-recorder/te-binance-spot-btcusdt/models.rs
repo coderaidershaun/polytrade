@@ -5,7 +5,7 @@ use engine::hot::quant::hawkes::{HawkesChoice, HawkesSide};
 use engine::hot::quant::intensity::{PacedIntensity, SideEstimate};
 use engine::hot::quant::liquidity::{KyleFeed, KylesLambdaSpec};
 use engine::hot::quant::micro::OrderbookResilience;
-use engine::hot::quant::pricing::GueantParams;
+use engine::hot::quant::pricing::{Bps, GueantParams, SideRates};
 use engine::hot::quant::toxicity::{
     ForwardHorizon, MarkoutSpec, MarkoutTracker, ReverseHorizon, SideMarkouts,
 };
@@ -374,9 +374,12 @@ impl GueantScale {
         let half_spread_ticks = self.half_spread_bps * self.ticks_per_bp;
         let a_mid_per_sec = estimate.a_mid_per_sec(half_spread_ticks)?;
         let k_per_bp = estimate.k_per_tick * self.ticks_per_bp;
-        let coefficients = self
-            .params
-            .coefficients(a_mid_per_sec, k_per_bp, self.sigma_bps)?;
+        let coefficients = self.params.coefficients(SideRates {
+            a_per_sec: a_mid_per_sec,
+            k_per_depth: k_per_bp,
+            sigma_per_sqrt_sec: self.sigma_bps,
+            unit: Bps,
+        })?;
         let depth_ticks = match side {
             QuoteSide::Bid => coefficients.bid_depth(self.inventory),
             QuoteSide::Ask => coefficients.ask_depth(self.inventory),

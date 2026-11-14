@@ -2,4 +2,6 @@
 
 mod gueant;
 
-pub use gueant::{GueantParams, Objective, QuoteCoefficients, QuoteInputs, Quotes};
+pub use gueant::{
+    Bps, GueantParams, Objective, QuoteCoefficients, QuoteInputs, Quotes, SideRates, Ticks,
+};

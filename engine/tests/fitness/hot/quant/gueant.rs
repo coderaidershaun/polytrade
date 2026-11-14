@@ -1,7 +1,9 @@
 //! The quoting model's closed-form terms against a worked example, and its rounding onto the grid,
 //! which stops a computed depth from becoming an order that crosses the book.
 
-use engine::hot::quant::pricing::{GueantParams, Objective, QuoteCoefficients, QuoteInputs};
+use engine::hot::quant::pricing::{
+    GueantParams, Objective, QuoteCoefficients, QuoteInputs, SideRates, Ticks,
+};
 use engine::msg::ids::Price;
 
 const TICK: Price = Price::from_mantissa(1_000_000); // $0.01 at the 1e-8 fixed-point scale.
@@ -11,12 +13,21 @@ fn approx(a: f64, b: f64, tol: f64) -> bool {
 }
 
 const ORDER_SIZE: f64 = 1.0;
+
+fn in_ticks(a_per_sec: f64, k_per_depth: f64, sigma_per_sqrt_sec: f64) -> SideRates<Ticks> {
+    SideRates {
+        a_per_sec,
+        k_per_depth,
+        sigma_per_sqrt_sec,
+        unit: Ticks,
+    }
+}
 const SIGMA: f64 = 2.0;
 
 // Δ=1, q=3, A=5, k̃=0.5, σ̃=2, γ̃=0.0736 -> c1=2, c2=0.2, h=2.2, j=0.4.
-fn worked_example() -> QuoteCoefficients {
+fn worked_example() -> QuoteCoefficients<Ticks> {
     GueantParams::new(0.0736, ORDER_SIZE, Objective::InventoryPenalty)
-        .coefficients(5.0, 0.5, SIGMA)
+        .coefficients(in_ticks(5.0, 0.5, SIGMA))
         .expect("valid estimates")
 }
 
@@ -93,7 +104,7 @@ fn rounding_is_outward_and_never_crosses_the_book() {
     // keeps its ask, a short book keeps its bid. A quarter tick keeps fair on the grid exactly.
     let quarter = Price::from_mantissa(25_000_000);
     let tiny = GueantParams::new(1e-30, ORDER_SIZE, Objective::InventoryPenalty)
-        .coefficients(1.0, 1e14, 1.0)
+        .coefficients(in_ticks(1.0, 1e14, 1.0))
         .expect("valid estimates");
     let spacing = 10_050f64.next_up() - 10_050.0;
     assert!(
@@ -132,13 +143,14 @@ fn model_a_matches_its_closed_form_and_each_bad_rate_is_refused() {
     let (k, a, r) = (1.0, 5.0, 1e-6);
     let gamma = r * k / order_size;
     let limit = GueantParams::new(gamma, order_size, Objective::CaraUtility)
-        .coefficients(a, k, sigma)
+        .coefficients(in_ticks(a, k, sigma))
         .expect("valid estimates");
     let model_b = GueantParams::new(gamma, order_size, Objective::InventoryPenalty)
-        .coefficients(a, k, sigma)
+        .coefficients(in_ticks(a, k, sigma))
         .expect("valid estimates");
-    let c1_of = |c: &QuoteCoefficients| c.half_spread() - 0.5 * order_size * c.skew_per_inventory();
-    let c2_of = |c: &QuoteCoefficients| c.skew_per_inventory() / sigma;
+    let c1_of =
+        |c: &QuoteCoefficients<Ticks>| c.half_spread() - 0.5 * order_size * c.skew_per_inventory();
+    let c2_of = |c: &QuoteCoefficients<Ticks>| c.skew_per_inventory() / sigma;
     assert!(
         (c1_of(&limit) / c1_of(&model_b) - 1.0).abs() <= r / 2.0,
         "c1 {} against {}",
@@ -156,7 +168,7 @@ fn model_a_matches_its_closed_form_and_each_bad_rate_is_refused() {
     // With γ = ξ = 0.25, Δ = 2, k = 0.5 and A = 0.5, ξΔ/k = 1, so by hand c1 = ln 2/0.5 = 2·ln 2
     // and c2 = √(0.25/(2·0.5·2·0.5)·2^2) = √1 = 1.
     let model_a = GueantParams::new(0.25, order_size, Objective::CaraUtility)
-        .coefficients(0.5, 0.5, sigma)
+        .coefficients(in_ticks(0.5, 0.5, sigma))
         .expect("valid estimates");
     let c1 = model_a.half_spread() - 0.5 * order_size * model_a.skew_per_inventory();
     let c2 = model_a.skew_per_inventory() / sigma;
@@ -171,13 +183,13 @@ fn model_a_matches_its_closed_form_and_each_bad_rate_is_refused() {
         for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
             for (a, k, sigma) in [(bad, 0.5, 2.0), (5.0, bad, 2.0), (5.0, 0.5, bad)] {
                 assert!(
-                    params.coefficients(a, k, sigma).is_none(),
+                    params.coefficients(in_ticks(a, k, sigma)).is_none(),
                     "{objective:?}: A {a}, k {k}, sigma {sigma} gave coefficients"
                 );
             }
         }
         assert!(
-            params.coefficients(1e-300, 1e-300, 2.0).is_none(),
+            params.coefficients(in_ticks(1e-300, 1e-300, 2.0)).is_none(),
             "{objective:?}: an infinite c2 gave coefficients"
         );
     }
