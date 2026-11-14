@@ -65,6 +65,9 @@ impl<P> Preflight<'_, P> {
         let mode = config.execution_mode();
         let mut registry = Registry::build(config)?;
         let armed = one_armed_source(config)?;
+        if let Some((venue, ..)) = armed {
+            check_rows_of_one_venue(&registry, venue)?;
+        }
         if let Some(core_id) = config.engine.hot_core_id {
             validate_core_id(core_id)?;
         }
@@ -152,6 +155,22 @@ fn one_armed_source<P>(
         }),
         _ => Ok(first),
     }
+}
+
+/// This build sends orders through one task, which takes each row of the registry and gives each
+/// of its events the venue of the first row. So a run that sends orders reads the sources of that
+/// venue only, and a row of another venue is refused before any check reads a venue.
+///
+/// # Errors
+/// [`StartError::ExecutionWithSeveralVenues`] when a row belongs to a venue other than `venue`.
+fn check_rows_of_one_venue(registry: &Registry, venue: VenueId) -> Result<(), StartError> {
+    let Some(other) = registry.instruments().iter().find(|row| row.venue != venue) else {
+        return Ok(());
+    };
+    Err(StartError::ExecutionWithSeveralVenues {
+        venue: registry.venue_name(venue),
+        other: registry.venue_name(other.venue),
+    })
 }
 
 /// Confirms the configured ladder fits every instrument's venue order ceiling before any thread

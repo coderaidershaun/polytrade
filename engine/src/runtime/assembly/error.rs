@@ -30,6 +30,15 @@ pub enum StartError {
     )]
     ExecutionOnSeveralSources { first: usize, second: usize },
     #[error(
+        "sources: the run sends orders on {venue} and also reads {other}, and this build starts \
+         the edge of one venue, which would read the instruments of {other} as its own; remove \
+         the sources of {other}, or set the execution mode of {venue} to off"
+    )]
+    ExecutionWithSeveralVenues {
+        venue: &'static str,
+        other: &'static str,
+    },
+    #[error(
         "the {table} table needs {needed} entries and a client order id addresses {addressable} — an engine that cannot tell its own orders apart must not place any"
     )]
     ExecutionCapacity {
@@ -133,6 +142,7 @@ impl StartError {
             | StartError::Venue(_)
             | StartError::ExecutionNotWired { .. }
             | StartError::ExecutionOnSeveralSources { .. }
+            | StartError::ExecutionWithSeveralVenues { .. }
             | StartError::ExecutionCapacity { .. }
             | StartError::ExecutionFieldInert { .. }
             | StartError::ExecutionBaseFloorOnPosition { .. }

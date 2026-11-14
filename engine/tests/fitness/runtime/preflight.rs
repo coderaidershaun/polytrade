@@ -313,6 +313,26 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         "{several}"
     );
 
+    // One venue sends orders and the run also reads another venue, in either order. This build
+    // sends orders through one connection, which would take the other venue's rows as its own.
+    for order in [
+        [(BINANCE_SPOT_SOURCE, ""), (POLY_SOURCE, live.as_str())],
+        [(POLY_SOURCE, live.as_str()), (BINANCE_SPOT_SOURCE, "")],
+    ] {
+        let beside = with_state(sources::document(&order, false), &state);
+        let refused = refusal(&beside, Scales::Refused, &state);
+        assert!(
+            matches!(
+                refused,
+                StartError::ExecutionWithSeveralVenues {
+                    venue: "polymarket",
+                    other: "binance"
+                }
+            ),
+            "{refused}"
+        );
+    }
+
     // E9: the link address is taken.
     let taken = UdpSocket::bind("127.0.0.1:0").expect("the test binds a loopback port");
     let address = taken.local_addr().expect("a bound address").to_string();
