@@ -25,7 +25,7 @@ use super::desired::QuoteLevel;
 pub(crate) use fees::FeeFold;
 use fees::FeeMemory;
 use occupancy::SlotsInUse;
-pub(super) use prior_run::{PriorRunOrders, Unseated};
+pub(super) use prior_run::{PriorRunOrders, PriorRunSeat, Unseated};
 pub use slot::{CloseReason, FillDelta, OrderSlot, OrderState};
 pub use transition::Applied;
 use transition::apply_exec_event;

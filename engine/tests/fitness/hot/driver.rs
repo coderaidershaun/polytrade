@@ -441,8 +441,24 @@ fn prior_run_fill(price: i64, cumulative: i64, at: i64) -> InboundMessage {
     )
 }
 
+/// The first report of the inherited order, with nothing filled yet. It seats the order, so each
+/// fill after it is a step that the ledger books.
+fn prior_run_seat(price: i64, qty: i64, at: i64) -> InboundMessage {
+    let MessageBody::Exec(fill) = prior_run_fill(price, 0, at).body else {
+        unreachable!("a prior-run fill is an execution message");
+    };
+    let seat = ExecEvent {
+        kind: ExecKind::ReportNew,
+        status: Some(VenueOrderStatus::New),
+        qty: Qty::from_mantissa(qty),
+        ..fill
+    };
+    InboundMessage::new(ts(at), MessageBody::Exec(seat))
+}
+
 /// Market messages in receive order, with a spin each time the timer would fire, the venue's
-/// readiness at the start, and two fills of an inherited order a third and two thirds of the way.
+/// readiness at the start, and two fills of an inherited order a third and two thirds of the way,
+/// the first one behind the report that seats the order.
 fn with_spins_and_answers(
     market: Vec<InboundMessage>,
     fill_price: i64,
@@ -463,6 +479,9 @@ fn with_spins_and_answers(
             next_spin += SPIN_US;
         }
         if let Some(nth) = fills.iter().position(|&fill| fill == index) {
+            if nth == 0 {
+                tape.push(prior_run_seat(fill_price, 4 * fill_qty, at));
+            }
             tape.push(prior_run_fill(fill_price, fill_qty * (nth as i64 + 1), at));
         }
         tape.push(message);
@@ -775,7 +794,7 @@ const RECORDED: [(Shipped, [Digest; 8]); 2] = [
 ];
 
 const RECORDER_OUTPUTS: [Digest; 8] = [
-    recorded("tape rows", 46_416, 0x02c3_829d_306f_29d1),
+    recorded("tape rows", 46_417, 0xa465_54e5_7bdb_0eb0),
     recorded("commands", 241, 0x60ea_828f_819b_c86e),
     recorded("ui books", 601, 0xd1ca_5f6f_2e33_bab2),
     recorded("ui events", 48_281, 0x24ad_47c2_3baf_320e),
@@ -786,7 +805,7 @@ const RECORDER_OUTPUTS: [Digest; 8] = [
 ];
 
 const PUBLISHER_OUTPUTS: [Digest; 8] = [
-    recorded("tape rows", 12, 0xd94c_dcad_5454_6e50),
+    recorded("tape rows", 13, 0xea9c_15a1_1af3_ebe3),
     recorded("commands", 80, 0xc4c1_7609_303b_edd7),
     recorded("ui books", 1_734, 0x4116_b312_52d1_9732),
     recorded("ui events", 1_245, 0xc5fe_6b6d_338d_87c0),
