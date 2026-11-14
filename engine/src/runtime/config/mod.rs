@@ -170,8 +170,6 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
     }
 }
 
-/// The slots of each ring. Each kind of input queue has its own capacity, because a full timer or
-/// execution ring halts the engine while a full link ring drops a frame.
 impl<P> Config<P> {
     pub(crate) fn seal_try_limit(&self) -> NonZeroU32 {
         let configured = self
@@ -187,6 +185,8 @@ impl<P> Config<P> {
     }
 }
 
+/// The slots of each ring. Each kind of input queue has its own capacity, because a full timer or
+/// execution ring halts the engine while a full link ring drops a frame.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueuesConfig {
