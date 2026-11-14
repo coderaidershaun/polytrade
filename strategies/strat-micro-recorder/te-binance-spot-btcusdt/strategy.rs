@@ -286,17 +286,16 @@ impl Strategy for MicroRecorder {
             estimate.lambda,
         );
         ctx.emit(features.kyle_intercept, instrument, estimate.intercept);
-        if let Some(mid) = mid_now {
-            let lambda_bps = estimate.lambda / mid * BPS;
+        if let Some(in_bps) = mid_now.and_then(|mid| estimate.per_unit(mid / BPS)) {
             ctx.emit(
                 features.kyle_lambda_bps_per_notional,
                 instrument,
-                lambda_bps,
+                in_bps.lambda,
             );
             ctx.emit_present(
                 features.kyle_one_bp_notional,
                 instrument,
-                Some(1.0 / lambda_bps).filter(|flow| flow.is_finite() && *flow > 0.0),
+                in_bps.one_unit_flow,
             );
         }
     }
