@@ -28,6 +28,7 @@ use super::config_guards::{
     BINANCE_KLINES_VOLUME_BARS, BINANCE_PERP_SOURCE, BINANCE_SPOT_SOURCE, POLY_SOURCE, SIM_BLOCK,
     config_with_execution_on, config_with_source, execution_block_with, link_block, sources_of,
 };
+use super::sources;
 use crate::engine_support::Idle;
 use crate::parquet_readback::TempDir;
 
@@ -291,6 +292,25 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
             }
         ),
         "{http_timeout}"
+    );
+
+    // Two venues that each send orders. This build places orders on one venue only, so the start
+    // refuses before it reads any venue.
+    let live = execution_block_with("live", "");
+    let two_venues = with_state(
+        sources::document(&[(BINANCE_PERP_SOURCE, &live), (POLY_SOURCE, &live)], false),
+        &state,
+    );
+    let several = refusal(&two_venues, Scales::Refused, &state);
+    assert!(
+        matches!(
+            several,
+            StartError::ExecutionOnSeveralSources {
+                first: 0,
+                second: 1
+            }
+        ),
+        "{several}"
     );
 
     // E9: the link address is taken.

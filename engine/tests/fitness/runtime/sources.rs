@@ -18,7 +18,7 @@ const POLY_SLOT_SYMBOLS: &[&str] = &[
 
 /// A document whose `sources:` list holds one item for each pair of a feed block and the blocks
 /// beside it, with a link block when `link` is true.
-fn document(items: &[(&str, &str)], link: bool) -> String {
+pub(super) fn document(items: &[(&str, &str)], link: bool) -> String {
     let mut sources = String::from("sources:\n");
     for (feed, blocks) in items {
         let item = sources_with(feed, blocks);
