@@ -372,7 +372,7 @@ impl GueantScale {
     ) -> Option<Price> {
         let estimate = estimate?.fresh()?;
         let half_spread_ticks = self.half_spread_bps * self.ticks_per_bp;
-        let a_mid_per_sec = estimate.a_mid_per_sec(half_spread_ticks);
+        let a_mid_per_sec = estimate.a_mid_per_sec(half_spread_ticks)?;
         let k_per_bp = estimate.k_per_tick * self.ticks_per_bp;
         let coefficients = self
             .params

@@ -29,9 +29,12 @@ pub struct SideEstimate {
 }
 
 impl SideEstimate {
-    /// Mid-relative rate = A_touch * e^(k * half_spread_ticks).
-    pub fn a_mid_per_sec(&self, half_spread_ticks: f64) -> f64 {
-        self.a_per_sec * (self.k_per_tick * half_spread_ticks).exp()
+    /// The rate of fills at the mid, A·e^(k·h) for a half spread of h ticks, since A is fitted at
+    /// the touch, h ticks out from the mid. `None` where that rate is not finite, as once k·h
+    /// passes ln(f64::MAX) and the exponential overflows: the side then gets no quote.
+    pub fn a_mid_per_sec(&self, half_spread_ticks: f64) -> Option<f64> {
+        let rate = self.a_per_sec * (self.k_per_tick * half_spread_ticks).exp();
+        rate.is_finite().then_some(rate)
     }
 
     /// A stale fit is a previous one re-dated: recording or publishing it would date a dead

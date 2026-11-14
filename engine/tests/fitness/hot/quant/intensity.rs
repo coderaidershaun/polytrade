@@ -5,6 +5,7 @@ use super::Lcg;
 use engine::hot::book::{Book, SnapshotOutcome};
 use engine::hot::quant::intensity::{IntensityFit, PacedIntensity, SideEstimate};
 use engine::hot::quant::optimise::NelderMead;
+use engine::hot::quant::pricing::{GueantParams, Objective};
 use engine::hot::tracker::MicroTracker;
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BookChunk, BookChunkKind, Level, TradeEvent};
@@ -443,4 +444,54 @@ fn refit_interval_rounds_to_the_nearest_microsecond() {
             "half-life {half_life_secs} s: {micros} us is not the microsecond nearest {product}"
         );
     }
+}
+
+/// The quote reads A at the mid from a side estimate. Past ln(f64::MAX) the exponential of k·h
+/// overflows, so that side must get no quote, and no rate that is not finite may leave the
+/// calculator for a column.
+#[test]
+fn an_intensity_overflow_gives_no_quote() {
+    let overflow = f64::MAX.ln();
+    // ln k at the upper bound of the search, 5, so k = e^5 per tick.
+    let at_the_bound = SideEstimate {
+        a_per_sec: 2.0,
+        k_per_tick: 5.0f64.exp(),
+        events: 10.0,
+        converged: true,
+        iterations: 40,
+        is_stale: false,
+    };
+    let params = GueantParams::new(0.1, 1.0, Objective::InventoryPenalty);
+    let sigma_per_sqrt_sec = 1.0;
+    let quote = |half_spread_ticks: f64| {
+        at_the_bound
+            .a_mid_per_sec(half_spread_ticks)
+            .and_then(|a_mid| {
+                params.coefficients(a_mid, at_the_bound.k_per_tick, sigma_per_sqrt_sec)
+            })
+    };
+
+    // A half spread of 5 ticks gives k·h = 5·e^5, past the overflow: no rate, so no quote.
+    assert!(5.0 * at_the_bound.k_per_tick > overflow);
+    assert_eq!(at_the_bound.a_mid_per_sec(5.0), None);
+    assert!(quote(5.0).is_none(), "a side past the overflow was quoted");
+
+    // 4 ticks stay below it, so the same side quotes, from finite coefficients.
+    assert!(4.0 * at_the_bound.k_per_tick < overflow);
+    let a_mid = at_the_bound
+        .a_mid_per_sec(4.0)
+        .expect("a finite rate below the overflow");
+    assert!(a_mid.is_finite());
+    let coefficients = quote(4.0).expect("a finite rate is quoted");
+    assert!(
+        coefficients.half_spread().is_finite() && coefficients.skew_per_inventory().is_finite(),
+        "{coefficients:?}"
+    );
+
+    // An A that is not a number gives no rate either.
+    let not_a_number = SideEstimate {
+        a_per_sec: f64::NAN,
+        ..at_the_bound
+    };
+    assert_eq!(not_a_number.a_mid_per_sec(1.0), None);
 }
