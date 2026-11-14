@@ -754,10 +754,10 @@ const RECORDED: [(Shipped, [Digest; 8]); 2] = [
 ];
 
 const RECORDER_OUTPUTS: [Digest; 8] = [
-    recorded("tape rows", 46_415, 0x237e_55e3_64b6_eb5b),
+    recorded("tape rows", 46_304, 0xef3c_93e8_981c_0c1c),
     recorded("commands", 241, 0x60ea_828f_819b_c86e),
     recorded("ui books", 601, 0xd1ca_5f6f_2e33_bab2),
-    recorded("ui events", 48_281, 0xd176_d389_f0e2_ac33),
+    recorded("ui events", 48_170, 0x2e25_a188_bc16_09f1),
     recorded("exposure", 2, 0x27cc_3d45_433e_2022),
     recorded("hot log", 207, 0xdd2c_5282_3961_7e45),
     recorded("text log", 0, 0xcbf2_9ce4_8422_2325),
