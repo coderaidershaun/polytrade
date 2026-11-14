@@ -308,9 +308,10 @@ fn secs(count: i64) -> DurationUs {
     DurationUs::from_micros(count * 1_000_000)
 }
 
-/// Hand-computed against the population stdev of consecutive returns, then divided by
-/// `sqrt(interval_secs)`. Absolute returns of `[100, 110, 99]` are `+10, -11` — mean `-0.5`,
-/// both deviations `10.5`, so stdev `10.5`. Log returns of `[1, e, 1]` are `+1, -1` — stdev `1`.
+/// Hand-computed as the root mean square of consecutive returns, with no mean subtracted, then
+/// divided by `sqrt(interval_secs)`. Absolute returns of `[100, 110, 99]` are `+10, -11`, so the
+/// mean square is `(100 + 121) / 2 = 110.5`. Log returns of `[1, e, 1]` are `+1, -1`, so the mean
+/// square is `1`.
 #[test]
 fn realised_vol_is_per_second_and_skips_unusable_closes() {
     let absolute = realised_vol_per_sec(
@@ -319,8 +320,12 @@ fn realised_vol_is_per_second_and_skips_unusable_closes() {
         secs(10),
     );
     assert!(
-        close_to(absolute.expect("two returns"), 10.5 / 10.0f64.sqrt(), 1e-12),
-        "absolute-return stdev divided by sqrt(10s)"
+        close_to(
+            absolute.expect("two returns"),
+            110.5f64.sqrt() / 10.0f64.sqrt(),
+            1e-12
+        ),
+        "root mean square of the absolute returns divided by sqrt(10s)"
     );
 
     let log = realised_vol_per_sec(
@@ -330,11 +335,11 @@ fn realised_vol_is_per_second_and_skips_unusable_closes() {
     );
     assert!(
         close_to(log.expect("two returns"), 1.0 / 60.0f64.sqrt(), 1e-12),
-        "log-return stdev divided by sqrt(60s)"
+        "root mean square of the log returns divided by sqrt(60s)"
     );
 
     // Poly closes every 10s and binance every 60s must land on one comparable unit: the SAME
-    // closes at the two spacings give equal raw stdevs; WITH the sqrt(interval) scaling the 10s
+    // closes at the two spacings give equal raw values; WITH the sqrt(interval) scaling the 10s
     // figure reads sqrt(6) hotter, the honest per-second reading of the same moves packed tighter.
     let closes = [100.0, 110.0, 99.0, 101.0];
     let fast = realised_vol_per_sec(closes.into_iter(), Returns::Absolute, secs(10))
