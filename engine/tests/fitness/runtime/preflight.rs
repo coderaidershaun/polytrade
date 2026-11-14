@@ -231,6 +231,33 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         ),
         "{capacity}"
     );
+    // The second of two sources of one venue holds the execution block. Both share the id of that
+    // venue, so the ladder is checked against its rows, not against the position of the source.
+    let ladder_on_second = with_state(
+        sources::document(
+            &[
+                (BINANCE_SPOT_SOURCE, ""),
+                (
+                    &sources::spot_source("ETH"),
+                    &execution_block_with("live", ""),
+                ),
+            ],
+            false,
+        ),
+        &state,
+    );
+    let second_capacity = refusal(
+        &ladder_on_second,
+        Scales::Stamped { max_num_orders: 1 },
+        &state,
+    );
+    assert!(
+        matches!(
+            second_capacity,
+            StartError::ExecutionOrderCapacity { venue_max: 1, .. }
+        ),
+        "{second_capacity}"
+    );
 
     // E7: the position file cannot be read.
     let ledger = exposure::file_path(&state, &identity(), Some(ExecutionMode::Sim));
@@ -312,6 +339,50 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         ),
         "{several}"
     );
+    // The refusal names the two items by their places in `sources:`, which differ from the ids of
+    // their venues when a venue has two sources.
+    let after_a_reader = with_state(
+        sources::document(
+            &[
+                (BINANCE_SPOT_SOURCE, ""),
+                (&sources::spot_source("ETH"), &live),
+                (POLY_SOURCE, &live),
+            ],
+            false,
+        ),
+        &state,
+    );
+    let named = refusal(&after_a_reader, Scales::Refused, &state);
+    assert!(
+        matches!(
+            named,
+            StartError::ExecutionOnSeveralSources {
+                first: 1,
+                second: 2
+            }
+        ),
+        "{named}"
+    );
+
+    // One venue sends orders and the run also reads another venue, in either order. This build
+    // sends orders through one connection, which would take the other venue's rows as its own.
+    for order in [
+        [(BINANCE_SPOT_SOURCE, ""), (POLY_SOURCE, live.as_str())],
+        [(POLY_SOURCE, live.as_str()), (BINANCE_SPOT_SOURCE, "")],
+    ] {
+        let beside = with_state(sources::document(&order, false), &state);
+        let refused = refusal(&beside, Scales::Refused, &state);
+        assert!(
+            matches!(
+                refused,
+                StartError::ExecutionWithSeveralVenues {
+                    venue: "polymarket",
+                    other: "binance"
+                }
+            ),
+            "{refused}"
+        );
+    }
 
     // E9: the link address is taken.
     let taken = UdpSocket::bind("127.0.0.1:0").expect("the test binds a loopback port");

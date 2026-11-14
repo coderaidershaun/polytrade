@@ -65,6 +65,9 @@ impl<P> Preflight<'_, P> {
         let mode = config.execution_mode();
         let mut registry = Registry::build(config)?;
         let armed = one_armed_source(config)?;
+        if let Some((venue, ..)) = armed {
+            check_rows_of_one_venue(&registry, venue)?;
+        }
         if let Some(core_id) = config.engine.hot_core_id {
             validate_core_id(core_id)?;
         }
@@ -77,9 +80,8 @@ impl<P> Preflight<'_, P> {
         // constant, so a production run is checked against the production grid.
         port.read_scales(&registry)?.stamp(&mut registry);
         ExecCapacity::of(registry.instruments())?;
-        for (index, source) in config.sources.iter().enumerate() {
+        for (source, venue) in config.sources.iter().zip(config.source_venues()) {
             if let Some(execution) = &source.execution {
-                let venue = VenueId(index as u8);
                 check_execution_order_capacity(&registry, venue, execution.max_orders_per_side)?;
             }
         }
@@ -139,19 +141,37 @@ impl StartPlan {
 /// second source that sends orders is refused before any check reads a venue.
 ///
 /// # Errors
-/// [`StartError::ExecutionOnSeveralSources`] when two sources send orders.
+/// [`StartError::ExecutionOnSeveralSources`] with the places of the two items in `sources:` when
+/// two sources send orders.
 fn one_armed_source<P>(
     config: &Config<P>,
 ) -> Result<Option<(VenueId, &SourceSpec, &ExecutionConfig)>, StartError> {
-    let mut armed = config.armed_sources();
-    let first = armed.next();
-    match (first, armed.next()) {
-        (Some((first, ..)), Some((second, ..))) => Err(StartError::ExecutionOnSeveralSources {
-            first: usize::from(first.0),
-            second: usize::from(second.0),
-        }),
-        _ => Ok(first),
+    let mut places = config
+        .sources
+        .iter()
+        .enumerate()
+        .filter(|(_, source)| source.armed_execution().is_some())
+        .map(|(place, _)| place);
+    if let (Some(first), Some(second)) = (places.next(), places.next()) {
+        return Err(StartError::ExecutionOnSeveralSources { first, second });
     }
+    Ok(config.armed_sources().next())
+}
+
+/// This build sends orders through one task, which takes each row of the registry and gives each
+/// of its events the venue of the first row. So a run that sends orders reads the sources of that
+/// venue only, and a row of another venue is refused before any check reads a venue.
+///
+/// # Errors
+/// [`StartError::ExecutionWithSeveralVenues`] when a row belongs to a venue other than `venue`.
+fn check_rows_of_one_venue(registry: &Registry, venue: VenueId) -> Result<(), StartError> {
+    let Some(other) = registry.instruments().iter().find(|row| row.venue != venue) else {
+        return Ok(());
+    };
+    Err(StartError::ExecutionWithSeveralVenues {
+        venue: registry.venue_name(venue),
+        other: registry.venue_name(other.venue),
+    })
 }
 
 /// Confirms the configured ladder fits every instrument's venue order ceiling before any thread

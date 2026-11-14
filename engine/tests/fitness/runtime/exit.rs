@@ -180,6 +180,10 @@ fn each_start_refusal() -> Vec<StartError> {
             first: 0,
             second: 1,
         },
+        StartError::ExecutionWithSeveralVenues {
+            venue: "polymarket",
+            other: "binance",
+        },
     ]
 }
 
@@ -209,6 +213,7 @@ fn start_variant_index(error: &StartError) -> usize {
         StartError::ExecutionNonceEmpty { .. } => 19,
         StartError::ExecutionHttpTimeout { .. } => 20,
         StartError::ExecutionOnSeveralSources { .. } => 21,
+        StartError::ExecutionWithSeveralVenues { .. } => 22,
     }
 }
 
@@ -568,7 +573,7 @@ fn fatal_is_never_a_graceful_exit() {
     let start_indexes: Vec<usize> = refusals.iter().map(start_variant_index).collect();
     assert_eq!(
         start_indexes,
-        (0..22).collect::<Vec<_>>(),
+        (0..23).collect::<Vec<_>>(),
         "one refusal of each variant, once"
     );
     for refusal in &refusals {

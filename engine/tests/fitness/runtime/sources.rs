@@ -66,7 +66,7 @@ fn queue_ids(registry: &Registry, venues: u8) -> Vec<usize> {
 }
 
 /// A binance coin of the spot market, one source of the venue binance.
-fn spot_source(base: &str) -> String {
+pub(super) fn spot_source(base: &str) -> String {
     BINANCE_SPOT_SOURCE.replace("base: BTC", &format!("base: {base}"))
 }
 
