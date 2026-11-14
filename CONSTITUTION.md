@@ -493,7 +493,15 @@ differ, and no record says why.
   - An event of an own order with a fill and no slot: `HaltReason::OrphanFill`, with an incident
     record. An event with no fill moves no money: a count only.
   - A prior-run order with no free slot: `HaltReason::PriorRunOverflow`.
+  - Amended 2026-11-14: the first report of a prior-run order seats it at the total of that report,
+    and the fold books none of that total. IF the total is above 0, THEN quoting halts
+    (`HaltReason::PriorRunFillUnbooked`), with an `OrphanFill` record of the order and its total.
+    Later steps book as usual. WHY: the restored position can already hold that total, so a booking
+    would count it two times.
 - [ ] The fold books a fee one time for each trade id. It never books a fee two times.
+  - Amended 2026-11-14: a report of a prior-run order that does not raise its total, at or below
+    the total of its seat, books no fee and leaves an `UnbookedFee` record. WHY: the earlier run can
+    have booked that fee.
 - [ ] A fee in an asset other than the quote asset goes into the fee row of that asset. A fee that
   the fold does not book leaves an incident record.
 - [ ] A position at the close of its market window leaves an incident record. Its basis counts as a
@@ -1084,6 +1092,14 @@ each venue needed its own engine. The link between two engines carries state and
     second source that sends orders (`StartError::ExecutionOnSeveralSources`). Stage 3 tasks T6
     and T12 of the master plan build the start of several edges with their leases. Then this
     refusal goes. WHY: the plan defers the start of several edges first when the part is too large.
+  - Amended 2026-11-14, as built: preflight also refuses, before any venue read, an armed config
+    whose registry holds rows of more than one venue (`StartError::ExecutionWithSeveralVenues`),
+    until stage 3 tasks T6 and T12 of the master plan. WHY: the start gives the one execution edge
+    each row of the registry, so it cannot quote the other venue, and the fold panics at its first
+    event.
+  - Amended 2026-11-14, as built: the exposure file keys each row by (venue, market, symbol), in
+    version 3. WHY: two markets of one venue can trade one symbol, as Binance spot and perpetual
+    BTCUSDT do.
 - [ ] Preflight runs the checks of each source (§2, 2026-11-13). The execution leases stay the last
   checks. Preflight takes the lock of each lease before it advances any run nonce. Thus a refused
   lock leaves each nonce unspent.
@@ -1125,9 +1141,17 @@ Binance sent an order action again after a lost answer.
   at or above it (`StartError::ExecutionHttpTimeout`).
   - The signed REST client of Binance returns a failed order action at once. Only a read is tried
     again. Pin: `a_timed_out_order_action_is_sent_once`.
+  - Amended 2026-11-14: this holds after any failure, the venue codes -1006 and -1007 ("execution
+    status unknown") among them. A REST cancel that fails, at -1021 or 429 too, then reads the order
+    back. Pin: `an_order_action_whose_outcome_is_unknown_is_sent_once`. WHY: an answer of "status
+    unknown" leaves the order action perhaps done, as a lost answer does.
 - [ ] Probe cap. A slot counts its status probes. At `execution.max_status_probes` the instrument
   gets one read of open orders. IF the order stays unknown after that read, THEN quoting halts
   (`HaltReason::StatusProbesSpent`).
+  - Amended 2026-11-14: a venue event that resolves the slot to a state other than `Unknown` sets
+    its count to 0, so the cap counts one unanswered episode. Pin:
+    `answered_timeouts_spend_no_probe`. WHY: each stream reset gives each working order a timeout,
+    so a count that never fell halted an order that the venue answered.
 - [ ] Silence escalation. IF the order stream shows no event for `execution.stream_silence_ms` of
   message time while an order works, THEN one read of open orders goes out.
   - A read that agrees with the order table ends the silence, and no count rises.
@@ -1156,6 +1180,8 @@ test, sits in a module that is a concept in its own right, or has a ruling of §
   - The `ExecSettings` fields `max_status_probes`, `stream_silence`, and `max_stream_resets`.
   - `HaltReason::{OrphanFill, PriorRunOverflow, StatusProbesSpent, StreamSilent, WriterFailed}` and
     `RejectReason::IdsSpent`: the reasons cross to the link and the workstation.
+    - Amended 2026-11-14: `HaltReason::PriorRunFillUnbooked`, by the same merit. WHY: the review of
+      part 3 added it.
 - [ ] Vocabulary of `msg`, the data that crosses domains: `VenueId`, `ExecEvent.venue`,
   `AccountChunk.venue`, `IncidentRow`, `IncidentKind`, `PersistRecord::Incident`,
   `ExecCommand::ResubscribeStream`, `MessageBody::WriterFailed`, `MessageKind::WriterFailed`,
@@ -1184,6 +1210,8 @@ test, sits in a module that is a concept in its own right, or has a ruling of §
   seams).
 - [ ] `StartError::{ExecutionCapacity, ExecutionNonceEmpty, ExecutionHttpTimeout,
   ExecutionOnSeveralSources}`: `StartError` is `pub` by the ruling of §12 on the start seam.
+  - Amended 2026-11-14: `StartError::ExecutionWithSeveralVenues`, by the same ruling. WHY: the
+    review of part 3 added it.
 - [ ] `HotEngineSetup.exec`, now one `ExecWiring` for each venue: the timing harness builds
   `HotEngineSetup`.
 - [ ] By the rulings of §12 (2026-11-13): the fault seam of the chassis (`halt_on_session_error`),
