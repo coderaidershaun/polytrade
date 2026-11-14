@@ -79,11 +79,6 @@ pub use senders::PinnedSenders;
 
 const ROTATIONS_CHANNEL_CAPACITY: usize = 256;
 
-/// One rotation binding every five minutes, drained on every edge select pass; the depth exists so
-/// a slow bring-up cannot lose the first window.
-const ASSIGNMENTS_CHANNEL_CAPACITY: usize = 8;
-const LINK_RING_CAPACITY: usize = 1_024;
-
 pub struct Engine {
     /// One trading engine per host: while this is held, no second process under the same TE
     /// identity can place. The credential names the nonce file, not the lock, so swapping keys
@@ -271,7 +266,7 @@ impl Engine {
         // The rotation binding the execution edge trades against. Sized for a handful of windows:
         // one assignment every five minutes, and the edge drains it on every select pass.
         let (assignments_tx, assignments_rx) =
-            mpsc::channel::<WindowAssignment>(ASSIGNMENTS_CHANNEL_CAPACITY);
+            mpsc::channel::<WindowAssignment>(exec::ASSIGNMENTS_CHANNEL_CAPACITY);
         let PersistBringUp {
             wiring: persist_wiring,
             handle: persistence,
@@ -316,7 +311,8 @@ impl Engine {
         let (link_wiring, link_feed) = match &bound_link {
             None => (None, None),
             Some(_) => {
-                let (producer, consumer) = RingBuffer::<OutboundLink>::new(LINK_RING_CAPACITY);
+                let (producer, consumer) =
+                    RingBuffer::<OutboundLink>::new(link::LINK_RING_CAPACITY);
                 (
                     Some(LinkWiring {
                         sink: LinkSink::new(producer),

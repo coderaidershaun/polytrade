@@ -37,6 +37,10 @@ use super::exec_identity::ExecutionLease;
 /// reserve: half goes to the sweep, half to the hot-thread join and the file drains.
 pub(crate) const SWEEP_SHARE_OF_DRAIN: u32 = 2;
 
+/// One rotation binding every five minutes, drained on every edge select pass; the depth exists so
+/// a slow bring-up cannot lose the first window.
+pub(super) const ASSIGNMENTS_CHANNEL_CAPACITY: usize = 8;
+
 pub(super) struct ExecBringUp {
     pub(super) spawn: Option<EdgeSpawn>,
     /// Only the simulated venue feeds itself from market taps, so only it has any to hold open

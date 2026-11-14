@@ -13,6 +13,8 @@ use crate::runtime::registry::Registry;
 
 use super::StartError;
 
+pub(super) const LINK_RING_CAPACITY: usize = 1_024;
+
 pub(super) struct BoundLink {
     /// A plain socket that needs no runtime, so a refused start closes it by dropping it. The start
     /// turns it into a tokio socket on the runtime that runs the link actor.
