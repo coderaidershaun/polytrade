@@ -1,6 +1,5 @@
-//! A request of the signed Binance client that acts on an order and gets no answer is sent once:
-//! the venue may have run it, and a second send could act twice. A read is sent again. The error of
-//! a signed request never holds its signature, because an error ends in a log.
+//! The signed Binance client sends a request that acts on an order once, whatever its failure, and
+//! tries a read again. The error of a signed request holds no signature, which a log would keep.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -15,15 +14,23 @@ use engine::venues::edge::rest_quiet::SharedRestQuiet;
 
 const ORDER: &str = "pd-7ad60b6c-6a64f040000c0001";
 
-/// A venue on this host that takes each request and never answers, and keeps the first line of
-/// each request it took.
-struct SilentVenue {
+/// A venue on this host that takes each request and keeps the first line of each. A silent venue
+/// never answers. An answering venue answers each request with one fixed reply.
+struct StandInVenue {
     port: u16,
     requests: Arc<Mutex<Vec<String>>>,
 }
 
-impl SilentVenue {
-    fn start() -> Self {
+impl StandInVenue {
+    fn silent() -> Self {
+        Self::start(None)
+    }
+
+    fn answering(reply: &'static str) -> Self {
+        Self::start(Some(reply))
+    }
+
+    fn start(reply: Option<&'static str>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("the test binds a loopback port");
         let port = listener.local_addr().expect("a bound address").port();
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -39,8 +46,19 @@ impl SilentVenue {
                             .expect("no reader panics while it holds the list")
                             .push(line.trim_end().to_owned());
                     }
-                    // The connection stays open with no answer until the client gives up on it.
-                    reader.read_to_end(&mut Vec::new()).ok();
+                    let Some(reply) = reply else {
+                        // The connection stays open with no answer until the client gives up on it.
+                        reader.read_to_end(&mut Vec::new()).ok();
+                        return;
+                    };
+                    let mut header = String::new();
+                    while reader.read_line(&mut header).is_ok_and(|read| read > 2) {
+                        header.clear();
+                    }
+                    reader
+                        .get_mut()
+                        .write_all(reply.as_bytes())
+                        .expect("the answer is written");
                 });
             }
         });
@@ -55,7 +73,7 @@ impl SilentVenue {
     }
 }
 
-fn client(venue: &SilentVenue) -> SignedRestClient {
+fn client(venue: &StandInVenue) -> SignedRestClient {
     SignedRestClient::on_loopback(
         venue.port,
         SignedRestConfig {
@@ -83,8 +101,8 @@ fn is_timeout(error: &RestError) -> bool {
 /// signed with a key that is no key, and reaches only a stand-in on this host.
 #[test]
 fn a_timed_out_order_action_is_sent_once() {
-    let cancel_venue = SilentVenue::start();
-    let read_venue = SilentVenue::start();
+    let cancel_venue = StandInVenue::silent();
+    let read_venue = StandInVenue::silent();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -236,4 +254,67 @@ fn the_error_of_a_signed_request_holds_no_signature() {
             "the error names no path: {text}"
         );
     }
+}
+
+/// The answer of Binance when its backend timed out: the request can have run, or not.
+const STATUS_UNKNOWN: &str = "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 119\r\nConnection: close\r\n\r\n{\"code\":-1007,\"msg\":\"Timeout waiting for response from backend server. Send status unknown; execution status unknown.\"}";
+
+fn is_status_unknown(error: &RestError) -> bool {
+    matches!(
+        error,
+        RestError::Status {
+            status: 503,
+            code: Some(-1007),
+            ..
+        }
+    )
+}
+
+/// The method and the path of each request line, so that a failed assertion prints no signature.
+fn targets(requests: &[String]) -> Vec<&str> {
+    requests
+        .iter()
+        .map(|line| line.split('?').next().unwrap_or_default())
+        .collect()
+}
+
+/// CONTRACT: the signed client of the Binance edge and the venue meet at the network. When the
+/// venue answers that the execution status of a request is unknown, a cancel can have run, so the
+/// client sends it once and gives the answer back, which the edge settles with a read. A read with
+/// the same answer is sent again, because reading twice changes nothing. Each request is signed
+/// with a key that is no key, and reaches only a stand-in on this host.
+#[test]
+fn an_order_action_whose_outcome_is_unknown_is_sent_once() {
+    let cancel_venue = StandInVenue::answering(STATUS_UNKNOWN);
+    let read_venue = StandInVenue::answering(STATUS_UNKNOWN);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("the test builds a runtime");
+    let (cancelled, read) = runtime.block_on(async {
+        let mut cancelling = client(&cancel_venue);
+        let mut reading = client(&read_venue);
+        tokio::join!(
+            cancelling.cancel_order("BTCUSDT", ORDER),
+            reading.order_status("BTCUSDT", ORDER)
+        )
+    });
+
+    let cancelled = cancelled.expect_err("an unknown outcome is no cancel");
+    assert!(is_status_unknown(&cancelled), "{cancelled}");
+    let cancels = cancel_venue.requests();
+    assert_eq!(
+        targets(&cancels),
+        ["DELETE /api/v3/order"],
+        "the cancel goes out once"
+    );
+
+    let read = read.expect_err("an unknown outcome is no read");
+    assert!(is_status_unknown(&read), "{read}");
+    let reads = read_venue.requests();
+    assert_eq!(
+        targets(&reads),
+        ["GET /api/v3/order", "GET /api/v3/order"],
+        "a read is tried again"
+    );
 }
