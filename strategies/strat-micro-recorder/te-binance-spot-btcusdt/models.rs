@@ -59,7 +59,8 @@ pub(crate) struct BinanceVol {
     /// Guéant tick-space grid. None if startup preflight left unstamped.
     pub(crate) tick: Option<Price>,
     pub(crate) markouts: MarkoutTracker,
-    /// None if no volume clock (on_volume never fires) or no tick (λ has no grid).
+    /// `None` without volume bars, since `on_volume` then never fires, and without a tick size, so
+    /// that only an instrument with a tick records the Kyle columns.
     pub(crate) kyle: Option<KyleFeed>,
     pub(crate) hawkes_bid: HawkesSide,
     pub(crate) hawkes_ask: HawkesSide,
