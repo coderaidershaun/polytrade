@@ -1,6 +1,5 @@
 //! Toxic-flow markouts: pseudo-fills price adverse selection (zero alloc).
 
-use super::MarkoutSpec;
 use super::markout_side::{BACKING_MULTIPLE, MarkoutSide, MidSample, SideMarkouts, spins_in};
 use crate::hot::series::FastQueue;
 use crate::msg::ids::{Price, Qty};
@@ -14,6 +13,13 @@ const MID_RING: DurationUs = DurationUs::from_secs(6);
 
 /// Fill mature > this many spins past ideal = feed gap, not markout.
 const STALE_TOLERANCE_SPINS: i64 = 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MarkoutSpec {
+    pub spin_interval: DurationUs,
+    /// Max mids/sec: book commits + spins.
+    pub max_mids_per_sec: u32,
+}
 
 /// Pseudo-fill (for UI); price = armed level at receipt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
