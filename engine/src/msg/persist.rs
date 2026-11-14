@@ -250,8 +250,8 @@ labelled_enum! {
         /// of the trades in between are unknown.
         FeeGap = "fee_gap",
         StrandedPosition = "stranded_position",
-        /// A fill of an own order that holds no slot, of this run or of an earlier one. The ledger
-        /// does not book it.
+        /// A fill of an own order that the ledger does not book: the order holds no slot, or the
+        /// fill is the total that an order of an earlier run shows at its first report.
         OrphanFill = "orphan_fill",
         /// A fee that the ledger did not book: its asset has no row, or the engine cannot tell
         /// whether the fee of its trade was booked before.

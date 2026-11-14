@@ -383,6 +383,7 @@ fn arb_halt() -> impl Strategy<Value = UiHalt> {
                 Just(HaltReason::StatusProbesSpent),
                 Just(HaltReason::StreamSilent),
                 Just(HaltReason::WriterFailed),
+                Just(HaltReason::PriorRunFillUnbooked),
             ],
             any::<i64>()
         )

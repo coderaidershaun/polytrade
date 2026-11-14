@@ -30,6 +30,7 @@ labelled_enum! {
         StatusProbesSpent = "order status probes spent",
         StreamSilent = "order stream silent",
         WriterFailed = "file writer failed",
+        PriorRunFillUnbooked = "prior-run fill not booked",
     }
     /// Operator words for the halt banner: a halted engine's reason is read under pressure, and the
     /// table sits beside the variants so a new reason cannot ship as a bare Rust identifier.

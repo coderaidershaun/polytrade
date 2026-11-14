@@ -31,8 +31,8 @@ impl ExecEngine {
         self.halt(HaltReason::OrphanFill, stamps.fold);
     }
 
-    /// The fill of an own order that holds no slot, as the venue's running total. A record needs an
-    /// instrument, so a fill that names none keeps only its count.
+    /// A fill of an own order that the ledger does not book, as the venue's running total. A record
+    /// needs an instrument, so a fill that names none keeps only its count.
     #[cold]
     pub(super) fn record_orphan_fill(
         &mut self,

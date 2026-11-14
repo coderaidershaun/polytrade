@@ -13,7 +13,7 @@ use super::account::ReleaseOutcome;
 use super::audit::{bank_engine_driven, bank_event_rows};
 use super::engine::{ExecEngine, FoldStamps, view_of};
 use super::gates::HaltReason;
-use super::order::{OrderSlot, OrderState, ReconcilePass, Unseated};
+use super::order::{FeeFold, OrderSlot, OrderState, PriorRunSeat, ReconcilePass, Unseated};
 use super::view::{ExecCallback, Fill, OrderReject, RejectOrigin};
 
 impl ExecEngine {
@@ -151,7 +151,7 @@ impl ExecEngine {
     }
 
     /// An order of an earlier run holds no reservation, adds to no reject streak and earns no
-    /// callback. Its fills still move the ledger.
+    /// callback. Its fills after its first report still move the ledger.
     #[cold]
     pub(super) fn apply_to_prior_run(
         &mut self,
@@ -161,15 +161,20 @@ impl ExecEngine {
         bank: &mut Actions,
     ) {
         let now = stamps.fold;
-        let index = match self.prior_orders.find_or_seat(event, now) {
-            Ok(index) => index,
+        let PriorRunSeat { index, unbooked } = match self.prior_orders.find_or_seat(event, now) {
+            Ok(seat) => seat,
             Err(Unseated::TableFull) => return self.on_prior_run_overflow(event, stamps, bank),
             Err(Unseated::NoInstrument) => {
                 return self.on_prior_run_without_instrument(event, stamps, bank);
             }
         };
         let previous_state = OrderLifecycle::from(self.prior_orders.slot(index).state());
-        let applied = self.prior_orders.apply(index, event, now);
+        let mut applied = self.prior_orders.apply(index, event, now);
+        let has_unbooked_total = unbooked.mantissa() > 0;
+        if has_unbooked_total {
+            // The earlier run may have booked the fee of this trade as well.
+            applied.fee.fold = FeeFold::Unbookable;
+        }
         let slot = *self.prior_orders.slot(index);
         self.book_report(&slot, event, applied, ledger, bank, stamps.received);
         bank_event_rows(
@@ -180,6 +185,24 @@ impl ExecEngine {
             applied.fill,
             stamps.received,
         );
+        if has_unbooked_total {
+            self.on_unbooked_prior_run_total(event, stamps, bank);
+        }
+    }
+
+    /// The total that an order of an earlier run shows at its first report can hold fills that the
+    /// earlier run booked, which the restored position holds, and the fold cannot tell which part.
+    /// So the ledger books none of it, the record keeps it for a person to book, and quoting halts.
+    #[cold]
+    fn on_unbooked_prior_run_total(
+        &mut self,
+        event: &ExecEvent,
+        stamps: FoldStamps,
+        bank: &mut Actions,
+    ) {
+        unbooked_prior_run_total_error(event);
+        self.record_orphan_fill(event, stamps.received, bank);
+        self.halt(HaltReason::PriorRunFillUnbooked, stamps.fold);
     }
 
     /// Each entry of the prior-run table holds a working order, so this one has nowhere to fold.
@@ -354,6 +377,15 @@ impl ExecEngine {
             event.reject_code
         );
     }
+}
+
+#[cold]
+fn unbooked_prior_run_total_error(event: &ExecEvent) {
+    hot_error!(
+        "prior-run order {:x} shows {} filled at its first report, and the earlier run may have booked any part of it — the ledger books none of it, a record keeps it, and quoting halts",
+        event.client_id.0,
+        event.cumulative_qty.mantissa()
+    );
 }
 
 /// A reconciliation retiring a working order is the engine LOSING one, not routine housekeeping: the

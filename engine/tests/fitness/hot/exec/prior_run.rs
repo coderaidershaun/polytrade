@@ -1,9 +1,10 @@
-//! The orders that an earlier run left resting: each of their fills reaches the ledger once, none
-//! takes a slot of this run, a full table halts quoting, and a cancel the bank refused is asked again.
+//! The orders that an earlier run left resting: each fill after their first report reaches the
+//! ledger once, none takes a slot of this run, a full table halts quoting, and a cancel the bank
+//! refused is asked again.
 
 use std::sync::{Arc, Mutex};
 
-use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
+use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{
     ClientIdLayout, ExecSettings, HaltReason, MAX_ORDER_SLOTS, QuoteLevel, side_base,
 };
@@ -18,6 +19,7 @@ use engine::msg::persist::{IncidentKind, IncidentRow, PersistRecord};
 use engine::msg::time::Stamper;
 use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
+use engine::runtime::exposure::InstrumentExposure;
 use engine::runtime::registry::InstrumentRow;
 use engine::venues::exec::open_orders_snapshot_end;
 use proptest::prelude::*;
@@ -26,8 +28,8 @@ use proptest::test_runner::{Config, TestCaseError, TestRunner};
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
-    ONE, account_chunk, detached_setup, drain_orders_and_fills, exec_event, instrument_row,
-    persist_ring_for, spin, stream_ready, ts, ui_event_ring, venue_ts,
+    ONE, account_chunk, detached_setup, drain_orders_and_fills, exec_event, exposure_ring,
+    instrument_row, persist_ring_for, spin, stream_ready, ts, ui_event_ring, venue_ts,
 };
 use crate::exec_support::drain_commands;
 
@@ -82,10 +84,12 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    fixture_with_lane(256)
+    fixture_of(256, &[])
 }
 
-fn fixture_with_lane(lane_capacity: usize) -> Fixture {
+/// An engine whose command lane holds `lane_capacity` commands, and whose ledger starts from the
+/// position file of the run before, `restored`.
+fn fixture_of(lane_capacity: usize, restored: &[InstrumentExposure]) -> Fixture {
     let instruments: [InstrumentRow; 1] = [instrument_row(0, TrackerSpec::default(), 64)];
     let latest: Readings = Arc::new(Mutex::new(None));
     let (persistence, records) = persist_ring_for(
@@ -105,6 +109,10 @@ fn fixture_with_lane(lane_capacity: usize) -> Fixture {
             settings: ExecSettings::disabled(),
             run_nonce: 0,
         }],
+        exposure: ExposureWiring {
+            restored,
+            sink: exposure_ring(16, instruments.len()).0,
+        },
         ..detached_setup(&instruments, strategy)
     });
     Fixture {
@@ -144,6 +152,20 @@ fn prior_run_trade(
             ..exec_event(INSTRUMENT, client_id, side, price, when)
         }),
     )
+}
+
+/// The first report of an order the previous run left resting, with nothing filled yet. It seats
+/// the order, so each later fill of it is a step that the ledger books.
+fn prior_run_seat(slot_index: usize, side: Side, price: i64, when: i64) -> InboundMessage {
+    let MessageBody::Exec(trade) = prior_run_trade(slot_index, side, price, 0, 0, when).body else {
+        unreachable!("a prior-run trade is an execution message");
+    };
+    let seat = ExecEvent {
+        kind: ExecKind::ReportNew,
+        status: Some(VenueOrderStatus::New),
+        ..trade
+    };
+    InboundMessage::new(ts(when), MessageBody::Exec(seat))
 }
 
 /// An order of THIS run that the venue names once and then never answers about. It leaves the
@@ -221,13 +243,21 @@ fn prior_run_overflow_halts() {
         )
     };
     // One instrument gives the table 16 entries, and a partial fill keeps each order working, so no
-    // entry is closed for the 17th to take.
+    // entry is closed for the 17th to take. Each order is seated with nothing filled, so its fill
+    // is a step that the ledger books.
     for order in 0..16 {
         let when = 10 + order as i64;
-        fixture.engine.dispatch(&InboundMessage::new(
-            ts(when),
-            MessageBody::Exec(report(order, TENTH, when)),
-        ));
+        let seat = ExecEvent {
+            kind: ExecKind::ReportNew,
+            status: Some(VenueOrderStatus::New),
+            trade_id: None,
+            ..report(order, 0, when)
+        };
+        for event in [seat, report(order, TENTH, when)] {
+            fixture
+                .engine
+                .dispatch(&InboundMessage::new(ts(when), MessageBody::Exec(event)));
+        }
     }
     let held = read(&mut fixture, 0, 100);
     assert_eq!(held.position_base, Qty::from_mantissa(16 * TENTH));
@@ -297,7 +327,8 @@ fn a_prior_run_fill_that_names_no_instrument_halts() {
 }
 
 /// One order of the earlier run in a generated case: where it rests, its trades as steps of its
-/// total, and whether the venue then cancels it.
+/// total, whether the venue then cancels it, and whether the venue first names it with nothing
+/// filled, before each other report of it.
 #[derive(Debug, Clone)]
 struct EarlierOrder {
     instrument: u16,
@@ -305,6 +336,7 @@ struct EarlierOrder {
     price: i64,
     steps: Vec<i64>,
     is_canceled: bool,
+    is_seated_empty: bool,
 }
 
 /// Each report the venue sends about `order`, number `index`: a trade report for each step, and a
@@ -331,6 +363,12 @@ fn reports_of(index: usize, order: &EarlierOrder) -> Vec<ExecEvent> {
     };
     let mut reports = Vec::new();
     let mut cumulative = 0;
+    if order.is_seated_empty {
+        reports.push(ExecEvent {
+            status: Some(VenueOrderStatus::New),
+            ..base(ExecKind::ReportNew, 0)
+        });
+    }
     for (trade, step) in (0..).zip(&order.steps) {
         cumulative += step;
         reports.push(ExecEvent {
@@ -421,12 +459,19 @@ fn fold_earlier_orders(
         ));
     }
 
+    // The total that each order showed at its first report, which the ledger never books, and the
+    // largest total that it showed since.
+    let mut first: Vec<Option<i64>> = vec![None; orders.len()];
     let mut held = vec![0; orders.len()];
     let mut steps = 0;
     for (step, report) in (0..).zip(delivered) {
         let order = ClientIdLayout::slot_of(report.client_id);
-        if report.cumulative_qty.mantissa() > held[order] {
-            held[order] = report.cumulative_qty.mantissa();
+        let cumulative = report.cumulative_qty.mantissa();
+        if first[order].is_none() {
+            first[order] = Some(cumulative);
+            held[order] = cumulative;
+        } else if cumulative > held[order] {
+            held[order] = cumulative;
             steps += 1;
         }
         engine.dispatch(&InboundMessage::new(
@@ -437,9 +482,10 @@ fn fold_earlier_orders(
     engine.dispatch(&spin(0, 1_000 * (delivered.len() as i64 + 2)));
 
     let mut expected = [(0, 0); 2];
-    for (order, total) in orders.iter().zip(&held) {
+    for ((order, total), first) in orders.iter().zip(&held).zip(&first) {
+        let total = total - first.unwrap_or(0);
         let notional = Price::from_mantissa(order.price)
-            .notional(Qty::from_mantissa(*total))
+            .notional(Qty::from_mantissa(total))
             .mantissa();
         let (position, cash) = &mut expected[usize::from(order.instrument)];
         match order.side {
@@ -457,16 +503,33 @@ fn fold_earlier_orders(
     prop_assert_eq!(
         money,
         expected.map(|(position, cash)| (Qty::from_mantissa(position), cash)),
-        "each instrument holds the largest total of each of its orders, paid once"
+        "each instrument holds what each of its orders added after its first report, paid once"
     );
     prop_assert!(
         !is_any_resting,
         "an order of the earlier run took a slot that this run quotes from"
     );
-    let fill_rows = std::iter::from_fn(|| records.pop().ok())
-        .filter(|record| matches!(record, PersistRecord::Fill(_)))
-        .count();
-    prop_assert_eq!(fill_rows, steps, "one fill row for each step of a total");
+    let (incident_rows, fills) = incidents_and_booked_fills(&mut records);
+    prop_assert_eq!(fills.len(), steps, "one fill row for each step of a total");
+    // A cancel report that raises the total leaves a fee gap as well, which is not this record.
+    let mut unbooked: Vec<(usize, i64)> = incident_rows
+        .iter()
+        .filter(|row| row.kind == IncidentKind::OrphanFill)
+        .map(|row| {
+            let client_id = row.client_id.expect("the record of an order names it");
+            (ClientIdLayout::slot_of(client_id), row.qty.mantissa())
+        })
+        .collect();
+    unbooked.sort_unstable();
+    let shown_at_first_report: Vec<(usize, i64)> = (0..)
+        .zip(&first)
+        .filter_map(|(order, total)| total.filter(|total| *total > 0).map(|total| (order, total)))
+        .collect();
+    prop_assert_eq!(
+        unbooked,
+        shown_at_first_report,
+        "one record for each order whose first report showed a fill, with that total"
+    );
     let cancels = drain_commands(&mut commands)
         .into_iter()
         .filter_map(|command| match command {
@@ -487,12 +550,14 @@ fn fold_earlier_orders(
     Ok(())
 }
 
-/// FITNESS: the fills of each order of an earlier run reach the ledger once, however the venue
-/// repeats them, interleaves them across orders, or sends them after the order's cancel. Each
-/// instrument that holds such an order gets one cancel, and no such order takes a slot of this run.
-/// A report that moved money twice, or not at all, leaves a position the venue does not hold.
+/// FITNESS: each fill of an order of an earlier run after its first report reaches the ledger once,
+/// however the venue repeats the reports, interleaves them across orders, or sends them after the
+/// order's cancel. The total of the first report never does: it leaves a record and halts quoting.
+/// Each instrument that holds such an order gets one cancel, and no such order takes a slot of this
+/// run. A report that moved money twice, or not at all, leaves a position the venue does not hold.
 #[test]
 fn prior_run_fills_reach_ledger_once() {
+    a_prior_run_total_at_its_first_report_is_not_booked_again();
     a_prior_run_fill_moves_the_money_once_banks_its_rows_and_still_cancels();
     a_prior_run_order_takes_no_slot_this_run_quotes_from();
     let order = (
@@ -501,24 +566,27 @@ fn prior_run_fills_reach_ledger_once() {
         90i64..110,
         prop::collection::vec(1i64..20, 1..=4),
         any::<bool>(),
+        any::<bool>(),
     )
         .prop_map(
-            |(instrument, side, price, steps, is_canceled)| EarlierOrder {
+            |(instrument, side, price, steps, is_canceled, is_seated_empty)| EarlierOrder {
                 instrument,
                 side,
                 price: price * ONE,
                 steps: steps.into_iter().map(|step| step * HUNDREDTH).collect(),
                 is_canceled,
+                is_seated_empty,
             },
         );
     let cases = prop::collection::vec(order, 1..=6).prop_flat_map(|orders| {
-        let reports: Vec<ExecEvent> = orders
+        let (seats, reports): (Vec<ExecEvent>, Vec<ExecEvent>) = orders
             .iter()
             .enumerate()
             .flat_map(|(index, order)| reports_of(index, order))
-            .collect();
+            .partition(|report| report.cumulative_qty.mantissa() == 0);
         (
             Just(orders),
+            Just(seats),
             Just(reports).prop_shuffle(),
             prop::collection::vec((0usize..64, 0usize..64), 0..8),
         )
@@ -529,15 +597,109 @@ fn prior_run_fills_reach_ledger_once() {
         ..Config::default()
     });
     runner
-        .run(&cases, |(orders, shuffled, copies)| {
+        .run(&cases, |(orders, seats, shuffled, copies)| {
             let mut delivered = shuffled.clone();
             for (from, to) in copies {
                 let copy = shuffled[from % shuffled.len()];
                 delivered.insert(to % (delivered.len() + 1), copy);
             }
+            let delivered: Vec<ExecEvent> = seats.into_iter().chain(delivered).collect();
             fold_earlier_orders(&orders, &delivered)
         })
         .expect("each fill of an order of an earlier run reaches the ledger once");
+}
+
+/// The total that an order of an earlier run shows at its first report can hold fills that the
+/// earlier run booked, which the restored position already holds. The fold cannot tell which part,
+/// so it books none of the total: quoting halts, a record keeps the total for a person to book, and
+/// each later step of the order books as usual. Booking the total would count the earlier fills
+/// twice.
+fn a_prior_run_total_at_its_first_report_is_not_booked_again() {
+    let restored = [InstrumentExposure {
+        instrument: INSTRUMENT,
+        position_base: Qty::from_mantissa(3 * TENTH),
+        cash_quote: -30 * ONE,
+        basis_quote: 30 * ONE,
+    }];
+    let mut fixture = fixture_of(256, &restored);
+    assert_eq!(
+        read(&mut fixture, 0, 5).position_base,
+        Qty::from_mantissa(3 * TENTH)
+    );
+
+    let first = prior_run_trade(1, Side::Buy, 100 * ONE, 3 * TENTH, 3 * TENTH, 10);
+    fixture.engine.dispatch(&first);
+    let seated = read(&mut fixture, 1, 20);
+    assert_eq!(
+        seated.position_base,
+        Qty::from_mantissa(3 * TENTH),
+        "the earlier run booked this fill, and the restored position already holds it"
+    );
+    assert_eq!(seated.pnl_quote, -30 * ONE);
+    assert_eq!(
+        halt_reason(&mut fixture.ui_events),
+        Some(HaltReason::PriorRunFillUnbooked),
+        "a total that the fold cannot book with certainty halts quoting"
+    );
+    let MessageBody::Exec(first) = first.body else {
+        unreachable!("a prior-run trade is an execution message");
+    };
+    let (records, fills) = incidents_and_booked_fills(&mut fixture.records);
+    assert_eq!(
+        records,
+        [IncidentRow {
+            kind: IncidentKind::OrphanFill,
+            instrument: INSTRUMENT,
+            client_id: Some(first.client_id),
+            trade_id: None,
+            qty: Qty::from_mantissa(3 * TENTH),
+            amount: 0,
+            window_close_ts_us: None,
+            exchange_ts_us: venue_ts(10),
+            received_ts_us: ts(10),
+        }],
+        "one record keeps the total that the ledger did not book"
+    );
+    assert_eq!(
+        fills,
+        [],
+        "no fill row claims a booking that did not happen"
+    );
+
+    fixture.engine.dispatch(&prior_run_trade(
+        1,
+        Side::Buy,
+        100 * ONE,
+        2 * TENTH,
+        5 * TENTH,
+        30,
+    ));
+    let later = read(&mut fixture, 2, 40);
+    assert_eq!(
+        later.position_base,
+        Qty::from_mantissa(5 * TENTH),
+        "a later report books only the step that it adds"
+    );
+    assert_eq!(later.pnl_quote, -50 * ONE);
+    assert_eq!(
+        incidents_and_booked_fills(&mut fixture.records),
+        (Vec::new(), vec![Qty::from_mantissa(2 * TENTH)])
+    );
+}
+
+/// The incident records and the booked quantity of each fill row that the engine banked so far.
+fn incidents_and_booked_fills(
+    records: &mut Consumer<PersistRecord>,
+) -> (Vec<IncidentRow>, Vec<Qty>) {
+    let mut banked = (Vec::new(), Vec::new());
+    while let Ok(record) = records.pop() {
+        match record {
+            PersistRecord::Incident(row) => banked.0.push(row),
+            PersistRecord::Fill(row) => banked.1.push(row.booked_qty),
+            _ => {}
+        }
+    }
+    banked
 }
 
 /// FITNESS: a fill on a prior run's order moves the money exactly once however many times the venue
@@ -550,6 +712,9 @@ fn prior_run_fills_reach_ledger_once() {
 fn a_prior_run_fill_moves_the_money_once_banks_its_rows_and_still_cancels() {
     let mut fixture = fixture();
 
+    fixture
+        .engine
+        .dispatch(&prior_run_seat(1, Side::Buy, 100 * ONE, 5));
     fixture
         .engine
         .dispatch(&prior_run_trade(1, Side::Buy, 100 * ONE, ONE, ONE, 10));
@@ -642,8 +807,12 @@ fn a_prior_run_fill_moves_the_money_once_banks_its_rows_and_still_cancels() {
 fn a_prior_run_order_takes_no_slot_this_run_quotes_from() {
     let mut fixture = fixture();
 
+    let buy_base = side_base(INSTRUMENT, Side::Buy);
+    fixture
+        .engine
+        .dispatch(&prior_run_seat(buy_base, Side::Buy, 100 * ONE, 5));
     fixture.engine.dispatch(&prior_run_trade(
-        engine::hot::exec::side_base(INSTRUMENT, Side::Buy),
+        buy_base,
         Side::Buy,
         100 * ONE,
         ONE,
@@ -679,7 +848,7 @@ fn banked_so_far(engine: &HotEngine) -> u64 {
 /// those orders again, and they would rest there through each later market move.
 #[test]
 fn prior_run_cancel_refused_by_a_full_bank_is_sent_later() {
-    let mut fixture = fixture_with_lane(JAMMED_LANE);
+    let mut fixture = fixture_of(JAMMED_LANE, &[]);
     fixture.engine.dispatch(&unanswered_order(1_000));
 
     // The lane takes its 64 and nobody drains it, so the bank fills behind it. Full is when its
@@ -702,7 +871,7 @@ fn prior_run_cancel_refused_by_a_full_bank_is_sent_later() {
 
     fixture
         .engine
-        .dispatch(&prior_run_trade(1, Side::Buy, 100 * ONE, ONE, ONE, 100_000));
+        .dispatch(&prior_run_seat(1, Side::Buy, 100 * ONE, 100_000));
 
     // The edge catches up. Emptying a whole lane each spin drains the bank behind it.
     let mut sent = Vec::new();
