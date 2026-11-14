@@ -358,7 +358,7 @@ impl UpSlot {
         block: &mut link_schema::UpRole,
     ) {
         let counts = ctx.tracker(self.instrument).intensity();
-        let Some(estimate) = self.intensity.refit(counts, now) else {
+        let Some(estimate) = self.intensity.estimate(counts, now) else {
             return;
         };
         write_side(

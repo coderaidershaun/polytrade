@@ -408,7 +408,7 @@ fn a_pacer_with_no_cadence_never_fits() {
     let mut pacer = PacedIntensity::new(None);
     assert!(
         pacer
-            .refit(configured.intensity(), ts(10_000_000))
+            .estimate(configured.intensity(), ts(10_000_000))
             .is_none(),
         "a pacer with no cadence fitted counts it was never asked to pace against"
     );

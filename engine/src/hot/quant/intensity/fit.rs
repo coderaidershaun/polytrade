@@ -178,8 +178,10 @@ impl PacedIntensity {
         DurationUs::from_micros((secs * 1e6).round() as i64)
     }
 
-    /// Current (A,k) fit. Re-solve costs 3 NM (bid/ask/pooled) -> rides histogram decay not spin.
-    pub fn refit(
+    /// Refits when the interval has passed since the last fit, then gives the fit in force. A
+    /// refit runs three searches, one for each side and one for both, so it follows the decay of
+    /// the counts and not each read. `None` with no interval or with no counts.
+    pub fn estimate(
         &mut self,
         counts: Option<&IntensityCounts>,
         now: LocalTs,

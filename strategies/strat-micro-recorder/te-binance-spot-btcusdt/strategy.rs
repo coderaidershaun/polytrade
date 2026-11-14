@@ -366,7 +366,7 @@ fn record_spin(
     }
     let intensity = model
         .intensity
-        .refit(ctx.tracker(instrument).intensity(), now);
+        .estimate(ctx.tracker(instrument).intensity(), now);
     let egarch = model.refresh(ctx, instrument);
     let egarch_vol = egarch.map(|estimate| estimate.forecast_vol_per_sec);
     let realised_st = gated_realised_vol(&model.spin_mids, Returns::Log, cfg.spin_interval);
