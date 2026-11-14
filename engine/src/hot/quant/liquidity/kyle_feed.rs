@@ -67,7 +67,7 @@ impl KyleFeed {
         self.estimator.fit()
     }
 
-    pub fn reset(&mut self) {
+    pub fn clear(&mut self) {
         self.estimator.clear();
         self.pending = None;
         self.prev_mid = None;

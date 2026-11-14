@@ -167,7 +167,7 @@ fn no_observation_spans_a_missing_mid_or_a_clear() {
     ];
     let mut cleared = feed();
     fold(&mut cleared, &prefix);
-    cleared.reset();
+    cleared.clear();
     let from_cleared = fold(&mut cleared, &after);
     let from_new = fold(&mut feed(), &after);
     assert!(

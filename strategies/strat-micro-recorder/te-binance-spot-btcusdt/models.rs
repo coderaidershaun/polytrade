@@ -163,7 +163,7 @@ impl BinanceVol {
         self.markouts.clear();
         self.last_mid_ts_us = None;
         if let Some(kyle) = self.kyle.as_mut() {
-            kyle.reset();
+            kyle.clear();
         }
         self.hawkes_bid.reset();
         self.hawkes_ask.reset();
