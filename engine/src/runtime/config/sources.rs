@@ -23,7 +23,7 @@ pub struct SourceConfig {
 
 impl SourceConfig {
     /// The execution block of this source when its mode sends orders.
-    pub fn armed_execution(&self) -> Option<&ExecutionConfig> {
+    pub(crate) fn armed_execution(&self) -> Option<&ExecutionConfig> {
         self.execution
             .as_ref()
             .filter(|execution| execution.mode.is_enabled())

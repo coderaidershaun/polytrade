@@ -279,7 +279,7 @@ impl<P> Config<P> {
 
     /// The venue of each source, in source order. The sources of one venue sit together, so a new id
     /// starts where the venue changes.
-    pub fn source_venues(&self) -> Vec<VenueId> {
+    pub(crate) fn source_venues(&self) -> Vec<VenueId> {
         let mut venues: Vec<VenueId> = Vec::with_capacity(self.sources.len());
         for (index, source) in self.sources.iter().enumerate() {
             let venue = match index.checked_sub(1) {
@@ -295,7 +295,9 @@ impl<P> Config<P> {
     }
 
     /// Each source that sends orders, with its venue id and its execution block.
-    pub fn armed_sources(&self) -> impl Iterator<Item = (VenueId, &SourceSpec, &ExecutionConfig)> {
+    pub(crate) fn armed_sources(
+        &self,
+    ) -> impl Iterator<Item = (VenueId, &SourceSpec, &ExecutionConfig)> {
         let venues = self.source_venues();
         self.sources
             .iter()

@@ -29,12 +29,8 @@ impl AssetDictionary {
             .map(|(_, name)| name.as_ref())
     }
 
-    pub fn venue(&self, id: AssetId) -> Option<VenueId> {
-        self.entries.get(usize::from(id.0)).map(|(venue, _)| *venue)
-    }
-
     /// Dictionary in id order; persisted in footer for deserialization.
-    pub fn entries(&self) -> &[(VenueId, Box<str>)] {
+    pub(crate) fn entries(&self) -> &[(VenueId, Box<str>)] {
         &self.entries
     }
 
