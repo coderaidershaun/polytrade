@@ -383,6 +383,48 @@ fn rearm_keeps_queue_only_while_armed_at_same_price() {
 }
 
 #[test]
+fn a_late_mid_is_raised_to_the_last_stamp() {
+    // Mids at 10 s and 11 s, then one stamped 10.5 s. It is held at 11 s, after the mids before it,
+    // so the ring stays in time order in each build.
+    let mut late = tracker(secs(1));
+    late.on_mid(at(secs(10)), 100.00);
+    late.on_mid(at(secs(11)), 100.01);
+    late.on_mid(at(secs(10) + 500_000), 100.02);
+    let mut raised = tracker(secs(1));
+    raised.on_mid(at(secs(10)), 100.00);
+    raised.on_mid(at(secs(11)), 100.01);
+    raised.on_mid(at(secs(11)), 100.02);
+    assert_eq!(late, raised, "the late mid holds the stamp 11 s");
+
+    // The sample at or before 11 s is the newest mid at 11 s. A bid fill at 12 s reads back to it,
+    // and the latest mid is that same sample, so the mid did not move into the fill: 0 bps. The
+    // older mid at 11 s would give (100.02 - 100.01) / 100.01, about 1 bps.
+    late.arm(MarkoutSide::Bid, price(100.0), Qty::from_mantissa(0));
+    late.on_trade(&print(Side::Sell, 100.0, secs(12)), at(secs(12)));
+    assert_eq!(late.bid().reverse(ReverseHorizon::Secs1).last(), Some(0.0));
+
+    // A resync keeps the clamp: after it, a mid stamped before the last fed stamp is still raised.
+    let mut resynced = tracker(secs(1));
+    resynced.on_mid(at(secs(11)), 100.01);
+    resynced.reset_continuity();
+    resynced.on_mid(at(secs(10)), 100.00);
+    let mut held = tracker(secs(1));
+    held.on_mid(at(secs(11)), 100.01);
+    held.reset_continuity();
+    held.on_mid(at(secs(11)), 100.00);
+    assert_eq!(resynced, held, "a resync keeps the last fed stamp");
+
+    // A clear starts the clock again: after it, the same feed gives the state of a new tracker.
+    let mut cleared = tracker(secs(1));
+    cleared.on_mid(at(secs(11)), 100.01);
+    cleared.clear();
+    cleared.on_mid(at(secs(10)), 100.00);
+    let mut fresh = tracker(secs(1));
+    fresh.on_mid(at(secs(10)), 100.00);
+    assert_eq!(cleared, fresh, "a clear forgets the last fed stamp");
+}
+
+#[test]
 fn arm_refuses_a_price_that_is_not_positive() {
     // A price at or below zero is no level, and the forward markout divides by the armed price.
     let mut markouts = tracker(secs(1));

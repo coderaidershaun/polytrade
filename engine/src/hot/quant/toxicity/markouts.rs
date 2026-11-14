@@ -28,6 +28,8 @@ pub struct MarkoutFill {
 pub struct MarkoutTracker {
     stale_tolerance: DurationUs,
     mids: FastQueue<MidSample>,
+    /// The last stamp fed to `on_mid`. A resync keeps it, so the mid clock never runs backwards.
+    last_mid_ts_us: Option<LocalTs>,
     bid: SideMarkouts,
     ask: SideMarkouts,
 }
@@ -53,6 +55,7 @@ impl MarkoutTracker {
                 STALE_TOLERANCE_SPINS * spec.spin_interval.micros(),
             ),
             mids: FastQueue::new(mid_capacity, BACKING_MULTIPLE),
+            last_mid_ts_us: None,
             bid: SideMarkouts::new(MarkoutSide::Bid, matured_window, spec.spin_interval),
             ask: SideMarkouts::new(MarkoutSide::Ask, matured_window, spec.spin_interval),
         }
@@ -102,16 +105,14 @@ impl MarkoutTracker {
         })
     }
 
-    /// Feed mid, mature fills (non-decreasing ts_us; skip invalid).
+    /// Feeds a mid and realises each fill that it ripens. The ring is searched by time, so a stamp
+    /// below the last fed stamp is raised to it. A mid that is not a positive number is skipped.
     pub fn on_mid(&mut self, ts_us: LocalTs, mid: f64) {
+        let ts_us = self.last_mid_ts_us.map_or(ts_us, |last| last.max(ts_us));
+        self.last_mid_ts_us = Some(ts_us);
         if !(mid.is_finite() && mid > 0.0) {
             return;
         }
-        debug_assert!(
-            self.mids.last().is_none_or(|last| ts_us >= last.ts_us),
-            "mid samples must arrive in time order, got {}us",
-            ts_us.micros()
-        );
         let sample = MidSample { ts_us, mid };
         self.mids.push(sample);
         self.bid.mature(sample, self.stale_tolerance);
@@ -137,6 +138,7 @@ impl MarkoutTracker {
 
     /// Wipe realised history for instrument rotation (lifetime counters survive).
     pub fn clear(&mut self) {
+        self.last_mid_ts_us = None;
         self.reset_continuity();
         self.bid.clear_series();
         self.ask.clear_series();
