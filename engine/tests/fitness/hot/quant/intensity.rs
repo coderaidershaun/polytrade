@@ -412,3 +412,35 @@ fn a_pacer_with_no_cadence_never_fits() {
         "a pacer with no cadence fitted counts it was never asked to pace against"
     );
 }
+
+/// A paced fit waits a tenth of the half-life of its counts, to the nearest microsecond. A cast
+/// alone rounds toward zero, so it loses one microsecond where the product falls just below a whole
+/// one, and each refit then comes that much early.
+#[test]
+fn refit_interval_rounds_to_the_nearest_microsecond() {
+    let interval = |half_life_secs: f64| {
+        PacedIntensity::refit_interval(&IntensitySpec {
+            half_life_secs,
+            ..IntensitySpec::default()
+        })
+        .micros()
+    };
+    // A tenth of each half-life, by hand: 120 s gives 12 s, 0.29 s gives 0.029 s, and 0.071 s
+    // gives 0.0071 s. In binary the products of the last two fall just below 29,000 and 7,100.
+    assert_eq!(interval(120.0), 12_000_000);
+    assert_eq!(interval(0.29), 29_000);
+    assert_eq!(interval(0.071), 7_100);
+
+    // Half-lives from 1 ms to 1 day, drawn evenly in their logarithm.
+    let (shortest, longest) = (1e-3f64.ln(), 86_400f64.ln());
+    let mut lcg = Lcg(0x5EED_0071);
+    for _ in 0..10_000 {
+        let half_life_secs = (shortest + (longest - shortest) * lcg.unit()).exp();
+        let product = half_life_secs * 0.1 * 1e6;
+        let micros = interval(half_life_secs);
+        assert!(
+            (micros as f64 - product).abs() <= 0.5,
+            "half-life {half_life_secs} s: {micros} us is not the microsecond nearest {product}"
+        );
+    }
+}

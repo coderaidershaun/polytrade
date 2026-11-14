@@ -168,10 +168,11 @@ impl PacedIntensity {
         }
     }
 
-    /// Re-solving faster than the counts decay re-fits the same data.
+    /// A tenth of the half-life of the counts, to the nearest microsecond: a refit that comes
+    /// sooner fits nearly the same counts again.
     pub fn refit_interval(spec: &IntensitySpec) -> DurationUs {
         let secs = spec.half_life_secs * REFIT_HALF_LIFE_FRACTION;
-        DurationUs::from_micros((secs * 1e6) as i64)
+        DurationUs::from_micros((secs * 1e6).round() as i64)
     }
 
     /// Current (A,k) fit. Re-solve costs 3 NM (bid/ask/pooled) -> rides histogram decay not spin.
