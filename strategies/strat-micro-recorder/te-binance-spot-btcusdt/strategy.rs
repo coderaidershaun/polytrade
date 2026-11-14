@@ -198,7 +198,6 @@ impl Strategy for MicroRecorder {
             return;
         }
         model.egarch.push_close(event.close.to_f64());
-        model.is_dirty = true;
     }
 
     fn on_trade(&mut self, ctx: &mut StrategyCtx<'_>, event: &TradeEvent) {
@@ -368,10 +367,8 @@ fn record_spin(
     let intensity = model
         .intensity
         .refit(ctx.tracker(instrument).intensity(), now);
-    model.refresh(ctx, instrument);
-    let egarch_vol = model
-        .estimate
-        .map(|estimate| estimate.conditional_vol_per_sec);
+    let egarch = model.refresh(ctx, instrument);
+    let egarch_vol = egarch.map(|estimate| estimate.conditional_vol_per_sec);
     let realised_st = gated_realised_vol(&model.spin_mids, Returns::Log, cfg.spin_interval);
     ctx.emit_present(features.mid, instrument, mid);
     ctx.emit_present(features.microprice, instrument, microprice);
@@ -395,7 +392,7 @@ fn record_spin(
         instrument,
         realised_st.map(|vol| vol * BPS),
     );
-    if let Some(estimate) = model.estimate {
+    if let Some(estimate) = egarch {
         ctx.emit(features.egarch_omega, instrument, estimate.omega);
         ctx.emit(features.egarch_gamma, instrument, estimate.gamma);
         ctx.emit(features.egarch_theta, instrument, estimate.theta);

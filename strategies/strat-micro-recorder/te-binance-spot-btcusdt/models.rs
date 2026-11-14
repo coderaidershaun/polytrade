@@ -44,15 +44,14 @@ const MARKOUT_EMA_HALFLIFE: u32 = 8;
 /// Worst-case mid observations/sec for markout ring. Binance 10x/s + spin + headroom.
 const MARKOUT_MAX_MIDS_PER_SEC: u32 = 12;
 
-/// Long-horizon EGARCH + short-horizon realised vol. estimate caches last fit; refit when dirty.
+/// The long-horizon EGARCH fit and the short-horizon realised volatility of one instrument, beside
+/// the feeds of each model.
 pub(crate) struct BinanceVol {
     /// Candle interval EGARCH rescale built against; on_kline accepts this interval alone.
     pub(crate) interval: KlineInterval,
     pub(crate) spin_mids: FastQueue<f64>,
     pub(crate) egarch: Egarch,
-    pub(crate) is_dirty: bool,
     is_seeded: bool,
-    pub(crate) estimate: Option<EgarchEstimate>,
     pub(crate) resilience: OrderbookResilience,
     pub(crate) resilience_window: FastQueue<f64>,
     pub(crate) median_scratch: MedianScratch,
@@ -94,9 +93,7 @@ impl BinanceVol {
             interval,
             spin_mids: FastQueue::new(realised_window_len(spin_interval), SERIES_BACKING_MULTIPLE),
             egarch: Egarch::new(span, EGARCH_MIN_CLOSES, keep),
-            is_dirty: false,
             is_seeded: false,
-            estimate: None,
             resilience: OrderbookResilience::new(),
             resilience_window: FastQueue::new(resilience_len, SERIES_BACKING_MULTIPLE),
             median_scratch: MedianScratch::for_window(resilience_len),
@@ -121,8 +118,13 @@ impl BinanceVol {
         }
     }
 
-    /// First live spin: absorb tracked warmup candles (REST backfill), refit on fresh candle. Clear-copy keeps idempotent.
-    pub(crate) fn refresh(&mut self, ctx: &mut StrategyCtx<'_>, instrument: InstrumentId) {
+    /// Gives the EGARCH fit in force, refitted when a close arrived. The first live spin first fills
+    /// the window from the tracker's candles, which hold the backfill that arrived during warmup.
+    pub(crate) fn refresh(
+        &mut self,
+        ctx: &mut StrategyCtx<'_>,
+        instrument: InstrumentId,
+    ) -> Option<EgarchEstimate> {
         if !self.is_seeded {
             self.is_seeded = true;
             if let Some(series) = ctx.tracker(instrument).candles(self.interval) {
@@ -130,15 +132,12 @@ impl BinanceVol {
                 for candle in series.closed.iter() {
                     self.egarch.push_close(candle.close.to_f64());
                 }
-                self.is_dirty |= !series.closed.is_empty();
             }
         }
-        if !self.is_dirty {
-            return;
-        }
-        self.estimate = self.egarch.fit();
-        self.is_dirty = false;
-        if let Some(estimate) = self.estimate
+        let is_refit = self.egarch.is_due();
+        let estimate = self.egarch.estimate();
+        if is_refit
+            && let Some(estimate) = estimate
             && !estimate.converged
         {
             engine::alert!(
@@ -148,6 +147,7 @@ impl BinanceVol {
                 estimate.iterations
             );
         }
+        estimate
     }
 
     /// Market data back to post-new state, keeping preallocated buffers. Config-derived (interval/tick/refit) stay.
@@ -155,10 +155,8 @@ impl BinanceVol {
         self.egarch.clear();
         self.spin_mids.clear();
         self.egarch.reset_warm_start();
-        self.is_dirty = false;
         // Re-seeded from tracker's candles on next live spin (same as boot). REST backfill contiguous.
         self.is_seeded = false;
-        self.estimate = None;
         self.resilience = OrderbookResilience::new();
         self.resilience_window.clear();
         self.intensity.reset();
