@@ -613,7 +613,8 @@ fn prior_run_fills_reach_ledger_once() {
 /// earlier run booked, which the restored position already holds. The fold cannot tell which part,
 /// so it books none of the total: quoting halts, a record keeps the total for a person to book, and
 /// each later step of the order books as usual. Booking the total would count the earlier fills
-/// twice.
+/// twice. For the same reason the fee of a trade at or below that total is not booked: a record
+/// keeps it, and a trade past the total books its fee.
 fn a_prior_run_total_at_its_first_report_is_not_booked_again() {
     let restored = [InstrumentExposure {
         instrument: INSTRUMENT,
@@ -666,25 +667,81 @@ fn a_prior_run_total_at_its_first_report_is_not_booked_again() {
         "no fill row claims a booking that did not happen"
     );
 
-    fixture.engine.dispatch(&prior_run_trade(
+    // The trade report of the seated total comes late, twice, with its fee of 0.0003 USDT.
+    let late = with_fee(
+        prior_run_trade(1, Side::Buy, 100 * ONE, 3 * TENTH, 3 * TENTH, 25),
         1,
-        Side::Buy,
-        100 * ONE,
-        2 * TENTH,
-        5 * TENTH,
-        30,
+        THREE_TEN_THOUSANDTHS,
+    );
+    let MessageBody::Exec(late_trade) = late.body else {
+        unreachable!("a prior-run trade is an execution message");
+    };
+    fixture.engine.dispatch(&late);
+    fixture.engine.dispatch(&late);
+    let repeated = read(&mut fixture, 2, 27);
+    assert_eq!(
+        repeated.pnl_quote,
+        -30 * ONE,
+        "the earlier run may have booked the fee of a trade at or below the seated total"
+    );
+    assert_eq!(
+        incidents_and_booked_fills(&mut fixture.records),
+        (
+            vec![IncidentRow {
+                kind: IncidentKind::UnbookedFee,
+                instrument: INSTRUMENT,
+                client_id: Some(late_trade.client_id),
+                trade_id: Some(TradeId(1)),
+                qty: Qty::from_mantissa(3 * TENTH),
+                amount: THREE_TEN_THOUSANDTHS,
+                window_close_ts_us: None,
+                exchange_ts_us: venue_ts(25),
+                received_ts_us: ts(25),
+            }],
+            Vec::new()
+        ),
+        "one record keeps the fee with its amount, however often the venue repeats the report"
+    );
+    assert_eq!(fixture.engine.counters().unbooked_fees, 1);
+
+    fixture.engine.dispatch(&with_fee(
+        prior_run_trade(1, Side::Buy, 100 * ONE, 2 * TENTH, 5 * TENTH, 30),
+        2,
+        TWO_TEN_THOUSANDTHS,
     ));
-    let later = read(&mut fixture, 2, 40);
+    let later = read(&mut fixture, 3, 40);
     assert_eq!(
         later.position_base,
         Qty::from_mantissa(5 * TENTH),
         "a later report books only the step that it adds"
     );
-    assert_eq!(later.pnl_quote, -50 * ONE);
+    assert_eq!(
+        later.pnl_quote,
+        -50 * ONE - TWO_TEN_THOUSANDTHS,
+        "a trade past the seated total books its fee"
+    );
     assert_eq!(
         incidents_and_booked_fills(&mut fixture.records),
         (Vec::new(), vec![Qty::from_mantissa(2 * TENTH)])
     );
+}
+
+/// Fees in USDT, the quote asset of the test instrument.
+const THREE_TEN_THOUSANDTHS: i64 = 3 * ONE / 10_000;
+const TWO_TEN_THOUSANDTHS: i64 = 2 * ONE / 10_000;
+
+/// The same report as trade `trade`, with a fee in the quote asset.
+fn with_fee(report: InboundMessage, trade: i64, fee: i64) -> InboundMessage {
+    let MessageBody::Exec(event) = report.body else {
+        unreachable!("a prior-run trade is an execution message");
+    };
+    let with_fee = ExecEvent {
+        trade_id: Some(TradeId(trade)),
+        commission: fee,
+        commission_asset: AssetId(1),
+        ..event
+    };
+    InboundMessage::new(report.header.received_ts_us, MessageBody::Exec(with_fee))
 }
 
 /// The incident records and the booked quantity of each fill row that the engine banked so far.

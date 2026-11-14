@@ -15,6 +15,9 @@ pub(super) struct FeeMemory {
     trade_ids: [Option<TradeId>; REMEMBERED_TRADES],
     /// Filled quantity that no report's own quantity has explained yet.
     open_gap: Qty,
+    /// The filled total that an order of an earlier run showed when this run seated it, and zero
+    /// for each other order. The earlier run may have booked the fee of any trade up to it.
+    seated_total: Qty,
 }
 
 /// What one report owes the ledger in fees.
@@ -46,7 +49,15 @@ impl FeeMemory {
     pub(super) const EMPTY: FeeMemory = FeeMemory {
         trade_ids: [None; REMEMBERED_TRADES],
         open_gap: Qty::from_mantissa(0),
+        seated_total: Qty::from_mantissa(0),
     };
+
+    pub(super) const fn seated_at(total: Qty) -> FeeMemory {
+        FeeMemory {
+            seated_total: total,
+            ..FeeMemory::EMPTY
+        }
+    }
 
     /// `step` is how far `event` raised the order's filled quantity.
     pub(super) fn fold(&mut self, event: &ExecEvent, step: Qty) -> FeeVerdict {
@@ -63,6 +74,11 @@ impl FeeMemory {
         }
         let fold = match event.trade_id {
             Some(trade) if self.trade_ids.contains(&Some(trade)) => FeeFold::AlreadyBooked,
+            // Remembered, so that a repeat of the report leaves no second record of its fee.
+            Some(trade) if self.is_at_or_below_the_seat(event) => {
+                self.remember(trade);
+                FeeFold::Unbookable
+            }
             // A trade whose quantity an earlier report's step already held: the report came late.
             Some(trade) if !self.is_full() => {
                 self.remember(trade);
@@ -75,6 +91,11 @@ impl FeeMemory {
             fold,
             unexplained: Qty::from_mantissa(0),
         }
+    }
+
+    #[inline]
+    fn is_at_or_below_the_seat(&self, event: &ExecEvent) -> bool {
+        self.seated_total.mantissa() > 0 && event.cumulative_qty <= self.seated_total
     }
 
     #[inline]

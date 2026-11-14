@@ -120,7 +120,7 @@ impl PriorRunOrders {
             last_event_ts_us: now,
             ..OrderSlot::EMPTY
         };
-        self.fees[index] = FeeMemory::EMPTY;
+        self.fees[index] = FeeMemory::seated_at(event.cumulative_qty);
         self.in_use.insert(index);
         let unbooked = event.cumulative_qty;
         Ok(PriorRunSeat { index, unbooked })

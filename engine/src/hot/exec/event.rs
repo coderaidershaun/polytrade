@@ -13,7 +13,7 @@ use super::account::ReleaseOutcome;
 use super::audit::{bank_engine_driven, bank_event_rows};
 use super::engine::{ExecEngine, FoldStamps, view_of};
 use super::gates::HaltReason;
-use super::order::{FeeFold, OrderSlot, OrderState, PriorRunSeat, ReconcilePass, Unseated};
+use super::order::{OrderSlot, OrderState, PriorRunSeat, ReconcilePass, Unseated};
 use super::view::{ExecCallback, Fill, OrderReject, RejectOrigin};
 
 impl ExecEngine {
@@ -169,12 +169,7 @@ impl ExecEngine {
             }
         };
         let previous_state = OrderLifecycle::from(self.prior_orders.slot(index).state());
-        let mut applied = self.prior_orders.apply(index, event, now);
-        let has_unbooked_total = unbooked.mantissa() > 0;
-        if has_unbooked_total {
-            // The earlier run may have booked the fee of this trade as well.
-            applied.fee.fold = FeeFold::Unbookable;
-        }
+        let applied = self.prior_orders.apply(index, event, now);
         let slot = *self.prior_orders.slot(index);
         self.book_report(&slot, event, applied, ledger, bank, stamps.received);
         bank_event_rows(
@@ -185,7 +180,7 @@ impl ExecEngine {
             applied.fill,
             stamps.received,
         );
-        if has_unbooked_total {
+        if unbooked.mantissa() > 0 {
             self.on_unbooked_prior_run_total(event, stamps, bank);
         }
     }
