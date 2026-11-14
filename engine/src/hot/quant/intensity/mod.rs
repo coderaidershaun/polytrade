@@ -5,4 +5,5 @@ mod counts;
 mod fit;
 
 pub use counts::IntensityCounts;
+pub(crate) use counts::{IntensityShape, TopOfBook, TradePrint};
 pub use fit::{IntensityEstimate, IntensityFit, PacedIntensity, SideEstimate};

@@ -3,9 +3,45 @@
 
 use crate::hot::digest::digest_fields;
 use crate::msg::ids::{Price, Side};
-use crate::msg::inbound::TradeEvent;
 use crate::msg::time::{LocalTs, VenueTs};
-use crate::runtime::config::IntensitySpec;
+
+/// The shape of the counts of one instrument, fixed at its start: the tick that measures the depth
+/// of a print, the number of depth buckets, the half-life of the decay, and the count at the touch
+/// below which a fit gives no new estimate.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct IntensityShape {
+    pub(crate) tick: Price,
+    pub(crate) max_depth_ticks: usize,
+    pub(crate) half_life_secs: f64,
+    pub(crate) min_events: f64,
+}
+
+/// One trade print as the counts read it. The prints of one sweep share their side and their
+/// exchange stamp, and the received stamp drives the decay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct TradePrint {
+    pub(crate) side: Side,
+    pub(crate) price: Price,
+    pub(crate) exchange_ts_us: VenueTs,
+    pub(crate) received_ts_us: LocalTs,
+}
+
+/// The best bid and ask from before the print, which anchor its depth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct TopOfBook {
+    pub(crate) best_bid: Option<Price>,
+    pub(crate) best_ask: Option<Price>,
+}
+
+impl TopOfBook {
+    /// A buy takes the ask and a sell the bid, so each print is measured from the side it takes.
+    fn anchor_for(self, side: Side) -> Option<Price> {
+        match side {
+            Side::Buy => self.best_ask,
+            Side::Sell => self.best_bid,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct IntensityCounts {
@@ -38,23 +74,21 @@ digest_fields! {
 }
 
 impl IntensityCounts {
-    /// tick buckets the histogram.
-    ///
     /// # Panics
     /// Fewer than two depth buckets: the fit needs an interior bin plus the censored tail, and the
     /// bucket arithmetic below would underflow on an empty histogram.
-    pub(crate) fn new(spec: &IntensitySpec, tick: Price) -> Self {
+    pub(crate) fn new(shape: IntensityShape) -> Self {
         assert!(
-            spec.max_depth_ticks >= 2,
+            shape.max_depth_ticks >= 2,
             "intensity histogram needs at least two depth buckets, got {}",
-            spec.max_depth_ticks
+            shape.max_depth_ticks
         );
         Self {
-            tick,
-            decay_per_sec: std::f64::consts::LN_2 / spec.half_life_secs,
-            min_events: spec.min_events,
-            bid_reach: vec![0.0; spec.max_depth_ticks],
-            ask_reach: vec![0.0; spec.max_depth_ticks],
+            tick: shape.tick,
+            decay_per_sec: std::f64::consts::LN_2 / shape.half_life_secs,
+            min_events: shape.min_events,
+            bid_reach: vec![0.0; shape.max_depth_ticks],
+            ask_reach: vec![0.0; shape.max_depth_ticks],
             exposure_secs: 0.0,
             last_decay_ts: None,
             open_group: None,
@@ -63,22 +97,17 @@ impl IntensityCounts {
         }
     }
 
-    /// Buy -> ASK side, sell -> BID side. Sweep (same side + ts) extends group; else new.
-    pub(crate) fn on_trade(
-        &mut self,
-        event: &TradeEvent,
-        received_ts_us: LocalTs,
-        bid: Option<Price>,
-        ask: Option<Price>,
-    ) {
+    /// A buy counts on the ask side and a sell on the bid side. A print with the side and the
+    /// exchange stamp of the open sweep extends that sweep; each other print starts a new one.
+    pub(crate) fn on_print(&mut self, print: TradePrint, top: TopOfBook) {
         if let Some(group) = self.open_group
-            && group.side == event.side
-            && group.exchange_ts_us == event.exchange_ts_us
+            && group.side == print.side
+            && group.exchange_ts_us == print.exchange_ts_us
         {
-            self.extend_group(group, event.price);
+            self.extend_group(group, print.price);
             return;
         }
-        self.start_group(event, received_ts_us, bid, ask);
+        self.start_group(print, top);
     }
 
     /// Wipes histograms/exposure/open sweep (lifetime counters survive).
@@ -111,31 +140,21 @@ impl IntensityCounts {
         }
     }
 
-    fn start_group(
-        &mut self,
-        event: &TradeEvent,
-        received_ts_us: LocalTs,
-        bid: Option<Price>,
-        ask: Option<Price>,
-    ) {
-        self.decay_to(received_ts_us);
-        let anchor = match event.side {
-            Side::Buy => ask,
-            Side::Sell => bid,
-        };
-        let Some(anchor) = anchor else {
+    fn start_group(&mut self, print: TradePrint, top: TopOfBook) {
+        self.decay_to(print.received_ts_us);
+        let Some(anchor) = top.anchor_for(print.side) else {
             self.without_book += 1;
             return;
         };
         let bucket = self
-            .bucket_for(event.side, anchor, event.price)
+            .bucket_for(print.side, anchor, print.price)
             .unwrap_or(0);
-        for level in self.reach_mut(event.side)[..=bucket].iter_mut() {
+        for level in self.reach_mut(print.side)[..=bucket].iter_mut() {
             *level += 1.0;
         }
         self.open_group = Some(Group {
-            side: event.side,
-            exchange_ts_us: event.exchange_ts_us,
+            side: print.side,
+            exchange_ts_us: print.exchange_ts_us,
             deepest_bucket: bucket,
             anchor,
         });
