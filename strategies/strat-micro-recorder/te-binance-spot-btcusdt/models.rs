@@ -5,7 +5,7 @@ use engine::hot::quant::hawkes::{HawkesChoice, HawkesSide};
 use engine::hot::quant::intensity::{PacedIntensity, SideEstimate};
 use engine::hot::quant::liquidity::{KyleFeed, KylesLambdaSpec};
 use engine::hot::quant::micro::OrderbookResilience;
-use engine::hot::quant::pricing::{Bps, GueantParams, SideRates};
+use engine::hot::quant::pricing::{Bps, GueantParams, QuoteInputs, SideRates, Snap};
 use engine::hot::quant::toxicity::{
     ForwardHorizon, MarkoutSpec, MarkoutTracker, ReverseHorizon, SideMarkouts,
 };
@@ -320,8 +320,8 @@ pub(crate) struct GueantScale {
     params: GueantParams,
     features: Features,
     tick: Price,
-    /// S̃ = S/τ, the fair price as a continuous tick index — S is the mid, not the microprice.
-    fair_ticks: f64,
+    /// S, the fair price the quote centres on: the mid, not the microprice.
+    fair: f64,
     ticks_per_bp: f64,
     /// σ̃ in bps per √second.
     pub(crate) sigma_bps: f64,
@@ -348,7 +348,7 @@ impl GueantScale {
             params,
             features,
             tick,
-            fair_ticks: mid / tick.to_f64(),
+            fair: mid,
             ticks_per_bp: ticks_per_bp(mid, tick),
             sigma_bps: log_vol * BPS,
             half_spread_bps: (spread / 2.0) / mid * BPS,
@@ -380,22 +380,6 @@ impl GueantScale {
             sigma_per_sqrt_sec: self.sigma_bps,
             unit: Bps,
         })?;
-        let depth_ticks = match side {
-            QuoteSide::Bid => coefficients.bid_depth(self.inventory),
-            QuoteSide::Ask => coefficients.ask_depth(self.inventory),
-        } * self.ticks_per_bp;
-        // Nearest tick, then clamped to the far edge of the minimum-distance band: the strategy
-        // never quotes tighter than MIN_QUOTE_DISTANCE_BPS from fair, which also stops an
-        // inventory-skewed δ(q) from crossing its own mid — the old fair-side clamp is the band
-        // edge's special case. The engine snaps a bid down and an ask up onto the same grid this
-        // already sits on, so the snap is idempotent and the price recorded is the price declared.
-        let min_distance_ticks = MIN_QUOTE_DISTANCE_BPS * self.ticks_per_bp;
-        let tick_index = match side {
-            QuoteSide::Bid => ((self.fair_ticks - depth_ticks).round() as i64)
-                .min((self.fair_ticks - min_distance_ticks).floor() as i64),
-            QuoteSide::Ask => ((self.fair_ticks + depth_ticks).round() as i64)
-                .max((self.fair_ticks + min_distance_ticks).ceil() as i64),
-        };
         let GueantSideColumns {
             half_spread_bps: half_spread,
             skew_bps: skew,
@@ -403,15 +387,29 @@ impl GueantScale {
         } = self.features.gueant(side);
         ctx.emit(half_spread, instrument, coefficients.half_spread());
         ctx.emit(skew, instrument, coefficients.skew_per_inventory());
-        // A half-spread wider than the whole price would put the bid through zero, which is
-        // invalid. Both conditions here gate negative and wrapped prices.
-        if tick_index > 0
-            && let Some(mantissa) = tick_index.checked_mul(self.tick.mantissa())
-        {
-            ctx.emit(price, instrument, Price::from_mantissa(mantissa).to_f64());
-            return Some(Price::from_mantissa(mantissa));
-        }
-        None
+        // Nearest tick, then out to the far edge of the minimum-distance band: the strategy never
+        // quotes nearer fair than MIN_QUOTE_DISTANCE_BPS, which also stops an inventory-skewed δ(q)
+        // from crossing its own mid. The engine snaps a bid down and an ask up onto the same grid
+        // this already sits on, so the snap is idempotent and the price recorded is the price
+        // declared. The recorder sets no touch to stay behind, as it never had one.
+        let quotes = coefficients.quote_in_ticks(
+            self.ticks_per_bp,
+            QuoteInputs {
+                fair: self.fair,
+                inventory: self.inventory,
+                best_bid: None,
+                best_ask: None,
+                tick: self.tick,
+                snap: Snap::Nearest,
+                min_distance_ticks: Some(MIN_QUOTE_DISTANCE_BPS * self.ticks_per_bp),
+            },
+        )?;
+        let quoted = match side {
+            QuoteSide::Bid => quotes.bid,
+            QuoteSide::Ask => quotes.ask,
+        }?;
+        ctx.emit(price, instrument, quoted.to_f64());
+        Some(quoted)
     }
 }
 
