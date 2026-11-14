@@ -6,7 +6,9 @@ use crate::msg::ids::{Price, Qty};
 use crate::msg::inbound::TradeEvent;
 use crate::msg::time::{DurationUs, LocalTs};
 
-const MATURED_WINDOW: DurationUs = DurationUs::from_secs(600);
+/// Each series holds as many markouts as there are spins in this span. A series grows only on a
+/// fill, so it holds the last N fills, which can reach back far more than ten minutes.
+const MATURED_CAPACITY: DurationUs = DurationUs::from_secs(600);
 
 /// Mid ring depth = deepest reverse lookback + 1s slack.
 const MID_RING: DurationUs = DurationUs::from_secs(6);
@@ -54,7 +56,7 @@ impl MarkoutTracker {
             "markout max_mids_per_sec must be non-zero"
         );
 
-        let matured_window = spins_in(MATURED_WINDOW, spec.spin_interval);
+        let matured_capacity = spins_in(MATURED_CAPACITY, spec.spin_interval);
         let mid_capacity = (MID_RING.to_secs() as usize * spec.max_mids_per_sec as usize).max(2);
         Self {
             stale_tolerance: DurationUs::from_micros(
@@ -62,8 +64,8 @@ impl MarkoutTracker {
             ),
             mids: FastQueue::new(mid_capacity, BACKING_MULTIPLE),
             last_mid_ts_us: None,
-            bid: SideMarkouts::new(MarkoutSide::Bid, matured_window, spec.spin_interval),
-            ask: SideMarkouts::new(MarkoutSide::Ask, matured_window, spec.spin_interval),
+            bid: SideMarkouts::new(MarkoutSide::Bid, matured_capacity, spec.spin_interval),
+            ask: SideMarkouts::new(MarkoutSide::Ask, matured_capacity, spec.spin_interval),
         }
     }
 
