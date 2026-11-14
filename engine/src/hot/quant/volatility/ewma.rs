@@ -38,7 +38,7 @@ impl EwmaVol {
     }
 
     #[inline]
-    pub fn volatility(&self) -> Option<f64> {
+    pub fn volatility_per_event(&self) -> Option<f64> {
         self.variance.map(f64::sqrt)
     }
 

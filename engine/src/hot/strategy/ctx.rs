@@ -74,7 +74,7 @@ impl StrategyCtx<'_> {
     pub fn ewma_vol(&self, instrument: InstrumentId) -> Option<f64> {
         self.ewma[usize::from(instrument.0)]
             .as_ref()
-            .and_then(EwmaVol::volatility)
+            .and_then(EwmaVol::volatility_per_event)
     }
 
     /// Whether the engine calls this market back and lets its quotes out yet. While it warms, a
