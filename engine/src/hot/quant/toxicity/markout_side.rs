@@ -18,7 +18,7 @@ pub(super) const BACKING_MULTIPLE: usize = 2;
 /// Headroom over fills in flight (at most one per side per placement).
 const PENDING_SLACK: usize = 2;
 
-/// Post-fill horizons. Ordering load-bearing: [`ForwardHorizon::ALL`] indexed by discriminant.
+/// The horizons after a fill at which its forward markout is realised.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ForwardHorizon {
     Secs1,
@@ -56,7 +56,20 @@ impl ForwardHorizon {
     }
 }
 
-/// Pre-fill horizons. Ordering load-bearing: [`ReverseHorizon::ALL`] indexed by discriminant.
+// The lanes are built in the order of `ALL` and read back by the discriminant of a horizon, so a
+// reordered `ALL` would read one horizon from the lane of another. The build fails on it instead.
+const _: () = {
+    let mut index = 0;
+    while index < ForwardHorizon::ALL.len() {
+        assert!(
+            ForwardHorizon::ALL[index].index() == index,
+            "ForwardHorizon::ALL must list each horizon at the index of its discriminant"
+        );
+        index += 1;
+    }
+};
+
+/// The horizons before a fill over which its reverse markout reads back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReverseHorizon {
     Secs1,
@@ -78,6 +91,18 @@ impl ReverseHorizon {
         self as usize
     }
 }
+
+// The series are read back by the discriminant of a horizon, as the forward lanes are.
+const _: () = {
+    let mut index = 0;
+    while index < ReverseHorizon::ALL.len() {
+        assert!(
+            ReverseHorizon::ALL[index].index() == index,
+            "ReverseHorizon::ALL must list each horizon at the index of its discriminant"
+        );
+        index += 1;
+    }
+};
 
 /// Which of OUR quotes a print reached (not Side: selling aggressor fills BID).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
