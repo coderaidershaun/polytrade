@@ -1,10 +1,12 @@
 //! Adverse selection w/o private fills: public print reaching quoted level => pseudo-execution.
 //! [`markouts`] = pseudo-fill machinery. [`vpin`] = volume-clock order-flow imbalance.
 
+mod markout_side;
 mod markouts;
 mod vpin;
 
-pub use markouts::{MarkoutFill, MarkoutSide, MarkoutTracker, SideMarkouts};
+pub use markout_side::{MarkoutSide, SideMarkouts};
+pub use markouts::{MarkoutFill, MarkoutTracker};
 pub use vpin::{VolumeBar, VpinEstimate, vpin};
 
 use crate::msg::time::DurationUs;
