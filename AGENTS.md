@@ -59,7 +59,7 @@ docker buildx build --platform linux/arm64 --build-arg BIN=strat-micro-recorder-
 
 ## Config keys
 
-Each block of an engine's `config.yaml` refuses a key it does not know. Each key below has a default, except `otlp.collector`. The blocks `latency:`, `senders:` and `otlp:` can be left out, so a config with none of these keys still loads. Defaults and ranges: `engine/src/runtime/config/` and `README.md`, section "Config keys".
+Each block of an engine's `config.yaml` refuses a key it does not know. Each key below has a default, except `sources:` and `otlp.collector`. The blocks `latency:`, `senders:` and `otlp:` can be left out. Thus a config with `sources:` and none of the other keys still loads. Defaults and ranges: `engine/src/runtime/config/` and `README.md`, section "Config keys".
 
 - `engine:` `idle` (`spin` or `park`), `park_us`, `housekeeping_core_id`. On Linux, `idle: spin` needs `hot_core_id`.
 - `latency:` `interval_secs`, `window_intervals`, `display_ms`, `sample_ring`, and `budget.<stage>.p99_us`, `budget.<stage>.p999_us` for `<stage>` = `venue_to_engine`, `wire_to_message`, `message_to_decision`, `decision_to_wire`. A budget only reports.
