@@ -19,7 +19,7 @@ use engine::msg::ids::{
 use engine::msg::inbound::{FileWriter, InboundMessage, MessageBody, SpinTick, WriterFailure};
 use engine::msg::time::{EngineClock, Stamper};
 use engine::msg::ui::{UiEvent, UiHalt};
-use engine::runtime::config::{ExecutionMode, TrackerSpec};
+use engine::runtime::config::{Config, ExecutionMode, TrackerSpec};
 use engine::runtime::exposure::{
     ExposureError, ExposureSnapshot, ExposureState, InstrumentExposure, WriterStatus, file_path,
 };
@@ -34,6 +34,7 @@ use crate::engine_support::{
 };
 use crate::exec_support::{drain_commands, exec_settings, make_ready, spin_at};
 use crate::parquet_readback::TempDir;
+use crate::runtime::config_guards::{BINANCE_PERP_SOURCE, BINANCE_SPOT_SOURCE};
 use crate::runtime::exposure_state::{
     BINANCE_SOURCE, POLY_SOURCE, drain_writer, identity, load_live, registry_for, row, snapshot,
     spawn_live_writer, spawn_reporting_writer, write_from, write_through_the_writer,
@@ -57,6 +58,7 @@ const MAX_SESSION_LOSS: i64 = 5 * ONE;
 fn each_instrument_with_a_position_survives_restart() {
     a_missing_file_is_a_cold_start();
     a_written_position_reloads_as_its_cost_basis();
+    two_markets_of_one_symbol_keep_their_own_positions();
     a_run_that_folds_nothing_leaves_its_inherited_file_as_it_was();
     the_sections_for_a_person_are_never_read_back();
     assets_sum_over_each_instrument_that_shares_them();
@@ -97,6 +99,43 @@ fn a_written_position_reloads_as_its_cost_basis() {
     );
 }
 
+/// Spot and perpetual BTCUSDT of Binance have one venue and one symbol. A start that put the
+/// position of the spot row onto the perpetual row would read the spot row flat, and the spot
+/// ceiling would admit buys up to the cap a second time.
+fn two_markets_of_one_symbol_keep_their_own_positions() {
+    let root = TempDir::new("exposure-two-markets");
+    let registry = registry_of_two_markets();
+    let markets: Vec<(&str, &str)> = registry
+        .instruments()
+        .iter()
+        .map(|row| (row.market.as_str(), row.venue_symbol.as_ref()))
+        .collect();
+    assert_eq!(
+        markets,
+        [("perpetual", "btcusdt"), ("spot", "btcusdt")],
+        "the perpetual row comes first, and both rows name one symbol"
+    );
+    let rows = [row(1, 100_000, -11_800_000_000, 11_800_000_000)];
+    write_through_the_writer(root.path(), &registry, &[snapshot(1, &rows)]);
+
+    let state = load_live(root.path(), &registry).expect("the file this build wrote loads");
+    assert_eq!(
+        state.instruments(),
+        rows,
+        "the position of the spot row comes back on the spot row"
+    );
+}
+
+/// Binance perpetual BTCUSDT, then Binance spot BTCUSDT: one venue, one symbol, two markets.
+fn registry_of_two_markets() -> Registry {
+    let document = crate::runtime::sources::document(
+        &[(BINANCE_PERP_SOURCE, ""), (BINANCE_SPOT_SOURCE, "")],
+        false,
+    );
+    let config: Config = Config::from_yaml(&document).expect("two markets of one venue parse");
+    Registry::build(&config).expect("two markets of one venue build")
+}
+
 /// A writer that started out believing the disk empty would put that belief over a real position at
 /// its first write, and the run that did it would look healthy.
 fn a_run_that_folds_nothing_leaves_its_inherited_file_as_it_was() {
@@ -130,7 +169,7 @@ fn the_sections_for_a_person_are_never_read_back() {
     let registry = registry_for(BINANCE_SOURCE);
     let path = file_path(root.path(), &identity(), Some(ExecutionMode::Live));
     std::fs::create_dir_all(root.path()).expect("create the exposure directory");
-    let rows = r#"{ "venue": "binance", "symbol": "btcusdt", "position_base": 100000, "cash_quote": -11800000000, "basis_quote": 11800000000 }"#;
+    let rows = r#"{ "venue": "binance", "market": "spot", "symbol": "btcusdt", "position_base": 100000, "cash_quote": -11800000000, "basis_quote": 11800000000 }"#;
     let body = document(CURRENT_VERSION, "te-recorder", FIXED_SCALE, rows).replace(
         r#""instruments""#,
         r#""last_exposure_quote": -123456789, "assets": [{ "asset": "BTC", "amount": 999999999 }, { "asset": "DOGE", "amount": 42 }], "instruments""#,
@@ -455,7 +494,7 @@ fn document_naming(venue: &str, symbol: &str, position_base: i64, cash_quote: i6
         "te-recorder",
         FIXED_SCALE,
         &format!(
-            r#"{{"venue":"{venue}","symbol":"{symbol}","position_base":{position_base},"cash_quote":{cash_quote},"basis_quote":0}}"#
+            r#"{{"venue":"{venue}","market":"spot","symbol":"{symbol}","position_base":{position_base},"cash_quote":{cash_quote},"basis_quote":0}}"#
         ),
     )
 }

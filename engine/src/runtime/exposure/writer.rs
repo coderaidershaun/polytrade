@@ -27,8 +27,8 @@ const RING_CAPACITY: usize = 16;
 /// again at the next poll, with no growing delay: a longer wait would only delay the halt.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-/// What a writer needs from the start. The registry gives the venue and symbol of each instrument
-/// and the name of each asset, so the file names each one in words that outlive the run.
+/// What a writer needs from the start. The registry gives the venue, market and symbol of each
+/// instrument and the name of each asset, so the file names each one in words that outlive the run.
 pub struct ExposureWriterSetup<'a> {
     pub dir: PathBuf,
     pub identity: RunIdentity,
@@ -93,6 +93,7 @@ impl ExposureWriterConfig {
                 .iter()
                 .map(|row| InstrumentFacts {
                     venue: registry.venue_name(row.venue),
+                    market: row.market.as_str(),
                     symbol: row.venue_symbol.clone(),
                     base_asset: row.base_asset,
                     quote_asset: row.quote_asset,
@@ -111,6 +112,7 @@ impl ExposureWriterConfig {
 
 struct InstrumentFacts {
     venue: &'static str,
+    market: &'static str,
     symbol: Box<str>,
     base_asset: AssetId,
     quote_asset: AssetId,
@@ -265,6 +267,7 @@ impl WriterState {
                 let facts = self.facts(exposure.instrument);
                 InstrumentEntry {
                     venue: facts.venue.to_owned(),
+                    market: facts.market.to_owned(),
                     symbol: facts.symbol.as_ref().to_owned(),
                     position_base: exposure.position_base.mantissa(),
                     cash_quote: exposure.cash_quote,

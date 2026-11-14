@@ -292,6 +292,7 @@ fn each_exposure_error() -> [ExposureError; 9] {
         ExposureError::UnknownInstrument {
             path: path(),
             venue: "binance".into(),
+            market: "spot".into(),
             symbol: "ETHUSDT".into(),
             position_base: 5,
             cash_quote: -10,

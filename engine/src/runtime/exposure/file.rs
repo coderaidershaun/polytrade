@@ -11,9 +11,9 @@ use crate::runtime::durable_file::{self, WriteError};
 
 use super::ExposureError;
 
-/// Version 3 names each row by its venue and its symbol, and version 2 added `basis_quote`. An older
-/// file is not migrated: a symbol alone names an instrument only within one venue, and a guessed
-/// basis would bring back a defect that nothing reports.
+/// Version 3 names each row by its venue, its market and its symbol, and version 2 added
+/// `basis_quote`. An older file is not migrated: a symbol alone names an instrument only within one
+/// market of one venue, and a guessed basis would bring back a defect that nothing reports.
 pub(super) const FORMAT_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -37,10 +37,13 @@ pub(super) struct ExposureDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct InstrumentEntry {
-    /// The venue and its symbol name the instrument, because an instrument id can change between
-    /// runs. Defaulted, so that a file of an older version parses and the version check refuses it.
+    /// The venue, its market and its symbol name the instrument, because an instrument id can
+    /// change between runs, and the spot and perpetual markets of one venue share a symbol.
+    /// Defaulted, so that a file of an older version parses and the version check refuses it.
     #[serde(default)]
     pub(super) venue: String,
+    #[serde(default)]
+    pub(super) market: String,
     pub(super) symbol: String,
     pub(super) position_base: i64,
     pub(super) cash_quote: i64,
