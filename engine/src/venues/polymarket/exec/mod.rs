@@ -20,6 +20,8 @@ pub mod probe;
 pub mod rest;
 pub mod sign;
 
+use std::time::Duration;
+
 use crate::hot::exec::{FeeModel, OrderBudget};
 use crate::runtime::secrets::CredentialVariables;
 use crate::venues::exec::{LeaseNamespace, VenueCapabilities};
@@ -39,6 +41,11 @@ pub(crate) fn capabilities() -> VenueCapabilities {
         base_asset_is_position: true,
     }
 }
+
+/// How long the order client waits for an answer. It stays below the in-flight timeout, so every
+/// placement gets an HTTP verdict before the in-flight table reads it back, and that expiry stays
+/// the exception rather than the normal path.
+pub(crate) const ORDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// One chain and one CLOB, so there is no deployment to separate: the signer address alone tells one
 /// account's nonce history from another's.

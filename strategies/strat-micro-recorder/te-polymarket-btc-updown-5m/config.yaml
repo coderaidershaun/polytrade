@@ -8,17 +8,52 @@ engine:
 queues:
   input_capacity: 65536
   persistence_capacity: 1024
-source:
-  exchange: polymarket
-  series: btc-updown-5m
-  # Cap on ADDING to a position, in dollars. This engine only ever quotes one order, so it never bites.
-  max_exposure_quote: 6
-  tracker:
-    # Measures how fast orders arrive near the best price. 120s of memory suits a 5-minute market.
-    intensity:
-      max_depth_ticks: 32
-      half_life_secs: 120.0
-      min_events: 3.0
+sources:
+  - feed:
+      exchange: polymarket
+      series: btc-updown-5m
+      # Cap on ADDING to a position, in dollars. This engine only ever quotes one order, so it never bites.
+      max_exposure_quote: 6
+      tracker:
+        # Measures how fast orders arrive near the best price. 120s of memory suits a 5-minute market.
+        intensity:
+          max_depth_ticks: 32
+          half_life_secs: 120.0
+          min_events: 3.0
+    execution:
+      # Ships disarmed. Polymarket has no simulator — off or live, nothing between.
+      mode: off # live, off
+      max_orders_per_side: 1
+      # Don't move an order for less than this. Moving it loses our place in the queue.
+      requote_threshold_ticks: 1
+      # Zero on purpose. This reserves the asset being sold, which here IS the position. Any reserve at
+      # all would block exits: selling the whole position would read as underfunded.
+      min_base_balance: 0.0
+      # Cash held back and never traded. Leaves about $9 of the $74 test balance usable.
+      min_quote_balance: 65.0
+      # Ceiling on one order. 5 shares can never cost more than $5, plus room for the fee.
+      max_order_notional_quote: 6.0
+      # How far from mid a quote may sit. Wide, because prices here run all the way to 0 or 1.
+      max_quote_distance_bps: 5000.0
+      # Stale book -> stop quoting. Provisional: polymarket resnapshots every few seconds by design,
+      # and nobody has measured how long that leaves the book invalid.
+      max_book_age_ms: 5000
+      # Rejects in a row before the kill switch. Ordinary post-only crosses don't count.
+      max_consecutive_rejects: 5
+      # Loss budget for the whole run, in dollars. Survives market rotations.
+      max_session_loss_quote: 5.0
+      # The engine's own backstop: refuse any quote this close to the close.
+      quote_stop_margin_ms: 3000
+      # Price exits 2 ticks through the best price. The venue holds a marketable order 250ms before
+      # matching, so pricing exactly at the touch leaves exits unfilled.
+      flatten_slack_ticks: 2
+      # Venue taker fee. Works out around 1.75% of notional at even money.
+      taker_fee_rate: 0.07
+      # 30 s with no stream event while an order works -> one read of open orders. A read that shows
+      # what the stream missed subscribes again.
+      stream_silence_ms: 30000
+      # recv_window_ms and max_clock_skew_ms are binance-shaped and stay at their defaults; polymarket
+      # stamps requests its own way.
 strategy:
   # Records nothing: the binance engine does the collecting. Going live must add [orders, fills],
   # or the run keeps no record of what it did with real money.
@@ -36,39 +71,6 @@ persistence:
   # Parquet files older than this many hours are deleted while the engine runs.
   # That includes files left by earlier runs.
   retention_hours: 6
-execution:
-  # Ships disarmed. Polymarket has no simulator — off or live, nothing between.
-  mode: off # live, off
-  max_orders_per_side: 1
-  # Don't move an order for less than this. Moving it loses our place in the queue.
-  requote_threshold_ticks: 1
-  # Zero on purpose. This reserves the asset being sold, which here IS the position. Any reserve at
-  # all would block exits: selling the whole position would read as underfunded.
-  min_base_balance: 0.0
-  # Cash held back and never traded. Leaves about $9 of the $74 test balance usable.
-  min_quote_balance: 65.0
-  # Ceiling on one order. 5 shares can never cost more than $5, plus room for the fee.
-  max_order_notional_quote: 6.0
-  # How far from mid a quote may sit. Wide, because prices here run all the way to 0 or 1.
-  max_quote_distance_bps: 5000.0
-  # Stale book -> stop quoting. Provisional: polymarket resnapshots every few seconds by design,
-  # and nobody has measured how long that leaves the book invalid.
-  max_book_age_ms: 5000
-  # Rejects in a row before the kill switch. Ordinary post-only crosses don't count.
-  max_consecutive_rejects: 5
-  # Loss budget for the whole run, in dollars. Survives market rotations.
-  max_session_loss_quote: 5.0
-  # The engine's own backstop: refuse any quote this close to the close.
-  quote_stop_margin_ms: 3000
-  # Price exits 2 ticks through the best price. The venue holds a marketable order 250ms before
-  # matching, so pricing exactly at the touch leaves exits unfilled.
-  flatten_slack_ticks: 2
-  # Venue taker fee. Works out around 1.75% of notional at even money.
-  taker_fee_rate: 0.07
-  # No exec events for this many spins -> reconnect. 300 spins at 100ms is 30 seconds.
-  exec_silence_spins: 300
-  # recv_window_ms and max_clock_skew_ms are binance-shaped and stay at their defaults; polymarket
-  # stamps requests its own way.
 link:
   # Different port from the binance engine (9310). Publishes only, never subscribes.
   bind: "127.0.0.1:9311"

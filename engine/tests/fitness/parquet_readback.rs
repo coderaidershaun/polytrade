@@ -178,7 +178,10 @@ pub(crate) fn run_meta() -> RunMeta {
         engine_version: "test".into(),
         feature_names: vec!["ewma_vol".into()],
         instrument_symbols: vec!["btcusdt".into()],
-        asset_symbols: vec!["btc".into(), "usdt".into()],
+        asset_symbols: vec![
+            ("binance".into(), "btc".into()),
+            ("binance".into(), "usdt".into()),
+        ],
     }
 }
 

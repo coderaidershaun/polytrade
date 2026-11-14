@@ -121,8 +121,29 @@ pub(super) struct ParsedConfig {
 
 #[derive(Deserialize)]
 struct ConfigShape {
-    execution: Option<ExecutionShape>,
+    #[serde(default)]
+    sources: Vec<SourceShape>,
     link: Option<LinkShape>,
+}
+
+#[derive(Deserialize)]
+struct SourceShape {
+    execution: Option<ExecutionShape>,
+}
+
+impl ConfigShape {
+    /// The mode of the run, read as the engine reads it: the mode of a source that sends orders,
+    /// else the mode of the first execution block.
+    fn mode(&self) -> Option<ExecutionMode> {
+        let modes = || {
+            self.sources
+                .iter()
+                .filter_map(|source| Some(source.execution.as_ref()?.mode))
+        };
+        modes()
+            .find(|mode| mode.is_enabled())
+            .or_else(|| modes().next())
+    }
 }
 
 #[derive(Deserialize)]
@@ -141,7 +162,7 @@ impl ProbedConfig {
     fn of_text(text: &str, path: &Path) -> ProbedConfig {
         match serde_saphyr::from_str::<ConfigShape>(text) {
             Ok(shape) => ProbedConfig::Parsed(ParsedConfig {
-                mode: shape.execution.map(|execution| execution.mode),
+                mode: shape.mode(),
                 link_bind: shape.link.map(|link| link.bind),
             }),
             Err(error) => ProbedConfig::unreadable(path, &error),
@@ -269,12 +290,13 @@ fn write_by_rename(path: &Path, text: &str) -> Result<(), FleetError> {
 }
 
 /// Line-based so that every byte outside the one value token is copied unchanged: comments, blank
-/// lines, CRLF endings and the rest of the mode line itself. `None` when there is no top-level
-/// `execution:` block, no `mode:` line among its direct children, or no value on that line.
+/// lines, CRLF endings and the rest of the mode line itself. It rewrites the first `execution:`
+/// block, the block of a source. `None` when there is no such block, no `mode:` line among its
+/// direct children, or no value on that line.
 fn rewrite_mode_line(text: &str, mode: ExecutionMode) -> Option<String> {
     let mut rewritten = String::with_capacity(text.len() + mode.as_str().len());
     let mut is_replaced = false;
-    let mut is_in_block = false;
+    let mut block_column = None;
     let mut child_indent = None;
     for line in text.split_inclusive('\n') {
         let content = line_content(line);
@@ -282,11 +304,11 @@ fn rewrite_mode_line(text: &str, mode: ExecutionMode) -> Option<String> {
             rewritten.push_str(line);
             continue;
         }
-        if is_in_block && !continues_block(content) {
-            is_in_block = false;
+        if block_column.is_some_and(|column| !continues_block(content, column)) {
+            block_column = None;
         }
-        if !is_in_block {
-            is_in_block = opens_execution_block(content);
+        if block_column.is_none() {
+            block_column = execution_key_column(content);
             child_indent = None;
             rewritten.push_str(line);
             continue;
@@ -316,17 +338,25 @@ fn line_content(line: &str) -> &str {
         .unwrap_or(without_newline)
 }
 
-fn opens_execution_block(content: &str) -> bool {
-    content.strip_prefix("execution:").is_some_and(|rest| {
+/// The column of the `execution:` key that `content` opens, as a key of a mapping or as the first
+/// key of a list item.
+fn execution_key_column(content: &str) -> Option<usize> {
+    let trimmed = content.trim_start_matches(' ');
+    let key = trimmed
+        .strip_prefix("- ")
+        .map_or(trimmed, |item| item.trim_start_matches(' '));
+    let opens = key.strip_prefix("execution:").is_some_and(|rest| {
         let rest = rest.trim_start_matches(' ');
         rest.is_empty() || rest.starts_with('#')
-    })
+    });
+    opens.then_some(content.len() - key.len())
 }
 
-/// Indented lines, comments and blank lines stay inside the block. The first line that starts at
-/// column zero with anything else ends it.
-fn continues_block(content: &str) -> bool {
-    content.starts_with([' ', '#']) || content.trim().is_empty()
+/// Lines indented past the key, comments and blank lines stay inside the block. The first other
+/// line at the column of the key or left of it ends it.
+fn continues_block(content: &str, key_column: usize) -> bool {
+    let trimmed = content.trim_start_matches(' ');
+    trimmed.is_empty() || trimmed.starts_with('#') || content.len() - trimmed.len() > key_column
 }
 
 /// Replaces the value token that starts after `value_from` (past any spaces) and runs up to

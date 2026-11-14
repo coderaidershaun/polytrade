@@ -18,7 +18,7 @@ use engine::hot::spawn::{HotDriver, HotLoop, HotThreadConfig, IdleWait, Step, sp
 use engine::hot::strategy::{Strategy, StrategyConfig, StrategyCtx};
 use engine::log::{HotRecord, LaneReader, TextRecord, open_hot_lane, open_text_lane};
 use engine::msg::exec::{
-    ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, Provenance, StampedExecCommand,
+    ExecCommand, ExecEvent, ExecKind, ExecLaneItem, Provenance, StampedExecCommand,
     VenueOrderStatus,
 };
 use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, QueueId, Side};
@@ -31,7 +31,7 @@ use engine::runtime::config::{
     BinanceMarket, Instruments, IntensitySpec, LatencyBudgets, PolySeries, RecordedTables,
     StageBudget, StrategySpec, Subscriptions, TableKind, TrackerSpec, VenueMarket,
 };
-use engine::runtime::exposure::ExposureSnapshot;
+use engine::runtime::exposure::{ExposureSnapshot, InstrumentExposure};
 use engine::runtime::metrics::{SampleProducers, SinkKind};
 use engine::runtime::pin_to_core;
 use engine::runtime::registry::InstrumentRow;
@@ -49,7 +49,7 @@ use engine::venues::polymarket::rotation::{OutcomeLeg, TokenId, WindowAssignment
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
-    Idle, ONE, account_chunk, detached_setup, engine_view, exec_event, exposure_ring,
+    ExposureLane, Idle, ONE, account_chunk, detached_setup, engine_view, exec_event, exposure_ring,
     instrument_row, level, persist_ring_for, snapshot_pair, spin, strategy_log_ring, stream_ready,
     tracker_spec_all, ts, ui_book_ring, ui_event_ring, venue_ts,
 };
@@ -199,13 +199,32 @@ fn digest(lane: &'static str, records: &[String]) -> Digest {
     }
 }
 
+/// The text that each recorded digest of the exposure lane hashes: the rows of a snapshot, then
+/// empty rows up to sixteen, then the count of its rows.
+fn recorded_exposure_text(snapshot: &ExposureSnapshot) -> String {
+    const RECORDED_ROWS: usize = 16;
+    let rows = snapshot.active();
+    let mut padded = rows.to_vec();
+    padded.extend(std::iter::repeat_n(
+        InstrumentExposure::EMPTY,
+        RECORDED_ROWS.saturating_sub(rows.len()),
+    ));
+    format!(
+        "ExposureSnapshot {{ instruments: {padded:?}, len: {}, seq: {}, exposure_quote: {}, emitted_ts_us: {:?} }}",
+        rows.len(),
+        snapshot.seq,
+        snapshot.exposure_quote,
+        snapshot.emitted_ts_us
+    )
+}
+
 /// The readers of every output of one engine, drained after each message so no ring fills.
 struct Lanes {
     persist: Consumer<PersistRecord>,
     commands: Consumer<ExecLaneItem>,
     ui_books: Consumer<UiBookSnapshot>,
     ui_events: Consumer<UiEvent>,
-    exposure: Consumer<ExposureSnapshot>,
+    exposure: ExposureLane,
     strategy_log: Consumer<HotRecord>,
     strategy_log_drops: Arc<AtomicU64>,
 }
@@ -229,8 +248,8 @@ impl Lanes {
         while let Ok(event) = self.ui_events.pop() {
             outputs.ui_events.push(event);
         }
-        while let Ok(snapshot) = self.exposure.pop() {
-            outputs.exposure.push(format!("{snapshot:?}"));
+        while let Some(snapshot) = self.exposure.pop() {
+            outputs.exposure.push(recorded_exposure_text(&snapshot));
         }
     }
 
@@ -279,7 +298,9 @@ fn settings(fee_model: FeeModel, holds_reservations_until_settled: bool) -> Exec
         max_consecutive_rejects: 5,
         max_session_loss_quote: Notional::from_mantissa(1_000_000 * ONE),
         inflight_timeout: DurationUs::from_secs(5),
-        exec_silence_spins: u32::MAX,
+        max_status_probes: 3,
+        stream_silence: DurationUs::from_micros(i64::MAX),
+        max_stream_resets: 2,
         order_reap_window: DurationUs::from_secs(3_600),
         quote_stop_margin: DurationUs::from_millis(3_000),
         flatten_slack_ticks: 2,
@@ -420,8 +441,24 @@ fn prior_run_fill(price: i64, cumulative: i64, at: i64) -> InboundMessage {
     )
 }
 
+/// The first report of the inherited order, with nothing filled yet. It seats the order, so each
+/// fill after it is a step that the ledger books.
+fn prior_run_seat(price: i64, qty: i64, at: i64) -> InboundMessage {
+    let MessageBody::Exec(fill) = prior_run_fill(price, 0, at).body else {
+        unreachable!("a prior-run fill is an execution message");
+    };
+    let seat = ExecEvent {
+        kind: ExecKind::ReportNew,
+        status: Some(VenueOrderStatus::New),
+        qty: Qty::from_mantissa(qty),
+        ..fill
+    };
+    InboundMessage::new(ts(at), MessageBody::Exec(seat))
+}
+
 /// Market messages in receive order, with a spin each time the timer would fire, the venue's
-/// readiness at the start, and two fills of an inherited order a third and two thirds of the way.
+/// readiness at the start, and two fills of an inherited order a third and two thirds of the way,
+/// the first one behind the report that seats the order.
 fn with_spins_and_answers(
     market: Vec<InboundMessage>,
     fill_price: i64,
@@ -442,6 +479,9 @@ fn with_spins_and_answers(
             next_spin += SPIN_US;
         }
         if let Some(nth) = fills.iter().position(|&fill| fill == index) {
+            if nth == 0 {
+                tape.push(prior_run_seat(fill_price, 4 * fill_qty, at));
+            }
             tape.push(prior_run_fill(fill_price, fill_qty * (nth as i64 + 1), at));
         }
         tape.push(message);
@@ -623,18 +663,18 @@ fn armed_engine(shipped: Shipped, log_lane: usize, stamper: Stamper) -> (HotEngi
     let strategy_log_drops = strategy_log_sink.drops_handle();
     let (ui_book_sink, ui_books) = ui_book_ring(OUTPUT_RING);
     let (ui_event_sink, ui_events) = ui_event_ring(OUTPUT_RING);
-    let (exposure_sink, exposure) = exposure_ring(OUTPUT_RING);
+    let (exposure_sink, exposure) = exposure_ring(OUTPUT_RING, rows.len());
     let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(OUTPUT_RING);
     let engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),
         strategy_log_sink,
         ui_book_sink,
         ui_event_sink,
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(commands_producer, stamper),
             settings: exec_settings(shipped),
             run_nonce: 0,
-        }),
+        }],
         exposure: ExposureWiring {
             restored: &[],
             sink: exposure_sink,
@@ -754,23 +794,23 @@ const RECORDED: [(Shipped, [Digest; 8]); 2] = [
 ];
 
 const RECORDER_OUTPUTS: [Digest; 8] = [
-    recorded("tape rows", 46_415, 0x6a6d_77e4_2f76_4512),
+    recorded("tape rows", 46_417, 0xa465_54e5_7bdb_0eb0),
     recorded("commands", 241, 0x60ea_828f_819b_c86e),
     recorded("ui books", 601, 0xd1ca_5f6f_2e33_bab2),
     recorded("ui events", 48_281, 0x24ad_47c2_3baf_320e),
     recorded("exposure", 2, 0x27cc_3d45_433e_2022),
-    recorded("hot log", 207, 0xdd2c_5282_3961_7e45),
+    recorded("hot log", 208, 0x13df_027a_e374_48f7),
     recorded("text log", 0, 0xcbf2_9ce4_8422_2325),
     recorded("strategy log", 2_160, 0x3e15_33ff_fb87_83af),
 ];
 
 const PUBLISHER_OUTPUTS: [Digest; 8] = [
-    recorded("tape rows", 11, 0x22fa_8faf_4d66_cae5),
+    recorded("tape rows", 13, 0xea9c_15a1_1af3_ebe3),
     recorded("commands", 80, 0xc4c1_7609_303b_edd7),
     recorded("ui books", 1_734, 0x4116_b312_52d1_9732),
     recorded("ui events", 1_245, 0xc5fe_6b6d_338d_87c0),
     recorded("exposure", 2, 0xe632_e3fd_5bf1_4ad7),
-    recorded("hot log", 9, 0x63ff_97f6_c5b0_f309),
+    recorded("hot log", 10, 0x180a_a374_73c5_2996),
     recorded("text log", 0, 0xcbf2_9ce4_8422_2325),
     recorded("strategy log", 0, 0xcbf2_9ce4_8422_2325),
 ];
@@ -1088,7 +1128,6 @@ impl Strategy for ThreeBids {
                 Some(DesiredQuote {
                     price: Price::from_mantissa(99 * ONE),
                     qty: Qty::from_mantissa(ONE / 10),
-                    style: OrderStyle::PostOnly,
                 }),
             );
         }
@@ -1120,11 +1159,11 @@ fn held_command_keeps_its_issue_tick() {
     });
     let (commands_producer, mut lane) = RingBuffer::<ExecLaneItem>::new(2);
     let engine = HotEngine::new(HotEngineSetup {
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(commands_producer, harness.counter.stamper.clone()),
             settings: settings(FeeModel::None, true),
             run_nonce: 0,
-        }),
+        }],
         ..detached_setup(&instruments, Box::new(ThreeBids))
     });
     let (mut input, queue) = RingBuffer::new(32);

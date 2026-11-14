@@ -4,6 +4,7 @@
 mod capabilities;
 mod core;
 mod effect;
+mod error;
 mod event;
 mod exit;
 mod identity;
@@ -14,10 +15,11 @@ mod resync;
 mod session;
 
 pub(crate) use capabilities::VenueCapabilities;
-pub use core::{ExecCore, ObserveOrderError, Phase, REQUEST_TIMEOUT};
+pub use core::{ExecCore, ObserveOrderError, Phase};
 pub use effect::{
     ExecEffect, ExecRequest, Outgoing, PlaceNotSentReason, RequestId, SkipReason, TimeoutFallout,
 };
+pub use error::{ExecSessionError, halt_on_session_error};
 pub use event::open_orders_snapshot_end;
 pub(crate) use event::{
     ChunkStamps, account_chunks, amend_not_sent, blank, place_not_sent, request_timed_out,

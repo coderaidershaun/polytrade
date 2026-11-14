@@ -27,6 +27,7 @@ use engine::link::{
 use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, OrderStyle, VenueOrderStatus,
 };
+use engine::msg::ids::VenueId;
 use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
 };
@@ -140,6 +141,7 @@ fn poly_rows() -> Vec<InstrumentRow> {
         .enumerate()
         .map(|(index, symbol)| InstrumentRow {
             instrument_id: InstrumentId(index as u16),
+            venue: VenueId(0),
             market: VenueMarket::Polymarket(PolySeries::BtcUpDown5m),
             venue_symbol: (*symbol).into(),
             display: (*symbol).into(),
@@ -848,9 +850,11 @@ fn maker_settings() -> ExecSettings {
         max_consecutive_rejects: 5,
         max_session_loss_quote: Notional::from_mantissa(1_000 * FIXED_SCALE),
         inflight_timeout: DurationUs::from_secs(3_600),
+        max_status_probes: u8::MAX,
         // No silence sweep: a reconciliation request in the command stream is noise these tests
         // would have to filter rather than a behaviour they are about.
-        exec_silence_spins: u32::MAX,
+        stream_silence: DurationUs::from_micros(i64::MAX),
+        max_stream_resets: 2,
         order_reap_window: DurationUs::from_secs(3_600),
         quote_stop_margin: DurationUs::from_millis(ENGINE_MARGIN_MS),
         flatten_slack_ticks: 2,
@@ -951,12 +955,12 @@ impl Maker {
         let (ui_event_sink, events) = ui_event_ring(4_096);
         let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(1_024);
         let engine = HotEngine::new(HotEngineSetup {
-            exec: Some(ExecWiring {
+            exec: vec![ExecWiring {
                 sink: ExecSink::new(commands_producer, Stamper::Off),
                 settings: maker_settings(),
                 // Zero because [`FillPen`] addresses this engine's slots with that constant.
                 run_nonce: 0,
-            }),
+            }],
             persistence: Some(persistence),
             ui_event_sink,
             ..detached_setup(&rows, Box::new(strategy))

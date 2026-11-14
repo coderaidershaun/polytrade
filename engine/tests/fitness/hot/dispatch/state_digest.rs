@@ -8,16 +8,15 @@ use engine::hot::exec::{ClientIdLayout, side_base};
 use engine::hot::ingress::IngressQueues;
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{
-    DesiredQuote, Fill, OrderReject, OrderStyle, OrderUpdate, QuoteLevel, Registration, Strategy,
-    StrategyCtx,
+    DesiredQuote, Fill, OrderReject, OrderUpdate, QuoteLevel, Registration, Strategy, StrategyCtx,
 };
 use engine::link::{LinkFrame, LinkHash, LinkOrigin, LinkPayload, TopicId};
 use engine::log::{HotRecord, TextRecord, open_hot_lane, open_text_lane};
 use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus};
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{
-    BookChunk, InboundMessage, KlineEvent, MarketRotation, MessageBody, MessageKind, SpinTick,
-    TradeEvent,
+    BookChunk, FileWriter, InboundMessage, KlineEvent, MarketRotation, MessageBody, MessageKind,
+    SpinTick, TradeEvent, WriterFailure,
 };
 use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::run_state::{RunAssertion, RunState};
@@ -33,10 +32,11 @@ use proptest::test_runner::{Config, TestCaseError, TestRunner};
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
-    ALL_TABLES, FillPen, ONE, account_chunk, book_reset, call_codes, delta_chunk, detached_setup,
-    exec_event, exposure_ring, instrument_row, kline, last_snapshot_chunk, partial_snapshot_chunk,
-    persist_ring_for, rotation, run_control, snapshot_pair, spin, strategy_log_ring, stream_ready,
-    tracker_spec_all, trade, ts, ui_book_ring, ui_event_ring, venue_ts,
+    ALL_TABLES, ExposureLane, FillPen, ONE, account_chunk, book_reset, call_codes, delta_chunk,
+    detached_setup, exec_event, exposure_ring, instrument_row, kline, last_snapshot_chunk,
+    partial_snapshot_chunk, persist_ring_for, rotation, run_control, snapshot_pair, spin,
+    strategy_log_ring, stream_ready, tracker_spec_all, trade, ts, ui_book_ring, ui_event_ring,
+    venue_ts,
 };
 use crate::exec_support::exec_settings;
 
@@ -78,7 +78,6 @@ impl Probe {
             let quote = DesiredQuote {
                 price,
                 qty: QUOTE_QTY,
-                style: OrderStyle::PostOnly,
             };
             ctx.quote(instrument, side, QuoteLevel::ZERO, Some(quote));
         }
@@ -164,7 +163,6 @@ impl Strategy for FeedProbe {
         let bid = DesiredQuote {
             price: Price::from_mantissa(100 * ONE),
             qty: Qty::from_mantissa(ONE),
-            style: OrderStyle::PostOnly,
         };
         ctx.quote(InstrumentId(0), Side::Buy, QuoteLevel::ZERO, Some(bid));
     }
@@ -244,7 +242,7 @@ struct Readers {
     commands: Consumer<ExecLaneItem>,
     ui_books: Consumer<UiBookSnapshot>,
     ui_events: Consumer<UiEvent>,
-    exposure: Consumer<ExposureSnapshot>,
+    exposure: ExposureLane,
     strategy_log: Consumer<HotRecord>,
 }
 
@@ -254,7 +252,7 @@ fn engine(start: Start, stamper: Stamper) -> (HotEngine, Readers) {
     let (strategy_log_sink, strategy_log) = strategy_log_ring(LANE);
     let (ui_book_sink, ui_books) = ui_book_ring(LANE);
     let (ui_event_sink, ui_events) = ui_event_ring(LANE);
-    let (exposure_sink, exposure) = exposure_ring(LANE);
+    let (exposure_sink, exposure) = exposure_ring(LANE, rows.len());
     let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(LANE);
     let exec = start.has_venue().then(|| ExecWiring {
         sink: ExecSink::new(commands_producer, stamper),
@@ -267,7 +265,7 @@ fn engine(start: Start, stamper: Stamper) -> (HotEngine, Readers) {
         ui_book_sink,
         ui_event_sink,
         warmup: start.warmup(),
-        exec,
+        exec: exec.into_iter().collect(),
         exposure: ExposureWiring {
             restored: &[],
             sink: exposure_sink,
@@ -395,7 +393,9 @@ fn fold_on_this_thread(start: Start, sequence: &[InboundMessage], measure: Measu
         drain(&mut readers.commands, &mut folded.commands);
         drain(&mut readers.ui_books, &mut folded.ui_books);
         drain(&mut readers.ui_events, &mut folded.ui_events);
-        drain(&mut readers.exposure, &mut folded.exposure);
+        folded
+            .exposure
+            .extend(std::iter::from_fn(|| readers.exposure.pop()));
         drain(&mut readers.strategy_log, &mut folded.strategy_log);
         while let Some(record) = hot_log.pop() {
             folded.hot_log.push(record);
@@ -475,7 +475,7 @@ fn two_folds_agree(start: Start, sequence: &[InboundMessage]) -> Result<Folded, 
 }
 
 /// One name for each kind of message, in the order of [`kind_of`].
-const KINDS: [&str; 10] = [
+const KINDS: [&str; 11] = [
     "trade",
     "book",
     "book reset",
@@ -486,6 +486,7 @@ const KINDS: [&str; 10] = [
     "run control",
     "exec",
     "account",
+    "writer failed",
 ];
 
 /// No arm catches the rest, so a new kind of message stops this file compiling here. Its name then
@@ -502,6 +503,7 @@ fn kind_of(message: &InboundMessage) -> usize {
         MessageBody::RunControl(_) => 7,
         MessageBody::Exec(_) => 8,
         MessageBody::Account(_) => 9,
+        MessageBody::WriterFailed(_) => 10,
     }
 }
 
@@ -539,6 +541,9 @@ enum Draw {
     Account {
         base_units: i64,
         quote_units: i64,
+    },
+    WriterFailed {
+        consecutive_failures: u32,
     },
 }
 
@@ -655,6 +660,9 @@ fn draw() -> impl Generator<Value = Draw> {
         1 => (0..20_i64, 0..2_000_000_i64).prop_map(|(base_units, quote_units)| Draw::Account {
             base_units,
             quote_units
+        }),
+        1 => (1..5_u32).prop_map(|consecutive_failures| Draw::WriterFailed {
+            consecutive_failures
         }),
     ]
 }
@@ -820,6 +828,15 @@ impl Builder {
                     }),
                 )
             }
+            Draw::WriterFailed {
+                consecutive_failures,
+            } => InboundMessage::new(
+                ts(when),
+                MessageBody::WriterFailed(WriterFailure {
+                    writer: FileWriter::Exposure,
+                    consecutive_failures,
+                }),
+            ),
         }
     }
 
@@ -1152,6 +1169,7 @@ fn kind_named_by(body: &MessageBody) -> MessageKind {
         MessageBody::RunControl(_) => MessageKind::RunControl,
         MessageBody::Exec(_) => MessageKind::Exec,
         MessageBody::Account(_) => MessageKind::Account,
+        MessageBody::WriterFailed(_) => MessageKind::WriterFailed,
     }
 }
 

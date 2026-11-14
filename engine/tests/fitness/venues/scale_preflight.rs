@@ -2,7 +2,7 @@
 //! and a missing or bad bound refuses, so a renamed field never lets a range pass.
 
 use engine::hot::exec::{MAX_ORDER_BUDGET_WINDOWS, OrderBudgetWindow};
-use engine::msg::ids::{AssetId, Notional, Price, Qty};
+use engine::msg::ids::{AssetId, Notional, Price, Qty, VenueId};
 use engine::msg::time::{DurationUs, VenueTs};
 use engine::runtime::config::{BinanceEnv, BinanceMarket, VenueMarket};
 use engine::runtime::registry::{InstrumentRow, OrderRateLimit, RateInterval, Registry};
@@ -364,11 +364,12 @@ pub(crate) fn build_poly_registry() -> Registry {
 queues:
   input_capacity: 65536
   persistence_capacity: 65536
-source:
-  exchange: polymarket
-  max_exposure_quote: 500
-  series: btc-updown-5m
-  tracker: {}
+sources:
+  - feed:
+      exchange: polymarket
+      max_exposure_quote: 500
+      series: btc-updown-5m
+      tracker: {}
 strategy:
   instruments: all
 persistence:
@@ -492,6 +493,10 @@ fn poly_preflight_accepts_the_venue_ticks_and_stamps_the_accepted_grid() {
 /// A registry carrying one binance spot source, BTC/USDT. `env_line` goes into the source block, so
 /// a caller can pin what an omitted `env:` means as well as an explicit one.
 fn build_binance_registry(env_line: &str) -> Registry {
+    let env_line: String = env_line
+        .lines()
+        .map(|line| format!("    {line}\n"))
+        .collect();
     let yaml = format!(
         "engine:
   hot_core_id: 0
@@ -499,13 +504,14 @@ fn build_binance_registry(env_line: &str) -> Registry {
 queues:
   input_capacity: 65536
   persistence_capacity: 65536
-source:
-  exchange: binance
-  market: spot
-{env_line}  base: BTC
-  quote: USDT
-  max_exposure_quote: 500
-  tracker: {{}}
+sources:
+  - feed:
+      exchange: binance
+      market: spot
+{env_line}      base: BTC
+      quote: USDT
+      max_exposure_quote: 500
+      tracker: {{}}
 strategy:
   instruments: all
 persistence:
@@ -713,8 +719,8 @@ fn asset_dictionary_interns_every_leg_and_is_stable_across_builds() {
 
     // How a venue cases its asset codes is its choice; an asset NO instrument names must resolve to
     // the sentinel, so its balance is counted and ignored rather than landing on a real one.
-    assert_eq!(first.assets().id("usdt"), row.quote_asset);
-    assert_eq!(first.assets().id("BNB"), AssetId::UNKNOWN);
+    assert_eq!(first.assets().id(VenueId(0), "usdt"), row.quote_asset);
+    assert_eq!(first.assets().id(VenueId(0), "BNB"), AssetId::UNKNOWN);
     assert_eq!(first.assets().name(AssetId::UNKNOWN), None);
 
     // Four polymarket slots are four DIFFERENT conditional tokens over one shared collateral, so

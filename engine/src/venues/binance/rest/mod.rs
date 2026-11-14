@@ -1,5 +1,5 @@
-//! REST client: public snapshots + backfills, payloads returned raw so a recorder can save them
-//! byte-for-byte, plus a rolling weight counter that warns before the venue's per-minute limit.
+//! The Binance REST client: public snapshots and backfills, each returned raw so that a recorder
+//! can save it byte for byte, and a rolling weight counter that warns before the limit of a minute.
 //!
 //! That counter is per CLIENT. The venue bills per IP, and the signed half builds a client of its
 //! own, so the two halves of one deployment each behave as though they held the whole budget: the
@@ -20,7 +20,8 @@ use crate::venues::edge::http::{self, Deadlines, HttpClient, TransportError};
 
 use weight::{OrderCountBudget, WeightBudget, weight_budget};
 
-/// Re-exported for adapter use (config owns deployment choice).
+/// Re-exported so that the callers of the REST client name it here. The config owns the choice of
+/// deployment.
 pub use crate::runtime::config::BinanceEnv;
 
 pub use payload::{
@@ -31,7 +32,7 @@ pub use request::{HttpMethod, RequestAuth, RequestPlan};
 pub use signed::{SignedRestClient, SignedRestConfig};
 pub use weight::OrderCountWindow;
 
-/// Request shape enables typed getters + recorder's fetch_text.
+/// One request, in the form that the typed getters and the raw read of the recorder share.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RestRequest {
     DepthSnapshot {
@@ -56,8 +57,8 @@ pub enum RestRequest {
         symbol: String,
         orig_client_order_id: String,
     },
-    /// Endpoint keyed by VENUE id (myTrades names orders that way, no client id -> only route
-    /// back from fill to owner -> ours to book vs human to leave).
+    /// Keyed by the venue's order id, because a trade of `myTrades` names its order only that way.
+    /// It is the one route from a fill back to its owner: ours to book, or a person's to leave.
     OrderStatusByVenueId {
         symbol: String,
         venue_order_id: i64,
@@ -77,7 +78,7 @@ pub struct KlineQuery {
     pub end_ts_ms: Option<i64>,
 }
 
-/// Driver's failure treatment. Venue codes hidden.
+/// How the driver treats a failure. The codes of the venue stay behind it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FailureVerdict {
     Retry,
@@ -85,39 +86,42 @@ pub enum FailureVerdict {
     Fatal,
 }
 
+/// Each variant names its request by `target`: the method and the path, as `GET /api/v3/account`.
+/// The query string of a signed request holds its signature, and an error ends in a log line, so no
+/// variant holds the query.
 #[derive(thiserror::Error, Debug)]
 pub enum RestError {
     #[error(transparent)]
     Transport(#[from] TransportError),
     #[error(
-        "binance rate limited {url}: http {status}, retry after {retry_after_secs:?}s (code {code:?}: {message:?})"
+        "binance rate limited {target}: http {status}, retry after {retry_after_secs:?}s (code {code:?}: {message:?})"
     )]
     RateLimited {
-        url: String,
+        target: String,
         status: u16,
         retry_after_secs: Option<u64>,
         code: Option<i64>,
         message: Option<String>,
     },
-    #[error("{url} returned http {status} (binance code {code:?}: {message:?})")]
+    #[error("{target} returned http {status} (binance code {code:?}: {message:?})")]
     Status {
-        url: String,
+        target: String,
         status: u16,
         code: Option<i64>,
         message: Option<String>,
     },
     #[error(
-        "binance refused {url} as unauthorised: http {status} (code {code:?}: {message:?}) — check the key's ip allowlist and that spot trading is enabled on it"
+        "binance refused {target} as unauthorised: http {status} (code {code:?}: {message:?}) — check the key's ip allowlist and that spot trading is enabled on it"
     )]
     Unauthorized {
-        url: String,
+        target: String,
         status: u16,
         code: Option<i64>,
         message: Option<String>,
     },
-    #[error("decoding the response from {url} failed")]
+    #[error("decoding the response from {target} failed")]
     Decode {
-        url: String,
+        target: String,
         #[source]
         source: serde_json::Error,
     },
@@ -172,8 +176,9 @@ fn status_verdict(code: Option<i64>, message: Option<&str>) -> FailureVerdict {
     }
 }
 
-/// -2010 = two codes in one: "match" (ordinary post-only) vs "balance" (not ordinary).
-/// Message match (no other discriminator; edge). Unknown -2010 = NOT routine.
+/// Binance code -2010 is two codes in one: a "match" refusal is the ordinary cost of post-only, and
+/// a "balance" refusal is not. Only the message tells them apart, so a -2010 with any other message
+/// is not routine.
 fn new_order_rejected_verdict(message: Option<&str>) -> FailureVerdict {
     match message {
         Some(text) if text.contains("immediately match") => FailureVerdict::Routine,
@@ -186,25 +191,43 @@ pub struct RestClient {
     http: HttpClient,
     market: BinanceMarket,
     env: BinanceEnv,
+    host: Host,
     weight: WeightBudget,
     order_counts: OrderCountBudget,
+}
+
+/// Where the requests go. A loopback port is the only other place than the venue, so a client
+/// that a test builds can reach nothing beyond this host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Host {
+    Venue,
+    Loopback(u16),
 }
 
 impl RestClient {
     /// # Errors
     /// [`RestError::Transport`] if the TLS backend fails to initialise.
     pub fn new(market: BinanceMarket, env: BinanceEnv) -> Result<Self, RestError> {
-        let http = HttpClient::new(Deadlines::STANDARD)?;
+        Self::with_deadlines(market, env, Deadlines::STANDARD)
+    }
+
+    pub(crate) fn with_deadlines(
+        market: BinanceMarket,
+        env: BinanceEnv,
+        deadlines: Deadlines,
+    ) -> Result<Self, RestError> {
+        let http = HttpClient::new(deadlines)?;
         Ok(Self {
             http,
             market,
             env,
+            host: Host::Venue,
             weight: WeightBudget::new(weight_budget(market)),
             order_counts: OrderCountBudget::default(),
         })
     }
 
-    /// Response body verbatim (recorder saves byte-for-byte as fixture).
+    /// The response body as the venue sent it, so that a recorder can save it byte for byte.
     ///
     /// # Errors
     /// Transport, non-2xx status, or 429/418 rate limiting.
@@ -251,11 +274,15 @@ impl RestClient {
     async fn send(&mut self, prepared: Prepared<'_>) -> Result<Fetched, RestError> {
         let plan = prepared.plan;
         self.weight.charge(plan.weight, plan.endpoint);
-        let base = format!("{}{}", base_url(self.market, self.env), plan.path);
+        let base = match self.host {
+            Host::Venue => format!("{}{}", base_url(self.market, self.env), plan.path),
+            Host::Loopback(port) => format!("http://127.0.0.1:{port}{}", plan.path),
+        };
         let url = match prepared.signed_query {
             Some(signed_query) => format!("{base}?{signed_query}"),
             None => base,
         };
+        let target = format!("{} {}", method_of(plan.method), plan.path);
 
         let mut builder = self.http.request(method_of(plan.method), &url);
         if prepared.signed_query.is_none() {
@@ -265,7 +292,7 @@ impl RestClient {
             builder = builder.header("X-MBX-APIKEY", api_key_header(api_key)?);
         }
 
-        let response = self.http.send(builder, &url).await?;
+        let response = self.http.send(builder, &target).await?;
 
         let status = response.status().as_u16();
         self.observe_limit_headers(response.headers());
@@ -274,20 +301,20 @@ impl RestClient {
             let (code, message) = binance_error(response).await;
             return Err(match status {
                 429 | 418 => RestError::RateLimited {
-                    url,
+                    target,
                     status,
                     retry_after_secs,
                     code,
                     message,
                 },
                 401 | 403 => RestError::Unauthorized {
-                    url,
+                    target,
                     status,
                     code,
                     message,
                 },
                 _ => RestError::Status {
-                    url,
+                    target,
                     status,
                     code,
                     message,
@@ -295,8 +322,8 @@ impl RestClient {
             });
         }
 
-        let body = self.http.body(response, &url).await?;
-        Ok(Fetched { url, body })
+        let body = self.http.body(response, &target).await?;
+        Ok(Fetched { target, body })
     }
 
     fn observe_limit_headers(&mut self, headers: &reqwest::header::HeaderMap) {
@@ -315,7 +342,8 @@ impl RestClient {
     }
 }
 
-/// Planned request + auth. Public half passes neither optional; SignedRestClient fills both.
+/// A planned request and its authentication. A public read passes neither; the signed client fills
+/// both.
 struct Prepared<'a> {
     plan: &'a RequestPlan,
     signed_query: Option<&'a str>,
@@ -323,7 +351,7 @@ struct Prepared<'a> {
 }
 
 struct Fetched {
-    url: String,
+    target: String,
     body: String,
 }
 
@@ -355,7 +383,7 @@ fn method_of(method: HttpMethod) -> reqwest::Method {
 
 fn decode<T: DeserializeOwned>(fetched: &Fetched) -> Result<T, RestError> {
     serde_json::from_str(&fetched.body).map_err(|source| RestError::Decode {
-        url: fetched.url.clone(),
+        target: fetched.target.clone(),
         source,
     })
 }

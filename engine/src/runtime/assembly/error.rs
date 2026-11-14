@@ -1,6 +1,8 @@
 //! Every way a run can refuse to start, after the config itself parsed: an unavailable core, an
 //! unreachable venue, a scale or limit the engine cannot represent, a lease another process holds.
 
+use crate::error;
+use crate::log::LogHandle;
 use crate::msg::failure::{FailureClass, Halt};
 use crate::runtime::config::ConfigError;
 use crate::runtime::exposure::ExposureError;
@@ -23,9 +25,27 @@ pub enum StartError {
         detail: &'static str,
     },
     #[error(
-        "{found} instruments exceed the {max}-instrument order table — an engine that cannot track its own orders must not place any"
+        "sources: items {first} and {second} both send orders, and this build starts the edge of \
+         one venue; set the execution mode of one of them to off"
     )]
-    ExecutionTooManyInstruments { found: usize, max: usize },
+    ExecutionOnSeveralSources { first: usize, second: usize },
+    #[error(
+        "sources: the run sends orders on {venue} and also reads {other}, and this build starts \
+         the edge of one venue, which would read the instruments of {other} as its own; remove \
+         the sources of {other}, or set the execution mode of {venue} to off"
+    )]
+    ExecutionWithSeveralVenues {
+        venue: &'static str,
+        other: &'static str,
+    },
+    #[error(
+        "the {table} table needs {needed} entries and a client order id addresses {addressable} — an engine that cannot tell its own orders apart must not place any"
+    )]
+    ExecutionCapacity {
+        table: &'static str,
+        needed: usize,
+        addressable: usize,
+    },
     #[error(
         "execution.{field} is {value}, but {venue_fact} — the setting reaches nothing on this venue, and a config that appears to tune one is worse than one that leaves it out"
     )]
@@ -64,6 +84,18 @@ pub enum StartError {
     ExecutionIdentityState { path: PathBuf, value: Box<str> },
     #[error("execution identity at {path} exhausted its 32-bit run nonce")]
     ExecutionIdentityExhausted { path: PathBuf },
+    #[error(
+        "the run nonce file at {path} is empty — a run stopped while it wrote the file; do not delete it, write the highest run nonce that the venue's order history shows into it, then start again"
+    )]
+    ExecutionNonceEmpty { path: PathBuf },
+    #[error(
+        "the {venue} execution client gives up on a request after {http_timeout_ms} ms, at or above execution.inflight_timeout_ms = {inflight_timeout_ms} — the in-flight timeout must outlast the HTTP verdict; raise it above {http_timeout_ms}"
+    )]
+    ExecutionHttpTimeout {
+        venue: &'static str,
+        http_timeout_ms: u64,
+        inflight_timeout_ms: u64,
+    },
     #[error("tokio runtime build failed")]
     Runtime(#[source] std::io::Error),
     #[error("hot_core_id {core_id} is not an available core (found {available})")]
@@ -109,7 +141,9 @@ impl StartError {
             | StartError::Exposure(_)
             | StartError::Venue(_)
             | StartError::ExecutionNotWired { .. }
-            | StartError::ExecutionTooManyInstruments { .. }
+            | StartError::ExecutionOnSeveralSources { .. }
+            | StartError::ExecutionWithSeveralVenues { .. }
+            | StartError::ExecutionCapacity { .. }
             | StartError::ExecutionFieldInert { .. }
             | StartError::ExecutionBaseFloorOnPosition { .. }
             | StartError::ExecutionOrderCapacity { .. }
@@ -117,6 +151,8 @@ impl StartError {
             | StartError::ExecutionIdentityIo { .. }
             | StartError::ExecutionIdentityState { .. }
             | StartError::ExecutionIdentityExhausted { .. }
+            | StartError::ExecutionNonceEmpty { .. }
+            | StartError::ExecutionHttpTimeout { .. }
             | StartError::Runtime(_)
             | StartError::CoreId { .. }
             | StartError::HotPin { .. }
@@ -133,4 +169,18 @@ impl StartError {
             source,
         }
     }
+}
+
+/// A refusal after the log started: each thread that started before it stops first, so the log
+/// waits for no lane of a running thread, then the log drains.
+#[cold]
+pub(super) fn refuse(
+    error: StartError,
+    log_handle: LogHandle,
+    stop_started: impl FnOnce(),
+) -> StartError {
+    error!("startup failed after the hot thread pinned: {error}");
+    stop_started();
+    log_handle.drain();
+    error
 }

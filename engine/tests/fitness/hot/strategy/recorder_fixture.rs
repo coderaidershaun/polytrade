@@ -82,11 +82,11 @@ pub(crate) fn recorder_engine(
     let engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),
         ui_event_sink: ui_event_ring(1_024).0,
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(commands_producer, Stamper::Off),
             settings: exec_settings(),
             run_nonce: 0,
-        }),
+        }],
         ..detached_setup(instruments, strategy)
     });
     (engine, persist, commands)

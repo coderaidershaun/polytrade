@@ -16,6 +16,10 @@ use crate::runtime::shutdown::FatalSignal;
 /// the engine after a short pause of the hot thread.
 const MIN_TIMER_CAPACITY: usize = 16;
 
+/// Each file writer sends at most one message in a run, so this ring cannot fill. A full one would
+/// still halt the engine, as each ring that the engine fills does.
+const WRITER_STATUS_CAPACITY: usize = 4;
+
 /// The ring capacity of each kind of input queue, with the default of each key that is absent.
 struct QueueCapacities {
     market_data: usize,
@@ -52,6 +56,7 @@ pub(super) struct RingPlan {
     timer: (QueueId, SourceId),
     link: Option<QueueId>,
     exec: Option<(QueueId, SourceId)>,
+    writer_status: Option<(QueueId, SourceId)>,
     capacities: QueueCapacities,
 }
 
@@ -65,6 +70,8 @@ pub(super) struct InputProducers {
     /// `None` unless execution is armed. The engine's own edge fills it, so a full ring halts the
     /// engine.
     pub(super) exec: Option<QueueProducer>,
+    /// `None` unless execution is armed. A file writer that gives up sends its one message here.
+    pub(super) writer_status: Option<QueueProducer>,
 }
 
 impl RingPlan {
@@ -77,13 +84,17 @@ impl RingPlan {
                 .iter()
                 .map(|group| (group.queue_id, group.source_id))
                 .collect(),
-            // The timer and the execution edge are no producer groups, so their source ids are the
-            // two after the last group.
+            // The timer, the execution edge and the file writers are no producer groups, so their
+            // source ids are the three after the last group.
             timer: (registry.timer_queue_id(), SourceId(group_count)),
             link: registry.link_queue_id(),
             exec: registry
-                .exec_queue_id()
-                .map(|queue_id| (queue_id, SourceId(group_count + 1))),
+                .exec_queues()
+                .next()
+                .map(|(_, queue_id)| (queue_id, SourceId(group_count + 1))),
+            writer_status: registry
+                .writer_status_queue_id()
+                .map(|queue_id| (queue_id, SourceId(group_count + 2))),
             capacities: QueueCapacities::of(config),
         }
     }
@@ -120,6 +131,10 @@ impl RingPlan {
             let producer = ring(queue_id, capacities.execution);
             QueueProducer::new(producer, fatal.clone(), queue_id, source_id)
         });
+        let writer_status = self.writer_status.map(|(queue_id, source_id)| {
+            let producer = ring(queue_id, WRITER_STATUS_CAPACITY);
+            QueueProducer::new(producer, fatal.clone(), queue_id, source_id)
+        });
         let consumers = consumers
             .into_iter()
             .map(|slot| slot.expect("every queue id assigned a ring"))
@@ -129,6 +144,7 @@ impl RingPlan {
             timer,
             link,
             exec,
+            writer_status,
         };
         (IngressQueues::new(consumers), producers)
     }

@@ -1,9 +1,11 @@
 //! Instruments that share one venue connection form one producer group with one input queue.
 //! Binance opens a connection per market and category; Polymarket opens one per series.
 
+use std::ops::Range;
+
 use crate::msg::ids::{InstrumentId, QueueId, SourceId};
 use crate::msg::labelled_enum::labelled_enum;
-use crate::runtime::config::{BinanceMarket, ConfigError, PolySeries, Subscriptions, VenueMarket};
+use crate::runtime::config::{ConfigError, Subscriptions, VenueMarket};
 
 use super::{InstrumentRow, queue_id_at};
 
@@ -55,16 +57,18 @@ pub struct ProducerGroup {
 
 // Group order fixes the queue and source ids, and those ids are recorded on every message, so a
 // new order would re-attribute every recorded tape.
+/// The connections of each source, in source order: each source reads its own rows through its own
+/// connection for each category its market serves.
 pub(super) fn group_producers(
     instruments: &[InstrumentRow],
+    source_rows: &[Range<usize>],
 ) -> Result<Vec<ProducerGroup>, ConfigError> {
-    let binance = [BinanceMarket::Spot, BinanceMarket::Perpetual].map(VenueMarket::Binance);
-    let polymarket = poly_series_present(instruments)
-        .into_iter()
-        .map(VenueMarket::Polymarket);
     let mut groups = Vec::new();
-    for market in binance.into_iter().chain(polymarket) {
-        push_market_groups(&mut groups, instruments, market)?;
+    for rows in source_rows {
+        let Some(first) = instruments.get(rows.start) else {
+            continue;
+        };
+        push_market_groups(&mut groups, &instruments[rows.clone()], first.market)?;
     }
     Ok(groups)
 }
@@ -93,16 +97,4 @@ fn push_market_groups(
         });
     }
     Ok(())
-}
-
-fn poly_series_present(instruments: &[InstrumentRow]) -> Vec<PolySeries> {
-    let mut seen = Vec::new();
-    for row in instruments {
-        if let VenueMarket::Polymarket(series) = row.market
-            && !seen.contains(&series)
-        {
-            seen.push(series);
-        }
-    }
-    seen
 }

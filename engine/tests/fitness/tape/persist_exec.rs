@@ -231,7 +231,7 @@ fn orders_and_fills_round_trip_through_the_arrow_reader() {
 
     let dictionary = footer_value(&fills_file.footer, "asset_dictionary");
     assert_eq!(
-        dictionary, r#"["btc","usdt"]"#,
+        dictionary, r#"[["binance","btc"],["binance","usdt"]]"#,
         "the fills commission asset is a dense index, so the footer must carry the names it indexes"
     );
     assert_eq!(

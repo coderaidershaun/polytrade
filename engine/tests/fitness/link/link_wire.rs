@@ -286,7 +286,6 @@ const REJECT_REASONS: [RejectReason; 20] = [
     RejectReason::WouldCross,
     RejectReason::OutsideBand,
     RejectReason::Underfunded,
-    RejectReason::StyleNotPermitted,
     RejectReason::NotReady(ReadinessGap::Stream),
     RejectReason::NotReady(ReadinessGap::Balances),
     RejectReason::NotReady(ReadinessGap::OpenOrders),
@@ -300,6 +299,7 @@ const REJECT_REASONS: [RejectReason; 20] = [
     RejectReason::OutsideWindow,
     RejectReason::RateBudget,
     RejectReason::Warming,
+    RejectReason::IdsSpent,
 ];
 
 /// The slot each refusal claims in [`REJECT_REASONS`], which is what stops that list rotting into a
@@ -307,7 +307,7 @@ const REJECT_REASONS: [RejectReason; 20] = [
 /// indexes one past the array, so it will not compile until the array grows with it and the
 /// round-trip below starts generating it.
 ///
-/// The `const` blocks are load-bearing, not decoration: a bare `REJECT_REASONS[19]` compiles, since
+/// The `const` blocks are load-bearing, not decoration: a bare `REJECT_REASONS[20]` compiles, since
 /// the out-of-bounds lint does not reach a const of this shape. Only const evaluation refuses it.
 fn listed_as(reason: RejectReason) -> RejectReason {
     match reason {
@@ -317,20 +317,20 @@ fn listed_as(reason: RejectReason) -> RejectReason {
         RejectReason::WouldCross => const { REJECT_REASONS[3] },
         RejectReason::OutsideBand => const { REJECT_REASONS[4] },
         RejectReason::Underfunded => const { REJECT_REASONS[5] },
-        RejectReason::StyleNotPermitted => const { REJECT_REASONS[6] },
-        RejectReason::NotReady(ReadinessGap::Stream) => const { REJECT_REASONS[7] },
-        RejectReason::NotReady(ReadinessGap::Balances) => const { REJECT_REASONS[8] },
-        RejectReason::NotReady(ReadinessGap::OpenOrders) => const { REJECT_REASONS[9] },
-        RejectReason::Halted => const { REJECT_REASONS[10] },
-        RejectReason::SessionReducingOnly => const { REJECT_REASONS[11] },
-        RejectReason::ExposureCeiling => const { REJECT_REASONS[12] },
-        RejectReason::NoQuoteDeclared => const { REJECT_REASONS[13] },
-        RejectReason::BookNotQuotable => const { REJECT_REASONS[14] },
-        RejectReason::DuplicatePrice => const { REJECT_REASONS[15] },
-        RejectReason::OrderLimit => const { REJECT_REASONS[16] },
-        RejectReason::OutsideWindow => const { REJECT_REASONS[17] },
-        RejectReason::RateBudget => const { REJECT_REASONS[18] },
-        RejectReason::Warming => const { REJECT_REASONS[19] },
+        RejectReason::NotReady(ReadinessGap::Stream) => const { REJECT_REASONS[6] },
+        RejectReason::NotReady(ReadinessGap::Balances) => const { REJECT_REASONS[7] },
+        RejectReason::NotReady(ReadinessGap::OpenOrders) => const { REJECT_REASONS[8] },
+        RejectReason::Halted => const { REJECT_REASONS[9] },
+        RejectReason::SessionReducingOnly => const { REJECT_REASONS[10] },
+        RejectReason::ExposureCeiling => const { REJECT_REASONS[11] },
+        RejectReason::NoQuoteDeclared => const { REJECT_REASONS[12] },
+        RejectReason::BookNotQuotable => const { REJECT_REASONS[13] },
+        RejectReason::DuplicatePrice => const { REJECT_REASONS[14] },
+        RejectReason::OrderLimit => const { REJECT_REASONS[15] },
+        RejectReason::OutsideWindow => const { REJECT_REASONS[16] },
+        RejectReason::RateBudget => const { REJECT_REASONS[17] },
+        RejectReason::Warming => const { REJECT_REASONS[18] },
+        RejectReason::IdsSpent => const { REJECT_REASONS[19] },
     }
 }
 
@@ -378,6 +378,12 @@ fn arb_halt() -> impl Strategy<Value = UiHalt> {
                 Just(HaltReason::CommandBankOverflow),
                 Just(HaltReason::DuplicateResting),
                 Just(HaltReason::SealNotAccepted),
+                Just(HaltReason::OrphanFill),
+                Just(HaltReason::PriorRunOverflow),
+                Just(HaltReason::StatusProbesSpent),
+                Just(HaltReason::StreamSilent),
+                Just(HaltReason::WriterFailed),
+                Just(HaltReason::PriorRunFillUnbooked),
             ],
             any::<i64>()
         )

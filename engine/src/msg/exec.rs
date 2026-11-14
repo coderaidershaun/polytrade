@@ -2,7 +2,8 @@
 //! to the edge. Each venue spelling is normalised at the edge, before it reaches here.
 
 use crate::msg::ids::{
-    AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, TradeId, VenueOrderId,
+    AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, TradeId, VenueId,
+    VenueOrderId,
 };
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::time::{LocalTs, Tick, VenueTs};
@@ -10,6 +11,9 @@ use crate::msg::time::{LocalTs, Tick, VenueTs};
 /// A normalised order-lifecycle transition. Stream-lifecycle kinds carry only their kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ExecEvent {
+    /// The venue whose edge sent the event. The edge stamps it as it queues the event, so an event
+    /// that names no instrument still names its venue.
+    pub venue: VenueId,
     /// A configured instrument; the edge drops any symbol that isn't configured. Balances
     /// instead carry an UNKNOWN asset when this happens. `None` for an event of the account
     /// stream itself, which names no instrument.
@@ -205,6 +209,8 @@ pub enum AccountChunkKind {
 /// instead, so this is filled from a REST snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AccountChunk {
+    /// The venue whose edge sent the balances, stamped as the edge queues the chunk.
+    pub venue: VenueId,
     pub kind: AccountChunkKind,
     balances: [AssetBalance; ACCOUNT_CHUNK_ASSETS],
     len: u8,
@@ -232,6 +238,7 @@ impl AccountChunk {
                 locked: 0,
             }; ACCOUNT_CHUNK_ASSETS],
             len: 0,
+            venue: VenueId::default(),
             is_last_chunk: false,
             venue_update_ts_ms,
             exchange_ts_us,
@@ -296,6 +303,9 @@ pub enum ExecCommand {
     },
     /// Cancel prior-run orders.
     CancelPriorRun { instrument: InstrumentId },
+    /// Subscribes to the order stream again, because a read of open orders showed a change that the
+    /// stream never reported. Each venue has its own command lane, so the command names no venue.
+    ResubscribeStream,
 }
 
 impl ExecCommand {

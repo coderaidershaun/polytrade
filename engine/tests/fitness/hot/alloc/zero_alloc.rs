@@ -6,13 +6,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use engine::hot::book::{Book, SnapshotOutcome};
 use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup, LinkWiring};
-use engine::hot::exec::MAX_ORDER_INSTRUMENTS;
+use engine::hot::exec::{DesiredQuote, QuoteLevel};
 use engine::hot::ingress::IngressQueues;
 use engine::hot::metrics::DriverSamples;
 use engine::hot::quant::intensity::IntensityFit;
 use engine::hot::sink::{ExecSink, LinkSink};
 use engine::hot::spawn::{HotDriver, Step};
-use engine::hot::strategy::{Strategy, StrategyConfig};
+use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
 use engine::hot::tracker::MicroTracker;
 use engine::link::{
     LinkFrame, LinkHash, LinkOrigin, LinkPayload, OutboundLink, TopicId, schema_hash_of_fields,
@@ -22,7 +22,7 @@ use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrd
 use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
 };
-use engine::msg::inbound::{InboundMessage, MessageBody};
+use engine::msg::inbound::{FileWriter, InboundMessage, MessageBody, SpinTick, WriterFailure};
 use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::time::{DurationUs, LocalTs, Stamper, VenueTs};
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
@@ -30,7 +30,6 @@ use engine::runtime::config::{
     BinanceMarket, Instruments, IntensitySpec, KlineInterval, PolySeries, RecordedTables,
     StrategySpec, Subscriptions, TableKind, TrackerSpec, VenueMarket,
 };
-use engine::runtime::exposure::ExposureSnapshot;
 use engine::runtime::metrics::{SampleProducers, SinkKind};
 use engine::runtime::registry::InstrumentRow;
 use engine::runtime::shutdown::RunControlGate;
@@ -38,10 +37,10 @@ use engine::venues::exec::open_orders_snapshot_end;
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::engine_support::{
-    ONE, account_chunk, book_reset, delta_chunk, detached_setup, engine_view, exec_event,
-    exposure_ring, idle_at, instrument_row, kline, persist_ring_for, recorder_feature_id,
-    recorder_spec, rotation, run_control, running_at, snapshot_pair, spin, strategy_log_ring,
-    tracker_spec_all, trade, ts, ui_book_ring, ui_event_ring,
+    ExposureLane, ONE, account_chunk, book_reset, delta_chunk, detached_setup, engine_view,
+    exec_event, exposure_ring, idle_at, instrument_row, kline, persist_ring_for,
+    recorder_feature_id, recorder_spec, rotation, run_control, running_at, snapshot_pair, spin,
+    strategy_log_ring, tracker_spec_all, trade, ts, ui_book_ring, ui_event_ring,
 };
 use crate::hot::driver::{Shipped, exec_settings, readiness};
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
@@ -415,23 +414,65 @@ const POLY_BID: i64 = 50 * POLY_TICK;
 const POLY_ASK: i64 = 52 * POLY_TICK;
 const POLY_SHARES: i64 = 5 * FIXED_SCALE;
 
-/// Calls of `step` that the counter watches, for each shipped strategy.
+/// Calls of `step` that the counter watches, for each case.
 const MEASURED_STEPS: u64 = 100_000;
 
 /// A resume wipes the derived state that the recorder's columns are built from, so the engine
 /// parks and resumes only once those columns have had the window.
 const PARK_AT_STEP: u64 = 99_000;
 
-/// Each shipped strategy runs with as many instruments as the order table holds.
-const INSTRUMENTS: u16 = MAX_ORDER_INSTRUMENTS as u16;
+/// A writer that gives up halts quoting for the rest of the run, so it reports once the other paths
+/// have run under the counter.
+const WRITER_FAILED_AT_STEP: u64 = 99_500;
 
-/// The instrument that takes the book resets and rotations, so the traded ones keep their state.
-const SPARE: u16 = INSTRUMENTS - 1;
+/// Each shipped strategy runs with far more instruments than its config names.
+const SHIPPED_INSTRUMENTS: u16 = 16;
 
 /// Small, so each input ring wraps many times before the window opens.
 const INPUT_RING: usize = 64;
 
+/// One run of the driver: a strategy that ships, or the probe, which quotes each instrument.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Case {
+    Shipped(Shipped),
+    Probe { instruments: u16 },
+}
+
+impl Case {
+    fn instruments(self) -> u16 {
+        match self {
+            Case::Shipped(_) => SHIPPED_INSTRUMENTS,
+            Case::Probe { instruments } => instruments,
+        }
+    }
+
+    /// The instrument that takes the book resets and rotations, so the traded ones keep their
+    /// state.
+    fn spare(self) -> u16 {
+        self.instruments() - 1
+    }
+
+    /// The venue whose grid and market messages the case trades. The probe trades the recorder's.
+    fn venue(self) -> Shipped {
+        match self {
+            Case::Shipped(shipped) => shipped,
+            Case::Probe { .. } => Shipped::Recorder,
+        }
+    }
+
+    /// Each instrument of the probe can place an order on each side in one spin, and the venue
+    /// answers each one before the driver steps again, so the rings hold four answers for each
+    /// instrument.
+    fn input_ring(self) -> usize {
+        INPUT_RING.max(4 * usize::from(self.instruments()))
+    }
+}
+
 const OUTPUT_RING: usize = 65_536;
+
+/// The pool of the exposure lane holds a snapshot with room for each instrument for each slot of
+/// its ring. A message publishes one snapshot at most, and the readers drain after each step.
+const EXPOSURE_RING: usize = 64;
 
 /// The stage sample ring is read only in the first half of the window, so it is full in the second.
 const STAGE_RING: u64 = 4_096;
@@ -441,7 +482,7 @@ const STAGE_RING: u64 = 4_096;
 const EXTRAS_EVERY: i64 = 50;
 
 /// One name for each kind of message, in the order of [`kind_of`].
-const KINDS: [&str; 10] = [
+const KINDS: [&str; 11] = [
     "trade",
     "book",
     "book reset",
@@ -452,6 +493,7 @@ const KINDS: [&str; 10] = [
     "run control",
     "exec",
     "account",
+    "writer failed",
 ];
 
 /// No arm catches the rest, so a new kind of message stops this file compiling until the mix sends
@@ -468,19 +510,22 @@ fn kind_of(message: &InboundMessage) -> usize {
         MessageBody::RunControl(_) => 7,
         MessageBody::Exec(_) => 8,
         MessageBody::Account(_) => 9,
+        MessageBody::WriterFailed(_) => 10,
     }
 }
 
-/// The input queues of a trading engine: market data, the timer, the venue's answers, the link.
+/// The input queues of a trading engine: market data, the timer, the venue's answers, the link, and
+/// the status of its file writers.
 #[derive(Debug, Clone, Copy)]
 enum Queue {
     Market,
     Timer,
     Venue,
     Link,
+    WriterStatus,
 }
 
-const QUEUES: usize = 4;
+const QUEUES: usize = 5;
 
 /// The write ends of the input rings, and the count of each kind of message pushed into them.
 struct Inputs {
@@ -489,8 +534,8 @@ struct Inputs {
 }
 
 impl Inputs {
-    fn new() -> (Inputs, IngressQueues) {
-        let (rings, consumers) = (0..QUEUES).map(|_| RingBuffer::new(INPUT_RING)).unzip();
+    fn new(capacity: usize) -> (Inputs, IngressQueues) {
+        let (rings, consumers) = (0..QUEUES).map(|_| RingBuffer::new(capacity)).unzip();
         let inputs = Inputs {
             rings,
             kinds: [0; KINDS.len()],
@@ -504,6 +549,14 @@ impl Inputs {
             .push(message)
             .expect("the driver empties each input ring before the next push");
     }
+}
+
+fn writer_failed(when: i64) -> InboundMessage {
+    let failure = WriterFailure {
+        writer: FileWriter::Exposure,
+        consecutive_failures: 3,
+    };
+    InboundMessage::new(ts(when), MessageBody::WriterFailed(failure))
 }
 
 fn when_of(i: i64) -> i64 {
@@ -597,7 +650,7 @@ fn recorder_message(i: i64) -> (Queue, InboundMessage) {
 }
 
 /// Prints and touch churn on both up legs, with sides that alternate from cycle to cycle.
-fn publisher_message(i: i64) -> (Queue, InboundMessage) {
+fn publisher_message(i: i64, spare: u16) -> (Queue, InboundMessage) {
     let when = when_of(i);
     let side = if (i / 6) % 2 == 0 { Side::Buy } else { Side::Sell };
     let depth = (1 + i % 5) * POLY_SHARES;
@@ -632,7 +685,7 @@ fn publisher_message(i: i64) -> (Queue, InboundMessage) {
         ),
         4 => {
             let candle = kline(
-                SPARE,
+                spare,
                 KlineInterval::OneMinute,
                 (POLY_BID, POLY_ASK, POLY_BID, POLY_ASK),
                 i % 12 == 4,
@@ -725,15 +778,16 @@ impl PeerFrames {
 }
 
 /// The spare instrument resets and rotates, the account reports, and a peer frame arrives.
-fn push_extras(inputs: &mut Inputs, shipped: Shipped, peers: &PeerFrames, i: i64) {
+fn push_extras(inputs: &mut Inputs, case: Case, peers: &PeerFrames, i: i64) {
     let when = when_of(i);
+    let spare = case.spare();
     match i % EXTRAS_EVERY {
         7 => {
-            inputs.push(Queue::Market, book_reset(SPARE, when));
-            push_snapshot(inputs, shipped, SPARE, when);
+            inputs.push(Queue::Market, book_reset(spare, when));
+            push_snapshot(inputs, case.venue(), spare, when);
         }
         17 => {
-            let window = rotation(SPARE, when, when + 300 * SECOND_US, when);
+            let window = rotation(spare, when, when + 300 * SECOND_US, when);
             inputs.push(Queue::Market, window);
         }
         27 => {
@@ -841,7 +895,9 @@ impl Venue {
                 recon_seq,
                 ..open_orders_snapshot_end(instrument, ts(when))
             },
-            ExecCommand::CancelOurs { .. } | ExecCommand::CancelPriorRun { .. } => return,
+            ExecCommand::CancelOurs { .. }
+            | ExecCommand::CancelPriorRun { .. }
+            | ExecCommand::ResubscribeStream => return,
         };
         inputs.push(
             Queue::Venue,
@@ -876,14 +932,24 @@ impl Venue {
     }
 }
 
+/// A binance spot row on the recorder's grid, with no trackers, so the probe costs only its quotes.
+fn probe_row_at(id: u16) -> InstrumentRow {
+    InstrumentRow {
+        market: VenueMarket::Binance(BinanceMarket::Spot),
+        venue_symbol: format!("btcusdt-{id}").into(),
+        tick_size: Some(Price::from_mantissa(MICRO_TICK)),
+        lot_size: Some(Qty::from_mantissa(1_000)),
+        min_qty: Some(Qty::from_mantissa(1_000)),
+        min_notional: Some(Notional::from_mantissa(5 * ONE)),
+        ..instrument_row(id, TrackerSpec::default(), 128)
+    }
+}
+
 fn recorder_row_at(id: u16) -> InstrumentRow {
-    let mut row = instrument_row(id, tracker_spec_all(100), 128);
-    row.market = VenueMarket::Binance(BinanceMarket::Spot);
-    row.venue_symbol = format!("btcusdt-{id}").into();
-    row.tick_size = Some(Price::from_mantissa(MICRO_TICK));
-    row.lot_size = Some(Qty::from_mantissa(1_000));
-    row.min_qty = Some(Qty::from_mantissa(1_000));
-    row.min_notional = Some(Notional::from_mantissa(5 * ONE));
+    let mut row = InstrumentRow {
+        tracker: tracker_spec_all(100),
+        ..probe_row_at(id)
+    };
     if id == 0 {
         row.tracker.intensity = intensity_spec().intensity;
         // The long VPIN window is 250 buckets, but tracker_spec_all retains only 64 closed bars — a
@@ -937,14 +1003,49 @@ fn publisher_row_at(id: u16) -> InstrumentRow {
     }
 }
 
-fn strategy_of(shipped: Shipped) -> Box<dyn Strategy> {
+/// The size of each quote of the probe: on the recorder's grid, past its minimum notional.
+const PROBE_QTY: Qty = Qty::from_mantissa(ONE / 10);
+
+/// Quotes the touch of each instrument on both sides at each spin, so each row of each execution
+/// table of the case is in use.
+#[derive(Default)]
+struct Probe {
+    instruments: u16,
+}
+
+impl Strategy for Probe {
+    fn register(&mut self, registration: Registration<'_>) {
+        self.instruments =
+            u16::try_from(registration.instruments.len()).expect("an instrument id is 16 bits");
+    }
+
+    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
+        for id in 0..self.instruments {
+            let instrument = InstrumentId(id);
+            let book = ctx.book(instrument);
+            let (Some(bid), Some(ask)) = (book.best_bid(), book.best_ask()) else {
+                continue;
+            };
+            for (side, price) in [(Side::Buy, bid.price), (Side::Sell, ask.price)] {
+                let desired = DesiredQuote {
+                    price,
+                    qty: PROBE_QTY,
+                };
+                ctx.quote(instrument, side, QuoteLevel::ZERO, Some(desired));
+            }
+        }
+    }
+}
+
+fn strategy_of(case: Case) -> Box<dyn Strategy> {
     let view = engine_view(MICRO_SPIN);
-    match shipped {
-        Shipped::Recorder => {
+    match case {
+        Case::Probe { .. } => Box::new(Probe::default()),
+        Case::Shipped(Shipped::Recorder) => {
             let spec = recorder_spec::<MicroRecorderParams>(vec![TableKind::Features]);
             Box::new(MicroRecorder::from_spec(&spec, view))
         }
-        Shipped::Publisher => Box::new(PolyUpPublisher::from_spec(
+        Case::Shipped(Shipped::Publisher) => Box::new(PolyUpPublisher::from_spec(
             &StrategySpec {
                 instruments: Instruments::All,
                 tables: Vec::new(),
@@ -964,7 +1065,7 @@ struct Readers {
     commands: Consumer<ExecLaneItem>,
     ui_books: Consumer<UiBookSnapshot>,
     ui_events: Consumer<UiEvent>,
-    exposure: Consumer<ExposureSnapshot>,
+    exposure: ExposureLane,
     strategy_log: Consumer<HotRecord>,
     strategy_log_drops: Arc<AtomicU64>,
     link: Consumer<OutboundLink>,
@@ -972,25 +1073,21 @@ struct Readers {
     text_log: LaneReader<TextRecord>,
 }
 
-/// The engine of `shipped` at the order table's capacity, armed with execution and the link. The
-/// recorder writes each table, and the publisher records nothing, as each ships.
-fn armed_at_capacity(
-    shipped: Shipped,
-    rows: &[InstrumentRow],
-    stamper: Stamper,
-) -> (HotEngine, Readers) {
-    let (persistence, persist) = match shipped {
-        Shipped::Recorder => {
+/// The engine of `case` over `rows`, armed with execution and the link. The recorder writes each
+/// table, and the publisher and the probe record nothing.
+fn armed_at_capacity(case: Case, rows: &[InstrumentRow], stamper: Stamper) -> (HotEngine, Readers) {
+    let (persistence, persist) = match case {
+        Case::Shipped(Shipped::Recorder) => {
             let (wiring, reader) = persist_ring_for(OUTPUT_RING, every_table());
             (Some(wiring), Some(reader))
         }
-        Shipped::Publisher => (None, None),
+        Case::Shipped(Shipped::Publisher) | Case::Probe { .. } => (None, None),
     };
     let (strategy_log_sink, strategy_log) = strategy_log_ring(OUTPUT_RING);
     let strategy_log_drops = strategy_log_sink.drops_handle();
     let (ui_book_sink, ui_books) = ui_book_ring(OUTPUT_RING);
     let (ui_event_sink, ui_events) = ui_event_ring(OUTPUT_RING);
-    let (exposure_sink, exposure) = exposure_ring(OUTPUT_RING);
+    let (exposure_sink, exposure) = exposure_ring(EXPOSURE_RING, rows.len());
     let (command_producer, commands) = RingBuffer::<ExecLaneItem>::new(OUTPUT_RING);
     let (link_producer, link) = RingBuffer::<OutboundLink>::new(OUTPUT_RING);
     let control = RunControlGate::new();
@@ -1003,16 +1100,16 @@ fn armed_at_capacity(
             sink: LinkSink::new(link_producer),
             acknowledged: control.acknowledged().clone(),
         }),
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(command_producer, stamper),
-            settings: exec_settings(shipped),
+            settings: exec_settings(case.venue()),
             run_nonce: 0,
-        }),
+        }],
         exposure: ExposureWiring {
             restored: &[],
             sink: exposure_sink,
         },
-        ..detached_setup(rows, strategy_of(shipped))
+        ..detached_setup(rows, strategy_of(case))
     });
     let readers = Readers {
         persist,
@@ -1049,6 +1146,8 @@ struct Window {
     steps: u64,
     kinds: [u64; KINDS.len()],
     commands: u64,
+    /// One bit for each instrument that an order was placed on.
+    placed: u64,
     tape_rows: u64,
     link_frames: u64,
     hot_records: u64,
@@ -1084,13 +1183,16 @@ impl Readers {
                 continue;
             };
             window.commands += 1;
+            if let ExecCommand::Place { instrument, .. } = stamped.command {
+                window.placed |= 1 << instrument.0;
+            }
             venue.answer(inputs, stamped.command, when);
         }
         while let Ok(snapshot) = self.ui_books.pop() {
             std::hint::black_box(snapshot);
         }
         drain_ui_kinds(&mut self.ui_events, &mut window.tees);
-        while let Ok(snapshot) = self.exposure.pop() {
+        while let Some(snapshot) = self.exposure.pop() {
             std::hint::black_box(snapshot);
         }
         while let Ok(record) = self.strategy_log.pop() {
@@ -1111,27 +1213,28 @@ impl Readers {
     }
 }
 
-/// One run of `shipped` through the hot loop's driver, on a thread of its own so its lanes and its
+/// One run of `case` through the hot loop's driver, on a thread of its own so its lanes and its
 /// count of heap calls are its own.
-fn drive(shipped: Shipped) -> Window {
+fn drive(case: Case) -> Window {
     std::thread::Builder::new()
         .stack_size(16 << 20)
-        .spawn(move || drive_on_this_thread(shipped))
+        .spawn(move || drive_on_this_thread(case))
         .expect("the test can spawn a thread")
         .join()
         .expect("the fold does not panic")
 }
 
-fn drive_on_this_thread(shipped: Shipped) -> Window {
+fn drive_on_this_thread(case: Case) -> Window {
     const INTERVAL_US: i64 = 60_000_000;
-    let rows: Vec<InstrumentRow> = (0..INSTRUMENTS)
-        .map(|id| match shipped {
-            Shipped::Recorder => recorder_row_at(id),
-            Shipped::Publisher => publisher_row_at(id),
+    let rows: Vec<InstrumentRow> = (0..case.instruments())
+        .map(|id| match case {
+            Case::Shipped(Shipped::Recorder) => recorder_row_at(id),
+            Case::Shipped(Shipped::Publisher) => publisher_row_at(id),
+            Case::Probe { .. } => probe_row_at(id),
         })
         .collect();
     let clock = quanta::Clock::new();
-    let (engine, mut readers) = armed_at_capacity(shipped, &rows, Stamper::Counter(clock.clone()));
+    let (engine, mut readers) = armed_at_capacity(case, &rows, Stamper::Counter(clock.clone()));
     let Harness {
         mut metrics,
         samples,
@@ -1146,7 +1249,7 @@ fn drive_on_this_thread(shipped: Shipped) -> Window {
         stages,
         counters,
     };
-    let (mut inputs, queues) = Inputs::new();
+    let (mut inputs, queues) = Inputs::new(case.input_ring());
     let mut driver = HotDriver::new(queues, engine, Some(samples));
     let columns = RecorderColumns::resolve();
     let peers = PeerFrames::new();
@@ -1155,10 +1258,10 @@ fn drive_on_this_thread(shipped: Shipped) -> Window {
 
     // A rotation names a new market to execution, which then waits for its readiness again, so the
     // windows land first and the readiness last.
-    if shipped == Shipped::Publisher {
+    if case == Case::Shipped(Shipped::Publisher) {
         push_windows(&mut inputs, 0);
     }
-    for instrument in 0..INSTRUMENTS {
+    for instrument in 0..case.instruments() {
         step_to_idle(
             &mut driver,
             &mut readers,
@@ -1168,7 +1271,7 @@ fn drive_on_this_thread(shipped: Shipped) -> Window {
             &mut inputs,
             0,
         );
-        push_snapshot(&mut inputs, shipped, instrument, 0);
+        push_snapshot(&mut inputs, case.venue(), instrument, 0);
     }
     step_to_idle(
         &mut driver,
@@ -1184,6 +1287,7 @@ fn drive_on_this_thread(shipped: Shipped) -> Window {
     }
 
     let mut parked_at = None;
+    let mut has_writer_failed = false;
     'window: for i in 0.. {
         if i == MEASURED_START {
             window = Window::default();
@@ -1191,9 +1295,9 @@ fn drive_on_this_thread(shipped: Shipped) -> Window {
         }
         let is_measured = i >= MEASURED_START;
         let when = when_of(i);
-        let (queue, message) = match shipped {
+        let (queue, message) = match case.venue() {
             Shipped::Recorder => recorder_message(i),
-            Shipped::Publisher => publisher_message(i),
+            Shipped::Publisher => publisher_message(i, case.spare()),
         };
         if let (true, MessageBody::Kline(candle)) = (is_measured, &message.body) {
             if candle.is_closed {
@@ -1203,7 +1307,12 @@ fn drive_on_this_thread(shipped: Shipped) -> Window {
             }
         }
         inputs.push(queue, message);
-        push_extras(&mut inputs, shipped, &peers, i);
+        push_extras(&mut inputs, case, &peers, i);
+        if let Case::Probe { instruments } = case {
+            // Each book is stated again in turn, well inside the age past which a quote is refused.
+            let instrument = u16::try_from(i % i64::from(instruments)).expect("an instrument id");
+            push_snapshot(&mut inputs, Shipped::Recorder, instrument, when);
+        }
         if i % FILL_EVERY == 0 {
             venue.fill_resting(&mut inputs, when);
         }
@@ -1216,6 +1325,10 @@ fn drive_on_this_thread(shipped: Shipped) -> Window {
                 inputs.push(Queue::Link, run_control(running_at(2), when));
             }
             _ => {}
+        }
+        if !has_writer_failed && window.steps >= WRITER_FAILED_AT_STEP {
+            inputs.push(Queue::WriterStatus, writer_failed(when));
+            has_writer_failed = true;
         }
         loop {
             let before = crate::alloc_count();
@@ -1264,57 +1377,59 @@ fn step_to_idle(
 }
 
 impl Window {
-    fn assert_live(&self, shipped: Shipped) {
+    fn assert_live(&self, case: Case) {
         for (kind, count) in KINDS.iter().zip(self.kinds) {
-            assert!(count > 0, "the {shipped:?} window sent no {kind} message");
+            assert!(count > 0, "the {case:?} window sent no {kind} message");
         }
         assert!(
             self.commands > 0,
-            "the {shipped:?} command sink banked commands"
+            "the {case:?} command sink banked commands"
         );
-        assert!(
-            self.hot_records > 0,
-            "the {shipped:?} hot lane took records"
-        );
+        assert!(self.hot_records > 0, "the {case:?} hot lane took records");
         assert!(
             self.stage_drops > 0,
-            "the {shipped:?} stage sample ring was full"
+            "the {case:?} stage sample ring was full"
         );
         assert_eq!(
             self.strategy_drops, 0,
-            "the drained {shipped:?} log lane never dropped a record"
+            "the drained {case:?} log lane never dropped a record"
         );
         assert!(
             self.tees.trade > 0,
-            "the {shipped:?} per-print Trade tee must have run"
+            "the {case:?} per-print Trade tee must have run"
         );
         assert!(
             self.tees.execution > 0,
-            "the {shipped:?} per-spin Execution tee must have run — the halt latch is absolute \
+            "the {case:?} per-spin Execution tee must have run — the halt latch is absolute \
              state and a panel that stopped hearing it would keep showing ARMED"
         );
         assert!(
             self.tees.fill > 0,
-            "the {shipped:?} venue-fill Fill tee must have run — and with it the whole inbound \
+            "the {case:?} venue-fill Fill tee must have run — and with it the whole inbound \
              exec fold, which moves the ledger on the hot thread and must allocate nothing doing it"
         );
         assert!(
             self.tees.rotation > 0,
-            "the {shipped:?} rotation Rotation tee must have run"
+            "the {case:?} rotation Rotation tee must have run"
         );
         assert!(
             self.tees.quote > 0,
-            "the {shipped:?} simulated Quote tee must have run"
+            "the {case:?} simulated Quote tee must have run"
         );
         assert!(
             self.tees.position > 0,
-            "the {shipped:?} per-spin Position tee must have run"
+            "the {case:?} per-spin Position tee must have run"
         );
-        match shipped {
-            Shipped::Recorder => self.assert_recorder_live(),
-            Shipped::Publisher => assert!(
+        match case {
+            Case::Shipped(Shipped::Recorder) => self.assert_recorder_live(),
+            Case::Shipped(Shipped::Publisher) => assert!(
                 self.link_frames > 0,
                 "the publisher's link_send reached the outbound ring"
+            ),
+            Case::Probe { instruments } => assert!(
+                self.placed.count_ones() >= u32::from(instruments) - 1,
+                "the probe placed orders on {} of its {instruments} instruments",
+                self.placed.count_ones()
             ),
         }
     }
@@ -1340,20 +1455,26 @@ impl Window {
 }
 
 /// FITNESS: after construction, each step of the hot loop's own driver, over real input rings,
-/// calls the allocator not once, for each kind of message and each shipped strategy at the order
-/// table's capacity. The measurement, the log lanes and the command sink are all inside the window,
-/// and one sample ring is full for half of it.
+/// calls the allocator not once, for each kind of message, for each shipped strategy, and for a
+/// probe that quotes each of 17 and of 64 instruments, whose tables take their size from the rows.
+/// The measurement, the log lanes and the command sink are all inside the window, and one sample
+/// ring is full for half of it.
 #[test]
 fn step_allocates_nothing_for_each_message_kind() {
-    for shipped in [Shipped::Recorder, Shipped::Publisher] {
-        let window = drive(shipped);
+    for case in [
+        Case::Shipped(Shipped::Recorder),
+        Case::Shipped(Shipped::Publisher),
+        Case::Probe { instruments: 17 },
+        Case::Probe { instruments: 64 },
+    ] {
+        let window = drive(case);
         assert_eq!(
             window.heap_calls, 0,
-            "the {shipped:?} driver called the allocator {} times in {} steps",
+            "the {case:?} driver called the allocator {} times in {} steps",
             window.heap_calls, window.steps
         );
         assert_eq!(window.steps, MEASURED_STEPS);
-        window.assert_live(shipped);
+        window.assert_live(case);
     }
 }
 

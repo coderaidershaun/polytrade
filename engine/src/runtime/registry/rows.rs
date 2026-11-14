@@ -1,14 +1,14 @@
 //! `SourceSpec` -> instrument rows: one venue's config block becomes the dense, frozen rows every
 //! later stage addresses by [`InstrumentId`]. Row order fixes those ids, so it is replay-visible.
 
-use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Notional};
+use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Notional, VenueId};
 use crate::runtime::config::{
     BinanceEnv, ConfigError, Instruments, KlineInterval, SourceSpec, Subscriptions, TrackerSpec,
     VenueMarket, validated_mantissa,
 };
 
 use super::InstrumentRow;
-use super::assets::{AssetDictionary, intern_assets};
+
 use super::validate::{validate_binance_tracker, validate_poly_tracker};
 
 const MAX_INSTRUMENTS: usize = u16::MAX as usize + 1;
@@ -35,10 +35,14 @@ pub(super) fn check_strategy_instruments(
     Ok(())
 }
 
-pub(super) fn build_instrument_rows(
+/// Appends the rows of one source, each naming `venue`, so the ids of each source follow the ids of
+/// the sources before it.
+pub(super) fn push_source_rows(
     source: &SourceSpec,
-) -> Result<(Vec<InstrumentRow>, AssetDictionary), ConfigError> {
-    let mut instruments = Vec::new();
+    venue: VenueId,
+    instruments: &mut Vec<InstrumentRow>,
+) -> Result<(), ConfigError> {
+    let first = instruments.len();
     match source {
         SourceSpec::Binance {
             market,
@@ -74,7 +78,7 @@ pub(super) fn build_instrument_rows(
                 base: base.to_uppercase().into(),
                 quote: quote.to_uppercase().into(),
             };
-            spec.push_row(&mut instruments, names);
+            spec.push_row(instruments, names);
         }
         SourceSpec::Polymarket {
             series,
@@ -105,12 +109,14 @@ pub(super) fn build_instrument_rows(
                     quote: "USD".into(),
                     venue_symbol,
                 };
-                spec.push_row(&mut instruments, names);
+                spec.push_row(instruments, names);
             }
         }
     }
-    let assets = intern_assets(&mut instruments);
-    Ok((instruments, assets))
+    for row in &mut instruments[first..] {
+        row.venue = venue;
+    }
+    Ok(())
 }
 
 pub(super) fn binance_env(source: &SourceSpec) -> Option<BinanceEnv> {
@@ -144,6 +150,7 @@ impl SourceRowSpec {
         let instrument_id = issue_instrument_id(instruments);
         instruments.push(InstrumentRow {
             instrument_id,
+            venue: VenueId::default(),
             market: self.market,
             venue_symbol: names.venue_symbol,
             display: names.display,

@@ -40,7 +40,7 @@ pub enum FleetError {
     )]
     ModeLockedWhileRunning { identity: RunIdentity, pid: u32 },
     #[error(
-        "{} has no mode: line with a value inside a top-level execution: block; put the value on \
+        "{} has no mode: line with a value inside the execution: block of a source; put the value on \
          the mode: line, or add the block by hand",
         .path.display()
     )]

@@ -8,14 +8,17 @@ use serde::de::DeserializeOwned;
 use crate::msg::time::EngineClock;
 use crate::runtime::config::BinanceMarket;
 use crate::runtime::secrets::Credentials;
-use crate::venues::binance::exec::{ClockOffset, RecvWindow, RequestParams, RequestSigner};
+use crate::venues::binance::exec::{
+    ClockOffset, ORDER_REQUEST_TIMEOUT, RecvWindow, RequestParams, RequestSigner,
+};
 use crate::venues::edge::backoff::BackoffCaps;
+use crate::venues::edge::http::Deadlines;
 use crate::venues::edge::rest_quiet::SharedRestQuiet;
 use crate::warn;
 
 use super::{
-    AccountInfo, AccountTrade, BinanceEnv, FailureVerdict, Fetched, OrderRecord, Prepared,
-    RestClient, RestError, RestRequest, decode,
+    AccountInfo, AccountTrade, BinanceEnv, FailureVerdict, Fetched, Host, HttpMethod, OrderRecord,
+    Prepared, RestClient, RestError, RestRequest, decode,
 };
 
 // The venue's code for a stale timestamp. Each retry resyncs the clock at most once, because more
@@ -27,7 +30,8 @@ pub struct SignedRestConfig {
     pub env: BinanceEnv,
     pub recv_window: RecvWindow,
     pub backoff: BackoffCaps,
-    /// Total tries, not retries: 1 means send once and surface whatever comes back.
+    /// Total tries of a read, not retries: 1 means send once and surface whatever comes back. A
+    /// request that acts on an order is always sent once.
     pub max_attempts: u32,
 }
 
@@ -71,7 +75,14 @@ impl SignedRestClient {
     ) -> Result<Self, RestError> {
         let signer = RequestSigner::new(credentials.api_secret());
         Ok(Self {
-            rest: RestClient::new(BinanceMarket::Spot, config.env)?,
+            rest: RestClient::with_deadlines(
+                BinanceMarket::Spot,
+                config.env,
+                Deadlines {
+                    request: ORDER_REQUEST_TIMEOUT,
+                    ..Deadlines::STANDARD
+                },
+            )?,
             credentials,
             signer,
             clock: EngineClock::start(),
@@ -79,6 +90,22 @@ impl SignedRestClient {
             config,
             quiet,
         })
+    }
+
+    /// A client that sends each request to a stand-in on this host at `port`, signed with a key
+    /// that is no key, so that a test can watch what the client sends. It reaches no other host,
+    /// and the engine never builds one.
+    ///
+    /// # Errors
+    /// [`RestError::Transport`] if the TLS backend fails to initialise.
+    pub fn on_loopback(
+        port: u16,
+        config: SignedRestConfig,
+        quiet: SharedRestQuiet,
+    ) -> Result<Self, RestError> {
+        let mut client = Self::new(Credentials::loopback(), config, quiet)?;
+        client.rest.host = Host::Loopback(port);
+        Ok(client)
     }
 
     /// # Errors
@@ -224,7 +251,14 @@ impl SignedRestClient {
                 return outcome;
             };
             attempt += 1;
-            if failure.verdict() != FailureVerdict::Retry || attempt >= self.config.max_attempts {
+            // Only a read is sent again. A request that acts on an order can have run at the venue
+            // whatever its failure says, a lost answer or "execution status unknown", so it goes out
+            // once, and the caller reads the order back.
+            let is_read = matches!(plan.method, HttpMethod::Get);
+            if !is_read
+                || failure.verdict() != FailureVerdict::Retry
+                || attempt >= self.config.max_attempts
+            {
                 return Err(failure);
             }
             self.wait_before_retry(&failure, plan.endpoint, attempt)

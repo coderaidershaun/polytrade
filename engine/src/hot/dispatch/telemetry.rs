@@ -10,12 +10,12 @@ use crate::msg::latency::EngineCounters;
 use super::HotEngine;
 
 impl HotEngine {
-    /// Output queue full = drop (never fatal).
+    /// A full output ring drops the record, never fatal.
     pub fn dropped_persist_records(&self) -> u64 {
         self.state.persist_dropped()
     }
 
-    /// Event ring full = drop (never fatal).
+    /// A full event ring drops the event, never fatal.
     pub fn dropped_ui_events(&self) -> u64 {
         self.ui.dropped_events()
     }
@@ -26,7 +26,7 @@ impl HotEngine {
         self.unretained_volume_bars
     }
 
-    /// Link ring full = drop (never fatal).
+    /// A full link ring drops the frame, never fatal.
     pub fn dropped_link_frames(&self) -> u64 {
         self.link_sink.as_ref().map_or(0, LinkSink::dropped)
     }
@@ -43,6 +43,7 @@ impl HotEngine {
 
     /// The drop and event counts since the start of the run, which the hot loop reads once a spin.
     pub fn counters(&self) -> EngineCounters {
+        let incidents = self.state.exec.incident_counts();
         EngineCounters {
             persist_dropped: self.state.persist_dropped(),
             book_trimmed: self.state.books.iter().map(Book::trimmed_count).sum(),
@@ -68,6 +69,11 @@ impl HotEngine {
             ui_events_dropped: self.ui.dropped_events(),
             link_dropped: self.dropped_link_frames(),
             exposure_superseded: self.state.exposure.superseded(),
+            fee_gaps: incidents.fee_gaps,
+            stranded_positions: incidents.stranded_positions,
+            orphan_fills: incidents.orphan_fills,
+            unbooked_fees: incidents.unbooked_fees,
+            orphan_events_without_fill: incidents.orphan_events_without_fill,
         }
     }
 }

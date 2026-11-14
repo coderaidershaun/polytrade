@@ -9,6 +9,7 @@ mod table;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::msg::failure::{FailureClass, Halt};
 use crate::runtime::config::{ExecutionMode, RecordedTables, StrategyId, TradingEngineId};
 
 pub use drain::{PersistHandle, PersistWriter};
@@ -32,8 +33,8 @@ pub struct RunMeta {
     pub engine_version: Box<str>,
     pub feature_names: Vec<Box<str>>,
     pub instrument_symbols: Vec<Box<str>>,
-    // Wrong reconciliation if not decoded.
-    pub asset_symbols: Vec<Box<str>>,
+    // Wrong reconciliation if not decoded. The venue name and the asset name of each asset id.
+    pub asset_symbols: Vec<(Box<str>, Box<str>)>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -63,6 +64,18 @@ pub enum PersistError {
 }
 
 impl PersistError {
+    /// The writer thread ends at its first error, so each row since is lost, orders and fills
+    /// among them, and the engine halts.
+    pub const fn failure_class(&self) -> FailureClass {
+        match self {
+            PersistError::Io { .. }
+            | PersistError::Parquet { .. }
+            | PersistError::Batch { .. }
+            | PersistError::WriterPanicked { .. }
+            | PersistError::DrainInterrupted => FailureClass::Halt(Halt::Engine),
+        }
+    }
+
     fn io_at(path: &Path) -> impl FnOnce(std::io::Error) -> Self + '_ {
         move |source| Self::Io {
             path: path.to_path_buf(),

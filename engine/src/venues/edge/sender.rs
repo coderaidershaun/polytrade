@@ -194,6 +194,8 @@ fn kind_of(command: &ExecCommand) -> (CommandKind, ClientOrderId) {
         ExecCommand::CancelOurs { .. } | ExecCommand::CancelPriorRun { .. } => {
             (CommandKind::Cancel, NO_CLIENT)
         }
-        ExecCommand::ReconcileOpenOrders { .. } => (CommandKind::Reconcile, NO_CLIENT),
+        ExecCommand::ReconcileOpenOrders { .. } | ExecCommand::ResubscribeStream => {
+            (CommandKind::Reconcile, NO_CLIENT)
+        }
     }
 }

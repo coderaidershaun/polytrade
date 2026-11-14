@@ -8,11 +8,12 @@ use crate::msg::persist::{OrderLifecycle, OrderTransition};
 use crate::msg::time::LocalTs;
 
 use super::audit::bank_engine_driven;
+use super::budget::QuotePermit;
 use super::desired::QuoteLevel;
 use super::engine::{ExecEngine, FoldStamps};
 use super::gates::HaltReason;
-use super::order::{CloseReason, OrderClaim, OrderState};
-use super::reconcile::{PlaceIntent, ReconcileOutcome};
+use super::order::{ClaimRefusal, OrderClaim, OrderState};
+use super::reconcile::{PlaceIntent, ReconcileOutcome, RejectReason};
 use super::spin::SpinInput;
 
 impl ExecEngine {
@@ -23,13 +24,18 @@ impl ExecEngine {
         level: QuoteLevel,
         outcome: ReconcileOutcome,
         input: &mut SpinInput<'_>,
-    ) {
+    ) -> Option<RejectReason> {
         let stamps = input.stamps();
         let at = stamps.fold;
         match outcome {
             ReconcileOutcome::Nothing | ReconcileOutcome::Reject(_) => {}
             ReconcileOutcome::Place(intent) => {
-                self.place(instrument, side, level, intent, stamps, input.bank)
+                let permit = match self.admit_quote_placement(instrument, side) {
+                    Ok(permit) => permit,
+                    Err(reason) => return Some(reason),
+                };
+                let kind = PlacementKind::Quote { level, permit };
+                return self.place(instrument, side, intent, kind, stamps, input.bank);
             }
             ReconcileOutcome::Cancel => {
                 if let Some(index) = self.resting_index(instrument, side, level) {
@@ -37,28 +43,21 @@ impl ExecEngine {
                 }
             }
             ReconcileOutcome::AmendQty(qty) => {
-                let Some(index) = self.resting_index(instrument, side, level) else {
-                    return;
-                };
-                let client_id = self.orders.slot(index).client_id;
+                let index = self.resting_index(instrument, side, level)?;
+                let client_id = self.orders.slot(index).client_id();
                 let command = ExecCommand::AmendQty {
                     instrument,
                     client_id,
                     qty,
                 };
-                if self.bank_or_halt(command, at) {
-                    let next = OrderState::AmendInFlight;
-                    let received = stamps.received;
-                    self.move_slot(
-                        index,
-                        next,
-                        OrderTransition::AmendSent,
-                        received,
-                        input.bank,
-                    );
+                if self.bank_or_halt(self.venue_of(instrument), command, at) {
+                    let previous = self.orders.mark_amend_sent(index);
+                    let transition = OrderTransition::AmendSent;
+                    self.bank_moved(index, previous, transition, stamps.received, input.bank);
                 }
             }
         }
+        None
     }
 
     #[inline]
@@ -68,7 +67,7 @@ impl ExecEngine {
         side: Side,
         level: QuoteLevel,
     ) -> Option<usize> {
-        let client_id = self.orders.resting(instrument, side, level)?.client_id;
+        let client_id = self.orders.resting(instrument, side, level)?.client_id();
         self.orders.find(client_id)
     }
 
@@ -83,54 +82,60 @@ impl ExecEngine {
         let at = stamps.fold;
         let slot = self.orders.slot(index);
         let command = ExecCommand::Cancel {
-            instrument: slot.instrument,
-            client_id: slot.client_id,
+            instrument: slot.instrument(),
+            client_id: slot.client_id(),
         };
-        let is_sent = self.bank_or_halt(command, at);
+        let is_sent = self.bank_or_halt(self.venue_of(slot.instrument()), command, at);
         if is_sent {
-            let next = OrderState::CancelInFlight;
-            self.move_slot(
-                index,
-                next,
-                OrderTransition::CancelSent,
-                stamps.received,
-                bank,
-            );
+            let previous = self.orders.mark_cancel_sent(index);
+            let transition = OrderTransition::CancelSent;
+            self.bank_moved(index, previous, transition, stamps.received, bank);
         }
         is_sent
     }
 
-    pub(super) fn move_slot(
-        &mut self,
+    /// Banks the row of a transition that the engine drove and the order table has made.
+    pub(super) fn bank_moved(
+        &self,
         index: usize,
-        next: OrderState,
+        previous: OrderState,
         transition: OrderTransition,
         received: LocalTs,
         bank: &mut Actions,
     ) {
-        let slot = self.orders.slot_mut(index);
-        let previous = OrderLifecycle::from(slot.state);
-        slot.state = next;
-        bank_engine_driven(bank, slot, transition, previous, received);
+        let slot = self.orders.slot(index);
+        bank_engine_driven(bank, slot, transition, previous.into(), received);
     }
 
-    /// Every placement the engine mints passes through here, so every one of them spends the venue
-    /// budget — a flatten is exempt from being REFUSED by it, never from consuming it. Counting the
-    /// exits is what makes the quote gate refuse early enough to leave room for the next one.
+    /// Every placement the engine mints passes through here, so each one spends the venue budget,
+    /// the order that gets a market flat included: the budget never refuses it, but it still counts
+    /// it, so the quotes after it are refused early enough to leave room for the next one.
+    ///
+    /// Returns the refusal of a level whose client ids are spent. A level with no slot at all halts
+    /// instead, and the halt is what the next spin reports.
     pub(super) fn place(
         &mut self,
         instrument: InstrumentId,
         side: Side,
-        level: QuoteLevel,
         intent: PlaceIntent,
+        kind: PlacementKind,
         stamps: FoldStamps,
         bank: &mut Actions,
-    ) {
+    ) -> Option<RejectReason> {
         let at = stamps.fold;
-        let Some((index, client_id)) = self.claim(instrument, side, level, intent, at) else {
-            return;
+        let level = match kind {
+            PlacementKind::Quote { level, .. } => level,
+            PlacementKind::Flatten => QuoteLevel::ZERO,
         };
-        let is_banked = self.pending.bank(
+        let (index, client_id) = match self.claim(instrument, side, level, intent, at) {
+            Ok(claimed) => claimed,
+            Err(ClaimRefusal::IdsSpent) => return Some(RejectReason::IdsSpent),
+            Err(ClaimRefusal::LevelFull) => {
+                self.halt(HaltReason::SlotLeak, at);
+                return None;
+            }
+        };
+        let is_banked = self.venue_mut(instrument).pending.bank(
             ExecCommand::Place {
                 instrument,
                 client_id,
@@ -143,9 +148,14 @@ impl ExecEngine {
         );
         if !is_banked {
             self.unwind(index, stamps, bank);
-            return;
+            return None;
         }
-        self.budget.record_place();
+        match kind {
+            PlacementKind::Quote { permit, .. } => {
+                self.venue_mut(instrument).budget.spend_quote(permit)
+            }
+            PlacementKind::Flatten => self.venue_mut(instrument).budget.spend_flatten(),
+        }
         bank_engine_driven(
             bank,
             self.orders.slot(index),
@@ -153,6 +163,7 @@ impl ExecEngine {
             OrderLifecycle::Free,
             stamps.received,
         );
+        None
     }
 
     fn claim(
@@ -162,8 +173,8 @@ impl ExecEngine {
         level: QuoteLevel,
         intent: PlaceIntent,
         at: LocalTs,
-    ) -> Option<(usize, ClientOrderId)> {
-        let Some((index, client_id)) = self.orders.claim(OrderClaim {
+    ) -> Result<(usize, ClientOrderId), ClaimRefusal> {
+        let (index, client_id) = self.orders.claim(OrderClaim {
             instrument,
             side,
             level,
@@ -171,28 +182,23 @@ impl ExecEngine {
             qty: intent.qty,
             style: intent.style,
             claimed_ts_us: at,
-            recon_seq: self.recon_seq,
-        }) else {
-            self.halt(HaltReason::SlotLeak, at);
-            return None;
-        };
+            recon_seq: self.venue(instrument).recon_seq,
+            run_nonce: self.venue(instrument).run_nonce,
+        })?;
         let asset = self.instruments[usize::from(instrument.0)].spend_asset(side);
         let amount = side.spend(intent.price, intent.qty);
-        let reserved_at = self.account.reserve(asset, amount);
-        let slot = self.orders.slot_mut(index);
-        slot.reserved_amount = Some(amount).filter(|amount| amount.mantissa() != 0);
-        slot.reserved_at = reserved_at;
-        Some((index, client_id))
+        let reserved_at = self.venue_mut(instrument).account.reserve(asset, amount);
+        self.orders.hold_reservation(index, amount, reserved_at);
+        Ok((index, client_id))
     }
 
     #[cold]
     fn unwind(&mut self, index: usize, stamps: FoldStamps, bank: &mut Actions) {
         let at = stamps.fold;
         self.release_unsent_reservation(index);
-        self.orders.slot_mut(index).closed_ts_us = at;
-        let next = OrderState::Closed(CloseReason::Rejected);
-        let received = stamps.received;
-        self.move_slot(index, next, OrderTransition::SendAbandoned, received, bank);
+        let previous = self.orders.abandon(index, at);
+        let transition = OrderTransition::SendAbandoned;
+        self.bank_moved(index, previous, transition, stamps.received, bank);
         self.halt(HaltReason::CommandBankOverflow, at);
     }
 
@@ -202,11 +208,23 @@ impl ExecEngine {
     /// unwind its claim before the halt, and the sweep the halt itself issues, which has nothing left
     /// to escalate to and says so out loud.
     #[inline]
-    pub(super) fn bank_or_halt(&mut self, command: ExecCommand, at: LocalTs) -> bool {
-        let is_banked = self.pending.bank(command, at);
+    pub(super) fn bank_or_halt(&mut self, venue: usize, command: ExecCommand, at: LocalTs) -> bool {
+        let is_banked = self.venues[venue].pending.bank(command, at);
         if !is_banked {
             self.halt(HaltReason::CommandBankOverflow, at);
         }
         is_banked
     }
+}
+
+/// What a placement is, for the slot it takes and the budget it spends. A quote rests at its level
+/// and spends the permit that the meter gave it. The order that gets a market flat takes level zero
+/// and needs no permit, because the budget never refuses it. It holds no rung of the ladder:
+/// `is_resting_quote` is what keeps the reconciler from reading it as a quote.
+pub(super) enum PlacementKind {
+    Quote {
+        level: QuoteLevel,
+        permit: QuotePermit,
+    },
+    Flatten,
 }

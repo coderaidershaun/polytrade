@@ -14,19 +14,18 @@ pub enum TransportError {
         #[source]
         source: reqwest::Error,
     },
-    #[error("request to {url} failed")]
+    #[error("request {target} failed")]
     Request {
-        url: String,
+        target: String,
         #[source]
         source: reqwest::Error,
     },
-    // The url goes last because a log record cuts a long line off at the end, and a signed url is
-    // long enough to hide anything written after it.
+    // The target goes last because a log record cuts a long line off at the end.
     #[error(
-        "request timed out after {limit_secs}s while {phase} — slow or blocked route to the venue (vpn, proxy, firewall): {url}"
+        "request timed out after {limit_secs}s while {phase} — slow or blocked route to the venue (vpn, proxy, firewall): {target}"
     )]
     Timeout {
-        url: String,
+        target: String,
         phase: &'static str,
         limit_secs: u64,
     },
@@ -65,45 +64,51 @@ impl HttpClient {
         self.http.request(method, url)
     }
 
+    /// `target` is how an error names the request, so it holds no secret: a venue that signs its
+    /// query string passes the method and the path alone.
     pub(crate) async fn send(
         &self,
         builder: RequestBuilder,
-        url: &str,
+        target: &str,
     ) -> Result<Response, TransportError> {
         builder
             .send()
             .await
-            .map_err(|source| self.failure(url, "waiting for the response", source))
+            .map_err(|source| self.failure(target, "waiting for the response", source))
     }
 
     pub(crate) async fn body(
         &self,
         response: Response,
-        url: &str,
+        target: &str,
     ) -> Result<String, TransportError> {
         response
             .text()
             .await
-            .map_err(|source| self.failure(url, "reading the response body", source))
+            .map_err(|source| self.failure(target, "reading the response body", source))
     }
 
     /// One deadline covers both the wait for headers and the body read, and reqwest reports a slow
     /// body as a timeout wrapped in a decoding error. The phase says which of the two ran out of
-    /// time.
-    fn failure(&self, url: &str, phase: &'static str, source: reqwest::Error) -> TransportError {
-        let url = url.to_owned();
+    /// time. The error of reqwest prints the whole url, query string and signature included, so it
+    /// loses its url here.
+    fn failure(&self, target: &str, phase: &'static str, source: reqwest::Error) -> TransportError {
+        let target = target.to_owned();
         if !source.is_timeout() {
-            return TransportError::Request { url, source };
+            return TransportError::Request {
+                target,
+                source: source.without_url(),
+            };
         }
         if source.is_connect() {
             return TransportError::Timeout {
-                url,
+                target,
                 phase: "connecting",
                 limit_secs: self.deadlines.connect.as_secs(),
             };
         }
         TransportError::Timeout {
-            url,
+            target,
             phase,
             limit_secs: self.deadlines.request.as_secs(),
         }

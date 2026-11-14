@@ -3,10 +3,9 @@
 
 use crate::msg::exec::{ExecCommand, ExecKind, Provenance};
 use crate::msg::time::LocalTs;
-use crate::runtime::shutdown::FatalReason;
 use crate::venues::binance::rest::OrderRecord;
 use crate::venues::edge::EdgeDriver;
-use crate::venues::exec::{MirroredOrder, Outgoing, ResyncPoll, SessionOutcome};
+use crate::venues::exec::{ExecSessionError, MirroredOrder, Outgoing, ResyncPoll, SessionOutcome};
 use crate::{error, info, warn};
 
 use super::rest::RestJob;
@@ -46,12 +45,9 @@ impl Actor {
             // An order this build cannot read leaves the mirror incomplete, and quoting against an
             // incomplete mirror is what strands somebody's order.
             let Some((event, _)) = self.decode_order(order, ExecKind::SnapshotOrder, 0) else {
-                self.session.core.stop_quoting();
+                let error = self.session.undecodable_open_order(order.order_id);
                 self.fail_resync(resync_seq);
-                self.control.fatal.trip(FatalReason::UndecodableOpenOrder {
-                    venue: self.venue(),
-                    venue_order_id: order.order_id,
-                });
+                self.control.fail(error);
                 return;
             };
             let Some(mut mirrored) = MirroredOrder::observed(&event) else {
@@ -67,13 +63,16 @@ impl Actor {
             match mirrored.provenance {
                 // Foreign orders are never mirrored, and since none carry this engine's
                 // client id, the operator is warned directly instead.
-                Provenance::Foreign => warn!(
-                    "binance execution sees a foreign order resting on {}: {:?} {} @ {} — it will never be cancelled by this engine",
-                    self.symbols.symbol(mirrored.instrument).unwrap_or("?"),
-                    mirrored.side,
-                    mirrored.qty.mantissa(),
-                    mirrored.price.mantissa()
-                ),
+                Provenance::Foreign => {
+                    self.session.core.count_foreign_order();
+                    warn!(
+                        "binance execution sees a foreign order resting on {}: {:?} {} @ {} — it will never be cancelled by this engine",
+                        self.symbols.symbol(mirrored.instrument).unwrap_or("?"),
+                        mirrored.side,
+                        mirrored.qty.mantissa(),
+                        mirrored.price.mantissa()
+                    );
+                }
                 provenance => {
                     seen_owned.push(mirrored.client_id);
                     info!(
@@ -85,8 +84,9 @@ impl Actor {
                             "binance execution cannot retain venue order {:016x} in its possibly-live set ({error:?}) — quoting is disabled",
                             mirrored.client_id.0
                         );
-                        self.control.fatal.trip(FatalReason::MirrorRetainFailed {
+                        self.control.fail(ExecSessionError::MirrorRetainFailed {
                             venue: self.venue(),
+                            source: error,
                         });
                         self.fail_resync(resync_seq);
                         return;
@@ -111,10 +111,12 @@ impl Actor {
                 .collect();
             for client_id in missing {
                 self.session.core.mark_ambiguous(client_id);
+                // The answer goes to the hot side, which numbers its own reads: a pass counter
+                // there would retire live orders or count toward a silence read, so it says 0.
                 if !self.submit(RestJob::OrderStatus {
                     instrument,
                     client_id,
-                    recon_seq: resync_seq,
+                    recon_seq: 0,
                 }) {
                     self.fail_resync(resync_seq);
                 }

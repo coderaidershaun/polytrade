@@ -60,12 +60,17 @@ pub(super) fn footer_metadata(meta: &RunMeta) -> Vec<(String, String)> {
         ),
         (
             "asset_dictionary".to_owned(),
-            json_string_array(&meta.asset_symbols),
+            json_array(&meta.asset_symbols),
         ),
         ("engine_version".to_owned(), meta.engine_version.to_string()),
     ]
 }
 
 fn json_string_array(items: &[Box<str>]) -> String {
-    serde_json::to_string(items).expect("a slice of strings always serialises to json")
+    json_array(items)
+}
+
+fn json_array<T: serde::Serialize>(items: &[T]) -> String {
+    serde_json::to_string(items)
+        .expect("a slice of strings or of string pairs always serialises to json")
 }

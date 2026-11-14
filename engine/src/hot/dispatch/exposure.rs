@@ -1,10 +1,9 @@
 //! Exposure persistence write half: banked ledger snapshot to disk on change.
 
 use crate::hot::sink::ExposureSink;
-use crate::log::hot_warn;
 use crate::msg::inbound::{InboundMessage, MessageKind};
 use crate::msg::time::LocalTs;
-use crate::runtime::exposure::{ExposureSnapshot, InstrumentExposure, MAX_EXPOSURE_INSTRUMENTS};
+use crate::runtime::exposure::{ExposureSnapshot, InstrumentExposure};
 
 use super::HotState;
 
@@ -24,60 +23,44 @@ pub(super) fn moves_position(message: &InboundMessage) -> bool {
     )
 }
 
-/// Boot state as publishable snapshot (same fn as publisher); mismatched seed -> spurious first write.
-pub(super) fn restored_snapshot(restored: &[InstrumentExposure]) -> ExposureSnapshot {
-    snapshot_of(restored.iter().copied())
-}
-
-/// Build snapshot from rows (drop empty, apply capacity).
-fn snapshot_of(rows: impl Iterator<Item = InstrumentExposure>) -> ExposureSnapshot {
-    let mut snapshot = ExposureSnapshot::EMPTY;
-    let mut len = 0;
-    for exposure in rows.filter(|exposure| !exposure.is_empty()) {
-        let Some(slot) = snapshot.instruments.get_mut(len) else {
-            break;
-        };
-        *slot = exposure;
-        len += 1;
-    }
-    snapshot.len = len as u8;
+/// The restored position as a snapshot with the rows that the publisher writes. A seed with other
+/// rows would make the first publish write a change that never happened. It has room for each
+/// instrument, so a publish fills it in place.
+pub(super) fn restored_snapshot(
+    instruments: usize,
+    restored: &[InstrumentExposure],
+) -> ExposureSnapshot {
+    let mut snapshot = ExposureSnapshot::for_instruments(instruments);
+    snapshot.set_rows(restored.iter().copied());
     snapshot
-}
-
-/// Warn if instruments exceed snapshot capacity (fixed-size POD, said once at startup).
-#[cold]
-pub(super) fn warn_uncovered_instruments(instrument_count: usize) {
-    hot_warn!(
-        "exposure: {} instruments exceed the {} one snapshot carries — only the first {} holding a position survive a restart",
-        instrument_count,
-        MAX_EXPOSURE_INSTRUMENTS,
-        MAX_EXPOSURE_INSTRUMENTS
-    );
 }
 
 impl HotState {
     /// Publish basis snapshot (only where changed). Compare against last published, not ledger flag (can't drift).
     pub(super) fn publish_exposure(&mut self, at: LocalTs) {
-        let durable = self
-            .ledger
-            .rows()
-            .map(|(instrument, row)| InstrumentExposure {
+        let ledger = &self.ledger;
+        let durable = || {
+            ledger.rows().map(|(instrument, row)| InstrumentExposure {
                 instrument,
                 position_base: row.position_base(),
                 cash_quote: row.cash_quote().mantissa(),
                 basis_quote: row.basis_quote().mantissa(),
-            });
-        let mut snapshot = snapshot_of(durable);
-        if snapshot.active() == self.published_exposure.active() {
+            })
+        };
+        let published = &mut self.published_exposure;
+        if durable()
+            .filter(|exposure| !exposure.is_empty())
+            .eq(published.active().iter().copied())
+        {
             return;
         }
         // Seq monotone from seed's 0 (writer's disk state). Mark informational only, saturate on overflow.
-        snapshot.seq = self.published_exposure.seq + 1;
-        snapshot.exposure_quote = self.ledger.rows().fold(0i64, |sum, (_, row)| {
+        published.set_rows(durable());
+        published.seq += 1;
+        published.exposure_quote = ledger.rows().fold(0i64, |sum, (_, row)| {
             sum.saturating_add(row.exposure_quote().mantissa())
         });
-        snapshot.emitted_ts_us = at;
-        self.published_exposure = snapshot;
-        self.exposure.push(snapshot);
+        published.emitted_ts_us = at;
+        self.exposure.push(published);
     }
 }

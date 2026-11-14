@@ -9,24 +9,64 @@ engine:
 queues:
   input_capacity: 65536
   persistence_capacity: 65536
-source:
-  exchange: binance
-  market: spot
-  base: BTC
-  quote: USDT
-  kline_intervals: ["1m"]
-  # Position cap in dollars. Past it that side stops quoting, so it must leave room for one full order.
-  max_exposure_quote: 50
-  tracker:
-    # 24 hours of 1-minute candles, enough to seed the long-horizon volatility estimate.
-    candles: { keep: 1440 }
-    imbalance: { top_n: 5, windows: [] }
-    ewma_vol: { halflife_events: 600 }
-    # Measures how fast orders arrive at each distance from the best price.
-    intensity: { max_depth_ticks: 32, half_life_secs: 600.0, min_events: 5.0 }
-    volume_bars:
-      threshold: klines
-      keep: 1440
+sources:
+  - feed:
+      exchange: binance
+      market: spot
+      base: BTC
+      quote: USDT
+      kline_intervals: ["1m"]
+      # Position cap in dollars. Past it that side stops quoting, so it must leave room for one full order.
+      max_exposure_quote: 50
+      tracker:
+        # 24 hours of 1-minute candles, enough to seed the long-horizon volatility estimate.
+        candles: { keep: 1440 }
+        imbalance: { top_n: 5, windows: [] }
+        ewma_vol: { halflife_events: 600 }
+        # Measures how fast orders arrive at each distance from the best price.
+        intensity: { max_depth_ticks: 32, half_life_secs: 600.0, min_events: 5.0 }
+        volume_bars:
+          threshold: klines
+          keep: 1440
+    execution:
+      # Ships disarmed.
+      mode: sim # live, sim, off
+      # The sim block is used only when mode is sim, so it can stay when you switch modes.
+      sim:
+        order_entry_latency_ms: 15
+        ack_latency_ms: 15
+        max_market_data_delay_ms: 74
+        heartbeat_ms: 100
+        opening_base_balance: 0.01
+        opening_quote_balance: 1000.0
+        maker_fee_bps: -0.4 # Rebate
+      max_orders_per_side: 1
+      # Don't move an order for less than this. Moving it loses our place in the queue.
+      requote_threshold_ticks: 1
+      # Balances held back and never traded through. Both must be above zero.
+      min_base_balance: 0.0002
+      min_quote_balance: 20.0
+      # Ceiling on one order. Leaves room above order_notional while still catching a sizing bug.
+      max_order_notional_quote: 25.0
+      # How far from mid a quote may sit.
+      max_quote_distance_bps: 50.0
+      # Book older than this means the engine is flying blind, so it pulls its quotes.
+      max_book_age_ms: 2000
+      # Rejects in a row before the kill switch. Ordinary post-only crosses don't count.
+      max_consecutive_rejects: 5
+      # Loss budget for the run. A realised breach halts; unrealised only stops adding to a position.
+      max_session_loss_quote: 5.0
+      inflight_timeout_ms: 5000
+      # Binance's order stream can go quiet without saying so. 30 s with no stream event while an order
+      # works -> one read of open orders. A read that shows what the stream missed subscribes again.
+      stream_silence_ms: 30000
+      # How long to remember closed orders. Must outlast the venue resending them.
+      order_reap_secs: 60
+      recv_window_ms: 5000
+      # Checked once at startup. A clock further off than this and the venue rejects everything.
+      max_clock_skew_ms: 1000
+      # Venue unreachable this long -> pull any resting orders.
+      disconnect_sweep_secs: 30
 strategy:
   instruments: all
   # link_frames = what we consumed from the polymarket engine. orders + fills = the audit trail.
@@ -39,45 +79,6 @@ persistence:
   # Parquet files older than this many hours are deleted while the engine runs.
   # That includes files left by earlier runs.
   retention_hours: 6
-execution:
-  # Ships disarmed.
-  mode: sim # live, sim, off
-  # The sim block is used only when mode is sim, so it can stay when you switch modes.
-  sim:
-    order_entry_latency_ms: 15
-    ack_latency_ms: 15
-    max_market_data_delay_ms: 74
-    heartbeat_ms: 100
-    opening_base_balance: 0.01
-    opening_quote_balance: 1000.0
-    maker_fee_bps: -0.4 # Rebate
-  max_orders_per_side: 1
-  # Don't move an order for less than this. Moving it loses our place in the queue.
-  requote_threshold_ticks: 1
-  # Balances held back and never traded through. Both must be above zero.
-  min_base_balance: 0.0002
-  min_quote_balance: 20.0
-  # Ceiling on one order. Leaves room above order_notional while still catching a sizing bug.
-  max_order_notional_quote: 25.0
-  # How far from mid a quote may sit.
-  max_quote_distance_bps: 50.0
-  # Book older than this means the engine is flying blind, so it pulls its quotes.
-  max_book_age_ms: 2000
-  # Rejects in a row before the kill switch. Ordinary post-only crosses don't count.
-  max_consecutive_rejects: 5
-  # Loss budget for the run. A realised breach halts; unrealised only stops adding to a position.
-  max_session_loss_quote: 5.0
-  inflight_timeout_ms: 5000
-  # Binance's stream key can expire and go quiet without saying so. No exec events for this many
-  # spins -> reconnect.
-  exec_silence_spins: 30
-  # How long to remember closed orders. Must outlast the venue resending them.
-  order_reap_secs: 60
-  recv_window_ms: 5000
-  # Checked once at startup. A clock further off than this and the venue rejects everything.
-  max_clock_skew_ms: 1000
-  # Venue unreachable this long -> pull any resting orders.
-  disconnect_sweep_secs: 30
 link:
   # Loopback: this engine and the workstation share a box. Private network only.
   bind: "127.0.0.1:9310"

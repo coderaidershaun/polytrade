@@ -23,7 +23,7 @@ use engine::venues::exec::{MAX_RESYNC_ATTEMPTS, ResyncPass, ResyncStep, open_ord
 
 use proptest::prelude::*;
 
-use crate::engine_support::{local_refusals, ts as at};
+use crate::engine_support::{exec_capacity, local_refusals, ts as at};
 use crate::exec_support::{
     ASK, BID, CEILING, INSTRUMENT, drain_commands, is_placing, open_orders_snapshot,
     quoting_engine, quoting_engine_with_ui, reseat_book, spin_at, stream_and_balances,
@@ -136,7 +136,7 @@ fn the_resync_marker_can_retire_no_slot() {
     assert_eq!(marker.kind, ExecKind::SnapshotEnd);
     assert_eq!(marker.instrument, Some(INSTRUMENT));
 
-    let mut orders = OrderTable::new(0);
+    let mut orders = OrderTable::new(&exec_capacity(1));
     let (index, _) = orders
         .claim(OrderClaim {
             instrument: INSTRUMENT,
@@ -147,6 +147,7 @@ fn the_resync_marker_can_retire_no_slot() {
             style: OrderStyle::PostOnly,
             claimed_ts_us: LocalTs::from_micros(0),
             recon_seq: 0,
+            run_nonce: 0,
         })
         .expect("a fresh table has a free slot");
 
@@ -163,7 +164,7 @@ fn the_resync_marker_can_retire_no_slot() {
     );
 
     assert_eq!(closed, 0, "the resync marker swept a working order");
-    assert!(orders.slot(index).state.is_working());
+    assert!(orders.slot(index).state().is_working());
 }
 
 /// FITNESS: balances are re-stated on every spin, not only when they change.

@@ -5,7 +5,7 @@ use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{DesiredQuote, QuoteLevel};
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{Strategy, StrategyCtx};
-use engine::msg::exec::{ExecCommand, ExecLaneItem, OrderStyle, StampedExecCommand};
+use engine::msg::exec::{ExecCommand, ExecLaneItem, StampedExecCommand};
 use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::Stamper;
@@ -39,7 +39,6 @@ impl Strategy for ThreePlacements {
                 Some(DesiredQuote {
                     price: Price::from_mantissa(price),
                     qty: QUOTE_QTY,
-                    style: OrderStyle::PostOnly,
                 }),
             );
         }
@@ -70,11 +69,11 @@ fn held_command_keeps_bank_stamp() {
     second.venue_symbol = "ETHUSDT".into();
     let instruments = [row_with_ceiling(CEILING), second];
     let mut engine = HotEngine::new(HotEngineSetup {
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(producer, Stamper::Counter(clock)),
             settings: exec_settings(),
             run_nonce: 0,
-        }),
+        }],
         ..detached_setup(&instruments, Box::new(ThreePlacements))
     });
     make_ready(&mut engine, 500_000);

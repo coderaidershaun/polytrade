@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use engine::hot::dispatch::HotEngine;
 use engine::hot::strategy::{Fill, Registration, Strategy, StrategyCtx};
-use engine::msg::ids::{AssetId, InstrumentId, Qty, Side};
+use engine::msg::ids::{InstrumentId, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::runtime::config::TrackerSpec;
 use engine::runtime::registry::InstrumentRow;
@@ -28,7 +28,7 @@ use crate::engine_support::{
 const TICK: i64 = ONE / 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Phase {
+pub(crate) enum Phase {
     /// Read inside the `on_fill` a venue fill earned, which the engine fires only after folding it.
     InFill,
     /// Read on a later message's spin. Carries the tick's sequence so a reader names the spin it
@@ -37,16 +37,16 @@ enum Phase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Reading {
-    phase: Phase,
-    instrument: InstrumentId,
-    position_base: Qty,
-    exposure_quote: i64,
-    pnl_quote: i64,
-    has_mark: bool,
+pub(crate) struct Reading {
+    pub(crate) phase: Phase,
+    pub(crate) instrument: InstrumentId,
+    pub(crate) position_base: Qty,
+    pub(crate) exposure_quote: i64,
+    pub(crate) pnl_quote: i64,
+    pub(crate) has_mark: bool,
 }
 
-type Readings = Arc<Mutex<Vec<Reading>>>;
+pub(crate) type Readings = Arc<Mutex<Vec<Reading>>>;
 
 /// Reads the ledger back through `ctx` on both callbacks it sees, so the tape alone decides the
 /// ledger and both sides of the fold boundary are observed. It banks nothing: the position it
@@ -137,11 +137,11 @@ fn scaled_product(left: i64, right: i64) -> i64 {
 
 /// A tracker with every series switched off: the ledger reads none of it, and a light row keeps the
 /// proptest below building a full estimator suite per case.
-fn bare_row(id: u16) -> InstrumentRow {
+pub(crate) fn bare_row(id: u16) -> InstrumentRow {
     instrument_row(id, TrackerSpec::default(), 64)
 }
 
-fn probe_engine(instruments: &[InstrumentRow]) -> (HotEngine, Readings) {
+pub(crate) fn probe_engine(instruments: &[InstrumentRow]) -> (HotEngine, Readings) {
     let readings: Readings = Arc::new(Mutex::new(Vec::new()));
     let (persistence, _persist) = persist_ring(256);
     let (log_sink, _logs) = strategy_log_ring(64);
@@ -156,7 +156,7 @@ fn probe_engine(instruments: &[InstrumentRow]) -> (HotEngine, Readings) {
     (engine, readings)
 }
 
-fn take_readings(readings: &Readings) -> Vec<Reading> {
+pub(crate) fn take_readings(readings: &Readings) -> Vec<Reading> {
     std::mem::take(&mut *readings.lock().expect("readings mutex poisoned"))
 }
 
@@ -164,7 +164,7 @@ fn take_readings(readings: &Readings) -> Vec<Reading> {
 /// "latest" on purpose: a scan for the most recent spin would quietly hand back the PREVIOUS one
 /// when the expected spin recorded nothing, and every assertion below it would then run green
 /// against stale numbers. Non-draining, so one spin can be read once per instrument.
-fn spin_reading(readings: &Readings, instrument: u16, spin_seq: u64) -> Reading {
+pub(crate) fn spin_reading(readings: &Readings, instrument: u16, spin_seq: u64) -> Reading {
     let recorded = readings.lock().expect("readings mutex poisoned");
     recorded
         .iter()
@@ -183,7 +183,7 @@ fn spin_reading(readings: &Readings, instrument: u16, spin_seq: u64) -> Reading 
 
 /// What a reconnecting adapter sends, and the one way to move the top of book with no transient
 /// crossing to reason about: drop it, then state it whole.
-fn reseat_book(instrument: u16, bid: i64, ask: i64, when: i64) -> [InboundMessage; 3] {
+pub(crate) fn reseat_book(instrument: u16, bid: i64, ask: i64, when: i64) -> [InboundMessage; 3] {
     let (bids, asks) = snapshot_pair(instrument, &[(bid, ONE)], &[(ask, ONE)], when);
     [
         book_reset(instrument, when),
@@ -192,7 +192,7 @@ fn reseat_book(instrument: u16, bid: i64, ask: i64, when: i64) -> [InboundMessag
     ]
 }
 
-fn dispatch_all(engine: &mut HotEngine, messages: &[InboundMessage]) {
+pub(crate) fn dispatch_all(engine: &mut HotEngine, messages: &[InboundMessage]) {
     for message in messages {
         engine.dispatch(message);
     }
@@ -283,105 +283,6 @@ proptest! {
             prop_assert_eq!(reading.pnl_quote, shadow.pnl_quote());
             prop_assert!(reading.has_mark);
         }
-    }
-}
-
-/// FITNESS: a venue fill is folded BEFORE the `on_fill` that reports it, and a report the venue
-/// redelivers moves the MONEY exactly once, whatever order the copies arrive in.
-///
-/// A strategy reading its position from `on_fill` must see the fill counted exactly once — adding it
-/// again is the double count. A fill is its own message, which the engine has already applied by the
-/// time anyone is told, never something a strategy banks mid-message for a later drain to fold.
-/// Redelivery is not a hypothetical either — Binance really does it, and the second copy is
-/// ordinary traffic that looks exactly like a real fill, with only its already-folded totals to tell
-/// it apart; the order table's own fitness pins the same idempotence on the slot's totals, and this pins it where it
-/// costs, on position and cash through the whole engine, because a fold idempotent about quantities
-/// and not about cash would still bank a profit that never happened.
-#[test]
-fn a_fill_folds_before_its_callback_and_a_redelivery_moves_the_money_once() {
-    {
-        let instruments = [bare_row(0)];
-        let (mut engine, readings) = probe_engine(&instruments);
-        // Mid of 100 and 102 is 101 — every number below is exact against it.
-        dispatch_all(&mut engine, &reseat_book(0, 100 * ONE, 102 * ONE, 0));
-        let mut pen = FillPen::new(0);
-
-        dispatch_all(&mut engine, &pen.fill(Side::Buy, 101 * ONE, ONE, 10));
-        engine.dispatch(&spin(0, 20));
-
-        let recorded = take_readings(&readings);
-        let in_fill = recorded
-            .iter()
-            .find(|reading| reading.phase == Phase::InFill)
-            .expect("the fill earned an on_fill, and the probe read the ledger inside it");
-        assert_eq!(
-            in_fill.position_base,
-            Qty::from_mantissa(ONE),
-            "on_fill ran against a ledger that had not yet folded the fill it was reporting"
-        );
-        assert_eq!(
-            in_fill.pnl_quote, 0,
-            "bought at the mark, so nothing is made or lost yet"
-        );
-
-        let on_spin = recorded
-            .iter()
-            .find(|reading| reading.phase == Phase::OnSpin(0))
-            .expect("the probe read the ledger on the following spin");
-        assert_eq!(
-            on_spin.position_base,
-            Qty::from_mantissa(ONE),
-            "the fill moved the position a second time between its callback and the next spin"
-        );
-        assert_eq!(on_spin.exposure_quote, 101 * ONE, "one unit marked at 101");
-        assert_eq!(on_spin.pnl_quote, 0);
-
-        dispatch_all(&mut engine, &pen.fill(Side::Buy, 100 * ONE, ONE, 30));
-        engine.dispatch(&spin(1, 40));
-
-        let after = spin_reading(&readings, 0, 1);
-        assert_eq!(after.position_base, Qty::from_mantissa(2 * ONE));
-        assert_eq!(after.exposure_quote, 202 * ONE);
-        assert_eq!(
-            after.pnl_quote, ONE,
-            "cost 201 for two units now worth 202 — the one unit bought under the mark"
-        );
-    }
-    {
-        let instruments = [bare_row(0)];
-        let (mut engine, readings) = probe_engine(&instruments);
-        dispatch_all(&mut engine, &reseat_book(0, 100 * ONE, 102 * ONE, 0));
-
-        let mut pen = FillPen::new(0);
-        let first = pen.fill(Side::Buy, 100 * ONE, ONE, 10);
-        let second = pen.fill(Side::Buy, 102 * ONE, 2 * ONE, 20);
-        // The first copy of each, then both again out of order, then the earlier one a third time.
-        for batch in [&first, &second, &second, &first, &first] {
-            dispatch_all(&mut engine, batch);
-        }
-        engine.dispatch(&spin(0, 30));
-
-        let after = spin_reading(&readings, 0, 0);
-        let fills = take_readings(&readings)
-            .iter()
-            .filter(|reading| reading.phase == Phase::InFill)
-            .count();
-        assert_eq!(
-            fills, 2,
-            "a redelivered report earned its own on_fill, so a strategy counting fills counts ghosts"
-        );
-
-        assert_eq!(
-            after.position_base,
-            Qty::from_mantissa(3 * ONE),
-            "the redeliveries moved the position again"
-        );
-        // Paid 100 for one unit and 204 for two; three units marked at 101 are worth 303.
-        assert_eq!(after.exposure_quote, 303 * ONE);
-        assert_eq!(
-            after.pnl_quote, -ONE,
-            "the redeliveries moved cash — a fold idempotent about size and not about money"
-        );
     }
 }
 
@@ -501,132 +402,4 @@ fn a_mark_needs_both_sides_and_survives_a_book_reset() {
     );
     assert_eq!(held.exposure_quote, 101 * ONE);
     assert_eq!(held.pnl_quote, ONE);
-}
-
-/// Reports the engine's own position and PnL each spin, so an assertion can be made against the
-/// MONEY rather than against an enum.
-#[derive(Default)]
-struct MoneyProbe {
-    latest: Arc<Mutex<Option<(i64, i64)>>>,
-}
-
-impl Strategy for MoneyProbe {
-    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
-        *self.latest.lock().expect("money mutex poisoned") = Some((
-            ctx.position_base(InstrumentId(0)).mantissa(),
-            ctx.pnl_quote(InstrumentId(0)).mantissa(),
-        ));
-    }
-}
-
-/// FITNESS: a fill on OUR BID increases the base position and decreases quote cash; a fill on OUR
-/// ASK does the mirror.
-///
-/// This is the assertion the whole side vocabulary exists for, and it is deliberately made against
-/// the money instead of against `Side`. `Side::Buy`/`Side::Sell`, `MarkoutSide::Bid`/`Ask` and the
-/// DOM's `AnchorSide` all coexist in this codebase, and the compiler catches only the spellings that
-/// do not exist. A mapping that is inverted CONSISTENTLY at every layer compiles, satisfies every
-/// structural test, agrees with itself everywhere — and trades backwards. The only thing that cannot
-/// be fooled by a consistent inversion is which way the cash went.
-///
-/// A commission is the third thing that moves the cash, and its sign inverts just as quietly: a
-/// rebate booked as a fee, or a fee paid in another asset counted as quote, reports a profit or a
-/// loss that the venue never paid.
-#[test]
-fn a_fill_moves_cash_the_way_its_side_and_its_commission_say() {
-    let instruments = [instrument_row(0, TrackerSpec::default(), 64)];
-    let latest = Arc::new(Mutex::new(None));
-    let (persistence, _persist) = persist_ring(256);
-    let (log_sink, _logs) = strategy_log_ring(64);
-    let mut engine = engine_without_warmup(
-        &instruments,
-        Box::new(MoneyProbe {
-            latest: Arc::clone(&latest),
-        }),
-        persistence,
-        log_sink,
-    );
-    let mut pen = FillPen::new(0);
-
-    // Buy one whole base unit at 100. No mark yet, so PnL is the bare cost basis — which is exactly
-    // the number that has to be NEGATIVE: we spent quote to get base.
-    for message in pen.fill(Side::Buy, 100 * ONE, ONE, 10) {
-        engine.dispatch(&message);
-    }
-    engine.dispatch(&spin(0, 20));
-    let (position, cash) = latest.lock().expect("poisoned").expect("the spin ran");
-    assert_eq!(
-        position, ONE,
-        "a fill on our bid must BUY — base did not increase"
-    );
-    assert_eq!(
-        cash,
-        -(100 * ONE),
-        "a fill on our bid must SPEND quote — cash did not decrease by the notional"
-    );
-
-    // Sell it back at 110. Base returns to flat and the round trip banks a profit; an inverted sell
-    // would drive the position to -2 and the cash the wrong way.
-    for message in pen.fill(Side::Sell, 110 * ONE, ONE, 30) {
-        engine.dispatch(&message);
-    }
-    engine.dispatch(&spin(1, 40));
-    let (position, cash) = latest.lock().expect("poisoned").expect("the spin ran");
-    assert_eq!(
-        position, 0,
-        "a fill on our ask must SELL — the position did not come back to flat"
-    );
-    assert_eq!(
-        cash,
-        10 * ONE,
-        "the round trip bought at 100 and sold at 110, so exactly 10 must be banked"
-    );
-
-    // Every row is the same buy of one unit at 100, so whatever the cash moves beyond that notional
-    // is the commission alone.
-    const COMMISSION: i64 = 23_599;
-    let (base_asset, quote_asset) = (instruments[0].base_asset, instruments[0].quote_asset);
-    let commissions = [
-        (
-            -COMMISSION,
-            quote_asset,
-            COMMISSION,
-            "a rebate paid in quote is income — cash must rise by exactly the rebate",
-        ),
-        (
-            COMMISSION,
-            quote_asset,
-            -COMMISSION,
-            "a fee paid in quote is a cost — cash must fall by exactly the fee",
-        ),
-        (
-            -COMMISSION,
-            base_asset,
-            0,
-            "a rebate paid in base is not this instrument's quote cash",
-        ),
-        (
-            COMMISSION,
-            AssetId::UNKNOWN,
-            0,
-            "a fee in an asset no instrument names is not this instrument's quote cash",
-        ),
-    ];
-    let mut cash_before = cash;
-    for (step, (commission, commission_asset, cash_gain, why)) in
-        commissions.into_iter().enumerate()
-    {
-        let when = 50 + 20 * step as i64;
-        let mut charged = pen.report(Side::Buy, 100 * ONE, ONE, when);
-        let MessageBody::Exec(report) = &mut charged.body else {
-            unreachable!("the pen reports a fill as an Exec message");
-        };
-        report.commission = commission;
-        report.commission_asset = commission_asset;
-        engine.dispatch(&charged);
-        engine.dispatch(&spin(2 + step as u64, when + 10));
-        let (_, cash_after) = latest.lock().expect("poisoned").expect("the spin ran");
-        assert_eq!(cash_after - cash_before, cash_gain - 100 * ONE, "{why}");
-        cash_before = cash_after;
-    }
 }

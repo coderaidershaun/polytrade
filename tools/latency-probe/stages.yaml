@@ -10,17 +10,18 @@ engine:
 queues:
   input_capacity: 65536
   persistence_capacity: 65536
-source:
-  exchange: binance
-  market: spot
-  base: BTC
-  quote: USDT
-  kline_intervals: ["1m"]
-  max_exposure_quote: 50
-  tracker:
-    candles: { keep: 1440 }
-    imbalance: { top_n: 5, windows: [] }
-    ewma_vol: { halflife_events: 600 }
+sources:
+  - feed:
+      exchange: binance
+      market: spot
+      base: BTC
+      quote: USDT
+      kline_intervals: ["1m"]
+      max_exposure_quote: 50
+      tracker:
+        candles: { keep: 1440 }
+        imbalance: { top_n: 5, windows: [] }
+        ewma_vol: { halflife_events: 600 }
 strategy:
   instruments: all
 logging:

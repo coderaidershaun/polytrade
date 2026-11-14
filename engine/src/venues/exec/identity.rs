@@ -22,7 +22,7 @@ impl TeTag {
         const OFFSET: u32 = 0x811c_9dc5;
         const PRIME: u32 = 0x0100_0193;
         let mut hash = OFFSET;
-        // Separator prevents ("ab", "c") and ("a", "bc") hash collision.
+        // The separator keeps ("ab", "c") and ("a", "bc") from hashing alike.
         for byte in identity
             .strategy_id
             .as_str()
@@ -83,32 +83,41 @@ pub struct EngineIdentity {
     pub run_nonce: u32,
 }
 
-/// Who owns an order, paired with the client id that identifies it.
+/// Who placed an order that the venue names back. A foreign order holds no client id, so no code
+/// can address it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct OrderOwnership {
-    pub provenance: Provenance,
-    /// Zero for a Foreign order, which is safe because nonce 0 is never minted for a real one.
-    pub client_id: ClientOrderId,
+pub enum OrderOwnership {
+    Mine(ClientOrderId),
+    PriorRun(ClientOrderId),
+    Foreign,
 }
 
 impl OrderOwnership {
-    pub(crate) const FOREIGN: Self = Self {
-        provenance: Provenance::Foreign,
-        client_id: ClientOrderId(0),
-    };
-
     /// Verdict on an id the venue named back to us, once the venue codec has parsed it.
     pub(crate) fn of(tag: TeTag, client_id: ClientOrderId, identity: EngineIdentity) -> Self {
         if tag != identity.te_tag {
-            return Self::FOREIGN;
+            return Self::Foreign;
         }
-        let provenance = match ClientIdLayout::nonce_of(client_id) == identity.run_nonce {
-            true => Provenance::Mine,
-            false => Provenance::PriorRun,
-        };
-        Self {
-            provenance,
-            client_id,
+        match ClientIdLayout::nonce_of(client_id) == identity.run_nonce {
+            true => Self::Mine(client_id),
+            false => Self::PriorRun(client_id),
+        }
+    }
+
+    pub(crate) const fn provenance(self) -> Provenance {
+        match self {
+            Self::Mine(_) => Provenance::Mine,
+            Self::PriorRun(_) => Provenance::PriorRun,
+            Self::Foreign => Provenance::Foreign,
+        }
+    }
+
+    /// The client id of an event about this order. An event about a foreign order carries id 0,
+    /// which names no slot, because no run mints nonce 0.
+    pub(crate) const fn event_client_id(self) -> ClientOrderId {
+        match self {
+            Self::Mine(client_id) | Self::PriorRun(client_id) => client_id,
+            Self::Foreign => ClientOrderId(0),
         }
     }
 }

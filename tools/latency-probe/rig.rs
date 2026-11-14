@@ -12,7 +12,7 @@ use engine::hot::dispatch::{ExposureWiring, HotEngine, HotEngineSetup};
 use engine::hot::sink::{ExposureSink, StrategyLogSink, UiBookSink, UiEventSink};
 use engine::hot::strategy::{EngineView, Strategy, StrategyConfig};
 use engine::log::{LogConfig, LogHandle};
-use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Notional, Price, Qty};
+use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, VenueId};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick, TradeEvent};
 use engine::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, Stamper};
 use engine::runtime::config::{
@@ -56,6 +56,7 @@ impl StrategyConfig for Silent {
 pub fn instrument() -> InstrumentRow {
     InstrumentRow {
         instrument_id: InstrumentId(0),
+        venue: VenueId(0),
         market: VenueMarket::Binance(BinanceMarket::Spot),
         venue_symbol: "btcusdt".into(),
         display: "BTC/USDT spot".into(),
@@ -90,10 +91,10 @@ pub fn engine(instruments: &[InstrumentRow]) -> HotEngine {
         ui_event_sink: UiEventSink::new(RingBuffer::new(OUTPUT_RING).0),
         link: None,
         warmup: DurationUs::ZERO,
-        exec: None,
+        exec: Vec::new(),
         exposure: ExposureWiring {
             restored: &[],
-            sink: ExposureSink::new(RingBuffer::new(OUTPUT_RING).0),
+            sink: ExposureSink::lane(OUTPUT_RING, instruments.len()).0,
         },
     })
 }

@@ -9,7 +9,7 @@ mod stream;
 mod wire;
 
 use crate::msg::exec::VenueOrderStatus;
-use crate::msg::ids::{InstrumentId, Notional};
+use crate::msg::ids::{InstrumentId, Notional, VenueId};
 use crate::msg::time::LocalTs;
 use crate::runtime::registry::{AssetDictionary, Registry};
 use crate::venues::edge::decode::{DecimalFault, JsonFrame, mantissa_field, unknown_enum};
@@ -29,6 +29,8 @@ pub use stream::{IgnoredReason, StreamEvent, account_snapshot_chunks, decode_str
 pub struct DecodeContext<'a> {
     pub symbols: &'a SymbolTable,
     pub assets: &'a AssetDictionary,
+    /// The venue of this edge, within which the venue names its assets.
+    pub venue: VenueId,
     pub identity: EngineIdentity,
     /// When this process received the message. Venue stamps are clamped against it; it is not the
     /// venue's clock.

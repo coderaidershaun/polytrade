@@ -13,25 +13,29 @@ use crate::runtime::config::{RecordedTables, TableKind};
 
 pub use crate::msg::ids::ClientOrderId;
 
-/// 64 features × 64 instruments sweep (1/16 persist ring so flush can't swamp). ~96 KB.
+/// One sweep of 64 features over 64 instruments, and a sixteenth of the persist ring, so one drain
+/// cannot swamp it. About 96 KB.
 pub(crate) const FEATURE_LANE_CAPACITY: usize = 4096;
 
-/// Raw rows (trades, book events, klines); book chunk widest callback. Deep headroom legacy. ~384 KB.
+/// Raw rows of trades, book events and klines, and the incidents of the execution engine. A book
+/// chunk is the widest callback. About 384 KB.
 pub(crate) const PERSIST_LANE_CAPACITY: usize = 4096;
 
 /// Log records that one callback can bank before the drain: 64 of 64 bytes, 4 KB.
 pub(crate) const LOG_LANE_CAPACITY: usize = 64;
 
-/// Few topics/callback; backlog pointless (far side sees only newest STATE). ~9 KB.
+/// A callback sends few topics, and the far side reads only the newest state, so a backlog buys
+/// nothing. About 9 KB.
 pub(crate) const LINK_LANE_CAPACITY: usize = 32;
 
-/// Bank config: disk permissions + strategy link_fields digest (every payload carries it).
+/// The tables that the config lets the bank write, and the hash of the strategy's link fields that
+/// each payload carries.
 pub(crate) struct ActionsSetup {
     pub tables: RecordedTables,
     pub link_schema_hash: LinkHash,
 }
 
-/// Drain destinations. Struct avoids opaque positional args.
+/// Where the drain sends each lane.
 pub(crate) struct DrainSinks<'a> {
     /// `None` with no `persistence:` block configured.
     pub persist: Option<&'a mut PersistSink>,
@@ -43,12 +47,13 @@ pub(crate) struct DrainSinks<'a> {
 }
 
 pub(crate) struct Actions {
-    /// Features only lane with UI tee. Separate from persist: tee-only rows don't displace Parquet rows.
+    /// Features only, each also sent to the workstation. A lane of its own, so a feature that only
+    /// the workstation reads never takes the place of a row for the tape.
     features: Vec<FeatureRow>,
     persist: Vec<PersistRecord>,
     logs: Vec<HotRecord>,
     link: Vec<OutboundLink>,
-    /// Config authority over persist lane; empty = persistence-off.
+    /// The tables of the persist lane that the config names. Empty with persistence off.
     tables: RecordedTables,
     link_schema_hash: LinkHash,
     dropped: LaneDrops,
@@ -70,7 +75,8 @@ impl Actions {
         }
     }
 
-    /// Ungated (Parquet gated at drain). Feature rows only here, never via push_persist (lose tee).
+    /// Not filtered here: the drain decides whether the tape takes it. A feature row comes only
+    /// through here, because through the persist lane it would never reach the workstation.
     #[inline]
     pub(crate) fn push_feature(&mut self, row: FeatureRow) {
         if self.features.len() == FEATURE_LANE_CAPACITY {
@@ -80,13 +86,15 @@ impl Actions {
         self.features.push(row);
     }
 
-    /// Gate non-tee rows: config authority. Filtered row ≠ capacity drop, uncounted.
+    /// A row of a table that `strategy.tables` does not name is filtered, which is not a drop and is
+    /// not counted. An incident passes whatever the config names.
     #[inline]
     pub(crate) fn push_persist(&mut self, record: PersistRecord) {
-        if !record
-            .table()
-            .is_some_and(|table| self.tables.contains(table))
-        {
+        let is_recorded = match record.table() {
+            Some(table) => self.tables.contains(table),
+            None => matches!(record, PersistRecord::Incident(_)),
+        };
+        if !is_recorded {
             return;
         }
         if self.persist.len() == PERSIST_LANE_CAPACITY {
@@ -106,7 +114,7 @@ impl Actions {
     }
 
     /// # Panics
-    /// >LINK_MAX_FIELDS values (see StrategyCtx::link_send).
+    /// When `values` holds more than `LINK_MAX_FIELDS` values.
     #[inline]
     pub(crate) fn push_link(&mut self, topic: TopicId, values: &[f64], event_ts: LocalTs) {
         if self.link.len() == LINK_LANE_CAPACITY {
@@ -131,9 +139,9 @@ impl Actions {
         self.dropped
     }
 
-    /// Drain lanes into sinks, keep capacity. Features tee to UI (push_stamped); others to own lanes.
-    /// Fixed order + no clock → replay-exact. Every feature tees; only config-named features → Parquet.
-    /// Persistence-off: monitor fed, Parquet empty.
+    /// Empties each lane into its sink and keeps its capacity. The order is fixed and no clock is
+    /// read, so a replay drains the same records. Each feature goes to the workstation, and to the
+    /// tape only when the config names the features table.
     pub(crate) fn drain(&mut self, sinks: DrainSinks<'_>) {
         let DrainSinks {
             persist: mut sink,

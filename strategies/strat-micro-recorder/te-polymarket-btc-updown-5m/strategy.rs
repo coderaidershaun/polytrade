@@ -1,16 +1,14 @@
 //! Publishes both up legs over one link topic, keyed by the role each plays this spin: quotes,
 //! top-of-book depth, per-side (A, k) trade intensity and volume traded since rotation.
 //!
-//! And makes a naive market on the leg whose window is OPEN: one post-only bid a few ticks behind
-//! the touch while flat, one post-only offer against whatever that bid bought, then nothing at all
-//! for the last few seconds of the window, where the only thing worth wanting is to be out. Both
-//! quotes lapse by not being redeclared — the seam is level-triggered — and that is what frees the
-//! side's single order budget for the flatten that follows.
+//! It also makes a simple market on the leg whose window is open: one bid a few ticks behind the
+//! touch while flat, then one offer for what that bid bought. In the last seconds of the window it
+//! quotes nothing, and while it holds a position it asks to get flat, which withdraws its quotes.
 
 use engine::hot::quant::intensity::{PacedIntensity, SideEstimate};
 use engine::hot::strategy::{
-    BookState, DesiredQuote, EngineView, InstrumentRow, OrderStyle, QuoteLevel, Registration,
-    Strategy, StrategyConfig, StrategyCtx, TickGrid, TopicId, WindowInfo,
+    BookState, DesiredQuote, EngineView, InstrumentRow, QuoteLevel, Registration, Strategy,
+    StrategyConfig, StrategyCtx, TickGrid, TopicId, WindowInfo,
 };
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{MarketRotation, SpinTick, TradeEvent};
@@ -245,9 +243,8 @@ impl Maker {
         now: LocalTs,
     ) {
         let position = ctx.position_base(instrument);
-        // Past the stop there is no quote worth having: this market is minutes from settling to 0
-        // or 1 and a fill here is one nothing can be traded out of. Declaring nothing withdraws the
-        // ladder, which is what frees the side for the flatten below.
+        // Past the stop no quote is worth having: the market settles at 0 or 1 within minutes, and
+        // a fill here cannot be traded out of.
         if window.is_past_quote_stop(now, self.quote_stop_lead) {
             if position.mantissa() != 0 {
                 ctx.flatten(instrument);
@@ -283,7 +280,6 @@ impl Maker {
                 (best_bid.mantissa() - self.edge_ticks * grid.tick).max(grid.tick),
             ),
             qty: self.order_qty,
-            style: OrderStyle::PostOnly,
         }
     }
 
@@ -302,7 +298,6 @@ impl Maker {
                 (best_ask.mantissa() + self.edge_ticks * grid.tick).min(ceiling),
             ),
             qty,
-            style: OrderStyle::PostOnly,
         })
     }
 }

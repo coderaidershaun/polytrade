@@ -11,6 +11,7 @@ use engine::msg::ids::{Notional, Price, Qty};
 use engine::runtime::config::{
     Config, ConfigError, ExecutionMode, NoParams, RunIdentity, SourceSpec,
 };
+use engine::runtime::exposure::ExposureError;
 use engine::runtime::registry::{BinanceLimits, Registry};
 use engine::runtime::{ExecutionLease, Preflight, StartError, exposure};
 use engine::venues::VenueError;
@@ -21,10 +22,13 @@ use engine::venues::exec::TeTag;
 use engine::venues::port::{ProbedVenue, VenuePort, VenueScales};
 use engine::venues::sim;
 
+use proptest::prelude::*;
+
 use super::config_guards::{
-    BINANCE_KLINES_VOLUME_BARS, BINANCE_PERP_SOURCE, BINANCE_SPOT_SOURCE, SIM_BLOCK,
-    config_with_execution_on, config_with_source, execution_block_with, link_block,
+    BINANCE_KLINES_VOLUME_BARS, BINANCE_PERP_SOURCE, BINANCE_SPOT_SOURCE, POLY_SOURCE, SIM_BLOCK,
+    config_with_execution_on, config_with_source, execution_block_with, link_block, sources_of,
 };
+use super::sources;
 use crate::engine_support::Idle;
 use crate::parquet_readback::TempDir;
 
@@ -91,7 +95,7 @@ fn identity() -> RunIdentity {
 }
 
 /// A simulated Binance spot engine on one instrument, whose state folder is `state`.
-fn sim_document(state: &Path, execution_extra: &str) -> String {
+pub(super) fn sim_document(state: &Path, execution_extra: &str) -> String {
     let execution = execution_block_with("sim", &format!("{execution_extra}{SIM_BLOCK}"));
     with_state(
         config_with_execution_on(BINANCE_SPOT_SOURCE, &execution),
@@ -227,6 +231,33 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         ),
         "{capacity}"
     );
+    // The second of two sources of one venue holds the execution block. Both share the id of that
+    // venue, so the ladder is checked against its rows, not against the position of the source.
+    let ladder_on_second = with_state(
+        sources::document(
+            &[
+                (BINANCE_SPOT_SOURCE, ""),
+                (
+                    &sources::spot_source("ETH"),
+                    &execution_block_with("live", ""),
+                ),
+            ],
+            false,
+        ),
+        &state,
+    );
+    let second_capacity = refusal(
+        &ladder_on_second,
+        Scales::Stamped { max_num_orders: 1 },
+        &state,
+    );
+    assert!(
+        matches!(
+            second_capacity,
+            StartError::ExecutionOrderCapacity { venue_max: 1, .. }
+        ),
+        "{second_capacity}"
+    );
 
     // E7: the position file cannot be read.
     let ledger = exposure::file_path(&state, &identity(), Some(ExecutionMode::Sim));
@@ -235,6 +266,26 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
     assert!(
         matches!(unreadable, StartError::Exposure(_)),
         "{unreadable}"
+    );
+    // The position file is of version 2, which names each row by its symbol alone.
+    fs::write(
+        &ledger,
+        format!(
+            r#"{{"version":2,"strategy_id":"{STRATEGY}","te_id":"{ENGINE}","written_ts_us":1,"seq":1,"fixed_scale":{ONE},"instruments":[]}}"#
+        ),
+    )
+    .expect("the test writes the position file");
+    let version_2 = refusal(&sim_document(&state, ""), stamped, &state);
+    assert!(
+        matches!(
+            version_2,
+            StartError::Exposure(ExposureError::UnknownVersion {
+                found: 2,
+                expected: 3,
+                ..
+            })
+        ),
+        "{version_2}"
     );
     fs::remove_file(&ledger).expect("the test removes the position file");
 
@@ -251,6 +302,87 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         ),
         "{probe}"
     );
+
+    // The order client waits for an answer as long as the in-flight timeout does.
+    let http_timeout = refusal(
+        &live_document(BINANCE_SPOT_SOURCE, 4_000, &state),
+        stamped,
+        &state,
+    );
+    assert!(
+        matches!(
+            http_timeout,
+            StartError::ExecutionHttpTimeout {
+                venue: "binance",
+                http_timeout_ms: 4_000,
+                inflight_timeout_ms: 4_000,
+            }
+        ),
+        "{http_timeout}"
+    );
+
+    // Two venues that each send orders. This build places orders on one venue only, so the start
+    // refuses before it reads any venue.
+    let live = execution_block_with("live", "");
+    let two_venues = with_state(
+        sources::document(&[(BINANCE_PERP_SOURCE, &live), (POLY_SOURCE, &live)], false),
+        &state,
+    );
+    let several = refusal(&two_venues, Scales::Refused, &state);
+    assert!(
+        matches!(
+            several,
+            StartError::ExecutionOnSeveralSources {
+                first: 0,
+                second: 1
+            }
+        ),
+        "{several}"
+    );
+    // The refusal names the two items by their places in `sources:`, which differ from the ids of
+    // their venues when a venue has two sources.
+    let after_a_reader = with_state(
+        sources::document(
+            &[
+                (BINANCE_SPOT_SOURCE, ""),
+                (&sources::spot_source("ETH"), &live),
+                (POLY_SOURCE, &live),
+            ],
+            false,
+        ),
+        &state,
+    );
+    let named = refusal(&after_a_reader, Scales::Refused, &state);
+    assert!(
+        matches!(
+            named,
+            StartError::ExecutionOnSeveralSources {
+                first: 1,
+                second: 2
+            }
+        ),
+        "{named}"
+    );
+
+    // One venue sends orders and the run also reads another venue, in either order. This build
+    // sends orders through one connection, which would take the other venue's rows as its own.
+    for order in [
+        [(BINANCE_SPOT_SOURCE, ""), (POLY_SOURCE, live.as_str())],
+        [(POLY_SOURCE, live.as_str()), (BINANCE_SPOT_SOURCE, "")],
+    ] {
+        let beside = with_state(sources::document(&order, false), &state);
+        let refused = refusal(&beside, Scales::Refused, &state);
+        assert!(
+            matches!(
+                refused,
+                StartError::ExecutionWithSeveralVenues {
+                    venue: "polymarket",
+                    other: "binance"
+                }
+            ),
+            "{refused}"
+        );
+    }
 
     // E9: the link address is taken.
     let taken = UdpSocket::bind("127.0.0.1:0").expect("the test binds a loopback port");
@@ -301,6 +433,25 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         "{exhausted}"
     );
 
+    // The nonce file is empty, because a run stopped while it wrote the file. Then a folder stands
+    // where the file should be, so the file cannot be read. Each leaves the last nonce unknown.
+    let last_nonce = fs::read(&nonce).expect("the nonce file reads");
+    fs::write(&nonce, "").expect("the test empties the nonce file");
+    let empty_nonce = refusal(&sim_document(&state, ""), stamped, &state);
+    assert!(
+        matches!(&empty_nonce, StartError::ExecutionNonceEmpty { path } if *path == nonce),
+        "{empty_nonce}"
+    );
+    fs::remove_file(&nonce).expect("the test removes the nonce file");
+    fs::create_dir(&nonce).expect("the test puts a folder at the nonce path");
+    let nonce_folder = refusal(&sim_document(&state, ""), stamped, &state);
+    assert!(
+        matches!(&nonce_folder, StartError::ExecutionIdentityIo { path, .. } if *path == nonce),
+        "{nonce_folder}"
+    );
+    fs::remove_dir(&nonce).expect("the test removes the folder");
+    fs::write(&nonce, last_nonce).expect("the test restores the nonce file");
+
     // E1 and E2: the nine documents that config or the registry refuses, by the field named.
     for (case, document, is_expected) in refused_documents() {
         let error = match Config::<NoParams>::from_yaml(&document) {
@@ -326,6 +477,68 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
     }
 }
 
+/// A live engine on `source` whose in-flight timeout is `inflight_timeout_ms`.
+fn live_document(source: &str, inflight_timeout_ms: u64, state: &Path) -> String {
+    let execution = execution_block_with(
+        "live",
+        &format!("  inflight_timeout_ms: {inflight_timeout_ms}\n"),
+    );
+    with_state(config_with_execution_on(source, &execution), state)
+}
+
+/// The request deadline of the order client of each venue with one, in milliseconds.
+const ORDER_CLIENT_TIMEOUT_MS: u64 = 4_000;
+
+proptest! {
+    /// FITNESS: the order client of a live venue gives its verdict on a request before the
+    /// in-flight table gives up on it. If the table gave up first, it would read back a request
+    /// whose answer is still on its way, and its expiry would be the normal path rather than the
+    /// exception. So the start is refused exactly when the in-flight timeout is at or below the
+    /// deadline of the order client, before any venue is asked anything; otherwise the start goes
+    /// on to its next check, here a scale read that the stand-in refuses.
+    #[test]
+    fn http_timeout_at_or_above_inflight_timeout_refuses_start(
+        is_binance in any::<bool>(),
+        inflight_timeout_ms in 1_u64..=2 * ORDER_CLIENT_TIMEOUT_MS,
+    ) {
+        let (venue, source) = match is_binance {
+            true => ("binance", BINANCE_SPOT_SOURCE),
+            false => ("polymarket", POLY_SOURCE),
+        };
+        let root = TempDir::new("http-timeout");
+        let state = root.path().join("state");
+        let refused = refusal(
+            &live_document(source, inflight_timeout_ms, &state),
+            Scales::Refused,
+            &state,
+        );
+        if inflight_timeout_ms > ORDER_CLIENT_TIMEOUT_MS {
+            prop_assert!(
+                matches!(refused, StartError::Venue(VenueError::BinanceScale(_))),
+                "an in-flight timeout of {inflight_timeout_ms} ms outlasts the order client: {refused}"
+            );
+            return Ok(());
+        }
+        let StartError::ExecutionHttpTimeout {
+            venue: named,
+            http_timeout_ms,
+            inflight_timeout_ms: found,
+        } = refused
+        else {
+            panic!("{venue} at {inflight_timeout_ms} ms must refuse with its own variant: {refused}");
+        };
+        prop_assert_eq!(named, venue);
+        prop_assert_eq!(http_timeout_ms, ORDER_CLIENT_TIMEOUT_MS);
+        prop_assert_eq!(found, inflight_timeout_ms);
+        let text = refused.to_string();
+        prop_assert!(
+            text.contains(&format!("{ORDER_CLIENT_TIMEOUT_MS} ms"))
+                && text.contains(&format!("= {inflight_timeout_ms}")),
+            "the refusal names both values: {}", text
+        );
+    }
+}
+
 type RefusedDocument = (&'static str, String, fn(&ConfigError) -> bool);
 
 /// The nine documents of the old config guard, each with the field that must name its refusal.
@@ -335,10 +548,9 @@ fn refused_documents() -> [RefusedDocument; 9] {
 queues:
   input_capacity: 65536
   persistence_capacity: 65536
-source:
 "
     .to_owned()
-        + BINANCE_PERP_SOURCE
+        + &sources_of(BINANCE_PERP_SOURCE)
         + "strategy:\n  instruments: all\npersistence:\n  dir: ./data\nlogging:\n  dir: ./logs\n";
     [
         (

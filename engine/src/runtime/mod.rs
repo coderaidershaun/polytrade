@@ -2,6 +2,7 @@
 //! the assembly that wires those parts at start and tears them down.
 
 pub mod config;
+mod durable_file;
 pub mod exposure;
 pub(crate) mod pin;
 pub mod registry;

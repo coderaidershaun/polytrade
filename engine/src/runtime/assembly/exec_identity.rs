@@ -1,9 +1,9 @@
 //! Host-scoped execution ownership and durable run nonces.
 
 use std::fs::{File, OpenOptions, TryLockError};
-use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+use crate::runtime::durable_file::{self, WriteError};
 use crate::venues::exec::{EngineIdentity, LeaseNamespace, TeTag};
 
 use super::StartError;
@@ -16,7 +16,8 @@ pub struct ExecutionLease {
 
 impl ExecutionLease {
     /// # Errors
-    /// The `ExecutionIdentity*` variants for lock, nonce, or filesystem failures.
+    /// The `ExecutionIdentity*` variants for lock, nonce, or filesystem failures, and
+    /// [`StartError::ExecutionNonceEmpty`] for a nonce file that holds no nonce.
     pub fn acquire(
         directory: &Path,
         te_tag: TeTag,
@@ -62,24 +63,24 @@ fn lock_host_identity(te_tag: TeTag) -> Result<File, StartError> {
 }
 
 fn advance_nonce(path: &Path) -> Result<u32, StartError> {
-    let mut state_file = open_read_write(path)?;
-    let previous = read_nonce(&mut state_file, path)?;
+    let previous = read_nonce(path)?.unwrap_or(0);
     let run_nonce = previous
         .checked_add(1)
         .filter(|nonce| *nonce != 0)
         .ok_or_else(|| StartError::ExecutionIdentityExhausted {
             path: path.to_path_buf(),
         })?;
-    // SMELL: this empties the nonce file and then writes the new value into the same file, so a
-    // crash between the two steps leaves it empty, and an empty file reads back as nonce 0. The
-    // next run then starts the count again. Write a new file and rename it over the old one, and
-    // refuse to start on an empty file.
-    state_file
-        .seek(SeekFrom::Start(0))
-        .and_then(|_| state_file.set_len(0))
-        .and_then(|_| writeln!(state_file, "{run_nonce}"))
-        .and_then(|_| state_file.sync_all())
-        .map_err(StartError::identity_io_at(path))?;
+    // Unlike the exposure file, an unsynced folder refuses the start: a power cut could bring back
+    // the previous nonce, and the next run would then mint the client ids of this one.
+    durable_file::write(path, format!("{run_nonce}\n").as_bytes()).map_err(
+        |error| match error {
+            WriteError::NotWritten { path, source }
+            | WriteError::FolderNotSynced {
+                directory: path,
+                source,
+            } => StartError::ExecutionIdentityIo { path, source },
+        },
+    )?;
     Ok(run_nonce)
 }
 
@@ -93,18 +94,23 @@ fn open_read_write(path: &Path) -> Result<File, StartError> {
         .map_err(StartError::identity_io_at(path))
 }
 
-fn read_nonce(file: &mut File, path: &Path) -> Result<u32, StartError> {
-    file.seek(SeekFrom::Start(0))
-        .map_err(StartError::identity_io_at(path))?;
-    let mut body = String::new();
-    file.read_to_string(&mut body)
-        .map_err(StartError::identity_io_at(path))?;
+/// `None` when no run has written the file yet. An empty file is no first run: a run stopped while
+/// it wrote the file, and its last nonce is unknown.
+fn read_nonce(path: &Path) -> Result<Option<u32>, StartError> {
+    let body = match std::fs::read_to_string(path) {
+        Ok(body) => body,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(StartError::identity_io_at(path)(source)),
+    };
     let trimmed = body.trim();
     if trimmed.is_empty() {
-        return Ok(0);
+        return Err(StartError::ExecutionNonceEmpty {
+            path: path.to_path_buf(),
+        });
     }
     trimmed
         .parse::<u32>()
+        .map(Some)
         .map_err(|_| StartError::ExecutionIdentityState {
             path: path.to_path_buf(),
             value: trimmed.into(),

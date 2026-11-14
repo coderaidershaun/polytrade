@@ -3,7 +3,7 @@
 //! subsystem lands here rather than lengthening the constructor.
 
 use crate::hot::book::Book;
-use crate::hot::exec::{ExecEngineSetup, ExecSettings};
+use crate::hot::exec::{ExecEngineSetup, ExecSettings, ExecVenueSetup};
 use crate::hot::quant::volatility::EwmaVol;
 use crate::hot::sink::{ExecSink, PersistSink, StrategyLogSink, UiBookSink, UiEventSink};
 use crate::hot::strategy::{Registration, Strategy};
@@ -26,7 +26,8 @@ pub struct HotEngineSetup<'a> {
     pub ui_event_sink: UiEventSink,
     pub link: Option<LinkWiring>,
     pub warmup: DurationUs,
-    pub exec: Option<ExecWiring>,
+    /// One wiring for each venue that trades, in venue order. Empty when execution is off.
+    pub exec: Vec<ExecWiring>,
     /// Never absent: position outlives the run, so even a flat position keeps exposure wired.
     pub exposure: ExposureWiring<'a>,
 }
@@ -44,30 +45,23 @@ pub struct ExecWiring {
 }
 
 impl ExecWiring {
-    /// The absent case is a real configuration, not a hole to fill with zeroes: settings that refuse
-    /// every order, and a nonce nothing reads because minting a client id needs a sink to send it
-    /// through.
+    /// A venue with no wiring is a real configuration, not a hole to fill with zeroes: the engine
+    /// gives it settings that refuse every order.
     pub(super) fn engine_setup(
-        wiring: Option<Self>,
+        wirings: Vec<Self>,
         instruments: &[InstrumentRow],
     ) -> ExecEngineSetup<'_> {
-        match wiring {
-            Some(ExecWiring {
-                sink,
-                settings,
-                run_nonce,
-            }) => ExecEngineSetup {
-                instruments,
-                run_nonce,
-                settings,
-                sink: Some(sink),
-            },
-            None => ExecEngineSetup {
-                instruments,
-                run_nonce: 0,
-                settings: ExecSettings::disabled(),
-                sink: None,
-            },
+        let venues = wirings
+            .into_iter()
+            .map(|wiring| ExecVenueSetup {
+                run_nonce: wiring.run_nonce,
+                settings: wiring.settings,
+                sink: Some(wiring.sink),
+            })
+            .collect();
+        ExecEngineSetup {
+            instruments,
+            venues,
         }
     }
 }

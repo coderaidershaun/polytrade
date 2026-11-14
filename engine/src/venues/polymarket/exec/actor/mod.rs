@@ -20,7 +20,7 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::msg::exec::{AssetBalance, CancelReason, ExecCommand};
 use crate::msg::ids::{AssetId, InstrumentId};
 use crate::msg::time::{DurationUs, LocalTs};
-use crate::runtime::registry::InstrumentRow;
+use crate::runtime::registry::{InstrumentRow, venue_of_rows};
 use crate::venues::edge::sender::{CommandTransport, Handover};
 use crate::venues::edge::socket::{Reader, Writer};
 use crate::venues::edge::{
@@ -33,6 +33,7 @@ use crate::venues::exec::{
 use crate::venues::polymarket::rotation::WindowAssignment;
 use crate::{info, warn};
 
+use super::ORDER_REQUEST_TIMEOUT;
 use super::codec::{OrderIndex, OrderSigner, SettlementWatermark, TokenTable, VenueAvailability};
 use super::handle::PolymarketExecAdapterSetup;
 use super::rest::ClobHttp;
@@ -59,10 +60,6 @@ const CLOSE_MARGIN: DurationUs = DurationUs::from_micros(3_000_000);
 const ORDER_INDEX_CAPACITY: usize = 256;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-
-// Set below REQUEST_TIMEOUT so every placement gets an HTTP verdict before that expiry
-// fires. This keeps the inflight timeout an exceptional path, never the normal case.
-const REQUEST_HTTP_TIMEOUT: Duration = Duration::from_secs(4);
 
 // The venue is temporarily unavailable; this is not a rejection of the order, which has no
 // errors of its own.
@@ -155,7 +152,7 @@ impl Actor {
         } = setup;
         let request_signer = RequestSigner::new(&credentials, wallet.signer)
             .expect("the startup gate already built a request signer from these credentials");
-        let http = ClobHttp::new(CONNECT_TIMEOUT, REQUEST_HTTP_TIMEOUT)
+        let http = ClobHttp::new(CONNECT_TIMEOUT, ORDER_REQUEST_TIMEOUT)
             .expect("the startup gate already built an http client with these settings");
         let (lanes, outcomes) = spawn_lanes(
             LaneSetup {
@@ -185,8 +182,8 @@ impl Actor {
                 venue: "polymarket",
                 core: ExecCore::with_limits(edge.max_orders_per_side, mirror_capacity),
                 instruments: instruments.iter().map(|row| row.instrument_id).collect(),
-                events: EventFunnel::new(producer, edge.clock.clone()),
-                fatal: edge.fatal.clone(),
+                events: EventFunnel::new(producer, edge.clock.clone(), venue_of_rows(&instruments)),
+                inflight_timeout: edge.inflight_timeout,
             }),
             tokens: TokenTable::with_retired_capacity(RETIRED_BINDINGS),
             orders: OrderIndex::with_capacity(ORDER_INDEX_CAPACITY),
@@ -285,6 +282,12 @@ struct LaneTransport<'a> {
 
 impl CommandTransport for LaneTransport<'_> {
     async fn hand_over(&mut self, command: ExecCommand) -> Result<Handover, SessionOutcome> {
+        // Polymarket does not document a second subscribe frame on a socket that holds one, so a
+        // new subscription drops the connection, and the reconnect subscribes again.
+        if command == ExecCommand::ResubscribeStream {
+            warn!("polymarket execution was asked for a new order stream — reconnecting");
+            return Err(SessionOutcome::Reconnect);
+        }
         let mut outgoing = Vec::new();
         self.actor.session.core.on_command(
             command,
@@ -395,6 +398,10 @@ impl EdgeDriver for Actor {
         warn!("polymarket execution pulling every order this run owns: {reason:?}");
         let outgoing = self.session.sweep(reason, None);
         self.dispatch(outgoing, writer).await;
+    }
+
+    fn foreign_orders(&self) -> u64 {
+        self.session.core.foreign_orders()
     }
 
     fn report_stop(&self) {

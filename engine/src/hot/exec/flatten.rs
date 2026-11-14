@@ -13,9 +13,9 @@ use crate::log::hot_warn;
 use crate::msg::exec::OrderStyle;
 use crate::msg::ids::{FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side};
 
-use super::desired::QuoteLevel;
 use super::engine::ExecEngine;
 use super::gates::reducing_side;
+use super::mint::PlacementKind;
 use super::reconcile::{BookTop, ExecLimits, FundsView, PlaceIntent, RejectReason, TickGrid};
 use super::spin::SpinInput;
 
@@ -213,15 +213,15 @@ fn notional_capped_qty(price: Price, max_notional_quote: Notional) -> Qty {
 impl ExecEngine {
     /// Sends one marketable order per instrument per spin while a strategy wants out and holding.
     /// Deliberately NOT window-gated — the close margin is when positions most need closing — and
-    /// deliberately not budget-gated either, for the reason `place_refusal` gives. Still gated on
-    /// every money protection (halt, readiness, single-flight, per-side order count, funds,
-    /// notional), so it bypasses only what would keep a position open.
-    pub(super) fn flatten_pass(&mut self, input: &mut SpinInput<'_>) {
-        if self.halt.is_halted() || self.readiness_gap().is_some() {
+    /// deliberately not budget-gated either, for the reason `admit_quote_placement` gives. Still
+    /// gated on every money protection (halt, readiness, single-flight, per-side order count,
+    /// funds, notional), so it bypasses only what would keep a position open.
+    pub(super) fn flatten_pass(&mut self, venue: usize, input: &mut SpinInput<'_>) {
+        if self.halt.is_halted() || self.venues[venue].readiness_gap().is_some() {
             return;
         }
-        for index in 0..self.instruments.len() {
-            let instrument = InstrumentId(index as u16);
+        for instrument in self.venues[venue].instrument_ids() {
+            let index = usize::from(instrument.0);
             if !input.desired.is_flattening(instrument, input.tick.seq) {
                 self.instruments[index].flatten_refusal = None;
                 continue;
@@ -233,7 +233,7 @@ impl ExecEngine {
             };
             if self.orders.is_awaiting_answer(instrument, side)
                 || self.orders.possibly_live_count(instrument, side)
-                    >= self.settings.max_orders_per_side
+                    >= self.venues[venue].settings.max_orders_per_side
             {
                 continue;
             }
@@ -241,11 +241,11 @@ impl ExecEngine {
                 position_base: position,
                 grid: self.instruments[index].grid,
                 top: self.book_top(instrument, input),
-                limits: self.settings.limits,
+                limits: self.venues[venue].settings.limits,
                 funds: self.funds_view(instrument, side),
-                slack_ticks: self.settings.flatten_slack_ticks,
-                fee_model: self.settings.fee_model,
-                taker_fee_rate: self.settings.taker_fee_rate,
+                slack_ticks: self.venues[venue].settings.flatten_slack_ticks,
+                fee_model: self.venues[venue].settings.fee_model,
+                taker_fee_rate: self.venues[venue].settings.taker_fee_rate,
             });
             self.act_on_flatten(instrument, side, outcome, input);
         }
@@ -258,32 +258,29 @@ impl ExecEngine {
         outcome: FlattenOutcome,
         input: &mut SpinInput<'_>,
     ) {
+        let refusal = match outcome {
+            FlattenOutcome::Nothing => None,
+            FlattenOutcome::Place(intent) => self.place(
+                instrument,
+                side,
+                intent,
+                PlacementKind::Flatten,
+                input.stamps(),
+                input.bank,
+            ),
+            FlattenOutcome::Refuse(reason) => Some(reason),
+        };
         let index = usize::from(instrument.0);
-        match outcome {
-            FlattenOutcome::Nothing => self.instruments[index].flatten_refusal = None,
-            FlattenOutcome::Place(intent) => {
-                self.instruments[index].flatten_refusal = None;
-                // Placed at level ZERO, since a marketable order does not occupy a quote
-                // rung. is_resting_quote() is what stops the reconciler and closer from
-                // confusing it with a quote.
-                self.place(
-                    instrument,
-                    side,
-                    QuoteLevel::ZERO,
-                    intent,
-                    input.stamps(),
-                    input.bank,
-                );
-            }
-            FlattenOutcome::Refuse(reason) => {
-                if self.instruments[index].flatten_refusal.replace(reason) != Some(reason) {
-                    report_unflattened(
-                        instrument,
-                        input.ledger.row(instrument).position_base(),
-                        reason,
-                    );
-                }
-            }
+        let Some(reason) = refusal else {
+            self.instruments[index].flatten_refusal = None;
+            return;
+        };
+        if self.instruments[index].flatten_refusal.replace(reason) != Some(reason) {
+            report_unflattened(
+                instrument,
+                input.ledger.row(instrument).position_base(),
+                reason,
+            );
         }
     }
 }

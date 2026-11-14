@@ -7,18 +7,20 @@ use crate::link::{LinkHash, LinkPayload, OutboundLink, TopicId};
 use crate::log::HotRecord;
 use crate::msg::exec::{Liquidity, OrderStyle, Provenance, RejectClass};
 use crate::msg::ids::{
-    AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, Spend, TradeId, VenueOrderId,
+    AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, Spend, TradeId, VenueId,
+    VenueOrderId,
 };
 use crate::msg::inbound::{Level, TradeEvent};
 use crate::msg::latency::LaneDrops;
 use crate::msg::persist::{
-    BookEventKind, BookEventRow, FeatureId, FeatureRow, FillRow, KlineRow, LinkFrameRow,
-    LinkRowKind, OrderLifecycle, OrderRow, OrderTransition, PersistRecord, TradeRow,
+    BookEventKind, BookEventRow, FeatureId, FeatureRow, FillRow, IncidentKind, IncidentRow,
+    KlineRow, LinkFrameRow, LinkRowKind, OrderLifecycle, OrderRow, OrderTransition, PersistRecord,
+    TradeRow,
 };
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{DurationUs, FoldTime, LocalTs, VenueTs};
 use crate::runtime::config::{KlineInterval, RecordedTables, SpinField};
-use crate::runtime::exposure::{ExposureSnapshot, InstrumentExposure};
+use crate::runtime::exposure::InstrumentExposure;
 
 /// The multiplier of the FxHash step.
 const MULTIPLIER: u64 = 0x517c_c1b7_2722_0a95;
@@ -229,6 +231,7 @@ digest_by_hash!(
     Spend,
     Side,
     InstrumentId,
+    VenueId,
     AssetId,
     ClientOrderId,
     VenueOrderId,
@@ -250,6 +253,7 @@ digest_by_hash!(
     LinkRowKind,
     OrderTransition,
     OrderLifecycle,
+    IncidentKind,
     InstrumentExposure,
 );
 
@@ -284,8 +288,13 @@ digest_fields! {
         exchange_ts_us, received_ts_us,
     }
 }
+digest_fields! {
+    IncidentRow {
+        kind, instrument, client_id, trade_id, qty, amount, window_close_ts_us, exchange_ts_us,
+        received_ts_us,
+    }
+}
 digest_fields! { OutboundLink { topic, payload } }
-digest_fields! { ExposureSnapshot { instruments, len, seq, exposure_quote, emitted_ts_us } }
 
 impl Digest for PersistRecord {
     fn digest(&self, digester: &mut Digester) {
@@ -298,6 +307,7 @@ impl Digest for PersistRecord {
             PersistRecord::Order(row) => digester.variant(5, row),
             PersistRecord::Fill(row) => digester.variant(6, row),
             PersistRecord::SealAll => digester.variant(7, &()),
+            PersistRecord::Incident(row) => digester.variant(8, row),
         }
     }
 }

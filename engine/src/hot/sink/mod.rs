@@ -19,6 +19,6 @@ pub use drop_counting::{
 };
 pub use exec::{ExecLaneBudget, ExecSink, exec_lane_capacity};
 pub use latched::PersistSink;
-pub use replacing::ExposureSink;
+pub use replacing::{ExposureReceiver, ExposureSink};
 
 pub(crate) use exec::PendingCommands;

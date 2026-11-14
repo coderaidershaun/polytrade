@@ -5,13 +5,10 @@ use std::path::Path;
 
 use engine::hot::strategy::{EngineView, StrategyConfig};
 use engine::msg::failure::{FailureClass, Halt};
-use engine::msg::ids::{FIXED_SCALE, Notional, QueueId, QueueIdError};
+use engine::msg::ids::{QueueId, QueueIdError, VenueId};
 use engine::msg::time::DurationUs;
-use engine::runtime::config::{
-    BinanceMarket, ConfigError, ExecutionMode, NoParams, PolySeries, TableKind, VenueMarket,
-    VolumeThreshold,
-};
-use engine::runtime::registry::{ConnectionCategory, Registry};
+use engine::runtime::config::{ConfigError, ExecutionMode, NoParams, TableKind, VolumeThreshold};
+use engine::runtime::registry::Registry;
 
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
 use crate::poly_strategy::{PolyUpParams, PolyUpPublisher};
@@ -22,18 +19,36 @@ fn build_from(yaml: &str) -> Registry {
     Registry::build(&config).expect("registry builds")
 }
 
-const POLY_SOURCE: &str = "  exchange: polymarket
+pub(super) const POLY_SOURCE: &str = "  exchange: polymarket
   max_exposure_quote: 500
   series: btc-updown-5m
   tracker: {}
 ";
 
-const POLY_SLOT_SYMBOLS: &[&str] = &[
-    "btc-updown-5m-a-up",
-    "btc-updown-5m-a-down",
-    "btc-updown-5m-b-up",
-    "btc-updown-5m-b-down",
-];
+/// The `sources:` list with one item: the feed of `source_block`, a block of keys indented by two
+/// spaces, and the `execution:` block of `blocks`. Each other block of `blocks` follows the list.
+pub(super) fn sources_with(source_block: &str, blocks: &str) -> String {
+    let feed: String = source_block
+        .lines()
+        .map(|line| format!("    {line}\n"))
+        .collect();
+    let (mut execution, mut rest) = (String::new(), String::new());
+    let mut is_execution = false;
+    for line in blocks.lines() {
+        if !line.is_empty() && !line.starts_with([' ', '#']) {
+            is_execution = line.starts_with("execution:");
+        }
+        match is_execution {
+            true => execution.push_str(&format!("    {line}\n")),
+            false => rest.push_str(&format!("{line}\n")),
+        }
+    }
+    format!("sources:\n  - feed:\n{feed}{execution}{rest}")
+}
+
+pub(super) fn sources_of(source_block: &str) -> String {
+    sources_with(source_block, "")
+}
 
 pub(super) fn config_with_source(source_block: &str) -> String {
     config_with_strategy(source_block, "  instruments: all\n")
@@ -42,15 +57,20 @@ pub(super) fn config_with_source(source_block: &str) -> String {
 const DEFAULT_PERSISTENCE: &str = "persistence:\n  dir: ./data\n";
 
 fn config_with_strategy(source_block: &str, strategy_block: &str) -> String {
-    with_link(source_block, strategy_block, DEFAULT_PERSISTENCE, "")
+    with_link(
+        &sources_of(source_block),
+        strategy_block,
+        DEFAULT_PERSISTENCE,
+        "",
+    )
 }
 
 fn config_without_persistence(source_block: &str, strategy_block: &str) -> String {
-    with_link(source_block, strategy_block, "", "")
+    with_link(&sources_of(source_block), strategy_block, "", "")
 }
 
 fn with_link(
-    source_block: &str,
+    sources: &str,
     strategy_block: &str,
     persistence_block: &str,
     link_block: &str,
@@ -62,8 +82,7 @@ fn with_link(
 queues:
   input_capacity: 65536
   persistence_capacity: 65536
-source:
-{source_block}strategy:
+{sources}strategy:
 {strategy_block}{persistence_block}{link_block}logging:
   dir: ./logs
 "
@@ -76,7 +95,7 @@ pub(super) fn link_block(bind: &str, extra: &str) -> String {
 
 fn config_with_link(link_block: &str) -> String {
     with_link(
-        BINANCE_PERP_SOURCE,
+        &sources_of(BINANCE_PERP_SOURCE),
         "  instruments: all\n",
         DEFAULT_PERSISTENCE,
         link_block,
@@ -90,104 +109,6 @@ pub(super) const BINANCE_PERP_SOURCE: &str = "  exchange: binance
   quote: USDT
   tracker: {}
 ";
-
-/// One polymarket source expands to the four fixed A/B x up/down slots, each a distinct venue symbol
-/// carrying a dense id in config order, none of them subscribing to klines, all on one queue. "One
-/// source" is not "one connection": a single binance source is ONE instrument served by three
-/// per-category connections (trades/depth/klines), so it is three producer groups plus the timer.
-/// The exposure ceiling reaches every row the block expands to as an exact quote mantissa — the four
-/// poly slots are budgeted separately, not as one pot.
-#[test]
-fn a_source_fans_out_to_its_rows_connections_and_queues() {
-    struct FanOut {
-        case: &'static str,
-        source: &'static str,
-        venue_symbols: &'static [&'static str],
-        market: VenueMarket,
-        has_klines: bool,
-        categories: &'static [ConnectionCategory],
-        instruments_per_group: &'static [usize],
-        input_queues: usize,
-    }
-
-    let cases = [
-        FanOut {
-            case: "polymarket",
-            source: POLY_SOURCE,
-            venue_symbols: POLY_SLOT_SYMBOLS,
-            market: VenueMarket::Polymarket(PolySeries::BtcUpDown5m),
-            has_klines: false,
-            categories: &[ConnectionCategory::Market],
-            instruments_per_group: &[4],
-            input_queues: 2,
-        },
-        FanOut {
-            case: "binance perpetual",
-            source: BINANCE_PERP_SOURCE,
-            venue_symbols: &["btcusdt"],
-            market: VenueMarket::Binance(BinanceMarket::Perpetual),
-            has_klines: true,
-            categories: &[
-                ConnectionCategory::Trades,
-                ConnectionCategory::Depth,
-                ConnectionCategory::Klines,
-            ],
-            instruments_per_group: &[1, 1, 1],
-            input_queues: 4,
-        },
-    ];
-
-    for expected in cases {
-        let case = expected.case;
-        let registry = build_from(&config_with_source(expected.source));
-        let rows = registry.instruments();
-        let symbols: Vec<&str> = rows.iter().map(|row| row.venue_symbol.as_ref()).collect();
-        assert_eq!(
-            symbols, expected.venue_symbols,
-            "{case}: distinct venue symbols in config order"
-        );
-        for (index, row) in rows.iter().enumerate() {
-            assert_eq!(
-                usize::from(row.instrument_id.0),
-                index,
-                "{case}: dense id in config order"
-            );
-            assert_eq!(row.market, expected.market, "{case}: the source's market");
-            assert_eq!(
-                row.subscriptions.klines, expected.has_klines,
-                "{case}: klines subscription"
-            );
-            assert_eq!(
-                row.kline_intervals.is_empty(),
-                !expected.has_klines,
-                "{case}: kline intervals"
-            );
-            assert_eq!(
-                row.max_exposure_quote,
-                Notional::from_mantissa(500 * FIXED_SCALE),
-                "{case}: every row the block expands to carries its 500 quote units, exactly"
-            );
-        }
-
-        let groups = registry.producer_groups();
-        let categories: Vec<ConnectionCategory> =
-            groups.iter().map(|group| group.category).collect();
-        assert_eq!(
-            categories, expected.categories,
-            "{case}: one connection per category"
-        );
-        let sizes: Vec<usize> = groups.iter().map(|group| group.instruments.len()).collect();
-        assert_eq!(
-            sizes, expected.instruments_per_group,
-            "{case}: instruments served by each connection"
-        );
-        assert_eq!(
-            registry.input_queue_count(),
-            expected.input_queues,
-            "{case}: producer groups + the timer"
-        );
-    }
-}
 
 /// A trading engine that only computes signals and ships them over the link should pay for no writer
 /// thread, no ring and no run directory, so the whole `persistence:` block is optional. And because
@@ -362,7 +283,7 @@ fn the_shipped_configs_run_their_strategies_and_ship_disarmed() {
          fills keeps no record of what it did with real money, and nothing downstream can tell that \
          apart from a run that did nothing"
     );
-    let micro_execution = micro
+    let micro_execution = micro.sources[0]
         .execution
         .as_ref()
         .expect("the shipped config carries an execution block");
@@ -417,7 +338,7 @@ fn the_shipped_configs_run_their_strategies_and_ship_disarmed() {
         "the rotations lineage still needs the writer thread: it is the only map from the \
          role-keyed poly_* features back to a condition id and window"
     );
-    let publisher_execution = publisher
+    let publisher_execution = publisher.sources[0]
         .execution
         .as_ref()
         .expect("the shipped config carries an execution block");
@@ -570,7 +491,8 @@ fn a_public_link_bind_is_a_startup_error_unless_allowed() {
 }
 
 /// FITNESS: no queue id at or past the cap of 20 exists, and each registry numbers its input queues
-/// 0 to n - 1, with the timer, the link and the execution edge after the producer groups. The hot
+/// 0 to n - 1, with the timer, the link, the execution edge and the writer status after the
+/// producer groups. The hot
 /// thread sizes its tables by that cap and a tape records each queue id, so an id past the cap, a
 /// gap or a shifted id would fold an order other than the one that the run recorded.
 #[test]
@@ -618,6 +540,24 @@ fn twenty_one_input_queues_are_refused() {
         let blocks = link_block("127.0.0.1:9310", "") + &execution_block_with(mode, extra);
         registries.push(build_from(&config_with_execution_on(source, &blocks)));
     }
+    let (at_cap, past_cap) = super::sources::twenty_one_queue_documents();
+    let twenty = build_from(&at_cap);
+    assert_eq!(
+        twenty.input_queue_count(),
+        20,
+        "18 connections, the timer and the link"
+    );
+    registries.push(twenty);
+    let config = engine::runtime::config::Config::<NoParams>::from_yaml(&past_cap)
+        .expect("the document of 21 queues parses and validates");
+    let refused = Registry::build(&config).expect_err("21 queues are one past the cap");
+    assert!(
+        matches!(
+            refused,
+            ConfigError::TooManyInputQueues { count: 21, max: 20 }
+        ),
+        "the queue of the venue is the 21st, refused by count and cap: {refused}"
+    );
 
     for registry in &registries {
         let mut ids: Vec<usize> = registry
@@ -627,13 +567,15 @@ fn twenty_one_input_queues_are_refused() {
             .collect();
         ids.push(registry.timer_queue_id().index());
         ids.extend(registry.link_queue_id().map(QueueId::index));
-        ids.extend(registry.exec_queue_id().map(QueueId::index));
+        ids.extend(registry.exec_queue_id(VenueId(0)).map(QueueId::index));
+        ids.extend(registry.writer_status_queue_id().map(QueueId::index));
         let count = registry.input_queue_count();
         assert!(count <= 20, "{count} input queues");
         assert_eq!(
             ids,
             (0..count).collect::<Vec<usize>>(),
-            "the ids are dense, and the timer, the link and the execution edge follow the groups"
+            "the ids are dense, and the timer, the link, the execution edge and the writer status \
+             follow the groups"
         );
     }
 }
@@ -689,10 +631,10 @@ fn config_with_execution(block: &str) -> String {
 
 pub(super) fn config_with_execution_on(source_block: &str, block: &str) -> String {
     with_link(
-        source_block,
+        &sources_with(source_block, block),
         "  instruments: all\n",
         DEFAULT_PERSISTENCE,
-        block,
+        "",
     )
 }
 
@@ -757,7 +699,7 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             "",
             ExecutionMode::Live,
             true,
-            5,
+            6,
         ),
         (
             "binance sim",
@@ -766,7 +708,7 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             SIM_BLOCK,
             ExecutionMode::Sim,
             true,
-            5,
+            6,
         ),
         (
             "polymarket off",
@@ -784,7 +726,7 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             "",
             ExecutionMode::Live,
             true,
-            3,
+            4,
         ),
     ];
     for (case, source, spelling, extra, expected, expects_queue, input_queues) in modes {
@@ -793,20 +735,26 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             engine::runtime::config::Config::from_yaml(&yaml)
                 .expect("the block parses and validates");
         assert_eq!(
-            config.execution.as_ref().map(|block| block.mode),
+            config.sources[0].execution.as_ref().map(|block| block.mode),
             Some(expected),
             "{case}: {spelling} is the spelling an operator types"
         );
         let registry = Registry::build(&config).expect("registry builds");
         assert_eq!(
-            registry.exec_queue_id().is_some(),
+            registry.exec_queue_id(VenueId(0)).is_some(),
             expects_queue,
             "{case}: the exec input queue exists exactly when an edge will feed it"
         );
         assert_eq!(
+            registry.writer_status_queue_id().is_some(),
+            expects_queue,
+            "{case}: a writer that gives up halts quoting, so its queue exists only when quoting can"
+        );
+        assert_eq!(
             registry.input_queue_count(),
             input_queues,
-            "{case}: producer groups + the timer, plus execution when it is armed"
+            "{case}: producer groups + the timer, plus execution and the writer status when it is \
+             armed"
         );
     }
 }
@@ -824,7 +772,7 @@ fn a_sim_block_is_inert_outside_sim_mode() {
         let config = engine::runtime::config::Config::<NoParams>::from_yaml(&yaml)
             .unwrap_or_else(|error| panic!("a sim block under {spelling} must load: {error}"));
         assert_eq!(
-            config.execution.as_ref().map(|block| block.mode),
+            config.sources[0].execution.as_ref().map(|block| block.mode),
             Some(expected),
             "the block is carried, but the mode is still the one the operator typed"
         );
@@ -949,8 +897,8 @@ fn a_one_second_spin_has_a_3030ms_budget_and_fits_the_default_timeout() {
         .expect("3030ms is strictly inside the default 5000ms timeout");
 
     let tight = yaml.replace(
-        "execution:\n  mode: sim\n",
-        "execution:\n  mode: sim\n  inflight_timeout_ms: 3030\n",
+        "execution:\n      mode: sim\n",
+        "execution:\n      mode: sim\n      inflight_timeout_ms: 3030\n",
     );
     let error = refusal(&tight);
     let ConfigError::Invalid {
@@ -967,8 +915,8 @@ fn a_one_second_spin_has_a_3030ms_budget_and_fits_the_default_timeout() {
         "the operator is told the millisecond sum they have to clear, not which field to guess at"
     );
     let just_inside = yaml.replace(
-        "execution:\n  mode: sim\n",
-        "execution:\n  mode: sim\n  inflight_timeout_ms: 3031\n",
+        "execution:\n      mode: sim\n",
+        "execution:\n      mode: sim\n      inflight_timeout_ms: 3031\n",
     );
     engine::runtime::config::Config::<NoParams>::from_yaml(&just_inside)
         .expect("one millisecond beyond the worst legal answer is sufficient");
@@ -999,7 +947,11 @@ fn the_base_floor_may_be_zero_and_the_quote_floor_may_not() {
     let config = engine::runtime::config::Config::<NoParams>::from_yaml(&zero_base)
         .expect("zero is the only correct base reserve where the base asset IS the position");
     assert_eq!(
-        config.execution.expect("execution block").min_base_balance,
+        config.sources[0]
+            .execution
+            .as_ref()
+            .expect("execution block")
+            .min_base_balance,
         0.0
     );
 
@@ -1022,11 +974,11 @@ fn the_base_floor_may_be_zero_and_the_quote_floor_may_not() {
 /// Every execution field whose range has no other floor/ceiling test: the µs-duration fields
 /// overflow the runtime's storage type at `u64::MAX`, and the bps field overflows the runtime's
 /// centi-bps conversion at a merely enormous finite float — two different overflow mechanisms,
-/// same refusal shape.
+/// same refusal shape. A limit of failed writes refuses zero, as each limit of the config does.
 #[test]
 fn execution_numeric_fields_reject_out_of_range_values() {
     let max = u64::MAX.to_string();
-    let cases: [(&str, String, Option<&str>); 6] = [
+    let cases: [(&str, String, Option<&str>); 10] = [
         (
             "execution.max_book_age_ms",
             execution_block_overriding("live", "max_book_age_ms", &max),
@@ -1059,6 +1011,29 @@ fn execution_numeric_fields_reject_out_of_range_values() {
             "execution.max_quote_distance_bps",
             execution_block_overriding("live", "max_quote_distance_bps", "1e308"),
             None,
+        ),
+        (
+            "execution.max_status_probes",
+            format!("{}  max_status_probes: 0\n", execution_block("live")),
+            Some("0"),
+        ),
+        (
+            "execution.stream_silence_ms",
+            format!("{}  stream_silence_ms: 0\n", execution_block("live")),
+            Some("0"),
+        ),
+        (
+            "execution.max_stream_resets",
+            format!("{}  max_stream_resets: 0\n", execution_block("live")),
+            Some("0"),
+        ),
+        (
+            "exposure.max_failed_writes",
+            format!(
+                "{}exposure:\n  max_failed_writes: 0\n",
+                execution_block("live")
+            ),
+            Some("0"),
         ),
     ];
     for (expected_field, block, expected_value) in cases {

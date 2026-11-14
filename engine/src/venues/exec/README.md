@@ -22,7 +22,8 @@ thread never sees any of it, only stamped messages in queue order.
 **Commands in** (one `rtrb` ring of `ExecLaneItem`, drained by the shared `Sender`, which hands
 each command to the venue's transport and from there to `ExecCore::on_command`):
 `Place`, `Cancel`, `AmendQty` (shrink only — growth is cancel+place), `ReconcileOrder`,
-`ReconcileOpenOrders`, `CancelOurs`, `CancelPriorRun`. These are intents, not venue methods.
+`ReconcileOpenOrders`, `CancelOurs`, `CancelPriorRun`, `ResubscribeStream`. These are intents, not
+venue methods.
 There is deliberately no cancel-all: the engine cannot distinguish foreign orders, so it
 never asks for something it could not account for.
 
@@ -30,7 +31,8 @@ never asks for something it could not account for.
 `MessageBody::Account(AccountChunk)`, through `EventFunnel`): sixteen `ExecKind`s covering acks,
 reports, refusals, snapshots and stream lifecycle, plus balance chunks. Everything is a fixed-size
 POD of integer newtypes — prices and quantities are i64 mantissas, identity is packed integers,
-and no string crosses inward.
+and no string crosses inward. `EventFunnel` stamps the venue of its edge on each event and each
+balance chunk, so an adapter never sets it, and the fold reads the venue from the message.
 
 Both live in `msg/exec.rs`. The venue's raw codes ride along as tape-only fields; the hot
 engine branches solely on the normalised enums.
@@ -52,7 +54,8 @@ engine branches solely on the normalised enums.
    marking, disconnect, expiry, resync polling and readiness arming), `EventSink` (where the
    session's synthesised events go: the venue's input queue, or a plain list in the simulator
    and the fitness suite), `InFlightTable` (request tracking; an expired request is
-   reconciled, never re-sent), `ResyncPass` (numbered passes, bounded retries, give-up drops
+   reconciled, never re-sent; each removal keeps the rest in the order they were sent, so
+   the oldest match answers), `ResyncPass` (numbered passes, bounded retries, give-up drops
    the connection), `ExecStop`/`EdgeHandle` (the stop latch and the one shutdown body), the
    synthesised-event constructors (every refused or timed-out command still answers the hot
    slot), `VenueCapabilities`/`LeaseNamespace` (declared beside each other in every venue
@@ -82,6 +85,18 @@ engine branches solely on the normalised enums.
    the clock lint of `clippy.toml`, which permits no site there — deadlines there take `now`
    as a parameter.
 
+   A fault of the session itself is an `ExecSessionError`: the mirror cannot hold an order, a
+   placement failed closed on corrupt state, an open order or a frame cannot be decoded, the
+   subscribe is refused or cannot be built, a worker stops, an index is full, a settlement
+   fails. The session and the venue code return it and never trip the fatal latch. The
+   chassis reads it in one place, `EdgeControl::fail`, which calls `halt_on_session_error`:
+   it reads `failure_class()` (each variant is HALT, engine), writes one ERROR line, and
+   trips the latch with `fatal_reason()`. A venue error code with no mapping is not a session
+   fault: the codec classifies it `Fatal`, and the fold halts quoting (`FatalReject`) while
+   the process stays up. The chassis also counts each order that a read or the stream shows
+   and this engine did not place (`ExecCore::foreign_orders`); it is never mirrored and never
+   cancelled.
+
 4. **Written obligations** — the rules no signature can carry:
    - Every command is eventually answered. A refusal, a timeout, a disconnect — each
      synthesises an event; no hot slot ever waits forever.
@@ -95,7 +110,13 @@ engine branches solely on the normalised enums.
      `venue_update_ts_ms` that advances only when money moved. A delta stream is converted
      to snapshots at the edge; a lagging balance read is never presented as fresh.
    - Timeouts and ambiguity reconcile — a status probe resolves them; nothing is re-sent.
-     Re-sending risks two live orders, which no reconciliation can undo.
+     Re-sending risks two live orders, which no reconciliation can undo. A probe that the edge
+     sends on its own answers with `recon_seq` 0: the hot side numbers its own reads, and only
+     an answer that echoes one of them counts toward that read. The deadline is
+     `execution.inflight_timeout_ms`, the one value that the hot slot and the in-flight table
+     both read (`SessionSetup.inflight_timeout`). A venue's order client gives its HTTP verdict
+     before that deadline: it declares its request deadline (`ORDER_REQUEST_TIMEOUT`), and the
+     start refuses an in-flight timeout at or below it.
    - `AckCanceled`/`ReportCanceled` are a finality promise: this order can no longer fill.
      A venue that cannot promise that reports `PendingCancel` and stays silent until it
      can. The hot side holds the slot and blocks the side until finality lands.
@@ -112,7 +133,8 @@ Connect → subscribe the user stream → resync pass (the venue's own read set:
 open orders, paginated or per-instrument as the venue demands) → fold every open order into
 the mirror, classifying provenance → cancel prior-run orders and wait for them to drain →
 arm readiness → Quoting. On disconnect: mark every in-flight request ambiguous, emit
-`StreamReset` (which invalidates every hot slot to Unknown and disarms readiness),
+`StreamReset` (which invalidates each hot slot of this venue's instruments to Unknown and
+disarms this venue's readiness; each other venue of the engine keeps its slots and readiness),
 reconnect with backoff, resync again. On exit: plan a cancel sweep, retry it paced until
 the mirror confirms every order gone or the deadline forces an abort, then report, settle
 the latch, and stop. A sweep past its deadline with orders still mirrored never reports
@@ -122,11 +144,22 @@ because the socket stayed down or nothing answered in time, ends the same way wi
 The edge settles its latch with that failure, and the drain counts it as a failed step, so
 the exit is not graceful.
 
+A new subscription: when a read of open orders shows a change that the order stream never
+reported, the hot side sends `ResubscribeStream`. The core turns it into the same
+`SubscribeUserStream` request that a connect sends, and no order request is sent again for it.
+Binance sends the subscribe again on its session: its WebSocket API accepts a second
+`userDataStream.subscribe.signature` and replaces the filter of the active one, and the answer
+gives `StreamReady` and starts a resync pass. Polymarket documents no second subscribe frame on a
+socket that holds one, so its edge drops the connection, and the reconnect subscribes again. The
+simulator records the subscription and sends nothing.
+
 ## Identity and ownership
 
 The engine's `ClientOrderId` is a bit-packed u64 — run nonce, slot index, generation — an
-address, not a name. `TeTag` digests the (strategy, te) identity. Every order is Mine,
-PriorRun or Foreign; foreign orders are never mirrored and never cancelled.
+address, not a name. `TeTag` digests the (strategy, te) identity. The codec's verdict on
+an order is the enum `OrderOwnership`: `Mine(id)`, `PriorRun(id)` or `Foreign`. `Foreign`
+holds no client id, so no code can address a foreign order: it is never mirrored and never
+cancelled.
 
 Two identity patterns exist, chosen by whether the venue echoes a client id:
 
@@ -142,7 +175,12 @@ Two identity patterns exist, chosen by whether the venue echoes a client id:
 Every venue declares a `LeaseNamespace` beside its capabilities. The execution lease locks
 one live process per engine identity per host and advances a durable run nonce per
 (venue, account). The nonce-file names are pinned byte-for-byte by fitness: renaming one
-orphans real nonce history and could re-mint client ids a venue has already seen.
+orphans real nonce history and could re-mint client ids a venue has already seen. Each new
+nonce replaces the file through the durable-file writer (temporary file, sync, rename), so a
+stop in the middle leaves the old nonce or the new one. A missing file is a first run. An
+empty file or one that cannot be read refuses the start: its last nonce is unknown, and a
+guess could re-mint client ids a venue has already seen. A folder that cannot be synced
+after the rename refuses the start too, because a power cut could bring back the old nonce.
 
 ## VenueCapabilities
 
@@ -198,10 +236,13 @@ variant there, and a dependency-allowlist amendment if signing needs a new crate
    returns them in `VenueScales`, through the venue port (`VenuePort::read_scales`); preflight
    stamps them onto the registry, so a stand-in port can give them in a test.
 
-The simulator is Binance-shaped and stays that way; a new venue's determinism evidence is
-its codec goldens plus a test double driven through its real codec, delivery-permutation
-style (ack-first, report-first, ack-only, report-only, ambiguous, duplicated, reordered —
-the seven ways two answers to one request arrive).
+Each venue gets a simulator behind the same contract. The seam suite of the fitness target
+holds one test body for each written obligation above, over a harness: a venue stand-in
+behind the venue's real codec. A venue passes the contract when its harness runs every body
+(`venue_edge_keeps_each_written_obligation!`); Binance runs it today. A new venue's
+determinism evidence is that run, its codec goldens, and a test double driven through its
+real codec, delivery-permutation style (ack-first, report-first, ack-only, report-only,
+ambiguous, duplicated, reordered — the seven ways two answers to one request arrive).
 
 ## What not to do
 

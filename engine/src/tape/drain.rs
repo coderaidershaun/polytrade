@@ -9,8 +9,8 @@ use rtrb::Consumer;
 use tokio::sync::mpsc;
 
 use crate::msg::persist::{
-    BookEventRow, FeatureRow, FillRow, KlineRow, LinkFrameRow, OrderRow, PersistRecord,
-    RotationRow, TradeRow,
+    BookEventRow, FeatureRow, FillRow, IncidentRow, KlineRow, LinkFrameRow, OrderRow,
+    PersistRecord, RotationRow, TradeRow,
 };
 use crate::msg::time::wall_clock_now;
 use crate::runtime::config::{ExecutionMode, RecordedTables, TableKind};
@@ -57,6 +57,7 @@ impl PersistWriter {
             link_frames: writers.named(TableKind::LinkFrames),
             orders: writers.named(TableKind::Orders),
             fills: writers.named(TableKind::Fills),
+            incidents: writers.always_written(),
             rotations: writers.always_written(),
             rotations_rx: rotations,
             unnamed_table_rows: 0,
@@ -90,10 +91,10 @@ impl TableWriterBuilder<'_> {
         self.tables.contains(table).then(|| self.writer())
     }
 
-    /// Venue lineage: it says which market each `instrument_id` stood for over which window, so
-    /// every other table's rows are unattributable without it. `TableKind` names it nowhere, and so
-    /// `strategy.tables` has no way to switch it off.
-    fn always_written(&self) -> TableWriter<RotationRow> {
+    /// For the tables that `TableKind` names nowhere, so `strategy.tables` has no way to switch them
+    /// off: the venue lineage, without which no row says which market its `instrument_id` stood
+    /// for, and the incidents, the record of money that the engine could not book.
+    fn always_written<R: TableRow>(&self) -> TableWriter<R> {
         self.writer()
     }
 
@@ -129,9 +130,11 @@ struct WriterState {
     link_frames: Option<TableWriter<LinkFrameRow>>,
     orders: Option<TableWriter<OrderRow>>,
     fills: Option<TableWriter<FillRow>>,
+    incidents: TableWriter<IncidentRow>,
     rotations: TableWriter<RotationRow>,
     rotations_rx: mpsc::Receiver<RotationRow>,
-    /// Rows for unnamed tables (hot path gates, so counts direct calls only; loud not fatal).
+    /// Rows of tables that the config does not name. The bank filters them first, so only a row
+    /// sent past it counts. A warning, never fatal.
     unnamed_table_rows: u64,
     retention: Retention,
 }
@@ -213,7 +216,8 @@ impl WriterState {
             PersistRecord::LinkFrame(row) => push_row(&mut self.link_frames, row)?,
             PersistRecord::Order(row) => push_row(&mut self.orders, row)?,
             PersistRecord::Fill(row) => push_row(&mut self.fills, row)?,
-            // Ring-ordered (not latch) -> banked records reach writer before pop.
+            PersistRecord::Incident(row) => self.incidents.push(row).map(|()| true)?,
+            // It comes through the ring, so each record banked before it is already here.
             PersistRecord::SealAll => return self.seal_all(),
         };
         if let (false, Some(table)) = (landed, record.table()) {
@@ -222,7 +226,7 @@ impl WriterState {
         Ok(())
     }
 
-    /// Power-of-two WARNs (find misconfiguration, don't flood).
+    /// Warns at each power of two, so a wrong config shows without a flood of lines.
     #[cold]
     fn count_unnamed_table_row(&mut self, table: TableKind) {
         self.unnamed_table_rows += 1;
@@ -244,12 +248,13 @@ impl WriterState {
         seal.observe_table(&mut self.link_frames);
         seal.observe_table(&mut self.orders);
         seal.observe_table(&mut self.fills);
+        seal.observe(self.incidents.seal());
         seal.observe(self.rotations.seal());
         seal.into_result()
     }
 }
 
-/// false if table not in strategy.tables (no writer exists).
+/// `false` when `strategy.tables` does not name the table, so it has no writer.
 fn push_row<R: TableRow>(
     writer: &mut Option<TableWriter<R>>,
     row: R,
@@ -260,7 +265,7 @@ fn push_row<R: TableRow>(
     }
 }
 
-/// Seal all tables; one fault doesn't short-circuit siblings' footers.
+/// Seals each table, so a fault of one still leaves a footer on each other.
 #[derive(Default)]
 struct SealOutcome {
     first_error: Option<PersistError>,
@@ -269,7 +274,7 @@ struct SealOutcome {
 }
 
 impl SealOutcome {
-    /// Unnamed table = no writer/file (not counted in failure rate).
+    /// A table that the config does not name has no file, so it counts as no table.
     fn observe_table<R: TableRow>(&mut self, writer: &mut Option<TableWriter<R>>) {
         let Some(writer) = writer else { return };
         self.observe(writer.seal());
