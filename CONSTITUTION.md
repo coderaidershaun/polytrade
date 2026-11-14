@@ -417,6 +417,11 @@ Failure classes:
     - The drain: `Exit::decide` (`engine/src/runtime/assembly/exit.rs`).
     - The start code: `Exit::refused(class)`, for each refusal
       (`engine/src/runtime/assembly/run.rs`).
+  - Amended 2026-11-14, as built: with feature `otlp`, a fifth root reads `failure_class()`: the
+    root of the OTLP exporter thread. `Poster::reject` (`engine/src/runtime/otlp/send.rs`) reads
+    the class of each `SendFailure`. Each failure is REJECT, so the exporter drops its records and
+    counts them. WHY: the export adds one thread, and the root of that thread is the one supervisor
+    of its sends.
   - Amended 2026-11-13, as built: three roots have no reader yet, each with its receiving part.
     - The root of the tape writer: part 5 of the plan.
     - The market-data actors and the simulator actor: part 4. Each of their 4 sites trips the fatal
