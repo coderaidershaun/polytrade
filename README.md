@@ -87,7 +87,7 @@ Step 2 of the gate also reads the clock lint of `clippy.toml`: a call that reads
 
 Each trading engine reads its `config.yaml`. Each block refuses a key that it does not know. The keys in the table below have defaults. The blocks `latency:` and `senders:` can be left out. The code is in `engine/src/runtime/config/`.
 
-The key `sources:` has no default. It lists one source or more. Each item holds `feed:`, the venue and its instruments, and its own optional `execution:` block. No `execution:` block stands at the top of the config. The sources of one venue sit together, at most one of them holds an execution block, and the sources that send orders use one mode. Today only one source can send orders: preflight refuses a second one.
+The key `sources:` has no default. It lists one source or more. Each item holds `feed:`, the venue and its instruments, and its own optional `execution:` block. No `execution:` block stands at the top of the config. The sources of one venue sit together, at most one of them holds an execution block, and the sources that send orders use one mode. Today only one source can send orders: preflight refuses a second one. An armed run also reads only the venue that sends orders: preflight refuses a row of another venue (`StartError::ExecutionWithSeveralVenues`), until stage 3 tasks T6 and T12 of the master plan.
 
 | Key | Default | What it sets |
 | --- | --- | --- |

@@ -280,9 +280,9 @@ fn targets(requests: &[String]) -> Vec<&str> {
 
 /// CONTRACT: the signed client of the Binance edge and the venue meet at the network. When the
 /// venue answers that the execution status of a request is unknown, a cancel can have run, so the
-/// client sends it once and gives the answer back, which the edge settles with a read. A read with
-/// the same answer is sent again, because reading twice changes nothing. Each request is signed
-/// with a key that is no key, and reaches only a stand-in on this host.
+/// client sends it once and gives the answer back to the edge. A read with the same answer is sent
+/// again, because reading twice changes nothing. Each request is signed with a key that is no key,
+/// and reaches only a stand-in on this host.
 #[test]
 fn an_order_action_whose_outcome_is_unknown_is_sent_once() {
     let cancel_venue = StandInVenue::answering(STATUS_UNKNOWN);

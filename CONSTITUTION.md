@@ -1142,9 +1142,15 @@ Binance sent an order action again after a lost answer.
   - The signed REST client of Binance returns a failed order action at once. Only a read is tried
     again. Pin: `a_timed_out_order_action_is_sent_once`.
   - Amended 2026-11-14: this holds after any failure, the venue codes -1006 and -1007 ("execution
-    status unknown") among them. A REST cancel that fails, at -1021 or 429 too, then reads the order
-    back. Pin: `an_order_action_whose_outcome_is_unknown_is_sent_once`. WHY: an answer of "status
-    unknown" leaves the order action perhaps done, as a lost answer does.
+    status unknown") among them. Pin: `an_order_action_whose_outcome_is_unknown_is_sent_once`. WHY:
+    an answer of "status unknown" leaves the order action perhaps done, as a lost answer does.
+  - Amended 2026-11-14, as built: after a failed REST cancel, the edge reads the order back at once
+    only at 429 and at a transport failure. At -1006, -1007, and -1021 it re-arms the cancel. The
+    read then comes from the in-flight timeout of the hot slot, and an exit sweep can send the same
+    cancel again. Part 4 takes this behavior, with question Q1 of the review. WHY: no money moves,
+    because a second cancel of one client order id adds no order.
+  - Replaced 2026-11-14: "A REST cancel that fails, at -1021 or 429 too, then reads the order
+    back." WHY: the edge does not act so (the review of part 3, round 2).
 - [ ] Probe cap. A slot counts its status probes. At `execution.max_status_probes` the instrument
   gets one read of open orders. IF the order stays unknown after that read, THEN quoting halts
   (`HaltReason::StatusProbesSpent`).

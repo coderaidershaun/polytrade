@@ -69,7 +69,7 @@ Each block of an engine's `config.yaml` refuses a key it does not know. Each key
 - `persistence:` `seal_try_limit`: the tries of a waiting seal before quoting halts.
 - `execution:` (in each source) `max_status_probes`, `stream_silence_ms`, `max_stream_resets`.
 - `exposure:` `max_failed_writes`: the failed writes in a row before the exposure writer reports and quoting halts.
-- `sources:` has no default: a list of one source or more. Each item holds `feed:` and its own optional `execution:` block, and no `execution:` block stands at the top of the config. The sources of one venue sit together, and at most one of them holds an execution block. Today only one source can send orders.
+- `sources:` has no default: a list of one source or more. Each item holds `feed:` and its own optional `execution:` block, and no `execution:` block stands at the top of the config. The sources of one venue sit together, and at most one of them holds an execution block. Today only one source can send orders. An armed run also reads only the venue that sends orders: preflight refuses a row of another venue (`StartError::ExecutionWithSeveralVenues`), until stage 3 tasks T6 and T12 of the master plan.
 
 ## Limits
 
