@@ -141,7 +141,7 @@ fn rounding_is_outward_and_never_crosses_the_book() {
 #[test]
 fn model_a_matches_its_closed_form_and_each_bad_rate_is_refused() {
     let (sigma, order_size) = (2.0, 2.0);
-    // As r = ξΔ/k goes to 0, Model A tends to Model B (wiki-gueant.txt:49-52). By hand, for
+    // As r = ξΔ/k goes to 0, Model A tends to the limits that Model B takes. By hand, for
     // 0 < r < 1: r − r²/2 ≤ ln(1 + r) ≤ r, so c1 of Model A is within r/2 of 1/k, relative, and c2
     // is within e^(r/2) − 1 < r of the c2 of Model B.
     let (k, a, r) = (1.0, 5.0, 1e-6);
@@ -168,7 +168,8 @@ fn model_a_matches_its_closed_form_and_each_bad_rate_is_refused() {
         c2_of(&model_b)
     );
 
-    // c1 = ln(1 + ξΔ/k)/(ξΔ) and c2 = √(γ/(2AΔk)·(1 + ξΔ/k)^(k/(ξΔ) + 1)) (wiki-gueant.txt:41-48).
+    // The closed form for ξ > 0: c1 = ln(1 + ξΔ/k)/(ξΔ) and
+    // c2 = √(γ/(2AΔk)·(1 + ξΔ/k)^(k/(ξΔ) + 1)).
     // With γ = ξ = 0.25, Δ = 2, k = 0.5 and A = 0.5, ξΔ/k = 1, so by hand c1 = ln 2/0.5 = 2·ln 2
     // and c2 = √(0.25/(2·0.5·2·0.5)·2^2) = √1 = 1.
     let model_a = GueantParams::new(0.25, order_size, Objective::CaraUtility)
@@ -199,9 +200,9 @@ fn model_a_matches_its_closed_form_and_each_bad_rate_is_refused() {
     }
 }
 
-/// A quote reads market and ledger values, so a fair or an inventory that is not finite, a grid tick
-/// that is not positive, a side whose tick is not positive, and a price past the range of a mantissa
-/// each give no quote for that side, never a panic and never a price at or below zero.
+/// A quote reads market and ledger values, so a fair or an inventory that is not finite, a grid
+/// tick that is not positive, a side whose tick is not positive, and a price past the range of a
+/// mantissa each give no quote for that side, never a panic and never a price at or below zero.
 #[test]
 fn quote_refuses_values_that_are_not_finite_and_ticks_that_are_not_positive() {
     let c = worked_example();
@@ -304,8 +305,8 @@ fn nearest_rounding_keeps_the_band_and_a_tick_between_sides() {
         .expect("finite inputs");
     assert_eq!((open.bid_tick, open.ask_tick), (10_048, 10_052));
 
-    // A band of 3 ticks binds: floor(10,050 − 3) = 10,047 and ceil(10,050 + 3) = 10,053. A band of 1
-    // tick sits inside the depth and changes nothing.
+    // A band of 3 ticks binds: floor(10,050 − 3) = 10,047 and ceil(10,050 + 3) = 10,053. A band of
+    // 1 tick sits inside the depth and changes nothing.
     let banded = c
         .quote(nearest(10_050.0, 0.0, Some(3.0)))
         .expect("finite inputs");

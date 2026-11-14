@@ -23,16 +23,19 @@ pub struct SideRates<U> {
     pub unit: U,
 }
 
-/// Closed-form objective (fixes ξ, never tuned).
+/// The objective of the closed form. It fixes ξ, so ξ is never a parameter to tune.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Objective {
-    /// CARA utility of terminal MTM wealth (ξ = γ).
+    /// Model A: constant absolute risk aversion over the marked-to-market wealth at the end
+    /// (ξ = γ).
     CaraUtility,
-    /// Terminal wealth minus quadratic inventory penalty (ξ = 0) at limits c1 = 1/k, c2 = √(γe/(2AΔk)).
+    /// Model B: the wealth at the end minus a quadratic penalty on inventory (ξ = 0), which takes
+    /// the limits c1 = 1/k and c2 = √(γe/(2AΔk)).
     InventoryPenalty,
 }
 
-/// Maker's strategy choices (caller's depth unit); risk-budget decisions.
+/// The choices of the maker that set its risk budget: the risk aversion, the size of one fill,
+/// and the objective.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GueantParams {
     gamma: f64,
@@ -41,9 +44,12 @@ pub struct GueantParams {
 }
 
 impl GueantParams {
-    /// gamma = γ̃ (inverse depth-unit-wealth risk aversion); order_size = Δ (inventory shock per fill).
+    /// `gamma` is γ, the risk aversion per unit of wealth in the depth unit of the rates, and
+    /// `order_size` is Δ, the change of inventory that one fill makes.
+    ///
     /// # Panics
-    /// When gamma or order_size non-finite or <=0 (config bug, not market condition).
+    /// If `gamma` or `order_size` is not finite or not positive: both come from config, so either
+    /// is a bug, not a market condition.
     pub fn new(gamma: f64, order_size: f64, objective: Objective) -> Self {
         assert!(
             gamma.is_finite() && gamma > 0.0,
@@ -100,7 +106,8 @@ impl GueantParams {
             Objective::CaraUtility => {
                 let xi_delta = self.gamma * self.order_size;
                 let ratio = xi_delta / k_per_depth;
-                // log1p preserves limit ξΔ/k->0: c1->1/k, c2 exponent->1 (Model B's e factor).
+                // ln_1p keeps its precision as ξΔ/k goes to 0, where c1 tends to 1/k and the
+                // exponent tends to 1, the factor e of Model B.
                 let log1p_ratio = ratio.ln_1p();
                 let c1 = log1p_ratio / xi_delta;
                 let exponent = (k_per_depth / xi_delta + 1.0) * log1p_ratio;
@@ -121,25 +128,25 @@ pub struct QuoteCoefficients<U> {
 }
 
 impl<U> QuoteCoefficients<U> {
-    /// h = c1 + (Δ/2)·σ·c2 (zero-inventory continuous half-spread).
+    /// h = c1 + (Δ/2)·σ·c2, the half-spread at zero inventory, before any rounding.
     #[inline]
     pub fn half_spread(&self) -> f64 {
         self.half_spread
     }
 
-    /// j = σ·c2 (reservation-centre shift per inventory unit).
+    /// j = σ·c2, how far the centre of the quote moves for each unit of inventory.
     #[inline]
     pub fn skew_per_inventory(&self) -> f64 {
         self.skew_per_inventory
     }
 
-    /// δᵇ(q) = h + j·q (continuous bid depth below fair).
+    /// δᵇ(q) = h + j·q, the depth of the bid below fair, before rounding.
     #[inline]
     pub fn bid_depth(&self, inventory: f64) -> f64 {
         self.half_spread + self.skew_per_inventory * inventory
     }
 
-    /// δᵃ(q) = h − j·q (continuous ask depth above fair).
+    /// δᵃ(q) = h − j·q, the depth of the ask above fair, before rounding.
     #[inline]
     pub fn ask_depth(&self, inventory: f64) -> f64 {
         self.half_spread - self.skew_per_inventory * inventory
@@ -148,9 +155,9 @@ impl<U> QuoteCoefficients<U> {
 
 impl QuoteCoefficients<Ticks> {
     /// The post-only quote on the grid, with its tick indices and depths. `None` for a fair, an
-    /// inventory, or a band that is not finite, and for a grid tick that is not positive: each is a
-    /// market or ledger value, so it is refused, not a panic. A side whose tick is not positive, or whose
-    /// price passes the range of a mantissa, has no price.
+    /// inventory, or a band that is not finite, and for a grid tick that is not positive: each is
+    /// a market or ledger value, so it is refused, not a panic. A side whose tick is not positive,
+    /// or whose price passes the range of a mantissa, has no price.
     pub fn quote(&self, inputs: QuoteInputs) -> Option<Quotes> {
         let bid_depth = self.bid_depth(inputs.inventory);
         let ask_depth = self.ask_depth(inputs.inventory);
@@ -201,7 +208,8 @@ fn quote_at_depths(bid_depth: f64, ask_depth: f64, inputs: QuoteInputs) -> Optio
         ask_tick = ask_tick.max(best_bid.mantissa().div_euclid(tick).saturating_add(1));
     }
 
-    // On collision, keep inventory-reducing quote; push other +1 tick.
+    // When the sides collide, the side that sheds inventory stays and the other moves one tick
+    // out.
     if ask_tick <= bid_tick {
         if inputs.inventory < 0.0 {
             ask_tick = bid_tick.saturating_add(1);
@@ -237,22 +245,22 @@ pub enum Snap {
     /// The bid floors and the ask ceils, so neither side comes nearer the market than its depth.
     Outward,
     /// Each side takes its nearest tick, which can be up to half a tick nearer the market than its
-    /// depth (wiki-gueant.txt:374).
+    /// depth.
     Nearest,
 }
 
-/// Quote inputs: fair value, signed inventory, grid (zero origin assumed).
+/// What a quote reads: fair, the signed inventory, the touch, and the grid, whose origin is zero.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct QuoteInputs {
-    /// Fair value (mid or microprice); tick index = fair / tick.
+    /// The fair price, a mid or a microprice. Its tick index is fair / tick.
     pub fair: f64,
-    /// Signed inventory (same units as params' order_size; q>0 is long).
+    /// The signed inventory, in the unit of `order_size`; above zero is long.
     pub inventory: f64,
     /// The touch that a post-only quote stays behind: the bid below the best ask, and the ask
     /// above the best bid. `None` sets no such limit on that side.
     pub best_bid: Option<Price>,
     pub best_ask: Option<Price>,
-    /// Grid step (exact mantissa); tick index = price_mantissa / tick.
+    /// The step of the grid. The tick index of a price is its mantissa over this mantissa, exactly.
     pub tick: Price,
     pub snap: Snap,
     /// The nearest that each side may come to fair, in ticks: the bid at most fair minus it,
@@ -260,7 +268,8 @@ pub struct QuoteInputs {
     pub min_distance_ticks: Option<f64>,
 }
 
-/// Produced quote pair (executable prices + tick indices + depths as diagnostics).
+/// The quote of both sides: the price of each, or `None`, with the tick indices and the depths
+/// that gave them.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Quotes {
     pub bid: Option<Price>,
