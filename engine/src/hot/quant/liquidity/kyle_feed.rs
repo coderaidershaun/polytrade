@@ -1,5 +1,5 @@
-//! Pairs the signed flow of closed volume bars with the move of the mid that the flow caused, as the
-//! observations of Kyle's lambda. A run waits for the book commit after its closing trade.
+//! Pairs the signed flow of closed volume bars with the move of the mid that the flow caused, as
+//! the observations of Kyle's lambda. A run waits for the book commit after its closing trade.
 
 use crate::hot::quant::liquidity::kyles_lambda::{KyleEstimate, KylesLambda, KylesLambdaSpec};
 

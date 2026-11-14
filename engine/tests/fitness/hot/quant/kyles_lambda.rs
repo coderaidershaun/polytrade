@@ -27,7 +27,8 @@ fn estimator_over(spec: KylesLambdaSpec, bars: &[(f64, f64)]) -> KylesLambda {
     estimator
 }
 
-// λ = 0.0002 price/contract, τ = 0.01 -> λ_tick = 0.02 ticks/contract, Q_1tick = 50 contracts.
+// The worked example: a slope of 0.0002 price units per contract over a tick of 0.01 is 0.02 ticks
+// per contract, so 50 contracts move the price by one tick.
 const LAMBDA: f64 = 0.0002;
 const ALPHA: f64 = 5e-5;
 

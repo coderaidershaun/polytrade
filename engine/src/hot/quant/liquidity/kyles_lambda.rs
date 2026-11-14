@@ -5,14 +5,16 @@ use crate::hot::series::FastQueue;
 
 const BACKING_MULTIPLE: usize = 2;
 
-/// Rolling window + data gates.
+/// The size of the rolling window, and the gates that refuse a window that cannot carry a slope.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KylesLambdaSpec {
     pub window: usize,
     pub min_observations: usize,
-    /// Var(Q) floor in squared flow units (fence denominator off zero).
+    /// The smallest variance of the flow that the fit accepts, in squared units of flow. It keeps
+    /// the denominator of the slope away from zero.
     pub min_flow_variance: f64,
-    /// Min fraction of bars per flow sign (>0.5 impossible).
+    /// The smallest share of the bars that each sign of flow must hold. A share above 0.5 could
+    /// never be met.
     pub min_sign_fraction: f64,
 }
 
@@ -21,7 +23,8 @@ impl Default for KylesLambdaSpec {
         Self {
             window: 100,
             min_observations: 30,
-            // A numerical epsilon, not an economic floor: real per-instrument floors are config.
+            // A numerical epsilon, not an economic floor. Each instrument sets its real floor in
+            // its config.
             min_flow_variance: 1e-12,
             min_sign_fraction: 0.2,
         }
@@ -33,15 +36,16 @@ pub struct KylesLambda {
     min_observations: usize,
     min_flow_variance: f64,
     min_sign_fraction: f64,
-    // Two queues (Element can't be pairs); push/clear keep in sync.
+    // Two queues, because a queue cannot hold pairs. push and clear keep them in step.
     flows: FastQueue<f64>,
     mid_changes: FastQueue<f64>,
 }
 
 impl KylesLambda {
     /// # Panics
-    /// When spec is invalid: min_observations <2 or >window, non-positive variance floor, or
-    /// sign fraction outside [0,0.5]. Config bug, not market condition.
+    /// When the spec is invalid: `min_observations` below 2 or above the window, a variance floor
+    /// that is not finite and positive, or a sign fraction outside 0 to 0.5. That is a bug of the
+    /// config, not a state of the market.
     pub fn new(spec: KylesLambdaSpec) -> Self {
         assert!(
             spec.min_observations >= 2,
@@ -54,7 +58,7 @@ impl KylesLambda {
             spec.min_observations,
             spec.window
         );
-        // Interlock with sign gate: zero-flow window never reaches division.
+        // Together with the sign gate, this keeps a window of zero flow from reaching the division.
         assert!(
             spec.min_flow_variance.is_finite() && spec.min_flow_variance > 0.0,
             "kyles lambda min_flow_variance must be finite and positive, got {}",
@@ -74,9 +78,11 @@ impl KylesLambda {
         }
     }
 
-    /// One bar (closed); flow units must be consistent.
+    /// Stores the flow and the mid change of one closed bar. Each bar must use the same unit of
+    /// flow.
+    ///
     /// # Panics
-    /// When either is non-finite (upstream bug, not market condition).
+    /// When either value is not finite: a bug upstream, not a state of the market.
     #[inline]
     pub fn push(&mut self, flow: f64, mid_change: f64) {
         assert!(
@@ -91,7 +97,8 @@ impl KylesLambda {
         self.mid_changes.push(mid_change);
     }
 
-    /// OLS slope or None; negative λ reported (informative).
+    /// The least-squares slope of the window, or `None` where a gate refuses the window. A negative
+    /// slope is reported, because it carries information.
     pub fn fit(&self) -> Option<KyleEstimate> {
         let observations = self.flows.len();
         if observations < self.min_observations {
@@ -101,7 +108,7 @@ impl KylesLambda {
         let flows = self.flows.as_slice();
         let mid_changes = self.mid_changes.as_slice();
         let count = observations as f64;
-        // Two-pass off slices (eviction drifts).
+        // Two passes over the window, because a running sum would drift as bars leave it.
         let mean_flow = flows.iter().sum::<f64>() / count;
         let mean_mid_change = mid_changes.iter().sum::<f64>() / count;
 
@@ -113,7 +120,7 @@ impl KylesLambda {
             let centred_flow = flow - mean_flow;
             centred_flow_squares += centred_flow * centred_flow;
             cross_products += centred_flow * (mid_change - mean_mid_change);
-            // Zero-flow bars anchor intercept.
+            // A bar with zero flow counts toward neither sign, and still anchors the intercept.
             positive_bars += usize::from(flow > 0.0);
             negative_bars += usize::from(flow < 0.0);
         }
@@ -124,7 +131,8 @@ impl KylesLambda {
             return None;
         }
 
-        // Extreme finite bars overflow centred sums -> unusable, gate applied.
+        // Extreme but finite bars can overflow the centred sums, so this gate also refuses a sum
+        // that is not finite.
         let flow_variance = centred_flow_squares / count;
         if !(flow_variance.is_finite() && flow_variance >= self.min_flow_variance) {
             return None;
@@ -132,7 +140,7 @@ impl KylesLambda {
 
         let lambda = cross_products / centred_flow_squares;
         let intercept = mean_mid_change - lambda * mean_flow;
-        // Cross sum can overflow -> gate result.
+        // The cross products can overflow too, so the result is checked.
         if !(lambda.is_finite() && intercept.is_finite()) {
             return None;
         }
@@ -163,12 +171,12 @@ impl KylesLambda {
     }
 }
 
-/// Slope + diagnostics (naked column not auditable).
+/// The slope with its diagnostics, because a slope alone cannot be checked.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KyleEstimate {
-    /// Price units per flow unit; reported even when negative.
+    /// Price units per unit of flow. Reported even when negative.
     pub lambda: f64,
-    /// α̂ — free intercept (drift + timestamp bias captured here, not in λ).
+    /// The free intercept: drift and any bias of the timestamps land here, not in the slope.
     pub intercept: f64,
     pub observations: usize,
     pub flow_variance: f64,
