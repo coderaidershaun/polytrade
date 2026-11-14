@@ -231,6 +231,33 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         ),
         "{capacity}"
     );
+    // The second of two sources of one venue holds the execution block. Both share the id of that
+    // venue, so the ladder is checked against its rows, not against the position of the source.
+    let ladder_on_second = with_state(
+        sources::document(
+            &[
+                (BINANCE_SPOT_SOURCE, ""),
+                (
+                    &sources::spot_source("ETH"),
+                    &execution_block_with("live", ""),
+                ),
+            ],
+            false,
+        ),
+        &state,
+    );
+    let second_capacity = refusal(
+        &ladder_on_second,
+        Scales::Stamped { max_num_orders: 1 },
+        &state,
+    );
+    assert!(
+        matches!(
+            second_capacity,
+            StartError::ExecutionOrderCapacity { venue_max: 1, .. }
+        ),
+        "{second_capacity}"
+    );
 
     // E7: the position file cannot be read.
     let ledger = exposure::file_path(&state, &identity(), Some(ExecutionMode::Sim));

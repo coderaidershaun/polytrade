@@ -80,9 +80,8 @@ impl<P> Preflight<'_, P> {
         // constant, so a production run is checked against the production grid.
         port.read_scales(&registry)?.stamp(&mut registry);
         ExecCapacity::of(registry.instruments())?;
-        for (index, source) in config.sources.iter().enumerate() {
+        for (source, venue) in config.sources.iter().zip(config.source_venues()) {
             if let Some(execution) = &source.execution {
-                let venue = VenueId(index as u8);
                 check_execution_order_capacity(&registry, venue, execution.max_orders_per_side)?;
             }
         }
