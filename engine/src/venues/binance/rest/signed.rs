@@ -12,7 +12,7 @@ use crate::venues::binance::exec::{
     ClockOffset, ORDER_REQUEST_TIMEOUT, RecvWindow, RequestParams, RequestSigner,
 };
 use crate::venues::edge::backoff::BackoffCaps;
-use crate::venues::edge::http::{Deadlines, TransportError};
+use crate::venues::edge::http::Deadlines;
 use crate::venues::edge::rest_quiet::SharedRestQuiet;
 use crate::warn;
 
@@ -30,7 +30,8 @@ pub struct SignedRestConfig {
     pub env: BinanceEnv,
     pub recv_window: RecvWindow,
     pub backoff: BackoffCaps,
-    /// Total tries, not retries: 1 means send once and surface whatever comes back.
+    /// Total tries of a read, not retries: 1 means send once and surface whatever comes back. A
+    /// request that acts on an order is always sent once.
     pub max_attempts: u32,
 }
 
@@ -250,16 +251,11 @@ impl SignedRestClient {
                 return outcome;
             };
             attempt += 1;
-            // A request that acts on an order may have run at the venue when its answer was lost,
-            // so it is never sent again: only a read is safe to repeat. The caller reads it back.
-            let may_have_run = !matches!(plan.method, HttpMethod::Get)
-                && matches!(
-                    failure,
-                    RestError::Transport(
-                        TransportError::Request { .. } | TransportError::Timeout { .. }
-                    )
-                );
-            if may_have_run
+            // Only a read is sent again. A request that acts on an order can have run at the venue
+            // whatever its failure says, a lost answer or "execution status unknown", so it goes out
+            // once, and the caller reads the order back.
+            let is_read = matches!(plan.method, HttpMethod::Get);
+            if !is_read
                 || failure.verdict() != FailureVerdict::Retry
                 || attempt >= self.config.max_attempts
             {

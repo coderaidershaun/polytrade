@@ -1,5 +1,5 @@
 //! The durable cost basis, one JSON file for each engine, written off the hot path. Position is
-//! keyed by venue and venue symbol, because an instrument id can change between runs.
+//! keyed by venue, market and venue symbol, because an instrument id can change between runs.
 
 mod file;
 mod writer;
@@ -211,12 +211,13 @@ pub enum ExposureError {
         expected: i64,
     },
     #[error(
-        "exposure file at {} holds {symbol} of {venue} with position {position_base} and cash {cash_quote}, and this config names no such instrument — the next write would erase it",
+        "exposure file at {} holds {symbol} of {venue} {market} with position {position_base} and cash {cash_quote}, and this config names no such instrument — the next write would erase it",
         .path.display()
     )]
     UnknownInstrument {
         path: PathBuf,
         venue: Box<str>,
+        market: Box<str>,
         symbol: Box<str>,
         position_base: i64,
         cash_quote: i64,
@@ -282,6 +283,7 @@ pub fn load(
     for entry in &document.instruments {
         let Some(row) = registry.instruments().iter().find(|row| {
             registry.venue_name(row.venue) == entry.venue
+                && row.market.as_str() == entry.market
                 && row.venue_symbol.as_ref() == entry.symbol
         }) else {
             if entry.is_zero() {
@@ -290,6 +292,7 @@ pub fn load(
             return Err(ExposureError::UnknownInstrument {
                 path,
                 venue: entry.venue.as_str().into(),
+                market: entry.market.as_str().into(),
                 symbol: entry.symbol.as_str().into(),
                 position_base: entry.position_base,
                 cash_quote: entry.cash_quote,
