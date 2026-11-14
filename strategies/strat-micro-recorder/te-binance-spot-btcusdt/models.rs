@@ -59,7 +59,6 @@ pub(crate) struct BinanceVol {
     /// Guéant tick-space grid. None if startup preflight left unstamped.
     pub(crate) tick: Option<Price>,
     pub(crate) markouts: MarkoutTracker,
-    last_mid_ts_us: Option<LocalTs>,
     /// None if no volume clock (on_volume never fires) or no tick (λ has no grid).
     pub(crate) kyle: Option<KyleFeed>,
     pub(crate) hawkes_bid: HawkesSide,
@@ -108,7 +107,6 @@ impl BinanceVol {
                 spin_interval,
                 max_mids_per_sec: MARKOUT_MAX_MIDS_PER_SEC,
             }),
-            last_mid_ts_us: None,
             kyle: row
                 .tick_size
                 .filter(|_| row.tracker.volume_bars.is_some())
@@ -161,7 +159,6 @@ impl BinanceVol {
         self.resilience_window.clear();
         self.intensity.reset();
         self.markouts.clear();
-        self.last_mid_ts_us = None;
         if let Some(kyle) = self.kyle.as_mut() {
             kyle.clear();
         }
@@ -169,12 +166,10 @@ impl BinanceVol {
         self.hawkes_ask.reset();
     }
 
-    /// The markout mid entry point. Spins and chunks arrive on different queues, so a late stamp is
-    /// clamped forward rather than allowed to disorder the series.
+    /// The markout mid entry point. Spins and chunks arrive on different queues, so a stamp can come
+    /// late. The tracker raises it to the last fed stamp, which keeps its series in order.
     pub(crate) fn feed_markout_mid(&mut self, ts_us: LocalTs, mid: Option<f64>) {
         let Some(mid) = mid else { return };
-        let ts_us = self.last_mid_ts_us.map_or(ts_us, |last| last.max(ts_us));
-        self.last_mid_ts_us = Some(ts_us);
         self.markouts.on_mid(ts_us, mid);
     }
 }
