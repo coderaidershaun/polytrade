@@ -3,7 +3,7 @@
 
 use engine::hot::quant::hawkes::HawkesChoice;
 use engine::hot::quant::liquidity::KylesLambdaSpec;
-use engine::hot::quant::micro::{PriceBand, ResilienceSample, banded_imbalance};
+use engine::hot::quant::micro::{BookSides, PriceBand, ResilienceSample};
 use engine::hot::quant::pricing::{GueantParams, Objective};
 use engine::hot::quant::toxicity::{MarkoutSide, vpin};
 use engine::hot::quant::volatility::Returns;
@@ -384,11 +384,11 @@ fn record_spin(
         .then(|| book.mid())
         .flatten()
         .map(|book_mid| {
-            banded_imbalance(
-                book.bids(),
-                book.asks(),
-                PriceBand::around(book_mid, OBI_BAND_HALF_WIDTH_BPS),
-            )
+            let sides = BookSides {
+                bids: book.bids(),
+                asks: book.asks(),
+            };
+            sides.banded_imbalance(PriceBand::around(book_mid, OBI_BAND_HALF_WIDTH_BPS))
         });
     ctx.emit_present(features.obi_half_bp, instrument, obi);
     ctx.emit_present(features.egarch_vol_lt, instrument, egarch_vol);
