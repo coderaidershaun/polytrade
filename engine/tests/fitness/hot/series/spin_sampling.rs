@@ -2,11 +2,11 @@
 //! reset at each sample. A strategy's windows follow a change of the spin interval.
 
 use engine::hot::dispatch::HotEngine;
-use engine::hot::quant::micro;
+use engine::hot::quant::micro::Touch;
 use engine::hot::series::FastQueue;
 use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
 use engine::log::HotRecord;
-use engine::msg::ids::{InstrumentId, Price, Side};
+use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::persist::{FeatureId, PersistRecord};
 use engine::msg::time::DurationUs;
@@ -185,10 +185,11 @@ fn mid_and_sided_trade_counts_sample_per_tick() {
         );
     }
 
-    let expected_mid = micro::mid(
-        Price::from_mantissa(100 * ONE),
-        Price::from_mantissa(101 * ONE),
-    );
+    let expected_mid = Touch {
+        bid: level(100 * ONE, 2 * ONE),
+        ask: level(101 * ONE, ONE),
+    }
+    .mid();
     assert_eq!(
         sided_state(&mut engine, &mut consumer, spin(1, 10)),
         [Some(expected_mid), Some(1.0), Some(3.0), Some(1.0)],
@@ -239,7 +240,11 @@ fn spin_samples_committed_state_only() {
         &mut consumer,
         InboundMessage::new(ts(1), MessageBody::Book(asks)),
     );
-    let committed = micro::microprice(level(100 * ONE, 2 * ONE), level(101 * ONE, ONE));
+    let committed = Touch {
+        bid: level(100 * ONE, 2 * ONE),
+        ask: level(101 * ONE, ONE),
+    }
+    .microprice();
 
     let (len, last) = spin_state(&mut engine, &mut consumer, spin(1, 2));
     assert_eq!(
@@ -270,7 +275,11 @@ fn spin_samples_committed_state_only() {
         &mut consumer,
         InboundMessage::new(ts(5), MessageBody::Book(last_chunk)),
     );
-    let recommitted = micro::microprice(level(100 * ONE, 7 * ONE), level(101 * ONE, 3 * ONE));
+    let recommitted = Touch {
+        bid: level(100 * ONE, 7 * ONE),
+        ask: level(101 * ONE, 3 * ONE),
+    }
+    .microprice();
     let (len, last) = spin_state(&mut engine, &mut consumer, spin(3, 6));
     assert_eq!(
         (len, last),

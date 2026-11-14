@@ -1,7 +1,7 @@
-//! Order-book imbalance in a band around the mid: a level on the edge of the band counts, and each
-//! side counts its best level, so a book never reads as empty.
+//! Order-book imbalance over the top levels and in a band around the mid. A level on the edge of
+//! the band counts, each side counts its best level, and a book with no size reads 0.
 
-use engine::hot::quant::micro::{PriceBand, banded_imbalance, imbalance};
+use engine::hot::quant::micro::{BookSides, PriceBand};
 use engine::msg::ids::{Price, Qty};
 use engine::msg::inbound::Level;
 
@@ -12,6 +12,14 @@ fn level(price: i64, qty: i64) -> Level {
         price: Price::from_mantissa(price * SCALE),
         qty: Qty::from_mantissa(qty * SCALE),
     }
+}
+
+fn banded_imbalance(bids: &[Level], asks: &[Level], band: PriceBand) -> f64 {
+    BookSides { bids, asks }.banded_imbalance(band)
+}
+
+fn imbalance(bids: &[Level], asks: &[Level], top_n: usize) -> f64 {
+    BookSides { bids, asks }.imbalance(top_n)
 }
 
 #[test]

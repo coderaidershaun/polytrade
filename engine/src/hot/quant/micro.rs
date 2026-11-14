@@ -78,30 +78,9 @@ impl BookSides<'_> {
     }
 }
 
+/// The mid of two best prices, for a caller that keeps the prices of the touch without its sizes.
 #[inline]
-pub fn microprice(best_bid: Level, best_ask: Level) -> f64 {
-    Touch {
-        bid: best_bid,
-        ask: best_ask,
-    }
-    .microprice()
-}
-
-/// Equilibrium = microprice; Π = M + λ(d−s) where λ = spread/(2(d+s)).
-/// Deliberately an alias, not a pass-through to delete: the OU resilience model is written in Π, so
-/// the name carries the model's own vocabulary for whatever feeds [`ResilienceSample::equilibrium`].
-#[inline]
-pub fn orderbook_equilibrium(best_bid: Level, best_ask: Level) -> f64 {
-    microprice(best_bid, best_ask)
-}
-
-#[inline]
-pub fn spread(best_bid: Price, best_ask: Price) -> f64 {
-    best_ask.to_f64() - best_bid.to_f64()
-}
-
-#[inline]
-pub fn mid(best_bid: Price, best_ask: Price) -> f64 {
+pub(crate) fn mid(best_bid: Price, best_ask: Price) -> f64 {
     (best_bid.to_f64() + best_ask.to_f64()) / 2.0
 }
 
@@ -122,11 +101,6 @@ impl PriceBand {
     }
 }
 
-#[inline]
-pub fn banded_imbalance(bids: &[Level], asks: &[Level], band: PriceBand) -> f64 {
-    BookSides { bids, asks }.banded_imbalance(band)
-}
-
 fn qty_to_edge(levels: &[Level], is_at_or_past_edge: impl Fn(f64) -> bool) -> f64 {
     let mut total = 0.0;
     for level in levels {
@@ -136,11 +110,6 @@ fn qty_to_edge(levels: &[Level], is_at_or_past_edge: impl Fn(f64) -> bool) -> f6
         }
     }
     total
-}
-
-#[inline]
-pub fn imbalance(bids: &[Level], asks: &[Level], top_n: usize) -> f64 {
-    BookSides { bids, asks }.imbalance(top_n)
 }
 
 // Order-book resilience: OU rate of mid relaxation toward equilibrium (1/sec).
