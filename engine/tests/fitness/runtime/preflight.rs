@@ -339,6 +339,30 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         ),
         "{several}"
     );
+    // The refusal names the two items by their places in `sources:`, which differ from the ids of
+    // their venues when a venue has two sources.
+    let after_a_reader = with_state(
+        sources::document(
+            &[
+                (BINANCE_SPOT_SOURCE, ""),
+                (&sources::spot_source("ETH"), &live),
+                (POLY_SOURCE, &live),
+            ],
+            false,
+        ),
+        &state,
+    );
+    let named = refusal(&after_a_reader, Scales::Refused, &state);
+    assert!(
+        matches!(
+            named,
+            StartError::ExecutionOnSeveralSources {
+                first: 1,
+                second: 2
+            }
+        ),
+        "{named}"
+    );
 
     // One venue sends orders and the run also reads another venue, in either order. This build
     // sends orders through one connection, which would take the other venue's rows as its own.

@@ -141,19 +141,21 @@ impl StartPlan {
 /// second source that sends orders is refused before any check reads a venue.
 ///
 /// # Errors
-/// [`StartError::ExecutionOnSeveralSources`] when two sources send orders.
+/// [`StartError::ExecutionOnSeveralSources`] with the places of the two items in `sources:` when
+/// two sources send orders.
 fn one_armed_source<P>(
     config: &Config<P>,
 ) -> Result<Option<(VenueId, &SourceSpec, &ExecutionConfig)>, StartError> {
-    let mut armed = config.armed_sources();
-    let first = armed.next();
-    match (first, armed.next()) {
-        (Some((first, ..)), Some((second, ..))) => Err(StartError::ExecutionOnSeveralSources {
-            first: usize::from(first.0),
-            second: usize::from(second.0),
-        }),
-        _ => Ok(first),
+    let mut places = config
+        .sources
+        .iter()
+        .enumerate()
+        .filter(|(_, source)| source.armed_execution().is_some())
+        .map(|(place, _)| place);
+    if let (Some(first), Some(second)) = (places.next(), places.next()) {
+        return Err(StartError::ExecutionOnSeveralSources { first, second });
     }
+    Ok(config.armed_sources().next())
 }
 
 /// This build sends orders through one task, which takes each row of the registry and gives each
