@@ -2,7 +2,6 @@
 //! with one observation for each bar, as the price impact of one unit of flow.
 
 use crate::hot::series::FastQueue;
-use crate::msg::ids::Price;
 
 const BACKING_MULTIPLE: usize = 2;
 
@@ -34,7 +33,6 @@ pub struct KylesLambda {
     min_observations: usize,
     min_flow_variance: f64,
     min_sign_fraction: f64,
-    tick: f64,
     // Two queues (Element can't be pairs); push/clear keep in sync.
     flows: FastQueue<f64>,
     mid_changes: FastQueue<f64>,
@@ -42,9 +40,9 @@ pub struct KylesLambda {
 
 impl KylesLambda {
     /// # Panics
-    /// When spec is invalid: min_observations <2 or >window, non-positive variance floor,
-    /// sign fraction outside [0,0.5], or non-positive tick. Config bug, not market condition.
-    pub fn new(spec: KylesLambdaSpec, tick: Price) -> Self {
+    /// When spec is invalid: min_observations <2 or >window, non-positive variance floor, or
+    /// sign fraction outside [0,0.5]. Config bug, not market condition.
+    pub fn new(spec: KylesLambdaSpec) -> Self {
         assert!(
             spec.min_observations >= 2,
             "kyles lambda min_observations must be at least 2, got {}",
@@ -67,16 +65,10 @@ impl KylesLambda {
             "kyles lambda min_sign_fraction must be in 0.0..=0.5, got {}",
             spec.min_sign_fraction
         );
-        assert!(
-            tick.mantissa() > 0,
-            "kyles lambda tick must be positive, got {}",
-            tick.mantissa()
-        );
         Self {
             min_observations: spec.min_observations,
             min_flow_variance: spec.min_flow_variance,
             min_sign_fraction: spec.min_sign_fraction,
-            tick: tick.to_f64(),
             flows: FastQueue::new(spec.window, BACKING_MULTIPLE),
             mid_changes: FastQueue::new(spec.window, BACKING_MULTIPLE),
         }
@@ -139,19 +131,14 @@ impl KylesLambda {
         }
 
         let lambda = cross_products / centred_flow_squares;
-        let lambda_tick = lambda / self.tick;
         let intercept = mean_mid_change - lambda * mean_flow;
         // Cross sum can overflow -> gate result.
-        if !(lambda.is_finite() && lambda_tick.is_finite() && intercept.is_finite()) {
+        if !(lambda.is_finite() && intercept.is_finite()) {
             return None;
         }
-        // Subnormal λ_tick inverts to infinity -> refuse (noise, not depth).
-        let one_tick_flow = Some(1.0 / lambda_tick).filter(|flow| flow.is_finite() && *flow > 0.0);
 
         Some(KyleEstimate {
             lambda,
-            lambda_tick,
-            one_tick_flow,
             intercept,
             observations,
             flow_variance,
@@ -181,13 +168,37 @@ impl KylesLambda {
 pub struct KyleEstimate {
     /// Price units per flow unit; reported even when negative.
     pub lambda: f64,
-    pub lambda_tick: f64,
-    /// Flow units per tick = 1/λ_tick (None if λ_tick ≤0 or subnormal, to avoid nonsense depth).
-    pub one_tick_flow: Option<f64>,
     /// α̂ — free intercept (drift + timestamp bias captured here, not in λ).
     pub intercept: f64,
     pub observations: usize,
     pub flow_variance: f64,
     pub positive_fraction: f64,
     pub negative_fraction: f64,
+}
+
+impl KyleEstimate {
+    /// The slope read in steps of `scale`, a price step such as one tick or one basis point of the
+    /// mid. `None` where that reading is not a finite number.
+    pub fn per_unit(&self, scale: f64) -> Option<PerUnitLambda> {
+        let lambda = self.lambda / scale;
+        if !lambda.is_finite() {
+            return None;
+        }
+        // A slope that is not positive gives no depth, and neither does a slope so faint that its
+        // inverse is too large for a float.
+        let one_unit_flow = Some(1.0 / lambda).filter(|flow| flow.is_finite() && *flow > 0.0);
+        Some(PerUnitLambda {
+            lambda,
+            one_unit_flow,
+        })
+    }
+}
+
+/// Kyle's lambda in steps of a chosen price unit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PerUnitLambda {
+    /// Price steps per unit of flow.
+    pub lambda: f64,
+    /// The flow that moves the price by one step: the inverse of the slope.
+    pub one_unit_flow: Option<f64>,
 }

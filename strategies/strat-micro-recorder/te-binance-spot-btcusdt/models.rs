@@ -112,7 +112,7 @@ impl BinanceVol {
             kyle: row
                 .tick_size
                 .filter(|_| row.tracker.volume_bars.is_some())
-                .map(|tick| KyleFeed::new(setup.kyles_lambda, tick)),
+                .map(|_| KyleFeed::new(setup.kyles_lambda)),
             hawkes_bid: HawkesSide::new(setup.hawkes),
             hawkes_ask: HawkesSide::new(setup.hawkes),
         }

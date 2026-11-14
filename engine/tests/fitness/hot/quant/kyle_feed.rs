@@ -2,21 +2,15 @@
 //! price impact that each sizing model reads, with no error.
 
 use engine::hot::quant::liquidity::{KyleEstimate, KyleFeed, KylesLambdaSpec};
-use engine::msg::ids::Price;
-
-const TICK: Price = Price::from_mantissa(1_000_000); // $0.01 at the 1e-8 fixed-point scale.
 
 fn feed() -> KyleFeed {
-    KyleFeed::new(
-        KylesLambdaSpec {
-            window: 100,
-            min_observations: 2,
-            // One-sided flow is the point of the sequence below; the sign gate would refuse it.
-            min_sign_fraction: 0.0,
-            ..KylesLambdaSpec::default()
-        },
-        TICK,
-    )
+    KyleFeed::new(KylesLambdaSpec {
+        window: 100,
+        min_observations: 2,
+        // One-sided flow is the point of the sequence below; the sign gate would refuse it.
+        min_sign_fraction: 0.0,
+        ..KylesLambdaSpec::default()
+    })
 }
 
 /// One step of the fold, in the order in which the recorder meets it.

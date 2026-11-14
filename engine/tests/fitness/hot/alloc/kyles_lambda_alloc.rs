@@ -6,9 +6,6 @@
 
 use crate::hot::quant::Lcg;
 use engine::hot::quant::liquidity::{KylesLambda, KylesLambdaSpec};
-use engine::msg::ids::Price;
-
-const TICK: Price = Price::from_mantissa(1_000_000); // $0.01 at the 1e-8 fixed-point scale.
 
 const WINDOW: usize = 256;
 
@@ -28,14 +25,11 @@ fn bar(lcg: &mut Lcg) -> (f64, f64) {
 #[test]
 fn kyles_lambda_push_and_fit_do_not_allocate() {
     let mut lcg = Lcg(0xF17E_5510);
-    let mut estimator = KylesLambda::new(
-        KylesLambdaSpec {
-            window: WINDOW,
-            min_observations: 64,
-            ..KylesLambdaSpec::default()
-        },
-        TICK,
-    );
+    let mut estimator = KylesLambda::new(KylesLambdaSpec {
+        window: WINDOW,
+        min_observations: 64,
+        ..KylesLambdaSpec::default()
+    });
 
     for _ in 0..PRIME {
         let (flow, mid_change) = bar(&mut lcg);

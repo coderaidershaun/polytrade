@@ -4,4 +4,4 @@ mod kyle_feed;
 mod kyles_lambda;
 
 pub use kyle_feed::KyleFeed;
-pub use kyles_lambda::{KyleEstimate, KylesLambda, KylesLambdaSpec};
+pub use kyles_lambda::{KyleEstimate, KylesLambda, KylesLambdaSpec, PerUnitLambda};

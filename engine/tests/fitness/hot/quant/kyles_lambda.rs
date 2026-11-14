@@ -20,7 +20,7 @@ fn spec(window: usize, min_observations: usize) -> KylesLambdaSpec {
 }
 
 fn estimator_over(spec: KylesLambdaSpec, bars: &[(f64, f64)]) -> KylesLambda {
-    let mut estimator = KylesLambda::new(spec, TICK);
+    let mut estimator = KylesLambda::new(spec);
     for &(flow, mid_change) in bars {
         estimator.push(flow, mid_change);
     }
@@ -55,12 +55,15 @@ fn slope_recovery_matches_a_known_worked_example() {
         "lambda {}",
         estimate.lambda
     );
+    let in_ticks = estimate
+        .per_unit(TICK.to_f64())
+        .expect("a slope of 0.0002 reads in ticks");
     assert!(
-        approx(estimate.lambda_tick, 0.02, 1e-3),
-        "lambda_tick {}",
-        estimate.lambda_tick
+        approx(in_ticks.lambda, 0.02, 1e-3),
+        "lambda in ticks {}",
+        in_ticks.lambda
     );
-    let one_tick_flow = estimate.one_tick_flow.expect("positive slope inverts");
+    let one_tick_flow = in_ticks.one_unit_flow.expect("positive slope inverts");
     assert!(
         approx(one_tick_flow, 50.0, 2.5),
         "one_tick_flow {one_tick_flow}"
@@ -86,7 +89,11 @@ fn slope_recovery_matches_a_known_worked_example() {
         falling.lambda
     );
     assert_eq!(
-        falling.one_tick_flow, None,
+        falling
+            .per_unit(TICK.to_f64())
+            .expect("a falling slope reads in ticks")
+            .one_unit_flow,
+        None,
         "a negative slope must never invert"
     );
 
@@ -209,7 +216,26 @@ fn overflowed_sums_and_subnormal_slopes_never_leak_infinity() {
         .expect("a faint but conditioned window still fits");
     assert!(estimate.lambda > 0.0, "lambda {}", estimate.lambda);
     assert_eq!(
-        estimate.one_tick_flow, None,
+        estimate
+            .per_unit(TICK.to_f64())
+            .expect("a faint slope reads in ticks")
+            .one_unit_flow,
+        None,
         "a subnormal slope inverted to infinite depth"
+    );
+
+    // A steep but finite slope still fits. Its reading in ticks would pass the largest float, so
+    // only that reading is refused. The two points (1, d) and (-1, -d) give the exact slope
+    // 2d / 2 = d, and d = 1e307 over a tick of 0.01 is 1e309.
+    let steep = [(1.0, 1e307), (-1.0, -1e307)];
+    let estimate = estimator_over(spec(64, 2), &steep)
+        .fit()
+        .expect("a finite slope fits, however steep");
+    assert_eq!(estimate.lambda, 1e307);
+    assert_eq!(estimate.intercept, 0.0);
+    assert_eq!(
+        estimate.per_unit(TICK.to_f64()),
+        None,
+        "a reading in ticks past the largest float was given"
     );
 }
