@@ -7,8 +7,10 @@ use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
 use engine::hot::exec::{DesiredQuote, ExecSettings, HaltReason, OrderState, QuoteLevel};
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{Strategy, StrategyCtx};
-use engine::msg::exec::{CancelReason, ExecCommand, ExecEvent, ExecLaneItem};
-use engine::msg::ids::{Price, Side};
+use engine::msg::exec::{
+    CancelReason, ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus,
+};
+use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::{DurationUs, Stamper};
 use engine::msg::ui::{UiEvent, UiHalt};
@@ -16,7 +18,9 @@ use engine::runtime::config::TrackerSpec;
 use engine::venues::exec::open_orders_snapshot_end;
 use rtrb::{Consumer, RingBuffer};
 
-use crate::engine_support::{detached_setup, instrument_row, spin, ts, ui_event_ring, venue_ts};
+use crate::engine_support::{
+    detached_setup, exec_event, instrument_row, spin, ts, ui_event_ring, venue_ts,
+};
 use crate::exec_support::{
     ASK, BID, INSTRUMENT, QUOTE_QTY, drain_commands, exec_settings, make_ready, reseat_book,
 };
@@ -60,6 +64,7 @@ struct Unanswered {
     ui_events: Consumer<UiEvent>,
     seen: SeenBids,
     sent: Vec<(i64, &'static str, u64)>,
+    placed: Option<ClientOrderId>,
 }
 
 impl Unanswered {
@@ -97,6 +102,7 @@ impl Unanswered {
             ui_events,
             seen,
             sent: Vec::new(),
+            placed: None,
         }
     }
 
@@ -104,7 +110,10 @@ impl Unanswered {
         self.engine.dispatch(&spin(second as u64, second * SECOND));
         for command in drain_commands(&mut self.lane) {
             let kind = match command {
-                ExecCommand::Place { .. } => "place",
+                ExecCommand::Place { client_id, .. } => {
+                    self.placed = Some(client_id);
+                    "place"
+                }
                 ExecCommand::ReconcileOrder { .. } => "probe",
                 ExecCommand::ReconcileOpenOrders { .. } => "read",
                 ExecCommand::CancelOurs {
@@ -207,5 +216,72 @@ fn spent_probes_read_open_orders_then_halt() {
             halted_ts_us: venue_ts(31 * SECOND),
         }),
         "an order still unknown after its probes and the read halts quoting at that fold time"
+    );
+
+    answered_timeouts_spend_no_probe();
+}
+
+/// Case c: each answer of the venue starts the count again. A stream reset makes each working order
+/// unknown, so each reset costs its order one timeout, and the venue answers each probe. Five such
+/// episodes never halt, and the cap still halts the next episode, which the venue never answers.
+fn answered_timeouts_spend_no_probe() {
+    let mut run = Unanswered::new();
+    run.spin_at_second(1);
+    let bid = run.placed.expect("the bid was placed at 1 s");
+    for second in 2..=61 {
+        run.spin_at_second(second);
+        let Some(&(_, _, recon_seq)) = run.sent.last().filter(|(at, ..)| *at == second) else {
+            continue;
+        };
+        if second > 31 {
+            continue;
+        }
+        let answered_at = second * SECOND + 500_000;
+        let answer = ExecEvent {
+            kind: ExecKind::SnapshotOrder,
+            status: Some(VenueOrderStatus::New),
+            qty: QUOTE_QTY,
+            recon_seq,
+            ..exec_event(INSTRUMENT, bid, Side::Buy, BID, answered_at)
+        };
+        run.engine.dispatch(&InboundMessage::new(
+            ts(answered_at),
+            MessageBody::Exec(answer),
+        ));
+        // The venue's stream drops and comes back. Its first episode began with the placement.
+        let reset_at = (second + 1) * SECOND - 100_000;
+        let reset = ExecEvent {
+            kind: ExecKind::StreamReset,
+            instrument: None,
+            ..exec_event(InstrumentId(0), ClientOrderId(0), Side::Buy, 0, reset_at)
+        };
+        run.engine
+            .dispatch(&InboundMessage::new(ts(reset_at), MessageBody::Exec(reset)));
+        make_ready(&mut run.engine, reset_at);
+    }
+    assert_eq!(
+        run.sent,
+        [
+            (1, "place", 0),
+            (7, "probe", 1),
+            (13, "probe", 2),
+            (19, "probe", 3),
+            (25, "probe", 4),
+            (31, "probe", 5),
+            (37, "probe", 6),
+            (43, "probe", 7),
+            (49, "probe", 8),
+            (55, "read", 9),
+            (61, "halt sweep", 0),
+        ],
+        "five answered episodes each send one probe, and the unanswered one after them spends the cap"
+    );
+    assert_eq!(
+        run.halt(),
+        Some(UiHalt::Halted {
+            reason: HaltReason::StatusProbesSpent,
+            halted_ts_us: venue_ts(61 * SECOND),
+        }),
+        "only the episode that the venue never answers halts quoting"
     );
 }

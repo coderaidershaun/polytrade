@@ -106,6 +106,12 @@ pub(super) fn apply_exec_event(
         ExecKind::SnapshotEnd | ExecKind::StreamReset | ExecKind::StreamReady => previous_state,
     };
     slot.state = next;
+    // The status probes count the timeouts of one episode that the venue leaves unanswered. The two
+    // kinds that the edge makes for a request that never left are no answer of the venue.
+    let is_venue_answer = !matches!(event.kind, ExecKind::PlaceNotSent | ExecKind::AmendNotSent);
+    if is_venue_answer && next != OrderState::Unknown {
+        slot.status_probes = 0;
+    }
     if matches!(event.kind, ExecKind::AckAmended | ExecKind::ReportAmended) {
         // Only an amend WE asked for spends budget: the same report arriving against a Live slot is
         // the venue restating an order, and counting it would cancel the ladder early.
