@@ -60,14 +60,24 @@ fn model_b_matches_a_known_worked_example() {
 #[test]
 fn rounding_is_outward_and_never_crosses_the_book() {
     // Symmetric depth 2.2, fair mid-book -> bid floors, ask ceils, both outside book.
-    let clean = worked_example().quote(inputs(10_050.0, 0.0, 10_049, 10_051));
+    let clean = worked_example()
+        .quote(inputs(10_050.0, 0.0, 10_049, 10_051))
+        .expect("finite inputs");
     assert_eq!(clean.bid_tick, 10_047, "bid floors: floor(10050 - 2.2)");
     assert_eq!(clean.ask_tick, 10_053, "ask ceils: ceil(10050 + 2.2)");
-    assert_eq!(clean.bid, Price::from_mantissa(10_047 * TICK.mantissa()));
-    assert_eq!(clean.ask, Price::from_mantissa(10_053 * TICK.mantissa()));
+    assert_eq!(
+        clean.bid,
+        Some(Price::from_mantissa(10_047 * TICK.mantissa()))
+    );
+    assert_eq!(
+        clean.ask,
+        Some(Price::from_mantissa(10_053 * TICK.mantissa()))
+    );
 
     // Long inventory -> ask_depth negative (liquidation skew); crossing ask clamps to best_bid+1.
-    let long = worked_example().quote(inputs(10_050.0, 10.0, 10_049, 10_051));
+    let long = worked_example()
+        .quote(inputs(10_050.0, 10.0, 10_049, 10_051))
+        .expect("finite inputs");
     assert_eq!(
         long.ask_tick, 10_050,
         "post-only lifts the crossing ask to best_bid + 1"
@@ -96,13 +106,13 @@ fn rounding_is_outward_and_never_crosses_the_book() {
         best_ask: Price::from_mantissa(10_051 * quarter.mantissa()),
         tick: quarter,
     };
-    let long = tiny.quote(at_fair(1.0));
+    let long = tiny.quote(at_fair(1.0)).expect("finite inputs");
     assert_eq!(
         (long.bid_tick, long.ask_tick),
         (10_049, 10_050),
         "a long book keeps its ask and moves its bid out"
     );
-    let short = tiny.quote(at_fair(-1.0));
+    let short = tiny.quote(at_fair(-1.0)).expect("finite inputs");
     assert_eq!(
         (short.bid_tick, short.ask_tick),
         (10_050, 10_051),
@@ -171,4 +181,82 @@ fn model_a_matches_its_closed_form_and_each_bad_rate_is_refused() {
             "{objective:?}: an infinite c2 gave coefficients"
         );
     }
+}
+
+/// A quote reads market and ledger values, so a fair or an inventory that is not finite, a grid tick
+/// that is not positive, a side whose tick is not positive, and a price past the range of a mantissa
+/// each give no quote for that side, never a panic and never a price at or below zero.
+#[test]
+fn quote_refuses_values_that_are_not_finite_and_ticks_that_are_not_positive() {
+    let c = worked_example();
+    let base = inputs(10_050.0, 0.0, 10_049, 10_051);
+    for (case, refused) in [
+        (
+            "fair NaN",
+            QuoteInputs {
+                fair: f64::NAN,
+                ..base
+            },
+        ),
+        (
+            "fair +inf",
+            QuoteInputs {
+                fair: f64::INFINITY,
+                ..base
+            },
+        ),
+        (
+            "fair -inf",
+            QuoteInputs {
+                fair: f64::NEG_INFINITY,
+                ..base
+            },
+        ),
+        (
+            "inventory NaN",
+            QuoteInputs {
+                inventory: f64::NAN,
+                ..base
+            },
+        ),
+        (
+            "inventory +inf",
+            QuoteInputs {
+                inventory: f64::INFINITY,
+                ..base
+            },
+        ),
+        (
+            "tick 0",
+            QuoteInputs {
+                tick: Price::from_mantissa(0),
+                ..base
+            },
+        ),
+        (
+            "tick -1",
+            QuoteInputs {
+                tick: Price::from_mantissa(-1),
+                ..base
+            },
+        ),
+    ] {
+        assert_eq!(c.quote(refused), None, "{case}: quoted");
+    }
+
+    // Fair 2 ticks up with a depth of 2.2 on each side, by hand: the bid floors to tick
+    // floor(2 − 2.2) = −1, so it has no price, and the ask ceils to ceil(2 + 2.2) = 5.
+    let low = c.quote(inputs(2.0, 0.0, 1, 3)).expect("finite inputs");
+    assert_eq!(low.bid, None, "a bid at or below zero was quoted");
+    assert_eq!(low.ask, Some(Price::from_mantissa(5 * TICK.mantissa())));
+
+    // Fair 1e13 ticks up: the ask ceils to tick 1e13 + 3, whose price passes the range of a
+    // mantissa, so it has no price; the bid stays behind the best ask, at tick 2.
+    assert!(i64::MAX / TICK.mantissa() < 10_000_000_000_003);
+    let high = c.quote(inputs(1e13, 0.0, 1, 3)).expect("finite inputs");
+    assert_eq!(
+        high.ask, None,
+        "an ask past the range of a mantissa was quoted"
+    );
+    assert_eq!(high.bid, Some(Price::from_mantissa(2 * TICK.mantissa())));
 }

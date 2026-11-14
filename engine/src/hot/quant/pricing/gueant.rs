@@ -122,25 +122,15 @@ impl QuoteCoefficients {
         self.half_spread - self.skew_per_inventory * inventory
     }
 
-    /// Depths -> post-only grid quote (tick indices + depths as diagnostics).
-    /// # Panics
-    /// When fair/inventory non-finite or tick <=0 (config bug).
-    pub fn quote(&self, inputs: QuoteInputs) -> Quotes {
-        assert!(
-            inputs.fair.is_finite(),
-            "gueant quote fair must be finite, got {}",
-            inputs.fair
-        );
-        assert!(
-            inputs.inventory.is_finite(),
-            "gueant quote inventory must be finite, got {}",
-            inputs.inventory
-        );
-        assert!(
-            inputs.tick.mantissa() > 0,
-            "gueant quote tick must be positive, got {}",
-            inputs.tick.mantissa()
-        );
+    /// The post-only quote on the grid, with its tick indices and depths. `None` for a fair or an
+    /// inventory that is not finite, and for a grid tick that is not positive: each is a market or
+    /// ledger value, so it is refused, not a panic. A side whose tick is not positive, or whose
+    /// price passes the range of a mantissa, has no price.
+    pub fn quote(&self, inputs: QuoteInputs) -> Option<Quotes> {
+        if !(inputs.fair.is_finite() && inputs.inventory.is_finite()) || inputs.tick.mantissa() <= 0
+        {
+            return None;
+        }
         let bid_depth = self.bid_depth(inputs.inventory);
         let ask_depth = self.ask_depth(inputs.inventory);
         let fair_ticks = inputs.fair / inputs.tick.to_f64();
@@ -159,27 +149,38 @@ impl QuoteCoefficients {
         let model_ask_tick = (fair_ticks + ask_depth).ceil() as i64;
 
         // Post-only: improve touch, never cross resting opposite side.
-        let mut bid_tick = model_bid_tick.min(best_ask_tick - 1);
-        let mut ask_tick = model_ask_tick.max(best_bid_tick + 1);
+        let mut bid_tick = model_bid_tick.min(best_ask_tick.saturating_sub(1));
+        let mut ask_tick = model_ask_tick.max(best_bid_tick.saturating_add(1));
 
         // On collision, keep inventory-reducing quote; push other +1 tick.
         if ask_tick <= bid_tick {
             if inputs.inventory < 0.0 {
-                ask_tick = bid_tick + 1;
+                ask_tick = bid_tick.saturating_add(1);
             } else {
-                bid_tick = ask_tick - 1;
+                bid_tick = ask_tick.saturating_sub(1);
             }
         }
 
-        Quotes {
-            bid: Price::from_mantissa(bid_tick * inputs.tick.mantissa()),
-            ask: Price::from_mantissa(ask_tick * inputs.tick.mantissa()),
+        Some(Quotes {
+            bid: price_at(bid_tick, inputs.tick),
+            ask: price_at(ask_tick, inputs.tick),
             bid_tick,
             ask_tick,
             bid_depth,
             ask_depth,
-        }
+        })
     }
+}
+
+/// The price of a tick index, or `None` for an index that is not positive or whose price passes
+/// the range of a mantissa.
+fn price_at(tick_index: i64, tick: Price) -> Option<Price> {
+    if tick_index <= 0 {
+        return None;
+    }
+    tick_index
+        .checked_mul(tick.mantissa())
+        .map(Price::from_mantissa)
 }
 
 /// Quote inputs: fair value, signed inventory, grid (zero origin assumed).
@@ -198,8 +199,8 @@ pub struct QuoteInputs {
 /// Produced quote pair (executable prices + tick indices + depths as diagnostics).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Quotes {
-    pub bid: Price,
-    pub ask: Price,
+    pub bid: Option<Price>,
+    pub ask: Option<Price>,
     pub bid_tick: i64,
     pub ask_tick: i64,
     pub bid_depth: f64,
