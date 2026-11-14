@@ -37,6 +37,36 @@ fn worked_example_matches_hand_arithmetic() {
         "signed_flow {}",
         est.signed_flow
     );
+
+    // Six bars and five buckets: the oldest bar, all buying, is outside the window, so the values
+    // are those of the five bars again. With it, VPIN would be 2800 / 6000.
+    let with_older = [
+        bar(1000, 0, 1000),
+        bars[0],
+        bars[1],
+        bars[2],
+        bars[3],
+        bars[4],
+    ];
+    let est = vpin(&with_older, 5).expect("six bars, positive target");
+    assert!(approx(est.vpin, 0.36), "vpin {}", est.vpin);
+    assert!(
+        approx(est.signed_flow, 0.24),
+        "signed_flow {}",
+        est.signed_flow
+    );
+
+    // Targets that differ weight each bar by its target: Σ|B−S| = 400 + 1000 = 1400 over
+    // Σtarget = 1000 + 3000 = 4000 gives 0.35, and Σ(B−S) = 400 − 1000 = −600 gives −0.15. A mean of
+    // the two bar ratios would give (0.4 + 1/3) / 2.
+    let unequal = [bar(700, 300, 1000), bar(1000, 2000, 3000)];
+    let est = vpin(&unequal, 2).expect("two bars, positive target");
+    assert!(approx(est.vpin, 0.35), "vpin {}", est.vpin);
+    assert!(
+        approx(est.signed_flow, -0.15),
+        "signed_flow {}",
+        est.signed_flow
+    );
 }
 
 #[test]
