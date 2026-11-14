@@ -147,9 +147,9 @@ impl<U> QuoteCoefficients<U> {
 }
 
 impl QuoteCoefficients<Ticks> {
-    /// The post-only quote on the grid, with its tick indices and depths. `None` for a fair or an
-    /// inventory that is not finite, and for a grid tick that is not positive: each is a market or
-    /// ledger value, so it is refused, not a panic. A side whose tick is not positive, or whose
+    /// The post-only quote on the grid, with its tick indices and depths. `None` for a fair, an
+    /// inventory, or a band that is not finite, and for a grid tick that is not positive: each is a
+    /// market or ledger value, so it is refused, not a panic. A side whose tick is not positive, or whose
     /// price passes the range of a mantissa, has no price.
     pub fn quote(&self, inputs: QuoteInputs) -> Option<Quotes> {
         let bid_depth = self.bid_depth(inputs.inventory);
@@ -169,27 +169,37 @@ impl QuoteCoefficients<Bps> {
 }
 
 fn quote_at_depths(bid_depth: f64, ask_depth: f64, inputs: QuoteInputs) -> Option<Quotes> {
-    if !(inputs.fair.is_finite() && inputs.inventory.is_finite()) || inputs.tick.mantissa() <= 0 {
+    let is_band_finite = inputs.min_distance_ticks.is_none_or(f64::is_finite);
+    if !(inputs.fair.is_finite() && inputs.inventory.is_finite() && is_band_finite)
+        || inputs.tick.mantissa() <= 0
+    {
         return None;
     }
+    let tick = inputs.tick.mantissa();
     let fair_ticks = inputs.fair / inputs.tick.to_f64();
-    // Exact tick indices from mantissas (never float modulo on price).
-    let best_bid_tick = inputs
-        .best_bid
-        .mantissa()
-        .div_euclid(inputs.tick.mantissa());
-    let best_ask_tick = inputs
-        .best_ask
-        .mantissa()
-        .div_euclid(inputs.tick.mantissa());
+    let (mut bid_tick, mut ask_tick) = match inputs.snap {
+        Snap::Outward => (
+            (fair_ticks - bid_depth).floor() as i64,
+            (fair_ticks + ask_depth).ceil() as i64,
+        ),
+        Snap::Nearest => (
+            (fair_ticks - bid_depth).round() as i64,
+            (fair_ticks + ask_depth).round() as i64,
+        ),
+    };
+    if let Some(distance) = inputs.min_distance_ticks {
+        bid_tick = bid_tick.min((fair_ticks - distance).floor() as i64);
+        ask_tick = ask_tick.max((fair_ticks + distance).ceil() as i64);
+    }
 
-    // Quantisation never more aggressive (bid floors, ask ceils).
-    let model_bid_tick = (fair_ticks - bid_depth).floor() as i64;
-    let model_ask_tick = (fair_ticks + ask_depth).ceil() as i64;
-
-    // Post-only: improve touch, never cross resting opposite side.
-    let mut bid_tick = model_bid_tick.min(best_ask_tick.saturating_sub(1));
-    let mut ask_tick = model_ask_tick.max(best_bid_tick.saturating_add(1));
+    // Post-only: improve touch, never cross resting opposite side. The tick index of the touch
+    // comes from its mantissa, so no float remainder of a price can misplace it.
+    if let Some(best_ask) = inputs.best_ask {
+        bid_tick = bid_tick.min(best_ask.mantissa().div_euclid(tick).saturating_sub(1));
+    }
+    if let Some(best_bid) = inputs.best_bid {
+        ask_tick = ask_tick.max(best_bid.mantissa().div_euclid(tick).saturating_add(1));
+    }
 
     // On collision, keep inventory-reducing quote; push other +1 tick.
     if ask_tick <= bid_tick {
@@ -221,6 +231,16 @@ fn price_at(tick_index: i64, tick: Price) -> Option<Price> {
         .map(Price::from_mantissa)
 }
 
+/// How a quote rounds a depth onto the grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Snap {
+    /// The bid floors and the ask ceils, so neither side comes nearer the market than its depth.
+    Outward,
+    /// Each side takes its nearest tick, which can be up to half a tick nearer the market than its
+    /// depth (wiki-gueant.txt:374).
+    Nearest,
+}
+
 /// Quote inputs: fair value, signed inventory, grid (zero origin assumed).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct QuoteInputs {
@@ -228,10 +248,16 @@ pub struct QuoteInputs {
     pub fair: f64,
     /// Signed inventory (same units as params' order_size; q>0 is long).
     pub inventory: f64,
-    pub best_bid: Price,
-    pub best_ask: Price,
+    /// The touch that a post-only quote stays behind: the bid below the best ask, and the ask
+    /// above the best bid. `None` sets no such limit on that side.
+    pub best_bid: Option<Price>,
+    pub best_ask: Option<Price>,
     /// Grid step (exact mantissa); tick index = price_mantissa / tick.
     pub tick: Price,
+    pub snap: Snap,
+    /// The nearest that each side may come to fair, in ticks: the bid at most fair minus it,
+    /// floored, and the ask at least fair plus it, ceiled. `None` sets no band.
+    pub min_distance_ticks: Option<f64>,
 }
 
 /// Produced quote pair (executable prices + tick indices + depths as diagnostics).

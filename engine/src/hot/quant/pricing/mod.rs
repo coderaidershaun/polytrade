@@ -3,5 +3,5 @@
 mod gueant;
 
 pub use gueant::{
-    Bps, GueantParams, Objective, QuoteCoefficients, QuoteInputs, Quotes, SideRates, Ticks,
+    Bps, GueantParams, Objective, QuoteCoefficients, QuoteInputs, Quotes, SideRates, Snap, Ticks,
 };

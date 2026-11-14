@@ -2,7 +2,7 @@
 //! which stops a computed depth from becoming an order that crosses the book.
 
 use engine::hot::quant::pricing::{
-    GueantParams, Objective, QuoteCoefficients, QuoteInputs, SideRates, Ticks,
+    GueantParams, Objective, QuoteCoefficients, QuoteInputs, SideRates, Snap, Ticks,
 };
 use engine::msg::ids::Price;
 
@@ -35,9 +35,11 @@ fn inputs(fair_ticks: f64, inventory: f64, best_bid_tick: i64, best_ask_tick: i6
     QuoteInputs {
         fair: fair_ticks * TICK.to_f64(),
         inventory,
-        best_bid: Price::from_mantissa(best_bid_tick * TICK.mantissa()),
-        best_ask: Price::from_mantissa(best_ask_tick * TICK.mantissa()),
+        best_bid: Some(Price::from_mantissa(best_bid_tick * TICK.mantissa())),
+        best_ask: Some(Price::from_mantissa(best_ask_tick * TICK.mantissa())),
         tick: TICK,
+        snap: Snap::Outward,
+        min_distance_ticks: None,
     }
 }
 
@@ -113,9 +115,11 @@ fn rounding_is_outward_and_never_crosses_the_book() {
     let at_fair = |inventory: f64| QuoteInputs {
         fair: 10_050.0 * quarter.to_f64(),
         inventory,
-        best_bid: Price::from_mantissa(10_049 * quarter.mantissa()),
-        best_ask: Price::from_mantissa(10_051 * quarter.mantissa()),
+        best_bid: Some(Price::from_mantissa(10_049 * quarter.mantissa())),
+        best_ask: Some(Price::from_mantissa(10_051 * quarter.mantissa())),
         tick: quarter,
+        snap: Snap::Outward,
+        min_distance_ticks: None,
     };
     let long = tiny.quote(at_fair(1.0)).expect("finite inputs");
     assert_eq!(
@@ -252,6 +256,13 @@ fn quote_refuses_values_that_are_not_finite_and_ticks_that_are_not_positive() {
                 ..base
             },
         ),
+        (
+            "band NaN",
+            QuoteInputs {
+                min_distance_ticks: Some(f64::NAN),
+                ..base
+            },
+        ),
     ] {
         assert_eq!(c.quote(refused), None, "{case}: quoted");
     }
@@ -271,4 +282,51 @@ fn quote_refuses_values_that_are_not_finite_and_ticks_that_are_not_positive() {
         "an ask past the range of a mantissa was quoted"
     );
     assert_eq!(high.bid, Some(Price::from_mantissa(2 * TICK.mantissa())));
+}
+
+/// The nearest snap and the band of a minimum distance, by hand on the worked example: rounding may
+/// bring a side up to half a tick nearer the market, the band never lets a side nearer fair than
+/// its distance, and a collision still keeps one tick between the sides.
+#[test]
+fn nearest_rounding_keeps_the_band_and_a_tick_between_sides() {
+    let nearest = |fair_ticks: f64, inventory: f64, min_distance_ticks: Option<f64>| QuoteInputs {
+        snap: Snap::Nearest,
+        min_distance_ticks,
+        best_bid: None,
+        best_ask: None,
+        ..inputs(fair_ticks, inventory, 0, 0)
+    };
+    let c = worked_example();
+
+    // Depth 2.2 on each side of 10,050: round(10,047.8) = 10,048 and round(10,052.2) = 10,052.
+    let open = c
+        .quote(nearest(10_050.0, 0.0, None))
+        .expect("finite inputs");
+    assert_eq!((open.bid_tick, open.ask_tick), (10_048, 10_052));
+
+    // A band of 3 ticks binds: floor(10,050 − 3) = 10,047 and ceil(10,050 + 3) = 10,053. A band of 1
+    // tick sits inside the depth and changes nothing.
+    let banded = c
+        .quote(nearest(10_050.0, 0.0, Some(3.0)))
+        .expect("finite inputs");
+    assert_eq!((banded.bid_tick, banded.ask_tick), (10_047, 10_053));
+    let inside = c
+        .quote(nearest(10_050.0, 0.0, Some(1.0)))
+        .expect("finite inputs");
+    assert_eq!((inside.bid_tick, inside.ask_tick), (10_048, 10_052));
+
+    // A half-spread below half a tick rounds both sides onto fair, so they collide: a long book
+    // keeps its ask and a short book keeps its bid, each with the other side one tick out.
+    let narrow = GueantParams::new(1e-6, ORDER_SIZE, Objective::InventoryPenalty)
+        .coefficients(in_ticks(1.0, 10.0, 1.0))
+        .expect("valid estimates");
+    assert!(narrow.bid_depth(1.0) < 0.5 && narrow.ask_depth(-1.0) < 0.5);
+    let long = narrow
+        .quote(nearest(10_050.0, 1.0, None))
+        .expect("finite inputs");
+    assert_eq!((long.bid_tick, long.ask_tick), (10_049, 10_050));
+    let short = narrow
+        .quote(nearest(10_050.0, -1.0, None))
+        .expect("finite inputs");
+    assert_eq!((short.bid_tick, short.ask_tick), (10_050, 10_051));
 }
