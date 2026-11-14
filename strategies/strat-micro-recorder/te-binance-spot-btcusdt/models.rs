@@ -9,7 +9,7 @@ use engine::hot::quant::pricing::GueantParams;
 use engine::hot::quant::toxicity::{
     ForwardHorizon, MarkoutSpec, MarkoutTracker, ReverseHorizon, SideMarkouts,
 };
-use engine::hot::quant::volatility::{Egarch, EgarchEstimate, Returns};
+use engine::hot::quant::volatility::{Egarch, EgarchEstimate, Returns, realised_vol_per_sec};
 use engine::hot::series::{FastQueue, MedianScratch};
 use engine::hot::strategy::{InstrumentRow, StrategyCtx};
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
@@ -138,7 +138,7 @@ impl BinanceVol {
         if !self.is_dirty {
             return;
         }
-        self.estimate = self.closes.egarch(&mut self.egarch);
+        self.estimate = self.egarch.fit(self.closes.as_slice());
         self.is_dirty = false;
         if let Some(estimate) = self.estimate
             && !estimate.converged
@@ -284,7 +284,7 @@ pub(crate) fn gated_realised_vol(
     if closes.len() <= MIN_VOL_RETURNS {
         return None;
     }
-    closes.realised_volatility(returns, interval)
+    realised_vol_per_sec(closes.iter(), returns, interval)
 }
 
 /// σ_log per second: the EGARCH conditional forecast raised by the fast realised window, whichever
