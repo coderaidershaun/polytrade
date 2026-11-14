@@ -92,7 +92,8 @@ fn unqueued_quote_fills_at_or_through_once_per_placement() {
     assert_eq!(markouts.ask().fill_count(), 1);
     assert_eq!(markouts.ask().armed_quote(), None);
 
-    // A print through the ask from above must fill too: prints at the level alone cannot pin >=.
+    // A print through the ask from above must fill too: prints exactly at the level could not show
+    // that a print beyond it fills.
     markouts.arm(MarkoutSide::Ask, price(101.0), Qty::from_mantissa(0));
     markouts.on_trade(&print(Side::Buy, 102.0, secs(4)), at(secs(4)));
     assert_eq!(markouts.ask().fill_count(), 2);
@@ -466,7 +467,7 @@ fn arm_refuses_a_price_that_is_not_positive() {
     markouts.on_trade(&print(Side::Buy, 101.0, secs(1)), at(secs(1)));
     assert_eq!(markouts.ask().fill_count(), 0);
 
-    // A positive price arms as before.
+    // A positive price still arms the side after the refusals.
     markouts.arm(MarkoutSide::Ask, price(101.0), Qty::from_mantissa(0));
     assert_eq!(markouts.ask().armed_quote(), Some(price(101.0)));
 }

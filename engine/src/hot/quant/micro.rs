@@ -143,9 +143,10 @@ impl OrderbookResilience {
         Self::default()
     }
 
-    /// The rate R = −ln((M₁ − Π₀)/(M₀ − Π₀)) / Δt in 1/s, or `None` while it warms up or where a
-    /// gate skips the interval. It is never NaN. It is negative where the deviation grew, and −0.0
-    /// where the mid did not move, such as on a spin with no change of the book.
+    /// The rate R = −ln((M₁ − Π₀)/(M₀ − Π₀)) / Δt in 1/s, with M the mid and Π the equilibrium, 0
+    /// the anchor and 1 this sample, and Δt the time between them. `None` while it warms up or
+    /// where a gate skips the interval. It is never NaN. It is negative where the deviation grew,
+    /// and −0.0 where the mid did not move, such as on a spin with no change of the book.
     pub fn on_sample(&mut self, sample: ResilienceSample) -> Option<f64> {
         // A sample with a value that is not finite is skipped and does not become the anchor, or
         // the next good sample would be lost too.

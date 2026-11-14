@@ -166,8 +166,8 @@ impl BinanceVol {
         self.hawkes_ask.reset();
     }
 
-    /// The markout mid entry point. Spins and chunks arrive on different queues, so a stamp can come
-    /// late. The tracker raises it to the last fed stamp, which keeps its series in order.
+    /// Feeds one mid to the markouts. The markout tracker raises a stamp below the last fed stamp
+    /// to that stamp, so its series of mids stays in time order.
     pub(crate) fn feed_markout_mid(&mut self, ts_us: LocalTs, mid: Option<f64>) {
         let Some(mid) = mid else { return };
         self.markouts.on_mid(ts_us, mid);
@@ -382,11 +382,11 @@ impl GueantScale {
         } = self.features.gueant(side);
         ctx.emit(half_spread, instrument, coefficients.half_spread());
         ctx.emit(skew, instrument, coefficients.skew_per_inventory());
-        // Nearest tick, then out to the far edge of the minimum-distance band: the strategy never
-        // quotes nearer fair than MIN_QUOTE_DISTANCE_BPS, which also stops an inventory-skewed δ(q)
-        // from crossing its own mid. The engine snaps a bid down and an ask up onto the same grid
-        // this already sits on, so the snap is idempotent and the price recorded is the price
-        // declared. The recorder sets no touch to stay behind, as it never had one.
+        // Each side snaps to its nearest tick, then out to the far edge of the band of minimum
+        // distance, so the strategy never quotes nearer fair than MIN_QUOTE_DISTANCE_BPS, and an
+        // inventory skew cannot push a side across its own mid. The engine snaps a bid down and an
+        // ask up onto the grid that the price already sits on, so the price recorded is the price
+        // declared.
         let quotes = coefficients.quote_in_ticks(
             self.ticks_per_bp,
             QuoteInputs {

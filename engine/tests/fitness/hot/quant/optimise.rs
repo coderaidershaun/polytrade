@@ -14,9 +14,9 @@ fn nelder_mead(start: [f64; 2], bounds: [(f64, f64); 2]) -> NelderMead<2> {
     }
 }
 
-/// Found bug: each fitter warm-starts the simplex from its previous optimum, and an optimum on a
-/// bound built a simplex with no extent in that direction. The parameter then stayed at the bound,
-/// each later refit reported the bound as the fit, and the convergence check still passed.
+/// Each fitter warm-starts the simplex from its previous optimum. An optimum on a bound must still
+/// give the simplex extent in that direction, or the parameter stays at the bound, each later refit
+/// reports the bound as the fit, and the convergence check still passes.
 #[test]
 fn start_on_a_bound_still_moves_that_parameter() {
     let result = nelder_mead([10.0, 3.0], [(-10.0, 10.0), (-10.0, 10.0)]).minimize::<3>(bowl);

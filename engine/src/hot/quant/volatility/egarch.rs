@@ -1,6 +1,5 @@
 //! The long-horizon volatility of the quotes: an EGARCH(1,1) fit by maximum likelihood to the log
-//! returns of closed candles, which forecasts the next close and starts each refit from its last
-//! optimum.
+//! returns of closed candles. It forecasts the next close and refits from its last optimum.
 
 use crate::hot::quant::optimise::NelderMead;
 use crate::hot::quant::options::exp;

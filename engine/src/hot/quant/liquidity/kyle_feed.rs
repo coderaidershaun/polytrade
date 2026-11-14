@@ -50,8 +50,9 @@ impl KyleFeed {
     }
 
     /// Folds one committed mid in. It closes the waiting run, and returns an estimate only where
-    /// that completed an observation. Δm spans [the commit of the previous run, this one], and the
-    /// first run after a start or a gap only anchors. A missing mid drops the run and the anchor.
+    /// that completed an observation. The move of the mid runs from the commit that closed the
+    /// previous run to this one, and the first run after a start or a gap only anchors. A missing
+    /// mid drops the run and the anchor.
     pub fn on_mid(&mut self, mid: Option<f64>) -> Option<KyleEstimate> {
         let Some(mid) = mid else {
             self.reset_continuity();

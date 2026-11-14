@@ -199,8 +199,9 @@ fn quote_at_depths(bid_depth: f64, ask_depth: f64, inputs: QuoteInputs) -> Optio
         ask_tick = ask_tick.max((fair_ticks + distance).ceil() as i64);
     }
 
-    // Post-only: improve touch, never cross resting opposite side. The tick index of the touch
-    // comes from its mantissa, so no float remainder of a price can misplace it.
+    // Post-only: a side may improve the touch, but never reaches the best price of the other
+    // side. The tick index of the touch comes from its mantissa, so no float remainder of a price
+    // can misplace it.
     if let Some(best_ask) = inputs.best_ask {
         bid_tick = bid_tick.min(best_ask.mantissa().div_euclid(tick).saturating_sub(1));
     }
