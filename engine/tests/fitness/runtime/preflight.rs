@@ -12,6 +12,8 @@ use engine::runtime::config::{
     Config, ConfigError, ExecutionMode, NoParams, RunIdentity, SourceSpec,
 };
 use engine::runtime::exposure::ExposureError;
+#[cfg(feature = "otlp")]
+use engine::runtime::otlp::OtlpError;
 use engine::runtime::registry::{BinanceLimits, Registry};
 use engine::runtime::{ExecutionLease, Preflight, StartError, exposure};
 use engine::venues::VenueError;
@@ -205,6 +207,84 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         matches!(core, StartError::CoreId { core_id: 4096, .. }),
         "{core}"
     );
+
+    // A collector that is not on this host's loopback.
+    #[cfg(feature = "otlp")]
+    {
+        let remote = refusal(
+            &format!(
+                "{}otlp:\n  collector: 192.0.2.10:4318\n",
+                sim_document(&state, "")
+            ),
+            stamped,
+            &state,
+        );
+        let collector = "192.0.2.10:4318".parse().expect("a socket address");
+        assert!(
+            matches!(
+                remote,
+                StartError::Otlp(OtlpError::CollectorNotLoopback { collector: found })
+                    if found == collector
+            ),
+            "{remote}"
+        );
+        let message = remote.to_string();
+        assert!(
+            message.contains("otlp.collector") && message.contains("127.0.0.0/8"),
+            "{message}"
+        );
+    }
+
+    // No room inside the engine's drain deadline for the exporter to stop.
+    #[cfg(feature = "otlp")]
+    {
+        let tight = format!(
+            "{}otlp:\n  collector: 127.0.0.1:4318\n",
+            sim_document(&state, "").replace("logging:\n", "logging:\n  drain_deadline_ms: 4000\n")
+        );
+        let deadline = refusal(&tight, stamped, &state);
+        assert!(
+            matches!(
+                deadline,
+                StartError::Otlp(OtlpError::DrainDeadline {
+                    log_deadline_ms: 4000,
+                    export_stop_ms: 1000,
+                    engine_deadline_ms: 5000,
+                    sweep_ms: 2500,
+                })
+            ),
+            "{deadline}"
+        );
+    }
+
+    // The default deadlines leave the exporter no room to stop after the exit sweep.
+    #[cfg(feature = "otlp")]
+    {
+        let defaults = format!(
+            "{}otlp:\n  collector: 127.0.0.1:4318\n",
+            sim_document(&state, "")
+        );
+        let deadline = refusal(&defaults, stamped, &state);
+        assert!(
+            matches!(
+                deadline,
+                StartError::Otlp(OtlpError::DrainDeadline {
+                    log_deadline_ms: 2000,
+                    export_stop_ms: 1000,
+                    engine_deadline_ms: 5000,
+                    sweep_ms: 2500,
+                })
+            ),
+            "{deadline}"
+        );
+        let message = deadline.to_string();
+        assert!(
+            message.contains("2500")
+                && message.contains("below 1500")
+                && message.contains("engine.drain_deadline_ms"),
+            "{message}"
+        );
+    }
 
     // E5: the scale read refuses.
     let scale = refusal(&sim_document(&state, ""), Scales::Refused, &state);
@@ -462,6 +542,21 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
             },
         };
         assert!(is_expected(&error), "{case}: wrong refusal {error}");
+    }
+
+    // A build without the export refuses a config that asks for one, so the run never goes quiet.
+    #[cfg(not(feature = "otlp"))]
+    {
+        let asked = format!(
+            "{}otlp:\n  collector: 127.0.0.1:4318\n",
+            sim_document(&state, "")
+        );
+        let refused = Config::<NoParams>::from_yaml(&asked).err();
+        assert!(
+            matches!(&refused, Some(ConfigError::Parse { detail }) if detail.contains("otlp")),
+            "a build without otlp refuses the block, got {}",
+            refused.map_or_else(|| "Ok".to_owned(), |error| error.to_string())
+        );
     }
 
     // A config refusal: an engine that spins with no hot core. Only Linux refuses it.

@@ -27,6 +27,8 @@ pub use render::{LogValue, Spec};
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) use console::register_hot_lane;
+#[cfg(feature = "otlp")]
+pub(crate) use lane::{CopiedLine, copy_lines};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use lane::{hot_ring, register_external_ring, register_hot_lane, tag_task};
 #[cfg(not(target_arch = "wasm32"))]

@@ -4,6 +4,8 @@
 pub mod config;
 mod durable_file;
 pub mod exposure;
+#[cfg(all(feature = "otlp", not(target_arch = "wasm32")))]
+pub mod otlp;
 pub(crate) mod pin;
 pub mod registry;
 pub mod secrets;

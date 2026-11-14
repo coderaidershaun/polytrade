@@ -39,6 +39,8 @@ impl Engine {
             exec_tap_gate,
             senders,
             metrics,
+            #[cfg(feature = "otlp")]
+            otlp,
             fatal,
             drain,
             lifecycle,
@@ -71,6 +73,10 @@ impl Engine {
         // Each edge and the link actor that ran on the pinned senders' thread has stopped above.
         drop(senders);
         metrics.stop();
+        #[cfg(feature = "otlp")]
+        if let Some(exporter) = otlp {
+            info!("{}", exporter.stop());
+        }
         // In the order the drain ran them, which is the order they name the exit: orders left on a
         // venue outlive the process, and position is what the next run inherits.
         let failures = [

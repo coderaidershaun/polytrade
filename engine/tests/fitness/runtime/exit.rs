@@ -12,6 +12,8 @@ use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, QueueId, Side, S
 use engine::msg::time::LocalTs;
 use engine::runtime::config::{Config, ConfigError, NoParams, RunIdentity};
 use engine::runtime::exposure::ExposureError;
+#[cfg(feature = "otlp")]
+use engine::runtime::otlp::OtlpError;
 use engine::runtime::shutdown::{AnswerPart, FatalReason, FatalSignal};
 use engine::runtime::{
     DrainDeadline, DrainFailure, DrainOutcome, DrainWatchdog, ExecutionLease, Exit, Preflight,
@@ -108,7 +110,7 @@ fn variant_index(reason: FatalReason) -> usize {
 fn each_start_refusal() -> Vec<StartError> {
     let path = || std::path::PathBuf::from("state/te.nonce");
     let io = || std::io::Error::other("refused");
-    vec![
+    let refusals = vec![
         StartError::Config(ConfigError::SpinWithoutHotCore),
         StartError::Exposure(ExposureError::Malformed {
             path: path(),
@@ -184,7 +186,15 @@ fn each_start_refusal() -> Vec<StartError> {
             venue: "polymarket",
             other: "binance",
         },
-    ]
+    ];
+    #[cfg(feature = "otlp")]
+    let refusals = refusals
+        .into_iter()
+        .chain([StartError::Otlp(OtlpError::CollectorNotLoopback {
+            collector: ([192, 0, 2, 10], 4318).into(),
+        })])
+        .collect();
+    refusals
 }
 
 /// The match has no catch-all arm, so a new variant does not compile here until the list above
@@ -214,6 +224,8 @@ fn start_variant_index(error: &StartError) -> usize {
         StartError::ExecutionHttpTimeout { .. } => 20,
         StartError::ExecutionOnSeveralSources { .. } => 21,
         StartError::ExecutionWithSeveralVenues { .. } => 22,
+        #[cfg(feature = "otlp")]
+        StartError::Otlp(_) => 23,
     }
 }
 
@@ -574,7 +586,7 @@ fn fatal_is_never_a_graceful_exit() {
     let start_indexes: Vec<usize> = refusals.iter().map(start_variant_index).collect();
     assert_eq!(
         start_indexes,
-        (0..23).collect::<Vec<_>>(),
+        (0..23 + usize::from(cfg!(feature = "otlp"))).collect::<Vec<_>>(),
         "one refusal of each variant, once"
     );
     for refusal in &refusals {

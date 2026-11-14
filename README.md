@@ -85,7 +85,7 @@ Step 2 of the gate also reads the clock lint of `clippy.toml`: a call that reads
 
 ## Config keys
 
-Each trading engine reads its `config.yaml`. Each block refuses a key that it does not know. The keys in the table below have defaults. The blocks `latency:` and `senders:` can be left out. The code is in `engine/src/runtime/config/`.
+Each trading engine reads its `config.yaml`. Each block refuses a key that it does not know. The keys in the table below have defaults, except `otlp.collector`. The blocks `latency:`, `senders:` and `otlp:` can be left out. The code is in `engine/src/runtime/config/`.
 
 The key `sources:` has no default. It lists one source or more. Each item holds `feed:`, the venue and its instruments, and its own optional `execution:` block. No `execution:` block stands at the top of the config. The sources of one venue sit together, at most one of them holds an execution block, and the sources that send orders use one mode. Today only one source can send orders: preflight refuses a second one. An armed run also reads only the venue that sends orders: preflight refuses a row of another venue (`StartError::ExecutionWithSeveralVenues`), until stage 3 tasks T6 and T12 of the master plan.
 
@@ -116,6 +116,7 @@ The key `sources:` has no default. It lists one source or more. Each item holds 
 | `execution.stream_silence_ms` | `30000` | The span of message time with no event of the order stream while an order works, from 1 to 86,400,000 ms. Then one read of open orders goes out. |
 | `execution.max_stream_resets` | `2` | Reads that differ from the order table, each followed by a new subscription of the order stream, with no stream event between. The next one halts quoting. 1 or more. |
 | `exposure.max_failed_writes` | `3` | Failed writes of the exposure file in a row before the writer reports and quoting halts. 1 or more. |
+| `otlp.collector` | none | A loopback address (`127.0.0.0/8` or `[::1]`) and the port of an OTLP/HTTP collector on this host, for example `127.0.0.1:4318`. IPv6 needs quotes in YAML: `"[::1]:4318"`. Each second the exporter sends the log lines and the latency rows that wait, one time each, with no retry and no redirect. Only a build with the feature `otlp` reads the block (`cargo build --features engine/otlp …`), and a build without it refuses the block. With the block, `logging.drain_deadline_ms` + 1,000 must be below the half of `engine.drain_deadline_ms` that the exit sweep leaves, or the start is refused. The default deadlines (5,000 and 2,000) do not fit: set a longer `engine.drain_deadline_ms` (6,002 or more) or a shorter `logging.drain_deadline_ms` (below 1,500). |
 
 The environment variable `POLYSIM_METRICS_SUMMARY_SECS` is gone: `latency.interval_secs` sets the interval.
 

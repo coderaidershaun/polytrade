@@ -116,6 +116,26 @@ The start:
 - [ ] The pin call is a parameter (`PinCall`). `run_trading_engine` passes `pin_to_core`, and a
   test passes a stand-in.
 
+### Amended 2026-11-13: the OTLP check and the exporter
+
+WHY: the export adds one start check and one thread, and neither may change the order of the pins.
+The stop of the exporter must end before the watchdog of the drain, after the exit sweep.
+
+- [ ] Preflight checks the `otlp:` block (feature `otlp`) after the core id and before the scale
+  read: a collector on a loopback address (`127.0.0.0/8` or `[::1]`), and room for the stop of the
+  exporter. It starts nothing, and it reads no network.
+- [ ] The watchdog of the drain starts with `engine.drain_deadline_ms`, and the exit sweep can take
+  its share first: `engine.drain_deadline_ms / SWEEP_SHARE_OF_DRAIN`, rounded up, half today. So
+  preflight refuses an `otlp:` block unless `logging.drain_deadline_ms` + 1,000 is below the rest.
+  The 1,000 ms are the stop of the exporter. The default deadlines (5,000 and 2,000) do not fit:
+  a config that exports sets a longer `engine.drain_deadline_ms` or a shorter
+  `logging.drain_deadline_ms`.
+- [ ] The exporter thread does not pin, so it is not in the pin order. Its lanes open right after
+  the log starts. The thread starts last, after the link, when no refusal can follow. So no refused
+  start has an exporter to stop.
+- [ ] IF the OS refuses the exporter thread, THEN the run goes on with no export and one ERROR line.
+  The start never panics for the export, so the drain and the exit sweep always run.
+
 ## 3. Memory
 
 - [ ] Fixed capacity wherever practical: preallocated at startup, contiguous, predictable layout,
@@ -233,6 +253,18 @@ earlier time than the one before.
 - [ ] `wall_clock_now()` reads the wall clock of this process, for a stamp that never becomes
   engine state: the link boot stamp, and the dates of logs and files. It returns a `LocalTs`, and
   it can step.
+
+### Amended 2026-11-13: OTLP wire timestamps
+
+WHY: the OTLP wire is an outside contract that a collector reads, and it counts time in nanoseconds.
+
+- [ ] A timestamp on the OTLP wire is a decimal string of nanoseconds since the Unix epoch, for
+  example `timeUnixNano: "1800000060000000000"`.
+- [ ] The writer converts each `LocalTs` one time with `to_peer()`, then multiplies the µs of that
+  `VenueTs` by 1,000 at the wire edge.
+- [ ] Internal fields stay a `LocalTs` or a `VenueTs` with the `_ts_us` suffix. µs resolution stays:
+  the last three digits of each OTLP timestamp are 0.
+- [ ] Scope: the OTLP wire ONLY. Every other API, record and file keeps the rules above.
 
 ## 6. Errors & Failure
 
@@ -385,6 +417,11 @@ Failure classes:
     - The drain: `Exit::decide` (`engine/src/runtime/assembly/exit.rs`).
     - The start code: `Exit::refused(class)`, for each refusal
       (`engine/src/runtime/assembly/run.rs`).
+  - Amended 2026-11-14, as built: with feature `otlp`, a fifth root reads `failure_class()`: the
+    root of the OTLP exporter thread. `Poster::reject` (`engine/src/runtime/otlp/send.rs`) reads
+    the class of each `SendFailure`. Each failure is REJECT, so the exporter drops its records and
+    counts them. WHY: the export adds one thread, and the root of that thread is the one supervisor
+    of its sends.
   - Amended 2026-11-13, as built: three roots have no reader yet, each with its receiving part.
     - The root of the tape writer: part 5 of the plan.
     - The market-data actors and the simulator actor: part 4. Each of their 4 sites trips the fatal
@@ -416,6 +453,8 @@ Lanes:
 | Command lane | commands stay in the bank, in order, with their bank stamps (2026-07-27) | RETRY |
 | Command bank | quoting halt `HaltReason::CommandBankOverflow` | HALT (quoting) |
 | Persistence seal | try at the request and at each spin, up to `persistence.seal_try_limit` tries, then quoting halt `HaltReason::SealNotAccepted` | RETRY, then HALT (quoting) |
+| Copy lane of the OTLP export (feature `otlp`): each line that the log drain writes | drop the copy, count it (2026-11-13, the OTLP export) | REJECT |
+| Rows lane of the OTLP export (feature `otlp`): each row of the metrics thread | drop the row, count it (2026-11-13, the OTLP export) | REJECT |
 
 - [ ] Amended 2026-11-13: the writer-status input queue is an engine-fed input queue: a full ring
   is HALT (engine). It holds 4 messages, and it exists only when execution is armed. Each writer
@@ -513,6 +552,28 @@ differ, and no record says why.
 - [ ] A run with no tape has no incident table. Its counts stay in hot state, beside the hot log
   lines. IF the persistence ring is full, THEN it drops the record and counts the drop. The
   incident count stays.
+
+### Amended 2026-11-13: the OTLP export
+
+WHY: a collector is an outside service. Its faults must never reach quoting or the engine, and the
+Never line on a timeout binds each request of the export.
+
+- [ ] Two lanes feed the exporter, the copy lane and the rows lane. Each one has the class of a
+  state lane (table of the 2026-11-13 section on failure classes), named beside its type.
+- [ ] A send of the export is one HTTP request. IF it fails by any cause (a status that is not 2xx,
+  a redirect included, a collector that the exporter cannot reach, no answer within 500 ms), THEN
+  the exporter drops its records, counts them, and never sends that request again. The next request
+  carries only newer records. Class: REJECT.
+- [ ] The HTTP client of the export keeps no idle connection, retries nothing, and follows no
+  redirect, so no library sends a request of the export again or sends it to another host.
+- [ ] A pass sends its logs request and its metrics request at the same time, so a pass ends within
+  500 ms.
+- [ ] A fault of the collector never halts quoting or the engine. The exporter holds no fatal latch,
+  no input queue and no order lane.
+- [ ] A refused `otlp:` block is a HALT (start refused), in preflight, before the lease.
+- [ ] The exporter stops in the drain after the metrics thread and before the log, in at most
+  1,000 ms: the pass in flight, then one last pass. Its failures are no `DrainFailure`, so a run
+  whose collector is down exits graceful.
 
 ## 7. Logging
 
@@ -689,6 +750,25 @@ Drain:
   about 240 bytes and stamped it with a wall-clock read. The drain stopped one pass after a flag. A
   write error reached only `eprintln!`. The date of the file came from its open. A drop counter was
   a `fetch_add`.
+
+### Amended 2026-11-13: the OTLP export copies log lines
+
+WHY: an operator reads the log of a live engine in a standard collector, and the log file stays the
+record.
+
+- [ ] Only a build with feature `otlp` and a config with an `otlp:` block exports.
+- [ ] The log drain copies each line that it writes into the copy lane of the exporter: time, level,
+  tag, module, file, line and text. The drain never waits for the exporter.
+- [ ] A copy holds at most 238 bytes of text, as a text record does. The log file keeps the whole
+  line.
+- [ ] The export is a copy that can lose lines, and it counts each loss. A fact that must not be
+  lost never lives only in a log line.
+- [ ] The service name of the export is the artifact stem of the run, so the name of a sim run ends
+  in `-sim` (2026-07-29).
+- [ ] Rule intact: the bespoke log is the only polysim logging API. The exporter calls neither `log`
+  nor `tracing`.
+- [ ] The exporter logs through its own thread lane, tag `otlp`. Its lines reach the collector like
+  any other line.
 
 ## 8. Code Organisation
 
@@ -1225,6 +1305,20 @@ test, sits in a module that is a concept in its own right, or has a ruling of §
   writer seam.
 - [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
 
+### Amended 2026-11-13: the OTLP export is `pub` on merit
+
+WHY: §12 (2026-07-28) forbids `pub` for a test's sake, so each new item names its merit.
+
+- [ ] `engine::runtime::otlp` is a concept in its own right: the OTLP export of a run. Its items
+  `OtlpPlan`, `OtlpLanes`, `OtlpExporter`, `OtlpRows`, `OtlpReport` and `OtlpError` are `pub` on
+  that merit. `OtlpRows::WHEN_FULL` is `pub` by the rule of §6 that each lane type names its class.
+- [ ] `StartError::Otlp` is `pub` by the §12 ruling on the start seam (2026-11-13). `OtlpConfig` and
+  `Config::otlp` are vocabulary of `engine::runtime::config`.
+- [ ] The copy lane of the log and the sink parameter of the metrics thread stay crate-private.
+- [ ] Package `engine` has feature `otlp` beside `mcp` and `web` (2026-11-12 section on two lib
+  crates). It is native only, and `--all-features` of the gate builds it.
+- [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
+
 ## 9. Naming & API Ergonomics
 
 - [ ] rex-code-ergonomics binds.
@@ -1327,7 +1421,7 @@ style in a comment, so the two clauses could not both hold.
 | `parquet` (`arrow`, `zstd`) + `arrow-array` + `arrow-schema` | ratified 2026-07-18. See note.                     | persistence                      |
 | `proptest`                                                   | ratified (dev)                                     | fitness suite                    |
 | `tokio-tungstenite`                                          | ratified (user directive 2026-07-18). See note.    | WS streams                       |
-| `reqwest`                                                    | ratified (user directive 2026-07-18). See note.    | REST snapshots + backfills       |
+| `reqwest`                                                    | ratified (user directive 2026-07-18). See note.    | REST snapshots + backfills, OTLP export (feature otlp) |
 | `futures-util`                                               | ratified 2026-07-18. See note.                     | WS stream/sink combinators       |
 | `serde-saphyr`                                               | ratified 2026-07-18. See note.                     | configuration                    |
 | `core_affinity`                                              | ratified 2026-07-18. See note.                     | pinning                          |
@@ -1632,6 +1726,32 @@ serializer with its own escaping bugs, for a crate already in the tree.
   that `polysim-web` writes. Amended 2026-10-26: these last two replace the bridge protocol lines.
 - [ ] No new crate and no new feature: `derive` + `std` already cover it.
 - [ ] DTOs stay at the edge. A hot-path type never derives `Serialize`.
+- [ ] Amended 2026-11-13: the OTLP bodies of the export are edge DTOs too.
+
+### Amended 2026-11-13: the OTLP export adds no crate
+
+WHY: OTLP over HTTP with JSON bodies needs an HTTP client, a JSON writer and a runtime, and the
+engine links all three.
+
+- [ ] Feature `otlp` of package `engine` is `otlp = []`. It enables no crate and no feature of a
+  crate, so `cargo tree -p engine -e normal` prints the same crates with and without it.
+- [ ] `reqwest` 0.12: the exporter posts with it, http only, to a collector on loopback. Its client
+  has no proxy, keeps no idle connection, retries nothing, and follows no redirect, so each request
+  goes out at most one time, to the collector only. The body is set by hand: no `json` feature.
+- [ ] `tokio`: the exporter runs a current-thread runtime on its own thread, with `rt`, `net`,
+  `time` and `macros` of the native table. polysim adds no tokio feature.
+- [ ] `serde` + `serde_json` write the OTLP bodies. They are edge DTOs (2026-10-14 section above).
+  No hot-path type derives `Serialize`.
+- [ ] Not adopted, measured on 2026-11-13 against the lock of `ec891c2`. Each set had no HIGH or
+  CRITICAL finding of `trivy`:
+  - `opentelemetry-proto` 0.33.1 with serde: 7 new lock entries and 10 crates new to the engine
+    build, for types that the export writes in about 200 lines.
+  - `opentelemetry` + `opentelemetry_sdk` + `opentelemetry-otlp` 0.33.1 over HTTP: 9 new lock
+    entries and 20 crates new to the engine build, `reqwest` 0.13 among them. The SDK starts a batch
+    thread for logs and a reader thread for metrics. Its HTTP exporter sends a request again after
+    a timeout by default.
+  - Any gRPC set (`opentelemetry-otlp` with `grpc-tonic`): 13 new lock entries and 26 crates new to
+    the engine build, with an HTTP/2 stack (`h2`, `tonic`).
 
 ## 12. Testing
 
@@ -1749,6 +1869,19 @@ operator visits.
   charter stays architectural: the pinned thing is an exposure boundary, not socket plumbing.
 - [ ] The test drives real sockets with hand-written requests. A client library would tidy away
   the very headers under test.
+
+### Amended 2026-11-13: the OTLP export is pinned in fitness through a loopback collector
+
+WHY: what leaves the process, and the Never line on a timeout, are boundaries that a refactor can
+break with each gate green.
+
+- [ ] `engine/tests/fitness/runtime/otlp.rs` is in fitness, as a contract test. A stand-in collector
+  listens on loopback in the test process. It answers, refuses, redirects, or never answers.
+- [ ] It checks each body against the official OTLP examples of `opentelemetry-proto`, kept byte for
+  byte in `engine/fixtures/otlp/` with the license of that repository beside them. So the test does
+  not only agree with the encoder that it tests.
+- [ ] This extends the 2026-10-26 override of the 2026-07-25 text to the export. The pinned thing is
+  what leaves the process and when the exporter gives up, not socket plumbing.
 
 ### Amended 2026-11-12: lanes and real funds
 

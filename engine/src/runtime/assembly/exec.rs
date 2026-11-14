@@ -35,7 +35,11 @@ use super::exec_identity::ExecutionLease;
 
 /// The cancel sweep's share of the drain deadline, as a fraction rather than a fixed
 /// reserve: half goes to the sweep, half to the hot-thread join and the file drains.
-const SWEEP_SHARE_OF_DRAIN: u32 = 2;
+pub(crate) const SWEEP_SHARE_OF_DRAIN: u32 = 2;
+
+/// One rotation binding every five minutes, drained on every edge select pass; the depth exists so
+/// a slow bring-up cannot lose the first window.
+pub(super) const ASSIGNMENTS_CHANNEL_CAPACITY: usize = 8;
 
 pub(super) struct ExecBringUp {
     pub(super) spawn: Option<EdgeSpawn>,

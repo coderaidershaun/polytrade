@@ -8,7 +8,11 @@ use std::path::{Path, PathBuf};
 
 use super::LogConfig;
 use super::lane::BacktraceMessage;
+#[cfg(feature = "otlp")]
+use super::lane::{CopiedLine, LaneWriter};
 use super::record::Callsite;
+#[cfg(feature = "otlp")]
+use super::record::TextRecord;
 use crate::msg::time::{DurationUs, LocalTs};
 
 const FLUSH_INTERVAL: DurationUs = DurationUs::from_secs(1);
@@ -113,6 +117,8 @@ pub(super) struct Output {
     line: String,
     last_flush: Option<LocalTs>,
     counts: OutputCounts,
+    #[cfg(feature = "otlp")]
+    copies: Option<LaneWriter<CopiedLine>>,
 }
 
 impl Output {
@@ -126,15 +132,30 @@ impl Output {
             line: String::new(),
             last_flush: None,
             counts: OutputCounts::default(),
+            #[cfg(feature = "otlp")]
+            copies: None,
         }
+    }
+
+    /// From now on each line goes to `copies` too.
+    #[cfg(feature = "otlp")]
+    pub(super) fn copy_into(&mut self, copies: LaneWriter<CopiedLine>) {
+        self.copies = Some(copies);
     }
 
     pub(super) fn counts(&self) -> OutputCounts {
         self.counts
     }
 
-    /// One record's line: time, level, tag, module, file:line, text.
-    pub(super) fn write_line(&mut self, tag: &str, callsite: &Callsite, at: LocalTs, text: &str) {
+    /// One record's line: time, level, tag, module, file:line, text. With the OTLP export, a copy
+    /// goes to the copy lane, which drops it when full.
+    pub(super) fn write_line(
+        &mut self,
+        tag: &'static str,
+        callsite: &'static Callsite,
+        at: LocalTs,
+        text: &str,
+    ) {
         self.line.clear();
         let level = callsite.level();
         push_timestamp(&mut self.line, at);
@@ -153,6 +174,11 @@ impl Output {
             self.counts.written += 1;
         } else {
             self.counts.lost += 1;
+        }
+        #[cfg(feature = "otlp")]
+        if let Some(copies) = self.copies.as_mut() {
+            let record = TextRecord::formatted(callsite, at, format_args!("{text}"));
+            copies.push(CopiedLine { tag, record });
         }
     }
 

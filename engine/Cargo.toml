@@ -33,6 +33,7 @@ path = "../tools/latency-probe/main.rs"
 
 [features]
 mcp = ["dep:hyper", "dep:hyper-util", "dep:rmcp", "dep:rustix"]
+otlp = []
 web = ["dep:hyper", "dep:hyper-util", "dep:http-body-util"]
 
 [dependencies]

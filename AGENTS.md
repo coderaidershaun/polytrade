@@ -59,7 +59,7 @@ docker buildx build --platform linux/arm64 --build-arg BIN=strat-micro-recorder-
 
 ## Config keys
 
-Each block of an engine's `config.yaml` refuses a key it does not know. Each key below has a default, and the blocks `latency:` and `senders:` can be left out, so a config with none of these keys still loads. Defaults and ranges: `engine/src/runtime/config/` and `README.md`, section "Config keys".
+Each block of an engine's `config.yaml` refuses a key it does not know. Each key below has a default, except `sources:` and `otlp.collector`. The blocks `latency:`, `senders:` and `otlp:` can be left out. Thus a config with `sources:` and none of the other keys still loads. Defaults and ranges: `engine/src/runtime/config/` and `README.md`, section "Config keys".
 
 - `engine:` `idle` (`spin` or `park`), `park_us`, `housekeeping_core_id`. On Linux, `idle: spin` needs `hot_core_id`.
 - `latency:` `interval_secs`, `window_intervals`, `display_ms`, `sample_ring`, and `budget.<stage>.p99_us`, `budget.<stage>.p999_us` for `<stage>` = `venue_to_engine`, `wire_to_message`, `message_to_decision`, `decision_to_wire`. A budget only reports.
@@ -70,6 +70,7 @@ Each block of an engine's `config.yaml` refuses a key it does not know. Each key
 - `execution:` (in each source) `max_status_probes`, `stream_silence_ms`, `max_stream_resets`.
 - `exposure:` `max_failed_writes`: the failed writes in a row before the exposure writer reports and quoting halts.
 - `sources:` has no default: a list of one source or more. Each item holds `feed:` and its own optional `execution:` block, and no `execution:` block stands at the top of the config. The sources of one venue sit together, and at most one of them holds an execution block. Today only one source can send orders. An armed run also reads only the venue that sends orders: preflight refuses a row of another venue (`StartError::ExecutionWithSeveralVenues`), until stage 3 tasks T6 and T12 of the master plan.
+- `otlp:` `collector`: a loopback address (`127.0.0.0/8` or `[::1]`) and the port of an OTLP/HTTP collector, for example `127.0.0.1:4318`. Only a build with feature `otlp` reads the block, and a build without it refuses the block. With the block, `logging.drain_deadline_ms` + 1,000 must be below the half of `engine.drain_deadline_ms` that the exit sweep leaves. The default deadlines (5,000 and 2,000) do not fit: set a longer `engine.drain_deadline_ms` or a shorter `logging.drain_deadline_ms`.
 
 ## Limits
 

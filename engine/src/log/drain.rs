@@ -211,6 +211,12 @@ impl LogDrain {
             });
             absorbed = true;
         }
+        // Taken after the lane registrations, so that a copy lane opened before a lane registered
+        // is in place before the first line of that lane.
+        #[cfg(feature = "otlp")]
+        while let Ok(copies) = channels.copies.try_recv() {
+            self.output.copy_into(copies);
+        }
         absorbed
     }
 
