@@ -10,10 +10,11 @@ use crate::runtime::config::IntensitySpec;
 const PARAMS: usize = 2;
 const SIMPLEX: usize = PARAMS + 1;
 
-/// ln A and ln k search box (fence off overflow).
+/// The box that the search for ln A and ln k stays in, so that no rate in the likelihood overflows.
 const LOG_BOUNDS: [(f64, f64); PARAMS] = [(-30.0, 30.0), (-12.0, 5.0)];
 
-/// Fraction of histogram half-life before (A,k) re-solve. Tenth holds drift <7%, three NM per span.
+/// A refit waits a tenth of the half-life of the counts. By then they have decayed by less than 7%,
+/// so an earlier refit would fit nearly the same counts.
 const REFIT_HALF_LIFE_FRACTION: f64 = 0.1;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -44,7 +45,7 @@ impl SideEstimate {
     }
 }
 
-/// Bid/ask/pooled fits (None before first fit).
+/// The fit of each side and of both sides pooled. A side is `None` until its first fit.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IntensityEstimate {
     pub bid: Option<SideEstimate>,
@@ -70,7 +71,8 @@ impl Slot {
         self as usize
     }
 
-    /// Pooling fits both sides against doubled exposure (A kept on per-quote scale).
+    /// The pooled fit counts both sides against twice the exposure, so its A stays the rate of one
+    /// side.
     fn exposure_multiple(self) -> f64 {
         match self {
             Slot::Pooled => 2.0,
@@ -79,14 +81,16 @@ impl Slot {
     }
 }
 
-/// Warm-start cache (not Copy to prevent fork).
+/// The last optimum of each slot, where its next fit starts. It is not `Copy`, so that no copy can
+/// start a second line of warm starts unseen.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct IntensityFit {
     slots: [Option<SlotFit>; 3],
 }
 
 impl IntensityFit {
-    /// Fits A, k per side and pool. Below min_events returns prior fit (stale) or None.
+    /// Fits A and k for each side and for both pooled. A slot whose count at the touch is below the
+    /// floor gives its last fit, marked stale, or `None` before its first.
     pub fn fit(&mut self, counts: &IntensityCounts, now: LocalTs) -> IntensityEstimate {
         IntensityEstimate {
             bid: self.fit_slot(Slot::Bid, counts, now),
@@ -105,7 +109,7 @@ impl IntensityFit {
         let max_depth = counts.max_depth();
         let (factor, exposure_base) = counts.decay_to_now(now);
         let exposure = exposure_base * slot.exposure_multiple();
-        // Decay-adjusted reach counts per slot.
+        // The decayed count of the prints of this slot that reached `depth` or went beyond it.
         let survival = move |depth: usize| -> f64 {
             let raw = match slot {
                 Slot::Bid => counts.bid_reach[depth],
@@ -149,12 +153,11 @@ impl IntensityFit {
     }
 }
 
-/// An [`IntensityFit`] paced by the histogram it reads: every spin gets the fit in force, the solve
-/// itself only once the cadence has elapsed.
+/// An [`IntensityFit`] that refits only once its interval has passed. Each read in between gets the
+/// fit in force.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PacedIntensity {
     fit: IntensityFit,
-    /// (A,k) fit in force, read every spin. Re-solved on refit_interval.
     estimate: Option<IntensityEstimate>,
     last_fit_ts_us: Option<LocalTs>,
     /// `None` never fits: no reach histogram is configured, so no counts reach it either.
@@ -198,13 +201,15 @@ impl PacedIntensity {
         self.estimate
     }
 
-    /// Market data back to post-new state. The cadence is config-derived and stays.
+    /// Forgets the fit and its time, as after `new`. The interval comes from config and stays.
     pub fn reset(&mut self) {
         *self = Self::new(self.refit_interval);
     }
 }
 
-/// Poisson NLL: mu_j = T*A*(e^(-k j) - e^(-k(j+1))) over exact interior bins, censored tail at mu = T*A*e^(-k(max-1)).
+/// The negative Poisson log likelihood of the counts. Each bucket j below the last expects
+/// T·A·(e^(−k·j) − e^(−k·(j+1))) prints, and the last bucket, which holds each print that reached
+/// it or went beyond it, expects T·A·e^(−k·(max−1)).
 fn poisson_nll(
     a: f64,
     k: f64,

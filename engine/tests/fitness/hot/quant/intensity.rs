@@ -116,8 +116,9 @@ fn exposure_from_zero(half_life_secs: f64, secs: f64) -> f64 {
     (1.0 - decay_factor(half_life_secs, secs)) / (std::f64::consts::LN_2 / half_life_secs)
 }
 
-/// The optimum of the likelihood of the fit, in closed form. Each print adds one to each bucket from
-/// the touch to the bucket that it reached, and the last bucket also holds each print beyond it.
+/// The optimum of the likelihood of the fit, in closed form. Each print adds one to each bucket
+/// from the touch to the bucket that it reached, and the last bucket also holds each print beyond
+/// it.
 /// With T the exposure, N the decayed count at the touch, S the sum of the counts behind the touch,
 /// and n the count in the last bucket, the negative log likelihood of the fit is
 /// T·A − N·ln(T·A) + S·k − (N − n)·ln(1 − e^(−k)), so its minimum is at A = N / T and
@@ -148,8 +149,8 @@ fn closed_form(reached: &[(usize, f64)], max_depth: usize, exposure: f64) -> Clo
 }
 
 /// One print more or less in any bucket of the tapes below moves A or k by more than 5%, and the
-/// search stops once its simplex spans less than 1e-8 in each log parameter, so this tolerance tells
-/// a wrong count from the stop of the search.
+/// search stops once its simplex spans less than 1e-8 in each log parameter, so this tolerance
+/// tells a wrong count from the stop of the search.
 const FIT_TOLERANCE: f64 = 1e-4;
 
 fn assert_fits(case: &str, estimate: Option<SideEstimate>, expected: &ClosedForm) {

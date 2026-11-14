@@ -110,7 +110,8 @@ impl IntensityCounts {
         self.start_group(print, top);
     }
 
-    /// Wipes histograms/exposure/open sweep (lifetime counters survive).
+    /// Empties the counts, the exposure, and the open sweep. The counts of prints inside the spread
+    /// and of prints with no book cover the life of the counts, so they stay.
     pub fn clear(&mut self) {
         self.bid_reach.iter_mut().for_each(|value| *value = 0.0);
         self.ask_reach.iter_mut().for_each(|value| *value = 0.0);
@@ -119,12 +120,14 @@ impl IntensityCounts {
         self.open_group = None;
     }
 
-    /// Stale-top race count (lifetime).
+    /// The prints that landed inside the spread, over the life of the counts: the top of book that
+    /// anchored each one was already stale.
     pub fn inside_spread_count(&self) -> u64 {
         self.inside_spread
     }
 
-    /// Unanchored trade count (lifetime).
+    /// The prints that found no top of book on their side to measure from, over the life of the
+    /// counts.
     pub fn without_book_count(&self) -> u64 {
         self.without_book
     }
@@ -176,7 +179,8 @@ impl IntensityCounts {
         });
     }
 
-    /// Depth bucket of a print against its anchor; a print inside the spread is counted and has none.
+    /// The depth bucket of a print behind its anchor, where the last bucket also takes each print
+    /// beyond it. A print inside the spread is counted and has no bucket.
     fn bucket_for(&mut self, side: Side, anchor: Price, price: Price) -> Option<usize> {
         let depth = tick_depth(side, anchor, price, self.tick);
         if depth < 0 {
@@ -186,8 +190,8 @@ impl IntensityCounts {
         Some((depth as usize).min(self.max_depth() - 1))
     }
 
-    /// Decays histograms by `e^(-lambda*dt)` and advances the exposure integral to `now`; a trade at
-    /// or before `last_decay_ts` doesn't advance.
+    /// Decays the counts by e^(−λ·dt) and moves the exposure on to `now`. A print at or before the
+    /// last decay changes nothing.
     fn decay_to(&mut self, now: LocalTs) {
         let Some(last) = self.last_decay_ts else {
             self.last_decay_ts = Some(now);
@@ -206,7 +210,7 @@ impl IntensityCounts {
         self.last_decay_ts = Some(now);
     }
 
-    /// Read-only: `(decay_factor, exposure_secs)` as of `now`.
+    /// The decay factor and the exposure in seconds at `now`, with no change to the counts.
     pub(super) fn decay_to_now(&self, now: LocalTs) -> (f64, f64) {
         let dt = match self.last_decay_ts {
             Some(last) => now.diff(last).to_secs().max(0.0),
