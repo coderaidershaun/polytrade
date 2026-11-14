@@ -381,3 +381,41 @@ fn rearm_keeps_queue_only_while_armed_at_same_price() {
     );
     assert_eq!(markouts.bid().fill_count(), 2);
 }
+
+#[test]
+fn arm_refuses_a_price_that_is_not_positive() {
+    // A price at or below zero is no level, and the forward markout divides by the armed price.
+    let mut markouts = tracker(secs(1));
+    markouts.on_mid(at(0), 100.0);
+    markouts.arm(
+        MarkoutSide::Bid,
+        Price::from_mantissa(0),
+        Qty::from_mantissa(0),
+    );
+    markouts.arm(
+        MarkoutSide::Ask,
+        Price::from_mantissa(-1),
+        Qty::from_mantissa(0),
+    );
+    assert_eq!(markouts.bid().armed_quote(), None);
+    assert_eq!(markouts.ask().armed_quote(), None);
+    // A buyer at any price is through an ask at -1, so an armed ask would fill here.
+    markouts.on_trade(&print(Side::Buy, 100.0, 0), at(0));
+    assert_eq!(markouts.ask().fill_count(), 0);
+
+    // The refusal also withdraws the quote that the side held, because that level is no longer
+    // shown, and a print must not fill it.
+    markouts.arm(MarkoutSide::Ask, price(101.0), Qty::from_mantissa(0));
+    markouts.arm(
+        MarkoutSide::Ask,
+        Price::from_mantissa(0),
+        Qty::from_mantissa(0),
+    );
+    assert_eq!(markouts.ask().armed_quote(), None);
+    markouts.on_trade(&print(Side::Buy, 101.0, secs(1)), at(secs(1)));
+    assert_eq!(markouts.ask().fill_count(), 0);
+
+    // A positive price arms as before.
+    markouts.arm(MarkoutSide::Ask, price(101.0), Qty::from_mantissa(0));
+    assert_eq!(markouts.ask().armed_quote(), Some(price(101.0)));
+}

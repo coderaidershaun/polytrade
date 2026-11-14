@@ -60,13 +60,15 @@ impl MarkoutTracker {
 
     /// Arms one side's quote, which fills once nine tenths of the queue shown at its level has
     /// traded. Re-arming at the same price keeps the place in the queue already earned.
+    ///
+    /// A price at or below zero is no level, and the forward markout divides by the armed price. It
+    /// arms nothing and withdraws the side's quote, so no print fills a level that is not shown.
     #[inline]
     pub fn arm(&mut self, side: MarkoutSide, price: Price, level_qty: Qty) {
-        debug_assert!(
-            price.mantissa() > 0,
-            "armed {side:?} quote is the forward-markout denominator, got {}",
-            price.mantissa()
-        );
+        if price.mantissa() <= 0 {
+            self.disarm(side);
+            return;
+        }
         self.side_mut(side).arm(price, level_qty);
     }
 
