@@ -12,7 +12,7 @@ use volume::VolumeClock;
 use crate::hot::book::Book;
 use crate::hot::digest::digest_fields;
 use crate::hot::quant::intensity::{IntensityCounts, IntensityShape, TopOfBook, TradePrint};
-use crate::hot::quant::micro;
+use crate::hot::quant::micro::{self, BookSides, Touch};
 use crate::hot::series::FastQueue;
 use crate::log::hot_warn;
 use crate::msg::ids::{Price, Side};
@@ -216,8 +216,9 @@ impl MicroTracker {
     /// `None` on a one-sided book. Callers feeding EWMA vol must gate on `Some`, not the stale slot.
     pub fn on_book(&mut self, book: &Book) -> Option<f64> {
         let (bid, ask) = book.best_bid().zip(book.best_ask())?;
-        let microprice = micro::microprice(bid, ask);
-        let spread = micro::spread(bid.price, ask.price);
+        let touch = Touch { bid, ask };
+        let microprice = touch.microprice();
+        let spread = touch.spread();
         self.latest.microprice = Some(microprice);
         self.latest.spread = Some(spread);
         self.latest.best_bid = Some(bid.price);
@@ -226,7 +227,11 @@ impl MicroTracker {
             series.push(microprice);
         }
         if let Some(stream) = self.imbalance.as_mut() {
-            let value = micro::imbalance(book.bids(), book.asks(), stream.top_n);
+            let sides = BookSides {
+                bids: book.bids(),
+                asks: book.asks(),
+            };
+            let value = sides.imbalance(stream.top_n);
             stream.series.push(value);
             self.latest.imbalance = Some(value);
         }
