@@ -1,4 +1,5 @@
-//! Toxic-flow markouts: pseudo-fills price adverse selection (zero alloc).
+//! Markouts measure adverse selection with no fills of our own: a public print that reaches our
+//! quote stands in for a fill, and the mid after it prices the fill. Nothing allocates after new.
 
 use super::markout_side::{BACKING_MULTIPLE, MarkoutSide, MidSample, SideMarkouts, spins_in};
 use crate::hot::series::FastQueue;
@@ -10,20 +11,20 @@ use crate::msg::time::{DurationUs, LocalTs};
 /// fill, so it holds the last N fills, which can reach back far more than ten minutes.
 const MATURED_CAPACITY: DurationUs = DurationUs::from_secs(600);
 
-/// Mid ring depth = deepest reverse lookback + 1s slack.
+/// The mid ring reaches back over the deepest reverse lookback, with one second to spare.
 const MID_RING: DurationUs = DurationUs::from_secs(6);
 
-/// Fill mature > this many spins past ideal = feed gap, not markout.
+/// A fill whose first ripe mid comes more than this many spins late is a feed gap, not a markout.
 const STALE_TOLERANCE_SPINS: i64 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MarkoutSpec {
     pub spin_interval: DurationUs,
-    /// Max mids/sec: book commits + spins.
+    /// The most mids in one second: the book commits and the spins together.
     pub max_mids_per_sec: u32,
 }
 
-/// Pseudo-fill (for UI); price = armed level at receipt.
+/// A pseudo-fill, at the armed level of our quote and stamped when the print was received.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MarkoutFill {
     pub side: MarkoutSide,
@@ -31,7 +32,8 @@ pub struct MarkoutFill {
     pub fill_ts_us: LocalTs,
 }
 
-/// Pseudo-fill markouts: arm quotes each placement, feed prints/mids, read realised bps.
+/// The markouts of both sides of our quote. Arm each quote at each placement, feed the prints and
+/// the mids, and read the realised markouts in basis points.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MarkoutTracker {
     stale_tolerance: DurationUs,
@@ -44,7 +46,8 @@ pub struct MarkoutTracker {
 
 impl MarkoutTracker {
     /// # Panics
-    /// If spin_interval <=0 or max_mids_per_sec = 0 (init-time bug, buffer lengths derive from these).
+    /// If the spin interval is not positive or the mids per second are 0. Both size the buffers, so
+    /// either is a bug of the caller at start.
     pub fn new(spec: MarkoutSpec) -> Self {
         assert!(
             spec.spin_interval.micros() > 0,
@@ -97,8 +100,9 @@ impl MarkoutTracker {
         }
     }
 
-    /// Route print by aggressor (seller->bid, buyer->ask). Fill at OUR armed level (not print), stamped at receipt.
-    /// Report recorded fill (routed side only) or None if no armed level reached.
+    /// Routes a print by its aggressor: a seller reaches our bid, and a buyer our ask. A fill is at
+    /// our armed level, not at the price of the print, and is stamped when the print was received.
+    /// Returns the fill, or `None` when the print reached no armed level.
     pub fn on_trade(&mut self, trade: &TradeEvent, received_ts_us: LocalTs) -> Option<MarkoutFill> {
         let side = MarkoutSide::from_aggressor(trade.side);
         let markouts = match side {
@@ -137,14 +141,16 @@ impl MarkoutTracker {
         &self.ask
     }
 
-    /// Book resync: void mid path + quotes + in-flight fills; realised markouts survive.
+    /// After a book resync, drops the mid path, the quotes, and the fills in flight. The realised
+    /// markouts stay, because those fills happened.
     pub fn reset_continuity(&mut self) {
         self.mids.clear();
         self.bid.reset_continuity();
         self.ask.reset_continuity();
     }
 
-    /// Wipe realised history for instrument rotation (lifetime counters survive).
+    /// Wipes the realised markouts too, for a rotation onto another instrument. The lifetime
+    /// counters stay.
     pub fn clear(&mut self) {
         self.last_mid_ts_us = None;
         self.reset_continuity();

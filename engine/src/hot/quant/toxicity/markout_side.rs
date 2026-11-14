@@ -9,13 +9,14 @@ use crate::msg::ids::{Price, Qty, Side};
 use crate::msg::inbound::TradeEvent;
 use crate::msg::time::{DurationUs, LocalTs};
 
-/// Queue heuristic: our quote joins LAST, fills when this fraction of level qty traded (9/10 covers unknown cancellations).
+/// Our quote joins the back of its level and fills once this share of the queue ahead has traded.
+/// Nine tenths, not all of it, because some of the queue leaves by cancels that no print shows.
 const QUEUE_FILL_NUM: i128 = 9;
 const QUEUE_FILL_DEN: i128 = 10;
 
 pub(super) const BACKING_MULTIPLE: usize = 2;
 
-/// Headroom over fills in flight (at most one per side per placement).
+/// Room over the fills in flight that the spins allow, at most one for each placement.
 const PENDING_SLACK: usize = 2;
 
 /// The horizons after a fill at which its forward markout is realised.
@@ -104,7 +105,8 @@ const _: () = {
     }
 };
 
-/// Which of OUR quotes a print reached (not Side: selling aggressor fills BID).
+/// Which of our quotes a print reached. It is not the side of the print: a selling aggressor fills
+/// our bid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MarkoutSide {
     Bid,
@@ -120,7 +122,8 @@ impl MarkoutSide {
         }
     }
 
-    /// Sign orientation: negative = toxic to us (bought bid hurt by mid falling, sold ask by mid running up).
+    /// A negative markout is toxic to us: a bought bid loses when the mid falls, and a sold ask
+    /// loses when it rises.
     #[inline]
     const fn sign(self) -> f64 {
         match self {
@@ -129,7 +132,7 @@ impl MarkoutSide {
         }
     }
 
-    /// Exact mantissa comparison (float compare would fill on rounding dust).
+    /// Compares the exact mantissas, because a float comparison would fill on rounding noise.
     #[inline]
     const fn is_through(self, armed: Price, print: Price) -> bool {
         match self {
@@ -154,7 +157,7 @@ struct PendingFill {
     fill_price: f64,
 }
 
-/// One horizon's in-flight fills + realised markouts.
+/// The fills in flight and the realised markouts of one horizon.
 #[derive(Debug, Clone, PartialEq)]
 struct ForwardLane {
     horizon: ForwardHorizon,
@@ -174,13 +177,14 @@ impl ForwardLane {
         }
     }
 
-    /// true once lane holds sized depth (further fills refused, no resize).
+    /// The lane is full at its sized depth. It refuses a further fill and never grows.
     #[inline]
     fn is_full(&self) -> bool {
         self.pending.len() == self.capacity
     }
 
-    /// Realise fills ripened by sample, return stale count (dropped fills still pop to avoid wedge).
+    /// Realises the fills that the sample ripens and returns how many came too late. A late fill
+    /// still leaves the lane, or one feed gap would hold back each fill behind it.
     fn mature(&mut self, sample: MidSample, tolerance: DurationUs, sign: f64) -> u64 {
         let horizon = self.horizon.duration();
         let mut stale = 0;
@@ -201,12 +205,14 @@ impl ForwardLane {
     }
 }
 
-/// One side's realised markouts, live quote, and gate counters (lifetime totals).
+/// The realised markouts of one side, its live quote, and the counters of its drops over the
+/// lifetime of the tracker.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SideMarkouts {
     side: MarkoutSide,
     pub(super) armed: Option<Price>,
-    /// Qty resting + eaten; fill gate @ 9/10 per arm.
+    /// The quantity resting ahead of our quote at its arm. The quote fills once nine tenths of it
+    /// has traded at the level.
     queue_ahead: Qty,
     eaten: Qty,
     forward_lanes: [ForwardLane; ForwardHorizon::ALL.len()],
@@ -235,7 +241,8 @@ impl SideMarkouts {
         }
     }
 
-    /// Realised markouts in bps, oldest first. Smooth them with `FastQueue::ema_over_window`.
+    /// Realised markouts in basis points, oldest first. Smooth them with
+    /// `FastQueue::ema_over_window`.
     #[inline]
     pub fn forward(&self, horizon: ForwardHorizon) -> &FastQueue<f64> {
         &self.forward_lanes[horizon.index()].matured
@@ -246,7 +253,7 @@ impl SideMarkouts {
         &self.reverse_series[horizon.index()]
     }
 
-    /// Level a print must reach to fill (None once filled until next placement).
+    /// The level that a print must reach to fill. `None` after a fill, until the next placement.
     #[inline]
     pub fn armed_quote(&self) -> Option<Price> {
         self.armed
@@ -257,25 +264,26 @@ impl SideMarkouts {
         self.fills
     }
 
-    /// Reverse samples dropped (mid ring didn't reach back whole horizon).
+    /// Reverse markouts dropped because the mid ring did not reach back over the whole horizon.
     #[inline]
     pub fn reverse_gap_count(&self) -> u64 {
         self.reverse_gaps
     }
 
-    /// Forward samples dropped (maturing mid too late).
+    /// Forward markouts dropped because the first ripe mid came too late.
     #[inline]
     pub fn stale_maturation_count(&self) -> u64 {
         self.stale_maturations
     }
 
-    /// Lane pushes refused (lane at max in-flight fills).
+    /// Fills that a full lane refused.
     #[inline]
     pub fn pending_overflow_count(&self) -> u64 {
         self.pending_overflows
     }
 
-    /// Arm price behind level_qty; re-arm same = keep position.
+    /// Arms at a price behind the quantity shown there. A re-arm at the same price keeps the place
+    /// already earned in the queue.
     pub(super) fn arm(&mut self, price: Price, level_qty: Qty) {
         if self.armed != Some(price) {
             self.queue_ahead = level_qty;
@@ -284,14 +292,15 @@ impl SideMarkouts {
         self.armed = Some(price);
     }
 
-    /// Print AT armed level; true if past fill threshold.
+    /// Takes a print at the armed level from the queue ahead. True once the quote fills.
     fn eat(&mut self, qty: Qty) -> bool {
         self.eaten = Qty::from_mantissa(self.eaten.mantissa().saturating_add(qty.mantissa()));
         i128::from(self.eaten.mantissa()) * QUEUE_FILL_DEN
             >= i128::from(self.queue_ahead.mantissa()) * QUEUE_FILL_NUM
     }
 
-    /// Some(armed) if print filled us at our level, None else (side effects apply either way).
+    /// Returns the armed level when the print filled us there, else `None`. A print at the level
+    /// eats the queue ahead either way.
     pub(super) fn on_trade(
         &mut self,
         trade: &TradeEvent,
@@ -302,7 +311,8 @@ impl SideMarkouts {
         if !self.side.is_through(armed, trade.price) {
             return None;
         }
-        // Print strictly through swept all orders (including ours); only AT-level order queues.
+        // A print through our level swept each order there, ours too. Only a print at the level
+        // waits for the queue ahead.
         if trade.price == armed && !self.eat(trade.qty) {
             return None;
         }
@@ -316,7 +326,8 @@ impl SideMarkouts {
         Some(armed)
     }
 
-    /// Pre-fill drift over each reverse horizon (vs newest mid at/before target).
+    /// The drift of the mid into the fill over each reverse horizon, against the newest mid at or
+    /// before the start of that horizon.
     fn record_reverse(&mut self, fill_ts_us: LocalTs, mids: &FastQueue<MidSample>) {
         let Some(latest) = mids.last() else {
             self.reverse_gaps += ReverseHorizon::ALL.len() as u64;
@@ -385,7 +396,8 @@ impl SideMarkouts {
     }
 }
 
-/// Newest sample at/before target (None if unreachable).
+/// The newest sample at or before the target, not the nearest one, which could sit after it and
+/// shorten the lookback. `None` when the ring does not reach back that far.
 fn sample_at_or_before(mids: &FastQueue<MidSample>, target: LocalTs) -> Option<MidSample> {
     let samples = mids.as_slice();
     let reaching = samples.partition_point(|sample| sample.ts_us <= target);
