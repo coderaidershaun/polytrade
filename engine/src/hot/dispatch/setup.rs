@@ -129,12 +129,12 @@ pub(super) fn per_instrument_state(
             &row.kline_intervals,
             row.tick_size,
         ));
-        ewma.push(
-            row.tracker
-                .ewma_vol
-                .as_ref()
-                .map(|spec| EwmaVol::new(spec.halflife_events)),
-        );
+        ewma.push(row.tracker.ewma_vol.as_ref().map(|spec| {
+            EwmaVol::new(
+                std::num::NonZeroU32::new(spec.halflife_events)
+                    .expect("the registry refuses a half-life of 0 before any thread starts"),
+            )
+        }));
     }
     (books, trackers, ewma)
 }

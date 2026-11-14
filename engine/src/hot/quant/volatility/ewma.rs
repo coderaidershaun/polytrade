@@ -1,8 +1,12 @@
-//! EWMA (RiskMetrics): streaming [`EwmaVol`], one log return folded in per microprice.
+//! A fast volatility that folds one microprice return at a time with RiskMetrics weights, so it
+//! stores no window.
+
+use std::num::NonZeroU32;
 
 use crate::hot::digest::digest_fields;
 
-/// RiskMetrics: λ weights prior var, (1−λ) weights fresh squared return. λ = 2^(−1/H) for half-life H.
+/// Each return r moves the variance to λσ² + (1 − λ)r², with λ = 2^(−1/H) for a half-life of H
+/// returns.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EwmaVol {
     decay: f64,
@@ -13,7 +17,7 @@ pub struct EwmaVol {
 digest_fields! { EwmaVol { decay, prev_price, variance } }
 
 impl EwmaVol {
-    pub fn new(halflife_events: u32) -> Self {
+    pub fn new(halflife_events: NonZeroU32) -> Self {
         Self {
             decay: decay_for(halflife_events),
             prev_price: None,
@@ -21,7 +25,8 @@ impl EwmaVol {
         }
     }
 
-    /// Fold microprice via log-return. Non-finite/non-positive prices skipped (prevent NaN corruption).
+    /// Folds the log return from the previous microprice. A price that is not finite or not
+    /// positive is skipped, because its return would turn the variance into NaN for good.
     pub fn on_microprice(&mut self, microprice: f64) {
         if !(microprice.is_finite() && microprice > 0.0) {
             return;
@@ -37,17 +42,21 @@ impl EwmaVol {
         self.prev_price = Some(microprice);
     }
 
+    /// The standard deviation of one return between two folded microprices. `None` before the
+    /// second price.
     #[inline]
     pub fn volatility_per_event(&self) -> Option<f64> {
         self.variance.map(f64::sqrt)
     }
 
-    /// Drop prev price for fresh return chain (variance kept). Resident survives resync.
+    /// Forgets the previous price and keeps the variance, so the first price after a resync starts
+    /// a new chain and no return spans the gap.
     pub fn reset_continuity(&mut self) {
         self.prev_price = None;
     }
 
-    /// Full reset (variance included, decay kept). Window rotation: variance across distros would lie.
+    /// Forgets the previous price and the variance, and keeps the decay. A new market window starts
+    /// here, because a variance carried across two windows mixes two distributions.
     pub fn reset(&mut self) {
         self.prev_price = None;
         self.variance = None;
@@ -55,6 +64,6 @@ impl EwmaVol {
 }
 
 #[inline]
-fn decay_for(halflife_events: u32) -> f64 {
-    (-std::f64::consts::LN_2 / f64::from(halflife_events)).exp()
+fn decay_for(halflife_events: NonZeroU32) -> f64 {
+    (-std::f64::consts::LN_2 / f64::from(halflife_events.get())).exp()
 }
