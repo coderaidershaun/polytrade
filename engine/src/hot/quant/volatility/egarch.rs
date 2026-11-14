@@ -1,36 +1,44 @@
-//! EGARCH(1,1): 4-param MLE fit (Nelder-Mead), allocation-free, warm-started.
+//! The long-horizon volatility of the quotes: an EGARCH(1,1) fit by maximum likelihood to the log
+//! returns of closed candles, which forecasts the next close and starts each refit from its last
+//! optimum.
 
 use crate::hot::quant::optimise::NelderMead;
+use crate::hot::quant::options::exp;
 use crate::hot::series::FastQueue;
 use crate::msg::time::DurationUs;
 
 use super::realised::{Returns, consecutive_returns};
 
-/// `[omega, gamma, theta, beta]`: baseline log-variance, news-impact magnitude/asymmetry, persistence.
-/// `ω/(1−β) = −14` seeds σ ≈ 1e-3 per 1m close.
+/// `[omega, gamma, theta, beta]`. With ω/(1 − β) = −14, the volatility of the first fit starts near
+/// 1e-3 for each close of one minute.
 const COLD_START: [f64; 4] = [-1.4, 0.1, -0.05, 0.9];
 
-/// Per-param bounds: β < 1 keeps ω/(1−β) finite; γ ≥ 0 keeps impact magnitude; θ ∈ [−1, 1] sign.
+/// β stays below 1, so that ω/(1 − β) is finite. γ stays at 0 or above, because it scales the size
+/// of a shock, and θ, which gives its sign, stays within ±1.
 const BOUNDS: [(f64, f64); 4] = [(-10.0, 10.0), (0.0, 1.0), (-1.0, 1.0), (0.5, 0.9999)];
 
 const PARAMS: usize = 4;
 const SIMPLEX: usize = PARAMS + 1;
 
-/// Floor seed variance to avoid ln(0) in recursion.
+/// A window of equal closes has a variance of 0, and the recursion seeds from its logarithm.
 const MIN_SEED_VARIANCE: f64 = 1e-12;
 
 const WINDOW_BACKING_MULTIPLE: usize = 2;
 
-/// Conditional/unconditional vol/sec, fitted params [ω, γ, θ, β], diagnostics.
+/// One fit of the window, with each volatility per second.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EgarchEstimate {
-    pub conditional_vol_per_sec: f64,
-    pub unconditional_vol_per_sec: f64,
+    /// The volatility of the next close: one step of the recursion past the last return.
+    pub forecast_vol_per_sec: f64,
+    /// exp(½ · ω/(1 − β)), the level that the log variance returns to. It lies below the long-run
+    /// standard deviation whenever the variance moves. `None` when it is not finite.
+    pub long_run_log_vol_per_sec: Option<f64>,
     pub omega: f64,
     pub gamma: f64,
     pub theta: f64,
     pub beta: f64,
-    /// Sign-flipped objective (Gaussian constant omitted, compares within length).
+    /// The objective with its sign flipped and the Gaussian constant left out, so it compares
+    /// only between windows of one length.
     pub log_likelihood: f64,
     pub converged: bool,
     pub iterations: usize,
@@ -102,7 +110,8 @@ impl Egarch {
 
     /// Fits the window now, and the result becomes the fit in force. The search starts from the
     /// last optimum. `None` below `min_closes`, with fewer than two usable returns, or when the
-    /// volatility is not finite. A close that is not finite or not positive drops out, and its
+    /// likelihood or the forecast is not finite; such a fit leaves the optimum that the next one
+    /// starts from as it was. A close that is not finite or not positive drops out, and its
     /// neighbours pair into one return.
     pub fn fit(&mut self) -> Option<EgarchEstimate> {
         self.is_due = false;
@@ -110,7 +119,7 @@ impl Egarch {
         self.estimate
     }
 
-    /// Drop cached params for cold restart (keeps buffer). Prevents simplex seeding from stale fit.
+    /// The next fit starts from the cold start, not from the last optimum.
     pub fn reset_warm_start(&mut self) {
         self.params = None;
     }
@@ -126,34 +135,36 @@ impl Egarch {
             .minimize::<SIMPLEX>(|params| {
                 recursion(params, residuals, seed_log_variance).neg_log_likelihood
             });
-        self.params = Some(optimum.x);
         let terminal = recursion(&optimum.x, residuals, seed_log_variance);
+        let last_residual = residuals[residuals.len() - 1];
+        let standardised = last_residual / exp(0.5 * terminal.last_log_variance);
+        let forecast_log_variance =
+            next_log_variance(&optimum.x, terminal.last_log_variance, standardised);
         let per_second_scale = self.interval.to_secs().sqrt().recip();
-        let conditional_vol_per_sec = (0.5 * terminal.last_log_variance).exp() * per_second_scale;
-        if !conditional_vol_per_sec.is_finite() {
+        let forecast_vol_per_sec = exp(0.5 * forecast_log_variance) * per_second_scale;
+        let log_likelihood = -terminal.neg_log_likelihood;
+        if !(forecast_vol_per_sec.is_finite() && log_likelihood.is_finite()) {
             return None;
         }
+        self.params = Some(optimum.x);
         let [omega, gamma, theta, beta] = optimum.x;
-        let unconditional = (0.5 * omega / (1.0 - beta)).exp() * per_second_scale;
+        let long_run = exp(0.5 * omega / (1.0 - beta)) * per_second_scale;
         Some(EgarchEstimate {
-            conditional_vol_per_sec,
-            unconditional_vol_per_sec: if unconditional.is_finite() {
-                unconditional
-            } else {
-                conditional_vol_per_sec
-            },
+            forecast_vol_per_sec,
+            long_run_log_vol_per_sec: long_run.is_finite().then_some(long_run),
             omega,
             gamma,
             theta,
             beta,
-            log_likelihood: -terminal.neg_log_likelihood,
+            log_likelihood,
             converged: optimum.converged,
             iterations: optimum.iterations,
         })
     }
 }
 
-/// Mean-centre log returns of usable closes. Returns seed log-variance (floored) or `None` if <2.
+/// Fills `returns` with the log returns of the usable closes less their mean, and gives the log
+/// of their mean square, floored, as the seed of the recursion. `None` with fewer than two returns.
 fn fill_centred_returns(closes: &[f64], returns: &mut Vec<f64>) -> Option<f64> {
     returns.clear();
     let mut sum = 0.0;
@@ -179,19 +190,16 @@ struct Recursion {
     last_log_variance: f64,
 }
 
-/// Single EGARCH pass, scalar log-variance carry (allocation-free). Neg-log-likelihood + terminal var.
+/// One pass over the residuals with the log variance carried as one number, so it allocates
+/// nothing. Each step reads the residual before it. It gives the objective and the log variance
+/// of the last residual.
 fn recursion(params: &[f64; 4], residuals: &[f64], seed_log_variance: f64) -> Recursion {
-    let [omega, gamma, theta, beta] = *params;
-    let expected_abs_z = std::f64::consts::FRAC_2_PI.sqrt();
     let mut log_variance = seed_log_variance;
     let mut neg_log_likelihood = 0.0;
     let mut previous = residuals[0];
     for &residual in &residuals[1..] {
         let standardised = previous / (0.5 * log_variance).exp();
-        log_variance = omega
-            + beta * log_variance
-            + gamma * (standardised.abs() - expected_abs_z)
-            + theta * standardised;
+        log_variance = next_log_variance(params, log_variance, standardised);
         neg_log_likelihood += 0.5 * (log_variance + residual * residual / log_variance.exp());
         previous = residual;
     }
@@ -199,4 +207,15 @@ fn recursion(params: &[f64; 4], residuals: &[f64], seed_log_variance: f64) -> Re
         neg_log_likelihood,
         last_log_variance: log_variance,
     }
+}
+
+/// One step of the log variance, from the standardised residual before it.
+#[inline]
+fn next_log_variance(params: &[f64; 4], log_variance: f64, standardised: f64) -> f64 {
+    let [omega, gamma, theta, beta] = *params;
+    let expected_abs_z = std::f64::consts::FRAC_2_PI.sqrt();
+    omega
+        + beta * log_variance
+        + gamma * (standardised.abs() - expected_abs_z)
+        + theta * standardised
 }

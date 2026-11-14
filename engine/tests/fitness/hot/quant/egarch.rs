@@ -41,7 +41,10 @@ fn fit_on_a_price_path_recovers_persistence_in_per_second_units() {
         cold.beta
     );
 
-    for vol in [cold.conditional_vol_per_sec, cold.unconditional_vol_per_sec] {
+    let long_run = cold
+        .long_run_log_vol_per_sec
+        .expect("an interior persistence gives a finite long-run level");
+    for vol in [cold.forecast_vol_per_sec, long_run] {
         assert!(
             (1e-5..1e-3).contains(&vol),
             "per-second σ {vol} outside return scale"
@@ -54,5 +57,87 @@ fn fit_on_a_price_path_recovers_persistence_in_per_second_units() {
         "warm refit {} exceeded cold {}",
         warm.iterations,
         cold.iterations
+    );
+}
+
+/// The quote reads the volatility of the next close. The variance of the last return, given the
+/// returns before it, has not seen that return, so the forecast takes one more step with it.
+#[test]
+fn forecast_is_one_recursion_step_past_the_last_return() {
+    let closes = synthetic_price_path(1500, [-0.7, 0.2, -0.1, 0.95], 0x1234_5678);
+    let mut egarch = Egarch::new(DurationUs::from_secs(60), 300, 1500);
+    for &close in &closes {
+        egarch.push_close(close);
+    }
+    let estimate = egarch.estimate().expect("1500 closes exceeds floor");
+
+    // The recursion of the fit, under its fitted params. The residuals are the log returns less
+    // their mean, the seed is the log of their mean square, and each step reads the residual
+    // before it, scaled by the volatility of that residual.
+    let returns: Vec<f64> = closes
+        .windows(2)
+        .map(|pair| (pair[1] / pair[0]).ln())
+        .collect();
+    let mut sum = 0.0;
+    for &log_return in &returns {
+        sum += log_return;
+    }
+    let mean = sum / returns.len() as f64;
+    let residuals: Vec<f64> = returns.iter().map(|log_return| log_return - mean).collect();
+    let mut sum_squares = 0.0;
+    for &residual in &residuals {
+        sum_squares += residual * residual;
+    }
+    let seed = (sum_squares / residuals.len() as f64).max(1e-12).ln();
+    let expected_abs_z = std::f64::consts::FRAC_2_PI.sqrt();
+    let step = |log_variance: f64, residual: f64| {
+        let z = residual / (0.5 * log_variance).exp();
+        estimate.omega
+            + estimate.beta * log_variance
+            + estimate.gamma * (z.abs() - expected_abs_z)
+            + estimate.theta * z
+    };
+    let mut log_variance_of_last = seed;
+    for pair in residuals.windows(2) {
+        log_variance_of_last = step(log_variance_of_last, pair[0]);
+    }
+    let last = residuals[residuals.len() - 1];
+    let forecast = (0.5 * step(log_variance_of_last, last)).exp() / 60.0f64.sqrt();
+    let last_return_vol = (0.5 * log_variance_of_last).exp() / 60.0f64.sqrt();
+    assert!(
+        (estimate.forecast_vol_per_sec / forecast - 1.0).abs() < 1e-12,
+        "forecast {} is not one step past the last return, {forecast}; the last return has {last_return_vol}",
+        estimate.forecast_vol_per_sec
+    );
+
+    // A close of 1e300 right after 1e-300 overflows the quotient of its log return to +inf. Then
+    // the mean return is +inf, and each residual is -inf or NaN, so no params give a finite
+    // likelihood. That fit must give no estimate and keep the optimum that the next fit starts
+    // from, as a twin that never saw the window shows.
+    let mut poisoned = Egarch::new(DurationUs::from_secs(60), 300, 1500);
+    let mut twin = Egarch::new(DurationUs::from_secs(60), 300, 1500);
+    for fit in [&mut poisoned, &mut twin] {
+        for &close in &closes {
+            fit.push_close(close);
+        }
+        fit.fit().expect("cold fit of the path");
+    }
+    poisoned.push_close(1e-300);
+    poisoned.push_close(1e300);
+    assert_eq!(
+        poisoned.fit(),
+        None,
+        "a window with no finite likelihood gave an estimate"
+    );
+    for fit in [&mut poisoned, &mut twin] {
+        fit.clear();
+        for &close in &closes {
+            fit.push_close(close);
+        }
+    }
+    assert_eq!(
+        poisoned.fit(),
+        twin.fit(),
+        "the fit with no finite estimate changed the optimum that the next fit starts from"
     );
 }

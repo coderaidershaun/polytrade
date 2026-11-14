@@ -368,7 +368,7 @@ fn record_spin(
         .intensity
         .refit(ctx.tracker(instrument).intensity(), now);
     let egarch = model.refresh(ctx, instrument);
-    let egarch_vol = egarch.map(|estimate| estimate.conditional_vol_per_sec);
+    let egarch_vol = egarch.map(|estimate| estimate.forecast_vol_per_sec);
     let realised_st = gated_realised_vol(&model.spin_mids, Returns::Log, cfg.spin_interval);
     ctx.emit_present(features.mid, instrument, mid);
     ctx.emit_present(features.microprice, instrument, microprice);
@@ -397,10 +397,10 @@ fn record_spin(
         ctx.emit(features.egarch_gamma, instrument, estimate.gamma);
         ctx.emit(features.egarch_theta, instrument, estimate.theta);
         ctx.emit(features.egarch_beta, instrument, estimate.beta);
-        ctx.emit(
+        ctx.emit_present(
             features.egarch_uncond_vol_lt,
             instrument,
-            estimate.unconditional_vol_per_sec,
+            estimate.long_run_log_vol_per_sec,
         );
     }
     let ewma_vol = ctx.ewma_vol(instrument);
