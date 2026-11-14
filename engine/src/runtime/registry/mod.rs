@@ -52,7 +52,7 @@ pub struct InstrumentRow {
     pub tracker: TrackerSpec,
 }
 
-/// Each edge serves the rows of one source, so the venue of its first row is the venue of each.
+/// Each edge serves the rows of one venue, so the venue of its first row is the venue of each.
 pub(crate) fn venue_of_rows(rows: &[InstrumentRow]) -> VenueId {
     rows.first().map_or(VenueId::default(), |row| row.venue)
 }
