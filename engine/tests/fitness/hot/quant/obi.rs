@@ -1,7 +1,7 @@
 //! Order-book imbalance in a band around the mid: a level on the edge of the band counts, and each
 //! side counts its best level, so a book never reads as empty.
 
-use engine::hot::quant::micro::{PriceBand, banded_imbalance};
+use engine::hot::quant::micro::{PriceBand, banded_imbalance, imbalance};
 use engine::msg::ids::{Price, Qty};
 use engine::msg::inbound::Level;
 
@@ -39,4 +39,24 @@ fn band_always_reaches_the_first_level_of_each_side() {
     assert_eq!(banded_imbalance(&wide_bids, &[], band), 1.0);
     assert_eq!(banded_imbalance(&[], &wide_asks, band), -1.0);
     assert_eq!(banded_imbalance(&[], &[], band), 0.0);
+}
+
+/// The imbalance of the top levels of each side. A book with no size reads 0, never 0 / 0, and a
+/// book with one side reads that side alone.
+#[test]
+fn top_level_imbalance_reads_zero_when_the_book_holds_no_size() {
+    let bids = [level(99_999, 3), level(99_998, 1), level(99_990, 50)];
+    let asks = [level(100_001, 1), level(100_005, 50)];
+    // The top two levels: 3 + 1 on the bid against 1 + 50 on the ask.
+    assert_eq!(imbalance(&bids, &asks, 2), (4.0 - 51.0) / 55.0);
+    assert_eq!(imbalance(&bids, &[], 2), 1.0);
+    assert_eq!(imbalance(&[], &asks, 2), -1.0);
+    assert_eq!(imbalance(&[], &[], 2), 0.0);
+    assert_eq!(imbalance(&bids, &asks, 0), 0.0, "no level counted");
+    let sizeless = [level(99_999, 0)];
+    assert_eq!(
+        imbalance(&sizeless, &sizeless, 1),
+        0.0,
+        "levels with no size"
+    );
 }

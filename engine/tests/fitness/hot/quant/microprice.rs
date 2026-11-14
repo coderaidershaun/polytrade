@@ -22,4 +22,9 @@ fn equilibrium_is_the_microprice() {
         (equilibrium - longhand).abs() < 1e-12,
         "equilibrium {equilibrium} vs longhand {longhand}"
     );
+
+    // With no size on either side the weights are undefined, so the microprice falls back to the
+    // mid, (100 + 101) / 2 = 100.5, and never reads 0 / 0.
+    let sizeless = microprice(level(100 * SCALE, 0), level(101 * SCALE, 0));
+    assert_eq!(sizeless, 100.5, "a touch with no size gave {sizeless}");
 }
