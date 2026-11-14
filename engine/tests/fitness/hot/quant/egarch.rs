@@ -29,8 +29,11 @@ fn synthetic_price_path(count: usize, params: [f64; 4], seed: u64) -> Vec<f64> {
 fn fit_on_a_price_path_recovers_persistence_in_per_second_units() {
     let closes = synthetic_price_path(1500, [-0.7, 0.2, -0.1, 0.95], 0x1234_5678);
     let mut egarch = Egarch::new(DurationUs::from_secs(60), 300, 1500);
+    for &close in &closes {
+        egarch.push_close(close);
+    }
 
-    let cold = egarch.fit(&closes).expect("1500 closes exceeds floor");
+    let cold = egarch.fit().expect("1500 closes exceeds floor");
     assert!(cold.converged, "cold fit hit max_iter");
     assert!(
         cold.beta > 0.9 && cold.beta < 0.9999,
@@ -45,7 +48,7 @@ fn fit_on_a_price_path_recovers_persistence_in_per_second_units() {
         );
     }
 
-    let warm = egarch.fit(&closes).expect("refit");
+    let warm = egarch.fit().expect("refit");
     assert!(
         warm.iterations <= cold.iterations,
         "warm refit {} exceeded cold {}",

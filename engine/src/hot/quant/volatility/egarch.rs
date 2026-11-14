@@ -1,6 +1,7 @@
 //! EGARCH(1,1): 4-param MLE fit (Nelder-Mead), allocation-free, warm-started.
 
 use crate::hot::quant::optimise::NelderMead;
+use crate::hot::series::FastQueue;
 use crate::msg::time::DurationUs;
 
 use super::realised::{Returns, consecutive_returns};
@@ -18,6 +19,8 @@ const SIMPLEX: usize = PARAMS + 1;
 /// Floor seed variance to avoid ln(0) in recursion.
 const MIN_SEED_VARIANCE: f64 = 1e-12;
 
+const WINDOW_BACKING_MULTIPLE: usize = 2;
+
 /// Conditional/unconditional vol/sec, fitted params [ω, γ, θ, β], diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EgarchEstimate {
@@ -33,19 +36,24 @@ pub struct EgarchEstimate {
     pub iterations: usize,
 }
 
-/// Persistent fit: caches params for warm-start, owns returns buffer. Rescales per-close σ to /sec.
+/// The closes of one candle interval, the fit in force over them, and the optimum that the next
+/// fit starts from.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Egarch {
     params: Option<[f64; 4]>,
     interval: DurationUs,
     min_closes: usize,
-    max_closes: usize,
+    closes: FastQueue<f64>,
     returns: Vec<f64>,
+    is_due: bool,
+    estimate: Option<EgarchEstimate>,
 }
 
 impl Egarch {
+    /// The window keeps the newest `max_closes` closes.
+    ///
     /// # Panics
-    /// Non-positive `interval`.
+    /// A close interval that is not positive, or a window of 0 closes.
     pub fn new(interval: DurationUs, min_closes: usize, max_closes: usize) -> Self {
         assert!(
             interval.micros() > 0,
@@ -56,26 +64,63 @@ impl Egarch {
             params: None,
             interval,
             min_closes,
-            max_closes,
+            closes: FastQueue::new(max_closes, WINDOW_BACKING_MULTIPLE),
             returns: Vec::with_capacity(max_closes.saturating_sub(1)),
+            is_due: false,
+            estimate: None,
         }
     }
 
-    /// Fits log returns via MLE, warm-started. Returns `None` below `min_closes` or <2 usable returns.
-    /// Non-finite closes drop pairwise. Cache adopts best vertex; check `converged` for quality.
-    /// # Panics
-    /// Closes exceed `max_closes`.
-    pub fn fit(&mut self, closes: &[f64]) -> Option<EgarchEstimate> {
+    /// A full window evicts its oldest close, and the next [`Egarch::estimate`] refits.
+    pub fn push_close(&mut self, close: f64) {
+        self.closes.push(close);
+        self.is_due = true;
+    }
+
+    /// Empties the window and drops the fit in force. The optimum that the next fit starts from
+    /// stays: [`Egarch::reset_warm_start`] drops it.
+    pub fn clear(&mut self) {
+        self.closes.clear();
+        self.is_due = false;
+        self.estimate = None;
+    }
+
+    /// Whether a close arrived since the last fit, so that the next [`Egarch::estimate`] refits.
+    #[inline]
+    pub fn is_due(&self) -> bool {
+        self.is_due
+    }
+
+    /// Refits when a close arrived since the last fit, then gives the fit in force. A read on each
+    /// spin is cheap, because the simplex search runs only when a close arrived.
+    pub fn estimate(&mut self) -> Option<EgarchEstimate> {
+        if self.is_due {
+            self.fit();
+        }
+        self.estimate
+    }
+
+    /// Fits the window now, and the result becomes the fit in force. The search starts from the
+    /// last optimum. `None` below `min_closes`, with fewer than two usable returns, or when the
+    /// volatility is not finite. A close that is not finite or not positive drops out, and its
+    /// neighbours pair into one return.
+    pub fn fit(&mut self) -> Option<EgarchEstimate> {
+        self.is_due = false;
+        self.estimate = self.solve();
+        self.estimate
+    }
+
+    /// Drop cached params for cold restart (keeps buffer). Prevents simplex seeding from stale fit.
+    pub fn reset_warm_start(&mut self) {
+        self.params = None;
+    }
+
+    fn solve(&mut self) -> Option<EgarchEstimate> {
+        let closes = self.closes.as_slice();
         if closes.len() < self.min_closes {
             return None;
         }
-        assert!(
-            closes.len() <= self.max_closes,
-            "egarch handed {} closes but sized for {}",
-            closes.len(),
-            self.max_closes
-        );
-        let seed_log_variance = self.fill_centred_returns(closes)?;
+        let seed_log_variance = fill_centred_returns(closes, &mut self.returns)?;
         let residuals = self.returns.as_slice();
         let optimum = NelderMead::new(self.params.unwrap_or(COLD_START), BOUNDS)
             .minimize::<SIMPLEX>(|params| {
@@ -106,32 +151,27 @@ impl Egarch {
             iterations: optimum.iterations,
         })
     }
+}
 
-    /// Drop cached params for cold restart (keeps buffer). Prevents simplex seeding from stale fit.
-    pub fn reset_warm_start(&mut self) {
-        self.params = None;
+/// Mean-centre log returns of usable closes. Returns seed log-variance (floored) or `None` if <2.
+fn fill_centred_returns(closes: &[f64], returns: &mut Vec<f64>) -> Option<f64> {
+    returns.clear();
+    let mut sum = 0.0;
+    for log_return in consecutive_returns(closes.iter().copied(), Returns::Log) {
+        sum += log_return;
+        returns.push(log_return);
     }
-
-    /// Mean-centre log returns of usable closes. Returns seed log-variance (floored) or `None` if <2.
-    fn fill_centred_returns(&mut self, closes: &[f64]) -> Option<f64> {
-        self.returns.clear();
-        let mut sum = 0.0;
-        for log_return in consecutive_returns(closes.iter().copied(), Returns::Log) {
-            sum += log_return;
-            self.returns.push(log_return);
-        }
-        if self.returns.len() < 2 {
-            return None;
-        }
-        let mean = sum / self.returns.len() as f64;
-        let mut sum_squares = 0.0;
-        for residual in &mut self.returns {
-            *residual -= mean;
-            sum_squares += *residual * *residual;
-        }
-        let variance = (sum_squares / self.returns.len() as f64).max(MIN_SEED_VARIANCE);
-        Some(variance.ln())
+    if returns.len() < 2 {
+        return None;
     }
+    let mean = sum / returns.len() as f64;
+    let mut sum_squares = 0.0;
+    for residual in returns.iter_mut() {
+        *residual -= mean;
+        sum_squares += *residual * *residual;
+    }
+    let variance = (sum_squares / returns.len() as f64).max(MIN_SEED_VARIANCE);
+    Some(variance.ln())
 }
 
 struct Recursion {

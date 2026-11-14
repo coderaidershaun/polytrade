@@ -197,7 +197,7 @@ impl Strategy for MicroRecorder {
         if event.interval != model.interval {
             return;
         }
-        model.closes.push(event.close.to_f64());
+        model.egarch.push_close(event.close.to_f64());
         model.is_dirty = true;
     }
 

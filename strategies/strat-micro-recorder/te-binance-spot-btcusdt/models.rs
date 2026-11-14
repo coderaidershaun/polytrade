@@ -48,9 +48,8 @@ const MARKOUT_MAX_MIDS_PER_SEC: u32 = 12;
 pub(crate) struct BinanceVol {
     /// Candle interval EGARCH rescale built against; on_kline accepts this interval alone.
     pub(crate) interval: KlineInterval,
-    pub(crate) closes: FastQueue<f64>,
     pub(crate) spin_mids: FastQueue<f64>,
-    egarch: Egarch,
+    pub(crate) egarch: Egarch,
     pub(crate) is_dirty: bool,
     is_seeded: bool,
     pub(crate) estimate: Option<EgarchEstimate>,
@@ -93,7 +92,6 @@ impl BinanceVol {
         let resilience_len = samples_in_horizon(RESILIENCE_HORIZON, spin_interval).max(1);
         Self {
             interval,
-            closes: FastQueue::new(keep, SERIES_BACKING_MULTIPLE),
             spin_mids: FastQueue::new(realised_window_len(spin_interval), SERIES_BACKING_MULTIPLE),
             egarch: Egarch::new(span, EGARCH_MIN_CLOSES, keep),
             is_dirty: false,
@@ -128,17 +126,17 @@ impl BinanceVol {
         if !self.is_seeded {
             self.is_seeded = true;
             if let Some(series) = ctx.tracker(instrument).candles(self.interval) {
-                self.closes.clear();
+                self.egarch.clear();
                 for candle in series.closed.iter() {
-                    self.closes.push(candle.close.to_f64());
+                    self.egarch.push_close(candle.close.to_f64());
                 }
-                self.is_dirty |= !self.closes.is_empty();
+                self.is_dirty |= !series.closed.is_empty();
             }
         }
         if !self.is_dirty {
             return;
         }
-        self.estimate = self.egarch.fit(self.closes.as_slice());
+        self.estimate = self.egarch.fit();
         self.is_dirty = false;
         if let Some(estimate) = self.estimate
             && !estimate.converged
@@ -154,7 +152,7 @@ impl BinanceVol {
 
     /// Market data back to post-new state, keeping preallocated buffers. Config-derived (interval/tick/refit) stay.
     pub(crate) fn reset(&mut self) {
-        self.closes.clear();
+        self.egarch.clear();
         self.spin_mids.clear();
         self.egarch.reset_warm_start();
         self.is_dirty = false;
