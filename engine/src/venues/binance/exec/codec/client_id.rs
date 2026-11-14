@@ -1,5 +1,5 @@
-//! Client order id round trip: engine id <-> venue 28-char string.
-//! Not display format; bits address slot + generation. Account stream: only ownership evidence.
+//! The client order id of this engine on Binance, and the way back from it. Its bits address a slot
+//! and a generation, and on the account stream it is the only sign of who placed an order.
 
 use crate::msg::ids::ClientOrderId;
 use crate::venues::exec::{EngineIdentity, OrderOwnership, TeTag};
@@ -34,12 +34,13 @@ pub fn parse_client_order_id(text: &str) -> Option<(TeTag, ClientOrderId)> {
 
 pub fn classify_client_order_id(text: &str, identity: EngineIdentity) -> OrderOwnership {
     let Some((tag, client_id)) = parse_client_order_id(text) else {
-        return OrderOwnership::FOREIGN;
+        return OrderOwnership::Foreign;
     };
     OrderOwnership::of(tag, client_id, identity)
 }
 
-// `from_str_radix` accepts leading `+` -> `pd-+1234567-…` aliases tag. Engine must reject.
+// `from_str_radix` accepts a leading `+`, so `pd-+1234567-…` would read as a shorter tag. Only hex
+// digits pass here.
 fn is_hex(text: &str) -> bool {
     text.bytes().all(|byte| byte.is_ascii_hexdigit())
 }

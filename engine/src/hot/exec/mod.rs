@@ -7,7 +7,9 @@
 
 mod account;
 mod audit;
+mod booking;
 mod budget;
+mod capacity;
 mod desired;
 mod engine;
 mod event;
@@ -16,8 +18,9 @@ mod gates;
 mod mint;
 mod order;
 mod reconcile;
+mod silence;
 mod spin;
-mod transition;
+mod venue;
 mod view;
 mod window;
 
@@ -25,6 +28,7 @@ pub use crate::runtime::config::MAX_QUOTE_LEVELS;
 
 pub use account::{AccountTable, AccountWatermark, Balance, ReleaseOutcome};
 pub use budget::{MAX_ORDER_BUDGET_WINDOWS, OrderBudget, OrderBudgetWindow};
+pub use capacity::ExecCapacity;
 pub use desired::{DesiredBook, DesiredQuote, QuoteLevel};
 pub(crate) use engine::FoldStamps;
 pub use engine::{ExecEngine, ExecEngineSetup, ExecSettings};
@@ -34,7 +38,7 @@ pub use gates::{
     assess_exposure, assess_loss,
 };
 pub use order::{
-    ClientIdLayout, CloseReason, FillDelta, MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS, OrderClaim,
+    Applied, ClaimRefusal, ClientIdLayout, CloseReason, FillDelta, MAX_ORDER_SLOTS, OrderClaim,
     OrderSlot, OrderState, OrderTable, ReconcilePass, level_of_slot, side_base,
 };
 pub use reconcile::{
@@ -42,7 +46,8 @@ pub use reconcile::{
     RestingOrder, TickGrid, reconcile_side,
 };
 pub use spin::SpinInput;
-pub use transition::{Applied, apply_exec_event};
+pub use venue::ExecVenueSetup;
 pub use view::{
     ExecCallback, Fill, OrderReject, OrderUpdate, OrderView, RejectOrigin, WorkingOrderView,
 };
+pub(crate) use window::RotationFacts;

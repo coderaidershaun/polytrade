@@ -54,12 +54,13 @@ engine:
   spin_interval_us: 100000
 queues:
   input_capacity: 65536
-source:
-  exchange: polymarket
-  max_exposure_quote: 500
-  series: btc-updown-5m
-  tracker:
-    microprice: { windows: [1000] }
+sources:
+  - feed:
+      exchange: polymarket
+      max_exposure_quote: 500
+      series: btc-updown-5m
+      tracker:
+        microprice: { windows: [1000] }
 strategy:
   instruments: all
   tables: [trades, book_events]
@@ -234,7 +235,7 @@ fn run_meta(registry: &Registry) -> RunMeta {
             .iter()
             .map(|row| row.venue_symbol.clone())
             .collect(),
-        asset_symbols: registry.assets().names().to_vec(),
+        asset_symbols: registry.asset_symbols(),
     }
 }
 

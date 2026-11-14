@@ -42,7 +42,7 @@ use crate::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, S
 use crate::msg::ui::UiCatalog;
 use crate::msg::ui::channel::{UiLifecycle, UiWiring, ui_channel};
 use crate::runtime::config::{Config, ExecutionMode, SenderPlacement};
-use crate::runtime::exposure::{ExposureHandle, ExposureWriter, ExposureWriterConfig};
+use crate::runtime::exposure::{ExposureHandle, ExposureWriter, ExposureWriterSetup, WriterStatus};
 #[cfg(feature = "otlp")]
 use crate::runtime::otlp::{OtlpExporter, OtlpLanes, OtlpPlan};
 use crate::runtime::pin::PinCall;
@@ -52,7 +52,8 @@ use crate::venues::exec::EdgeHandle;
 use crate::venues::venue::{MarketDataWiring, WindowAssignment, spawn_market_data, tap_heartbeat};
 use crate::{info, warn};
 
-use drain::{install_panic_hook, refuse};
+use drain::install_panic_hook;
+use error::refuse;
 use exec::{CommandLane, ExecBringUp, ExecBringUpSetup, exec_bring_up, open_command_lane};
 use hot::{HotBringUp, HotBringUpSetup, hot_bring_up};
 use metrics::{
@@ -282,19 +283,6 @@ impl Engine {
             rotations: rotations_rx,
         });
 
-        // This runs before the hot thread is built, so the writer knows the disk state before
-        // anything changes it. `mode` names the ledger file, so it must be the same value the load
-        // was given, or this run writes a ledger it did not read.
-        let (exposure, exposure_sink) = ExposureWriter::spawn(
-            ExposureWriterConfig::new(
-                config.exposure.dir.clone(),
-                identity.clone(),
-                mode,
-                &registry,
-            ),
-            &restored_exposure,
-        );
-
         let SampleProducers {
             stages,
             counters,
@@ -316,15 +304,14 @@ impl Engine {
 
         let drain_deadline = Duration::from_millis(config.engine.drain_deadline_ms);
         let spin_interval = config.engine.spin_interval();
+        let armed = config
+            .armed_sources()
+            .next()
+            .map(|(.., execution)| execution);
         let CommandLane {
             wiring: exec_wiring,
             edge: planned_edge,
-        } = open_command_lane(
-            execution_plan,
-            config.execution.as_ref(),
-            spin_interval,
-            &stamper,
-        );
+        } = open_command_lane(execution_plan, armed, spin_interval, &stamper);
 
         let (link_wiring, link_feed) = match &bound_link {
             None => (None, None),
@@ -342,6 +329,7 @@ impl Engine {
 
         let instruments = registry.instruments().to_vec();
         let restored = restored_exposure.instruments().to_vec();
+        let (exposure_sink, exposure_lane) = ExposureWriter::lane(instruments.len());
         let warmup = DurationUs::from_secs(config.engine.warmup_secs as i64);
         let HotBringUp {
             thread: hot,
@@ -351,7 +339,7 @@ impl Engine {
             rings: RingPlan::of(&registry, &config),
             engine: move || {
                 HotEngine::new(HotEngineSetup {
-                    exec: exec_wiring,
+                    exec: exec_wiring.into_iter().collect(),
                     instruments: &instruments,
                     strategy,
                     persistence: persist_wiring,
@@ -380,7 +368,21 @@ impl Engine {
             timer: timer_producer,
             link: link_producer,
             exec: exec_producer,
+            writer_status,
         } = producers;
+        let exposure = ExposureWriter::spawn(ExposureWriterSetup {
+            dir: config.exposure.dir.clone(),
+            identity: identity.clone(),
+            mode,
+            registry: &registry,
+            status: writer_status.map(|queue| WriterStatus {
+                queue,
+                clock: clock.clone(),
+                max_failed_writes: config.exposure.max_failed_writes,
+            }),
+            restored: &restored_exposure,
+            lane: exposure_lane,
+        });
 
         let ExecBringUp {
             spawn: exec_spawn,
@@ -388,7 +390,7 @@ impl Engine {
             lease: execution_lease,
         } = exec_bring_up(ExecBringUpSetup {
             edge: planned_edge,
-            execution: config.execution.as_ref(),
+            execution: armed,
             registry: &registry,
             producer: exec_producer,
             groups: &mut group_producers,

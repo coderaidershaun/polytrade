@@ -4,13 +4,12 @@
 use crate::msg::exec::{CancelReason, ExecEvent};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Side};
 use crate::msg::inbound::{InboundMessage, MessageBody};
-use crate::msg::time::LocalTs;
-use crate::runtime::shutdown::{FatalReason, FatalSignal};
+use crate::msg::time::{DurationUs, LocalTs};
 use crate::{error, warn};
 
 use super::{
-    ExecCore, ExecEffect, ExecRequest, InFlightTable, MAX_RESYNC_ATTEMPTS, Outgoing,
-    PlaceNotSentReason, REQUEST_TIMEOUT, ResyncPass, ResyncStep, TimeoutFallout, amend_not_sent,
+    ExecCore, ExecEffect, ExecRequest, ExecSessionError, InFlightTable, MAX_RESYNC_ATTEMPTS,
+    Outgoing, PlaceNotSentReason, ResyncPass, ResyncStep, TimeoutFallout, amend_not_sent,
     open_orders_snapshot_end, place_not_sent, request_timed_out, stream_reset,
 };
 
@@ -32,7 +31,9 @@ pub struct SessionSetup<S> {
     pub core: ExecCore,
     pub instruments: Vec<InstrumentId>,
     pub events: S,
-    pub fatal: FatalSignal,
+    /// `execution.inflight_timeout_ms`, the deadline that the hot slot of a request also reads, so
+    /// the edge and the fold give up on an unanswered request at the same time.
+    pub inflight_timeout: DurationUs,
 }
 
 /// What a deadline pass leaves for the venue: status probes to send, reads nobody answered, and
@@ -56,7 +57,6 @@ pub struct ExecSession<S> {
     pub inflight: InFlightTable,
     pub resync: ResyncPass,
     pub events: S,
-    fatal: FatalSignal,
     venue: &'static str,
     instruments: Vec<InstrumentId>,
     is_readiness_pending: bool,
@@ -66,10 +66,9 @@ impl<S: EventSink> ExecSession<S> {
     pub fn new(setup: SessionSetup<S>) -> Self {
         Self {
             core: setup.core,
-            inflight: InFlightTable::new(REQUEST_TIMEOUT),
+            inflight: InFlightTable::new(setup.inflight_timeout),
             resync: ResyncPass::default(),
             events: setup.events,
-            fatal: setup.fatal,
             venue: setup.venue,
             instruments: setup.instruments,
             is_readiness_pending: false,
@@ -100,23 +99,41 @@ impl<S: EventSink> ExecSession<S> {
         outgoing
     }
 
-    pub fn fold(&mut self, event: &ExecEvent, recon_seq: u64, outgoing: &mut Vec<Outgoing>) {
-        let folded = self
-            .core
-            .on_event(event, &mut Outgoing::sink(outgoing, recon_seq));
-        if let Err(error) = folded {
-            error!(
-                "{} execution cannot retain an observed order in its possibly-live set: {error}",
-                self.venue
-            );
-            self.fatal
-                .trip(FatalReason::MirrorRetainFailed { venue: self.venue });
+    /// # Errors
+    /// [`ExecSessionError::MirrorRetainFailed`] when the event reveals an order that the mirror
+    /// cannot hold. The rest of the event is still applied.
+    pub fn fold(
+        &mut self,
+        event: &ExecEvent,
+        recon_seq: u64,
+        outgoing: &mut Vec<Outgoing>,
+    ) -> Result<(), ExecSessionError> {
+        self.core
+            .on_event(event, &mut Outgoing::sink(outgoing, recon_seq))
+            .map_err(|source| ExecSessionError::MirrorRetainFailed {
+                venue: self.venue,
+                source,
+            })
+    }
+
+    /// An open order that the codec cannot read leaves the mirror incomplete, and quoting against
+    /// an incomplete mirror is what strands somebody's order, so quoting stops.
+    #[must_use]
+    pub fn undecodable_open_order(&mut self, venue_order_id: i64) -> ExecSessionError {
+        self.core.stop_quoting();
+        ExecSessionError::UndecodableOpenOrder {
+            venue: self.venue,
+            venue_order_id,
         }
     }
 
     /// Answers the hot slot for an effect the core decided must not be sent. Without the answer the
     /// slot waits out its whole in-flight timeout before the side can quote again.
-    pub fn on_unsent(&mut self, effect: &ExecEffect, now: LocalTs) {
+    ///
+    /// # Errors
+    /// [`ExecSessionError::PlacementFailedClosed`] when the core refused a placement because its
+    /// own state is corrupt. The slot is still answered.
+    pub fn on_unsent(&mut self, effect: &ExecEffect, now: LocalTs) -> Result<(), ExecSessionError> {
         match *effect {
             ExecEffect::PlaceNotSent {
                 instrument,
@@ -131,9 +148,10 @@ impl<S: EventSink> ExecSession<S> {
                 self.events
                     .send_exec(now, place_not_sent(instrument, client_id, side, now));
                 if reason.is_fatal() {
-                    self.fatal.trip(FatalReason::PlacementFailedClosed {
+                    return Err(ExecSessionError::PlacementFailedClosed {
                         venue: self.venue,
                         client_id,
+                        reason,
                     });
                 }
             }
@@ -152,11 +170,20 @@ impl<S: EventSink> ExecSession<S> {
             | ExecEffect::Skipped { .. }
             | ExecEffect::SweepComplete { .. } => {}
         }
+        Ok(())
     }
 
     /// The edge could not put this request on the wire, so nothing reached the venue.
+    ///
+    /// # Errors
+    /// The error of [`Self::on_unsent`] for a placement that the core refused on corrupt state.
     #[cold]
-    pub fn refuse(&mut self, request: ExecRequest, reason: PlaceNotSentReason, now: LocalTs) {
+    pub fn refuse(
+        &mut self,
+        request: ExecRequest,
+        reason: PlaceNotSentReason,
+        now: LocalTs,
+    ) -> Result<(), ExecSessionError> {
         match request {
             ExecRequest::Place {
                 instrument,
@@ -171,7 +198,7 @@ impl<S: EventSink> ExecSession<S> {
                     side,
                     reason,
                 };
-                self.on_unsent(&effect, now);
+                self.on_unsent(&effect, now)
             }
             ExecRequest::AmendQty {
                 instrument,
@@ -188,10 +215,14 @@ impl<S: EventSink> ExecSession<S> {
                 // Re-arming the latch lets the next cancel command or sweep pass send it again.
                 self.core.re_arm_cancel(client_id);
                 self.warn_refused(request, reason);
+                Ok(())
             }
             ExecRequest::OrderStatus { .. }
             | ExecRequest::OpenOrders { .. }
-            | ExecRequest::SubscribeUserStream => self.warn_refused(request, reason),
+            | ExecRequest::SubscribeUserStream => {
+                self.warn_refused(request, reason);
+                Ok(())
+            }
         }
     }
 

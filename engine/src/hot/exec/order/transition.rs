@@ -1,34 +1,37 @@
-//! The transition table: the one pure function every venue event folds through, and the money
-//! decisions encoded in it.
-//!
-//! Split from the store beside it because these are two different questions. `order.rs` answers
-//! WHERE an order lives — which slot, under which id, retired when. This file answers what an event
-//! MEANS, and it is the half where a wrong answer costs money rather than tidiness.
-//!
-//! Two "in-flight" notions run through it and must never merge. EXISTENCE in-flight
-//! ([`OrderState::PendingNew`]) is resolved by ANY event naming the client id — the order either
-//! reached the venue or it did not. COMMAND in-flight (cancel/amend) is resolved only by that
-//! command's own ack or by a terminal report: a fill arriving mid-cancel does not mean the cancel
-//! landed, and treating it that way emits a second cancel.
+//! The transition table: what a venue event means for an order, apart from where the order lives,
+//! because here a wrong answer costs money rather than tidiness.
 
 use crate::msg::exec::{ExecEvent, ExecKind, RejectClass, VenueOrderStatus};
 use crate::msg::time::LocalTs;
 
-use super::order::{CloseReason, FillDelta, OrderSlot, OrderState};
+use super::fees::{FeeMemory, FeeVerdict};
+use super::{CloseReason, FillDelta, OrderSlot, OrderState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Applied {
     pub fill: FillDelta,
     pub state: OrderState,
     pub is_resurrection: bool,
+    pub(crate) fee: FeeVerdict,
 }
 
-pub fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent, now: LocalTs) -> Applied {
+/// Two "in-flight" notions run through it and must never merge. EXISTENCE in-flight
+/// ([`OrderState::PendingNew`]) is resolved by ANY event naming the client id — the order either
+/// reached the venue or it did not. COMMAND in-flight (cancel/amend) is resolved only by that
+/// command's own ack or by a terminal report: a fill arriving mid-cancel does not mean the cancel
+/// landed, and treating it that way emits a second cancel.
+pub(super) fn apply_exec_event(
+    slot: &mut OrderSlot,
+    fees: &mut FeeMemory,
+    event: &ExecEvent,
+    now: LocalTs,
+) -> Applied {
     if slot.state == OrderState::Free {
         return Applied {
             fill: FillDelta::NONE,
             state: OrderState::Free,
             is_resurrection: false,
+            fee: FeeVerdict::UNBOOKABLE,
         };
     }
     // Bound before anything mutates the slot, because the tail below has to ask what the state was
@@ -36,6 +39,7 @@ pub fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent, now: LocalTs) -
     // would answer that only for as long as the assignment stayed at the very bottom.
     let previous_state = slot.state;
     let fill = slot.fold_fill(event);
+    let fee = fees.fold(event, fill.base);
     let mut is_resurrection = false;
     let next = match event.kind {
         ExecKind::AckPlaced | ExecKind::ReportNew => match previous_state {
@@ -66,13 +70,13 @@ pub fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent, now: LocalTs) -
             },
             Some(RejectClass::Refused) => close_or_keep(previous_state, CloseReason::Rejected),
             Some(RejectClass::Gone) => close_or_keep(previous_state, CloseReason::ReconciledGone),
-            // SMELL: this catch-all arm takes `Ambiguous`, `Fatal`, a missing class, and any class
-            // added later, so a new reject class compiles and lands here with no decision. Each
-            // class needs its own arm.
-            _ => match previous_state {
-                OrderState::Closed(reason) => OrderState::Closed(reason),
-                _ => OrderState::Unknown,
-            },
+            // The venue cannot say whether the order rests: Binance's "unknown order" is also what
+            // a filled order returns.
+            Some(RejectClass::Ambiguous) => unknown_unless_closed(previous_state),
+            // The fold halts quoting on this class, and the order it refused may still rest.
+            Some(RejectClass::Fatal) => unknown_unless_closed(previous_state),
+            // A refusal that names no class says nothing about the order.
+            None => unknown_unless_closed(previous_state),
         },
 
         ExecKind::ReportTrade => {
@@ -102,6 +106,12 @@ pub fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent, now: LocalTs) -
         ExecKind::SnapshotEnd | ExecKind::StreamReset | ExecKind::StreamReady => previous_state,
     };
     slot.state = next;
+    // The status probes count the timeouts of one episode that the venue leaves unanswered. The two
+    // kinds that the edge makes for a request that never left are no answer of the venue.
+    let is_venue_answer = !matches!(event.kind, ExecKind::PlaceNotSent | ExecKind::AmendNotSent);
+    if is_venue_answer && next != OrderState::Unknown {
+        slot.status_probes = 0;
+    }
     if matches!(event.kind, ExecKind::AckAmended | ExecKind::ReportAmended) {
         // Only an amend WE asked for spends budget: the same report arriving against a Live slot is
         // the venue restating an order, and counting it would cancel the ladder early.
@@ -133,6 +143,7 @@ pub fn apply_exec_event(slot: &mut OrderSlot, event: &ExecEvent, now: LocalTs) -
         fill,
         state: next,
         is_resurrection,
+        fee,
     }
 }
 
@@ -173,6 +184,15 @@ fn close_or_keep(state: OrderState, reason: CloseReason) -> OrderState {
     match state {
         OrderState::Closed(existing) => OrderState::Closed(existing),
         _ => OrderState::Closed(reason),
+    }
+}
+
+/// A closed order keeps its first answer, and any other is unknown until the venue is asked.
+#[inline]
+fn unknown_unless_closed(state: OrderState) -> OrderState {
+    match state {
+        OrderState::Closed(reason) => OrderState::Closed(reason),
+        _ => OrderState::Unknown,
     }
 }
 

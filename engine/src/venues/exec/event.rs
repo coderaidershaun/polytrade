@@ -5,7 +5,7 @@ use crate::msg::exec::{
     ACCOUNT_CHUNK_ASSETS, AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind,
     Provenance, RejectClass,
 };
-use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side};
+use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, VenueId};
 use crate::msg::time::{LocalTs, VenueTs};
 
 // A timed-out request may still have reached the venue, so its outcome is ambiguous and only a
@@ -79,6 +79,7 @@ pub(crate) fn blank(
     at: LocalTs,
 ) -> ExecEvent {
     ExecEvent {
+        venue: VenueId::default(),
         instrument,
         client_id,
         venue_order_id: None,

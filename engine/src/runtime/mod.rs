@@ -2,6 +2,7 @@
 //! the assembly that wires those parts at start and tears them down.
 
 pub mod config;
+mod durable_file;
 pub mod exposure;
 #[cfg(all(feature = "otlp", not(target_arch = "wasm32")))]
 pub mod otlp;

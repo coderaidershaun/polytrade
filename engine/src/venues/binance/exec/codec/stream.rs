@@ -5,7 +5,6 @@ use crate::msg::exec::{
     AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind, Liquidity, RejectClass,
 };
 use crate::msg::ids::{AssetId, TradeId, VenueOrderId};
-use crate::runtime::registry::AssetDictionary;
 use crate::venues::edge::decode::{
     DecimalFault, mantissa_field, order_side, price_field, qty_field, unknown_enum,
 };
@@ -70,7 +69,7 @@ pub fn decode_stream_event(
                         free_field: "f",
                         locked_field: "l",
                     }
-                    .parse(context.assets)
+                    .parse(context)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             let stamps = ChunkStamps {
@@ -105,7 +104,7 @@ pub fn account_snapshot_chunks(
                 free_field: "free",
                 locked_field: "locked",
             }
-            .parse(context.assets)
+            .parse(context)
         })
         .collect::<Result<Vec<_>, _>>()?;
     let stamps = ChunkStamps {
@@ -116,11 +115,11 @@ pub fn account_snapshot_chunks(
 }
 
 impl BalanceView<'_> {
-    fn parse(self, assets: &AssetDictionary) -> Result<AssetBalance, DecimalFault> {
+    fn parse(self, context: &DecodeContext<'_>) -> Result<AssetBalance, DecimalFault> {
         Ok(AssetBalance {
             // An asset no configured instrument names still crosses, as UNKNOWN, because a balance
             // dropped here is one nobody can later explain.
-            asset: assets.id(self.asset),
+            asset: context.assets.id(context.venue, self.asset),
             free: mantissa_field(self.free_field, self.free)?,
             locked: mantissa_field(self.locked_field, self.locked)?,
         })
@@ -143,7 +142,7 @@ fn decode_execution_report(
         trade_id: (report.trade_id >= 0).then_some(TradeId(report.trade_id)),
         status: Some(venue_status("X", &report.order_status)?),
         reject: report_reject(kind, &report.reject_reason),
-        provenance: ownership.provenance,
+        provenance: ownership.provenance(),
         side: order_side("S", &report.side)?,
         liquidity: matches!(kind, ExecKind::ReportTrade).then(|| match report.is_maker {
             true => Liquidity::Maker,
@@ -156,14 +155,14 @@ fn decode_execution_report(
         cumulative_qty: qty_field("z", &report.cumulative_qty)?,
         cumulative_quote: money_field("Z", &report.cumulative_quote)?,
         commission: commission_field(&report.commission)?,
-        commission_asset: commission_asset(report.commission_asset.as_deref(), context.assets),
+        commission_asset: commission_asset(report.commission_asset.as_deref(), context),
         exchange_ts_us: clamp_exchange_ts(report.transact_ts_ms, context.received_ts_us),
         // The stream gives a reject reason but no code, and an amend report carries no count of
         // the amends left, so the code and the amend budget keep their unknown defaults.
         ..blank(
             kind,
             Some(instrument),
-            ownership.client_id,
+            ownership.event_client_id(),
             context.received_ts_us,
         )
     }))
@@ -220,6 +219,8 @@ fn commission_field(text: &str) -> Result<i64, DecimalFault> {
 
 /// An asset no configured instrument names becomes UNKNOWN, so its fee is never booked against
 /// one the engine trades. The venue sends null when the fee is zero.
-fn commission_asset(asset: Option<&str>, assets: &AssetDictionary) -> AssetId {
-    asset.map_or(AssetId::UNKNOWN, |name| assets.id(name))
+fn commission_asset(asset: Option<&str>, context: &DecodeContext<'_>) -> AssetId {
+    asset.map_or(AssetId::UNKNOWN, |name| {
+        context.assets.id(context.venue, name)
+    })
 }

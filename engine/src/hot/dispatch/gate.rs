@@ -152,7 +152,8 @@ fn opened_market(body: &MessageBody) -> Option<InstrumentId> {
         | MessageBody::Link(_)
         | MessageBody::RunControl(_)
         | MessageBody::Exec(_)
-        | MessageBody::Account(_) => None,
+        | MessageBody::Account(_)
+        | MessageBody::WriterFailed(_) => None,
     }
 }
 

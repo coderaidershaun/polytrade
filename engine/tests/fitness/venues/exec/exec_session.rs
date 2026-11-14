@@ -5,33 +5,35 @@ use engine::msg::exec::{
     CancelReason, ExecCommand, ExecEvent, ExecKind, OrderStyle, Provenance, RejectClass,
     VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side};
+use engine::msg::failure::{FailureClass, Halt};
+use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, VenueId};
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::runtime::shutdown::FatalSignal;
 use engine::venues::exec::{
-    ExecCore, ExecEffect, ExecRequest, ExecSession, InFlightRequest, MAX_RESYNC_ATTEMPTS,
-    MirroredOrder, Outgoing, Phase, PlaceNotSentReason, REQUEST_TIMEOUT, ResyncPoll, SessionSetup,
-    TimeoutFallout,
+    ExecCore, ExecEffect, ExecRequest, ExecSession, ExecSessionError, InFlightRequest,
+    MAX_RESYNC_ATTEMPTS, MirroredOrder, Outgoing, Phase, PlaceNotSentReason, ResyncPoll,
+    SessionSetup,
 };
 
 use crate::exec_support::SentEvents;
 
-type Session = ExecSession<SentEvents>;
+pub(super) type Session = ExecSession<SentEvents>;
 
 const VENUE: &str = "test-venue";
-const INSTRUMENT: InstrumentId = InstrumentId(0);
+pub(super) const INSTRUMENT: InstrumentId = InstrumentId(0);
 const OTHER_INSTRUMENT: InstrumentId = InstrumentId(1);
-const NOW: LocalTs = LocalTs::from_micros(1_785_000_000_000_000);
+pub(super) const NOW: LocalTs = LocalTs::from_micros(1_785_000_000_000_000);
+pub(super) const INFLIGHT_TIMEOUT: DurationUs = DurationUs::from_millis(5_000);
 const PRICE: Price = Price::from_mantissa(11_800_000_000_000);
 
-fn new_session() -> (Session, FatalSignal) {
+pub(super) fn new_session() -> (Session, FatalSignal) {
     let fatal = FatalSignal::new();
     let session = ExecSession::new(SessionSetup {
         venue: VENUE,
         core: ExecCore::with_limits(8, 32),
         instruments: vec![INSTRUMENT, OTHER_INSTRUMENT],
         events: SentEvents::default(),
-        fatal: fatal.clone(),
+        inflight_timeout: INFLIGHT_TIMEOUT,
     });
     (session, fatal)
 }
@@ -52,7 +54,11 @@ fn quoting_session() -> (Session, FatalSignal) {
 
 /// What a venue's dispatch does with the core's decision: every request it sends is recorded as in
 /// flight under the hot sequence it answers.
-fn send(session: &mut Session, command: ExecCommand, sent_at: LocalTs) -> Vec<ExecRequest> {
+pub(super) fn send(
+    session: &mut Session,
+    command: ExecCommand,
+    sent_at: LocalTs,
+) -> Vec<ExecRequest> {
     let mut outgoing = Vec::new();
     session.core.on_command(
         command,
@@ -61,7 +67,11 @@ fn send(session: &mut Session, command: ExecCommand, sent_at: LocalTs) -> Vec<Ex
     record(session, outgoing, sent_at)
 }
 
-fn record(session: &mut Session, outgoing: Vec<Outgoing>, sent_at: LocalTs) -> Vec<ExecRequest> {
+pub(super) fn record(
+    session: &mut Session,
+    outgoing: Vec<Outgoing>,
+    sent_at: LocalTs,
+) -> Vec<ExecRequest> {
     let mut sent = Vec::new();
     for Outgoing { effect, recon_seq } in outgoing {
         if let ExecEffect::Send {
@@ -81,7 +91,7 @@ fn record(session: &mut Session, outgoing: Vec<Outgoing>, sent_at: LocalTs) -> V
     sent
 }
 
-fn place(client_id: u64, side: Side) -> ExecCommand {
+pub(super) fn place(client_id: u64, side: Side) -> ExecCommand {
     ExecCommand::Place {
         instrument: INSTRUMENT,
         client_id: ClientOrderId(client_id),
@@ -126,6 +136,7 @@ fn prior_run_order(client_id: u64) -> MirroredOrder {
 /// A venue report of a resting order the codec attributed to this run by its client id.
 fn resting_report(client_id: u64) -> ExecEvent {
     ExecEvent {
+        venue: VenueId(0),
         instrument: Some(INSTRUMENT),
         client_id: ClientOrderId(client_id),
         venue_order_id: None,
@@ -152,7 +163,7 @@ fn resting_report(client_id: u64) -> ExecEvent {
     }
 }
 
-fn kinds(events: &[ExecEvent]) -> Vec<ExecKind> {
+pub(super) fn kinds(events: &[ExecEvent]) -> Vec<ExecKind> {
     events.iter().map(|event| event.kind).collect()
 }
 
@@ -163,7 +174,7 @@ fn provenance_of(session: &Session, client_id: u64) -> Option<Provenance> {
         .map(|order| order.provenance)
 }
 
-fn sent(outgoing: &[Outgoing]) -> Vec<(ExecRequest, u64)> {
+pub(super) fn sent(outgoing: &[Outgoing]) -> Vec<(ExecRequest, u64)> {
     outgoing
         .iter()
         .filter_map(|sent| match sent.effect {
@@ -180,7 +191,7 @@ fn cancel_request(client_id: u64) -> ExecRequest {
     }
 }
 
-fn status_request(client_id: u64) -> ExecRequest {
+pub(super) fn status_request(client_id: u64) -> ExecRequest {
     ExecRequest::OrderStatus {
         instrument: INSTRUMENT,
         client_id: ClientOrderId(client_id),
@@ -210,9 +221,9 @@ fn assert_not_quoting(session: &Session, step: &str) {
 /// engine cannot account for.
 #[test]
 fn a_refused_placement_releases_only_this_runs_reservation_and_trips_only_on_corrupt_state() {
-    let (mut ours, ours_fatal) = quoting_session();
+    let (mut ours, _) = quoting_session();
     send(&mut ours, place(1, Side::Sell), NOW);
-    ours.refuse(
+    let refused = ours.refuse(
         place_request(1, Side::Sell),
         PlaceNotSentReason::NoTransport,
         NOW,
@@ -225,18 +236,20 @@ fn a_refused_placement_releases_only_this_runs_reservation_and_trips_only_on_cor
     assert_eq!(kinds(&ours.events), [ExecKind::PlaceNotSent]);
     assert_eq!(ours.events[0].client_id, ClientOrderId(1));
     assert_eq!(ours.events[0].side, Side::Sell);
-    assert!(!ours_fatal.is_tripped());
+    assert!(refused.is_ok());
 
     let (mut inherited, _) = quoting_session();
     inherited
         .core
         .observe_venue_order(prior_run_order(2))
         .expect("one prior-run order fits the mirror");
-    inherited.refuse(
-        place_request(2, Side::Buy),
-        PlaceNotSentReason::NoTransport,
-        NOW,
-    );
+    inherited
+        .refuse(
+            place_request(2, Side::Buy),
+            PlaceNotSentReason::NoTransport,
+            NOW,
+        )
+        .expect("a refusal on clean state is no fault");
     assert_eq!(
         provenance_of(&inherited, 2),
         Some(Provenance::PriorRun),
@@ -244,18 +257,19 @@ fn a_refused_placement_releases_only_this_runs_reservation_and_trips_only_on_cor
     );
     assert_eq!(kinds(&inherited.events), [ExecKind::PlaceNotSent]);
 
-    let (mut duplicated, duplicated_fatal) = quoting_session();
+    let (mut duplicated, _) = quoting_session();
     send(&mut duplicated, place(3, Side::Buy), NOW);
     let mut effects = Vec::new();
     duplicated
         .core
         .on_command(place(3, Side::Buy), &mut |effect| effects.push(effect));
-    for effect in &effects {
-        duplicated.on_unsent(effect, NOW);
-    }
+    let faults: Vec<ExecSessionError> = effects
+        .iter()
+        .filter_map(|effect| duplicated.on_unsent(effect, NOW).err())
+        .collect();
     assert!(
-        duplicated_fatal.is_tripped(),
-        "a duplicate client id ran on"
+        matches!(faults[..], [ExecSessionError::PlacementFailedClosed { .. }]),
+        "a duplicate client id ran on: {faults:?}"
     );
     assert_eq!(kinds(&duplicated.events), [ExecKind::PlaceNotSent]);
     assert_eq!(
@@ -272,19 +286,18 @@ fn a_refused_placement_releases_only_this_runs_reservation_and_trips_only_on_cor
         (PlaceNotSentReason::Encoding, false),
         (PlaceNotSentReason::NoTransport, false),
     ] {
-        let (mut session, fatal) = quoting_session();
-        session.refuse(place_request(4, Side::Buy), reason, NOW);
-        assert_eq!(fatal.is_tripped(), is_fatal, "{reason:?}");
+        let (mut session, _) = quoting_session();
+        let refused = session.refuse(place_request(4, Side::Buy), reason, NOW);
+        assert_eq!(refused.is_err(), is_fatal, "{reason:?}");
         assert_eq!(
             kinds(&session.events),
             [ExecKind::PlaceNotSent],
             "{reason:?} left the hot slot waiting"
         );
-        if is_fatal {
+        if let Err(fault) = refused {
+            assert_eq!(fault.failure_class(), FailureClass::Halt(Halt::Engine));
             assert!(
-                fatal
-                    .reason()
-                    .is_some_and(|reason| reason.to_string().contains(VENUE)),
+                fault.fatal_reason().to_string().contains(VENUE),
                 "{reason:?} stopped the run without naming the venue"
             );
         }
@@ -299,7 +312,7 @@ fn a_refused_placement_releases_only_this_runs_reservation_and_trips_only_on_cor
 /// report the hot slot waits out its in-flight timeout before the side can quote again.
 #[test]
 fn a_refused_cancel_rearms_and_a_refused_amend_frees_the_slot() {
-    let (mut session, fatal) = quoting_session();
+    let (mut session, _) = quoting_session();
     send(&mut session, place(1, Side::Buy), NOW);
     assert_eq!(send(&mut session, cancel(1), NOW).len(), 1);
     assert!(
@@ -309,7 +322,7 @@ fn a_refused_cancel_rearms_and_a_refused_amend_frees_the_slot() {
             .is_some_and(|order| order.has_sent_cancel)
     );
 
-    session.refuse(cancel_request(1), PlaceNotSentReason::NoTransport, NOW);
+    let refused_cancel = session.refuse(cancel_request(1), PlaceNotSentReason::NoTransport, NOW);
     assert!(
         session
             .core
@@ -330,7 +343,7 @@ fn a_refused_cancel_rearms_and_a_refused_amend_frees_the_slot() {
         client_id: ClientOrderId(1),
         qty: Qty::from_mantissa(4_000),
     };
-    session.refuse(refused_amend, PlaceNotSentReason::NoTransport, NOW);
+    let amend_fault = session.refuse(refused_amend, PlaceNotSentReason::NoTransport, NOW);
     assert_eq!(
         session.core.mirror(),
         resting.as_slice(),
@@ -338,59 +351,7 @@ fn a_refused_cancel_rearms_and_a_refused_amend_frees_the_slot() {
     );
     assert_eq!(kinds(&session.events), [ExecKind::AmendNotSent]);
     assert_eq!(session.events[0].client_id, ClientOrderId(1));
-    assert!(!fatal.is_tripped());
-}
-
-/// FITNESS: a request whose bytes may have reached the venue leaves its order ambiguous and answers
-/// the hot slot as ambiguous, and nothing is put back on the wire.
-///
-/// The order may exist, so a resend could leave two live orders and a release could strand one;
-/// only a read can settle it. The event carries the side the mirror knows, because the hot side
-/// matches the slot on it.
-#[test]
-fn a_request_the_wire_may_have_seen_is_in_doubt_and_never_resent() {
-    let (mut session, _) = quoting_session();
-    session.core.on_command(place(1, Side::Sell), &mut |_| {});
-
-    session.mark_in_doubt(place_request(1, Side::Sell), NOW);
-    assert!(
-        session
-            .core
-            .mirrored(ClientOrderId(1))
-            .is_some_and(|order| order.is_ambiguous)
-    );
-    let [in_doubt] = session.events.as_slice() else {
-        panic!("expected one event, got {:?}", session.events);
-    };
-    assert_eq!(in_doubt.kind, ExecKind::AckFailed);
-    assert_eq!(in_doubt.reject, Some(RejectClass::Ambiguous));
-    assert_eq!(in_doubt.client_id, ClientOrderId(1));
-    assert_eq!(in_doubt.side, Side::Sell);
-    assert_eq!(in_doubt.exchange_ts_us, NOW.as_venue_calendar());
-
-    session.events.clear();
-    session.mark_in_doubt(status_request(7), NOW);
-    assert_eq!(kinds(&session.events), [ExecKind::AckFailed]);
-    assert_eq!(session.events[0].side, Side::Buy);
-
-    session.events.clear();
-    session.mark_in_doubt(
-        ExecRequest::OpenOrders {
-            instrument: INSTRUMENT,
-        },
-        NOW,
-    );
-    session.mark_in_doubt(ExecRequest::SubscribeUserStream, NOW);
-    assert!(
-        session.events.is_empty(),
-        "a read that may have been seen names no order: {:?}",
-        session.events
-    );
-    assert_eq!(
-        session.inflight.take_all().len(),
-        1,
-        "only the subscribe sent at connect is in flight; nothing was resent"
-    );
+    assert!(refused_cancel.is_ok() && amend_fault.is_ok());
 }
 
 /// FITNESS: a lost connection makes every outstanding order request ambiguous, then resets the
@@ -437,59 +398,6 @@ fn losing_the_connection_dooms_every_outstanding_request_then_resets_the_stream_
     assert!(session.inflight.take_all().is_empty());
     assert_eq!(session.core.phase(), Phase::Down);
     assert!(session.core.mirror().iter().all(|order| order.is_ambiguous));
-}
-
-/// FITNESS: a request past its deadline is reconciled with a status probe under the hot sequence
-/// it belonged to, never resent; an unanswered read is handed back to the venue to decide; and only
-/// a lost placement is flagged as one.
-///
-/// Resending risks a second live order. The probe's answer must land in the reconcile pass that
-/// asked, or the hot side settles the wrong pass. A lost placement may sit on the venue under an id
-/// this run never learned, which is why a venue may need to look for it.
-#[test]
-fn an_unanswered_request_is_reconciled_with_a_status_probe_under_its_own_hot_sequence() {
-    let (mut session, _) = quoting_session();
-    session.core.on_command(place(1, Side::Sell), &mut |_| {});
-    let reconcile_order = ExecCommand::ReconcileOrder {
-        instrument: INSTRUMENT,
-        client_id: ClientOrderId(1),
-        recon_seq: 41,
-    };
-    send(&mut session, reconcile_order, NOW);
-    let reconcile_open = ExecCommand::ReconcileOpenOrders {
-        instrument: INSTRUMENT,
-        recon_seq: 42,
-    };
-    send(&mut session, reconcile_open, NOW);
-
-    let early = session.expire(NOW + REQUEST_TIMEOUT - DurationUs::from_micros(1));
-    assert!(early.outgoing.is_empty() && early.unanswered_reads.is_empty());
-    assert!(session.events.is_empty());
-
-    let expired = session.expire(NOW + REQUEST_TIMEOUT);
-    assert_eq!(sent(&expired.outgoing), [(status_request(1), 41)]);
-    assert_eq!(
-        expired.unanswered_reads,
-        [
-            TimeoutFallout::StreamUnusable,
-            TimeoutFallout::ReadAbandoned
-        ]
-    );
-    assert!(!expired.has_lost_placement);
-    assert_eq!(kinds(&session.events), [ExecKind::AckFailed]);
-    assert_eq!(session.events[0].side, Side::Sell);
-    assert!(
-        session
-            .core
-            .mirrored(ClientOrderId(1))
-            .is_some_and(|order| order.is_ambiguous)
-    );
-
-    let (mut placing, _) = quoting_session();
-    send(&mut placing, place(2, Side::Buy), NOW);
-    let lost = placing.expire(NOW + REQUEST_TIMEOUT);
-    assert!(lost.has_lost_placement);
-    assert_eq!(sent(&lost.outgoing), [(status_request(2), 0)]);
 }
 
 /// FITNESS: a failed resync pass is re-read under a fresh sequence once its backoff is due, and the
@@ -633,7 +541,9 @@ fn an_order_found_before_quoting_opened_is_prior_run_and_after_it_is_ours() {
     let _subscribe = early.connect();
     assert!(!early.core.has_opened_quoting());
     let mut outgoing = Vec::new();
-    early.fold(&resting_report(1), 0, &mut outgoing);
+    early
+        .fold(&resting_report(1), 0, &mut outgoing)
+        .expect("the session raises no fault here");
     assert_eq!(provenance_of(&early, 1), Some(Provenance::PriorRun));
     assert!(
         sent(&outgoing).contains(&(cancel_request(1), 0)),
@@ -649,13 +559,17 @@ fn an_order_found_before_quoting_opened_is_prior_run_and_after_it_is_ours() {
     let mut gone = resting_report(1);
     gone.kind = ExecKind::ReportCanceled;
     gone.status = Some(VenueOrderStatus::Canceled);
-    early.fold(&gone, 0, &mut Vec::new());
+    early
+        .fold(&gone, 0, &mut Vec::new())
+        .expect("the session raises no fault here");
     assert_not_quoting(&early, "the inherited order leaving");
-    early.refuse(
-        place_request(5, Side::Buy),
-        PlaceNotSentReason::NoTransport,
-        NOW,
-    );
+    early
+        .refuse(
+            place_request(5, Side::Buy),
+            PlaceNotSentReason::NoTransport,
+            NOW,
+        )
+        .expect("the session raises no fault here");
     assert_not_quoting(&early, "a refused placement");
     early.finish_pass();
     assert!(!early.arm_readiness(NOW), "readiness armed while down");
@@ -664,7 +578,8 @@ fn an_order_found_before_quoting_opened_is_prior_run_and_after_it_is_ours() {
     let (mut late, _) = quoting_session();
     assert!(late.core.has_opened_quoting());
     let mut outgoing = Vec::new();
-    late.fold(&resting_report(2), 0, &mut outgoing);
+    late.fold(&resting_report(2), 0, &mut outgoing)
+        .expect("the session raises no fault here");
     assert_eq!(provenance_of(&late, 2), Some(Provenance::Mine));
     assert!(sent(&outgoing).is_empty(), "this run's order was cancelled");
 
@@ -676,7 +591,8 @@ fn an_order_found_before_quoting_opened_is_prior_run_and_after_it_is_ours() {
         "a reconnect reset the latch"
     );
     let mut outgoing = Vec::new();
-    late.fold(&resting_report(3), 0, &mut outgoing);
+    late.fold(&resting_report(3), 0, &mut outgoing)
+        .expect("the session raises no fault here");
     assert_eq!(provenance_of(&late, 3), Some(Provenance::Mine));
     assert!(sent(&outgoing).is_empty(), "this run's order was cancelled");
 }

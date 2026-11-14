@@ -12,16 +12,15 @@ use probe_config::{ProbeError, load_harness_config, stages_config_path};
 /// The config that the harness ships for its full start, which runs with execution off.
 const STAGES_CONFIG: &str = include_str!("../../../../tools/latency-probe/stages.yaml");
 
-/// The fields that a live execution block cannot leave out.
-const LIVE_EXECUTION: &str = "
-execution:
-  mode: live
-  min_base_balance: 0.0
-  min_quote_balance: 20.0
-  max_order_notional_quote: 25.0
-  max_quote_distance_bps: 50.0
-  max_book_age_ms: 2000
-  max_session_loss_quote: 5.0
+/// The fields that a live execution block cannot leave out, inside the one source of the harness.
+const LIVE_EXECUTION: &str = "    execution:
+      mode: live
+      min_base_balance: 0.0
+      min_quote_balance: 20.0
+      max_order_notional_quote: 25.0
+      max_quote_distance_bps: 50.0
+      max_book_age_ms: 2000
+      max_session_loss_quote: 5.0
 ";
 
 fn written(name: &str, contents: &str) -> PathBuf {
@@ -36,7 +35,8 @@ fn written(name: &str, contents: &str) -> PathBuf {
 
 #[test]
 fn latency_probe_refuses_live_execution() {
-    let live = written("live", &format!("{STAGES_CONFIG}{LIVE_EXECUTION}"));
+    let armed = STAGES_CONFIG.replacen("strategy:\n", &format!("{LIVE_EXECUTION}strategy:\n"), 1);
+    let live = written("live", &armed);
     let shipped = written("shipped", STAGES_CONFIG);
     let refusal = load_harness_config(&live);
     let accepted = load_harness_config(&shipped);
@@ -59,8 +59,8 @@ fn latency_probe_refuses_live_execution() {
     let config = accepted.expect("the shipped harness config loads");
     assert!(
         config
-            .execution
-            .is_none_or(|execution| execution.mode != ExecutionMode::Live),
+            .execution_mode()
+            .is_none_or(|mode| mode != ExecutionMode::Live),
         "the shipped harness config never runs live"
     );
 

@@ -60,6 +60,14 @@ pub struct Credentials {
 }
 
 impl Credentials {
+    /// No key at all, for a client that can reach only a stand-in on this host.
+    pub(crate) fn loopback() -> Self {
+        Self {
+            api_key: Secret::new("loopback-api-key"),
+            api_secret: Secret::new("loopback-api-secret"),
+        }
+    }
+
     pub fn api_key(&self) -> &Secret {
         &self.api_key
     }

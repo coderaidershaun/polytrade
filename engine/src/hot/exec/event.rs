@@ -1,38 +1,43 @@
 //! Folding a venue event: a stream reset, the end of an open-orders snapshot, or the transition of
 //! an order of this run or an earlier one, with its money, reservation release and audit rows.
 
-use crate::hot::digest::digest_fields;
-use crate::hot::ledger::{LedgerFill, PositionLedger};
+use crate::hot::ledger::PositionLedger;
 use crate::hot::strategy::Actions;
 use crate::log::{hot_error, hot_warn};
 use crate::msg::exec::{ExecEvent, ExecKind, RejectClass};
-use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Side};
+use crate::msg::ids::AssetId;
 use crate::msg::persist::{OrderLifecycle, OrderTransition};
 use crate::msg::time::LocalTs;
-use crate::runtime::config::MAX_QUOTE_LEVELS;
 
 use super::account::ReleaseOutcome;
 use super::audit::{bank_engine_driven, bank_event_rows};
 use super::engine::{ExecEngine, FoldStamps, view_of};
 use super::gates::HaltReason;
-use super::order::{
-    FillDelta, MAX_ORDER_INSTRUMENTS, MAX_ORDER_SLOTS, OrderSlot, OrderState, ReconcilePass,
-    free_or_oldest_closed,
-};
-use super::transition::apply_exec_event;
+use super::order::{OrderSlot, OrderState, PriorRunSeat, ReconcilePass, Unseated};
 use super::view::{ExecCallback, Fill, OrderReject, RejectOrigin};
 
 impl ExecEngine {
     #[cold]
-    pub(super) fn on_stream_reset(&mut self, at: LocalTs, bank: &mut Actions) -> ExecCallback {
+    /// A stream reset of one venue leaves the orders, the readiness and the refusals of each other
+    /// venue as they were.
+    pub(super) fn on_stream_reset(
+        &mut self,
+        venue: usize,
+        at: LocalTs,
+        bank: &mut Actions,
+    ) -> ExecCallback {
         hot_warn!(
             "execution stream reset — every open order is unknown until a reconciliation lands"
         );
-        self.readiness.observe_stream_reset();
+        self.venues[venue].readiness.observe_stream_reset();
         // Every reason the pass last reported was derived from order state that is now a memory, so
         // the next refusal is news again rather than a repeat the latch would swallow.
-        self.refusals.forget();
-        self.orders.invalidate_all(&mut |slot, previous| {
+        let (instruments, slots) = {
+            let state = &self.venues[venue];
+            (state.instruments.clone(), state.slots.clone())
+        };
+        self.refusals.forget_instruments(instruments);
+        self.orders.invalidate_within(slots, &mut |slot, previous| {
             let transition = OrderTransition::StreamReset;
             bank_engine_driven(bank, slot, transition, previous.into(), at);
         });
@@ -54,20 +59,33 @@ impl ExecEngine {
             recon_seq: event.recon_seq,
             recon_ts_us: stamps.fold,
         };
+        let mut has_swept = false;
         self.orders.sweep_unseen(pass, &mut |slot, previous| {
+            has_swept = true;
             swept_warning(slot, pass.recon_seq);
             let transition = OrderTransition::SweepClosed;
             bank_engine_driven(bank, slot, transition, previous.into(), stamps.received);
         });
-        self.readiness.observe_open_orders_snapshot();
+        let venue = self.venue_of(instrument);
+        if has_swept {
+            self.venues[venue]
+                .silence
+                .observe_read_change(pass.recon_seq);
+        }
+        self.venues[venue].readiness.observe_open_orders_snapshot();
+        self.end_silence_read(venue, pass.recon_seq, stamps.fold);
         ExecCallback::None
     }
 
-    /// Retry releases that beat account update. Fixed-slot scan, no alloc.
-    pub(super) fn retry_reservation_releases(&mut self) {
-        for index in 0..MAX_ORDER_SLOTS {
+    /// Retries each release that beat its account update. A free slot holds no reservation, so the
+    /// pass walks the slots in use.
+    pub(super) fn retry_reservation_releases(&mut self, venue: usize) {
+        let slots = self.venues[venue].slots.clone();
+        let mut next = self.orders.next_in_use(slots.start);
+        while let Some(index) = next.filter(|index| slots.contains(index)) {
+            next = self.orders.next_in_use(index + 1);
             let slot = self.orders.slot(index);
-            if slot.reserved_amount.is_none() || slot.state == OrderState::PendingNew {
+            if slot.reserved_amount().is_none() || slot.state() == OrderState::PendingNew {
                 continue;
             }
             self.release_reservation(index);
@@ -83,14 +101,14 @@ impl ExecEngine {
         bank: &mut Actions,
     ) -> ExecCallback {
         let (now, received) = (stamps.fold, stamps.received);
-        let previous_state = OrderLifecycle::from(self.orders.slot(index).state);
-        let applied = apply_exec_event(self.orders.slot_mut(index), event, now);
+        let previous_state = OrderLifecycle::from(self.orders.slot(index).state());
+        let applied = self.orders.apply(index, event, now);
         if applied.is_resurrection {
             self.resurrection_error(event);
         }
         let slot = *self.orders.slot(index);
 
-        self.book_fill(&slot, event, applied.fill, ledger);
+        self.book_report(&slot, event, applied, ledger, bank, received);
         if event.kind == ExecKind::PlaceNotSent {
             self.release_unsent_reservation(index);
         } else {
@@ -101,10 +119,10 @@ impl ExecEngine {
 
         if !applied.fill.is_empty() {
             return ExecCallback::Fill(Fill {
-                instrument: slot.instrument,
-                client_id: slot.client_id,
-                side: slot.side,
-                level: slot.level,
+                instrument: slot.instrument(),
+                client_id: slot.client_id(),
+                side: slot.side(),
+                level: slot.level(),
                 price: event.last_price,
                 qty: applied.fill.base,
                 notional: applied.fill.quote,
@@ -118,10 +136,10 @@ impl ExecEngine {
         }
         if let Some(class) = event.reject {
             return ExecCallback::Reject(OrderReject {
-                instrument: slot.instrument,
-                client_id: Some(slot.client_id),
-                side: slot.side,
-                level: Some(slot.level),
+                instrument: slot.instrument(),
+                client_id: Some(slot.client_id()),
+                side: slot.side(),
+                level: Some(slot.level()),
                 origin: RejectOrigin::Venue {
                     class,
                     code: event.reject_code,
@@ -132,7 +150,8 @@ impl ExecEngine {
         ExecCallback::Update(view_of(&slot).updated_at(received))
     }
 
-    /// Prior-run order event: no reservation release, no reject count, no callback (position already in ledger).
+    /// An order of an earlier run holds no reservation, adds to no reject streak and earns no
+    /// callback. Its fills after its first report still move the ledger.
     #[cold]
     pub(super) fn apply_to_prior_run(
         &mut self,
@@ -142,18 +161,17 @@ impl ExecEngine {
         bank: &mut Actions,
     ) {
         let now = stamps.fold;
-        // SMELL: when every prior-run slot is taken, this event is logged and dropped, so a fill of
-        // an order from the earlier run never reaches the ledger and the position stays wrong. A
-        // full table should halt the engine instead.
-        let index = match self.prior_orders.find_or_seat(event, now) {
-            Ok(index) => index,
-            Err(Unseated::TableFull) => return self.prior_run_overflow_error(event),
-            Err(Unseated::NoInstrument) => return self.prior_run_without_instrument_error(event),
+        let PriorRunSeat { index, unbooked } = match self.prior_orders.find_or_seat(event, now) {
+            Ok(seat) => seat,
+            Err(Unseated::TableFull) => return self.on_prior_run_overflow(event, stamps, bank),
+            Err(Unseated::NoInstrument) => {
+                return self.on_prior_run_without_instrument(event, stamps, bank);
+            }
         };
-        let previous_state = OrderLifecycle::from(self.prior_orders.slot(index).state);
-        let applied = apply_exec_event(self.prior_orders.slot_mut(index), event, now);
+        let previous_state = OrderLifecycle::from(self.prior_orders.slot(index).state());
+        let applied = self.prior_orders.apply(index, event, now);
         let slot = *self.prior_orders.slot(index);
-        self.book_fill(&slot, event, applied.fill, ledger);
+        self.book_report(&slot, event, applied, ledger, bank, stamps.received);
         bank_event_rows(
             bank,
             &slot,
@@ -162,39 +180,58 @@ impl ExecEngine {
             applied.fill,
             stamps.received,
         );
+        if unbooked.mantissa() > 0 {
+            self.on_unbooked_prior_run_total(event, stamps, bank);
+        }
     }
 
-    /// Fee + fill. No-op on empty (duplicates already folded).
-    fn book_fill(
+    /// The total that an order of an earlier run shows at its first report can hold fills that the
+    /// earlier run booked, which the restored position holds, and the fold cannot tell which part.
+    /// So the ledger books none of it, the record keeps it for a person to book, and quoting halts.
+    #[cold]
+    fn on_unbooked_prior_run_total(
         &mut self,
-        slot: &OrderSlot,
         event: &ExecEvent,
-        fill: FillDelta,
-        ledger: &mut PositionLedger,
+        stamps: FoldStamps,
+        bank: &mut Actions,
     ) {
-        if fill.is_empty() {
-            return;
+        unbooked_prior_run_total_error(event);
+        self.record_orphan_fill(event, stamps.received, bank);
+        self.halt(HaltReason::PriorRunFillUnbooked, stamps.fold);
+    }
+
+    /// Each entry of the prior-run table holds a working order, so this one has nowhere to fold.
+    /// The ledger would have to guess, so quoting halts with the table as it is, and the tape keeps
+    /// the fill.
+    #[cold]
+    fn on_prior_run_overflow(&mut self, event: &ExecEvent, stamps: FoldStamps, bank: &mut Actions) {
+        self.prior_run_overflow_error(event);
+        self.record_orphan_fill(event, stamps.received, bank);
+        self.halt(HaltReason::PriorRunOverflow, stamps.fold);
+    }
+
+    /// With a fill and no instrument, the order has no entry and the fill no record, so quoting
+    /// halts as for each other fill that no slot holds.
+    #[cold]
+    fn on_prior_run_without_instrument(
+        &mut self,
+        event: &ExecEvent,
+        stamps: FoldStamps,
+        bank: &mut Actions,
+    ) {
+        self.prior_run_without_instrument_error(event);
+        if event.cumulative_qty.mantissa() > 0 {
+            self.record_orphan_fill(event, stamps.received, bank);
+            self.halt(HaltReason::OrphanFill, stamps.fold);
         }
-        // Only commission in own quote_asset counts (foreign asset = wrong PnL forever).
-        let quote_asset = self.instruments[usize::from(slot.instrument.0)].quote_asset;
-        let commission_quote =
-            if event.commission_asset == quote_asset { event.commission } else { 0 };
-        let commission_quote = Notional::from_mantissa(commission_quote);
-        ledger.apply_fill(&LedgerFill {
-            instrument: slot.instrument,
-            side: slot.side,
-            base: fill.base,
-            notional_quote: fill.quote,
-            commission_quote,
-        });
     }
 
     #[cold]
     fn prior_run_overflow_error(&self, event: &ExecEvent) {
         hot_error!(
-            "prior-run order {:x} has nowhere to fold — all {} entries are still working, so its fills cannot reach the ledger",
+            "prior-run order {:x} has nowhere to fold — all {} entries are still working, so quoting halts and its fill stays on the tape",
             event.client_id.0,
-            PRIOR_RUN_SLOTS
+            self.prior_orders.capacity()
         );
     }
 
@@ -228,20 +265,23 @@ impl ExecEngine {
     /// drops `free` and releasing before it lands would double-spend.
     fn release_reservation(&mut self, index: usize) {
         let slot = self.orders.slot(index);
-        if slot.reserved_amount.is_none() {
+        if slot.reserved_amount().is_none() {
             return;
         }
-        let asset = self.instruments[usize::from(slot.instrument.0)].spend_asset(slot.side);
-        if self.settings.holds_reservations_until_settled {
-            if slot.state != OrderState::PendingNew {
+        let asset = self.instruments[usize::from(slot.instrument().0)].spend_asset(slot.side());
+        if self
+            .settings_of(slot.instrument())
+            .holds_reservations_until_settled
+        {
+            if slot.state() != OrderState::PendingNew {
                 self.gated_release(index, asset);
             }
             return;
         }
-        if slot.state.is_working() {
+        if slot.state().is_working() {
             return;
         }
-        if slot.filled_base.mantissa() == 0 {
+        if slot.filled_base().mantissa() == 0 {
             self.release_unsent_reservation(index);
             return;
         }
@@ -252,23 +292,30 @@ impl ExecEngine {
     /// held for the next spin to retry.
     fn gated_release(&mut self, index: usize, asset: AssetId) {
         let slot = self.orders.slot(index);
-        let Some(amount) = slot.reserved_amount else {
+        let Some(amount) = slot.reserved_amount() else {
             return;
         };
-        let outcome = self.account.release(asset, amount, slot.reserved_at);
+        let reserved_at = slot.reserved_at();
+        let outcome = self
+            .venue_mut(slot.instrument())
+            .account
+            .release(asset, amount, reserved_at);
         if outcome == ReleaseOutcome::Released {
-            self.orders.slot_mut(index).reserved_amount = None;
+            self.orders.clear_reservation(index);
         }
     }
 
     pub(super) fn release_unsent_reservation(&mut self, index: usize) {
         let slot = self.orders.slot(index);
-        let Some(amount) = slot.reserved_amount else {
+        let Some(amount) = slot.reserved_amount() else {
             return;
         };
-        let asset = self.instruments[usize::from(slot.instrument.0)].spend_asset(slot.side);
-        self.account.release_unsent(asset, amount);
-        self.orders.slot_mut(index).reserved_amount = None;
+        let instrument = slot.instrument();
+        let asset = self.instruments[usize::from(instrument.0)].spend_asset(slot.side());
+        self.venue_mut(instrument)
+            .account
+            .release_unsent(asset, amount);
+        self.orders.clear_reservation(index);
     }
 
     /// A venue answer ends the reject streak, extends it, or leaves it alone. `Refused` leaves it
@@ -290,7 +337,7 @@ impl ExecEngine {
             let is_venue_answer =
                 !matches!(event.kind, ExecKind::PlaceNotSent | ExecKind::AmendNotSent);
             if is_venue_answer && matches!(state, OrderState::Live) {
-                self.reject_streak = 0;
+                self.venues[usize::from(event.venue.0)].reject_streak = 0;
             }
             return;
         };
@@ -307,15 +354,16 @@ impl ExecEngine {
             // request, so it must not count toward the kill switch.
             RejectClass::Gone => {}
             RejectClass::StillLive | RejectClass::Ambiguous => {
-                self.reject_streak += 1;
-                if self.reject_streak >= self.settings.max_consecutive_rejects {
+                let venue = &mut self.venues[usize::from(event.venue.0)];
+                venue.reject_streak += 1;
+                if venue.reject_streak >= venue.settings.max_consecutive_rejects {
                     self.halt(HaltReason::RejectStreak, now);
                 }
             }
         }
     }
 
-    /// Class determines branch. Same fatal class for different causes -> error message carries the code.
+    /// One class covers several causes, so the line carries the venue's code.
     #[cold]
     fn fatal_reject_error(&self, event: &ExecEvent) {
         hot_error!(
@@ -326,6 +374,15 @@ impl ExecEngine {
     }
 }
 
+#[cold]
+fn unbooked_prior_run_total_error(event: &ExecEvent) {
+    hot_error!(
+        "prior-run order {:x} shows {} filled at its first report, and the earlier run may have booked any part of it — the ledger books none of it, a record keeps it, and quoting halts",
+        event.client_id.0,
+        event.cumulative_qty.mantissa()
+    );
+}
+
 /// A reconciliation retiring a working order is the engine LOSING one, not routine housekeeping: the
 /// venue was asked what it holds and did not mention an order this table believed in. It is logged
 /// as a warning because otherwise a duplicate resting on the venue is the first anyone hears of it.
@@ -334,90 +391,7 @@ fn swept_warning(slot: &OrderSlot, recon_seq: u64) {
     hot_warn!(
         "reconciliation pass {} did not name order {:x} on instrument {} — closing it as gone",
         recon_seq,
-        slot.client_id.0,
-        slot.instrument.0
+        slot.client_id().0,
+        slot.instrument().0
     );
-}
-
-const PRIOR_RUN_SLOTS: usize = MAX_QUOTE_LEVELS * 2 * MAX_ORDER_INSTRUMENTS;
-
-/// Orders an EARLIER run of this trading engine left resting on the venue. They are cancelled on
-/// sight, but the cancel takes hundreds of milliseconds and whatever rests fills in the meantime.
-/// Those are real executions on this account, so they move the ledger and earn audit rows exactly
-/// like any other.
-///
-/// They must never join THIS run's quoting, which is why they sit in a table of their own rather
-/// than in [`OrderTable`](super::order::OrderTable). A prior-run client id decodes to a slot index
-/// in that table, so seating one there would either evict an order this run is about to place or
-/// lose the fill to the orphan path, decided by nothing but arrival order. Keeping them apart also
-/// keeps a cancel answered "unknown order", this path's ordinary outcome, out of the reject streak.
-pub(super) struct PriorRunOrders {
-    slots: Box<[OrderSlot; PRIOR_RUN_SLOTS]>,
-}
-
-digest_fields! { PriorRunOrders { slots } }
-
-/// Why an order of an earlier run has no slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Unseated {
-    TableFull,
-    NoInstrument,
-}
-
-impl PriorRunOrders {
-    pub(super) fn new() -> Self {
-        Self {
-            slots: Box::new([OrderSlot::EMPTY; PRIOR_RUN_SLOTS]),
-        }
-    }
-
-    #[inline]
-    pub(super) fn slot(&self, index: usize) -> &OrderSlot {
-        &self.slots[index]
-    }
-
-    #[inline]
-    pub(super) fn slot_mut(&mut self, index: usize) -> &mut OrderSlot {
-        &mut self.slots[index]
-    }
-
-    pub(super) fn working(
-        &self,
-        instrument: InstrumentId,
-        side: Side,
-    ) -> impl Iterator<Item = &OrderSlot> {
-        self.slots.iter().filter(move |slot| {
-            slot.instrument == instrument && slot.side == side && slot.state.is_working()
-        })
-    }
-
-    pub(super) fn find_or_seat(
-        &mut self,
-        event: &ExecEvent,
-        now: LocalTs,
-    ) -> Result<usize, Unseated> {
-        if let Some(index) = self.find(event.client_id) {
-            return Ok(index);
-        }
-        let instrument = event.instrument.ok_or(Unseated::NoInstrument)?;
-        let index = free_or_oldest_closed(&self.slots[..]).ok_or(Unseated::TableFull)?;
-        self.slots[index] = OrderSlot {
-            client_id: event.client_id,
-            venue_order_id: event.venue_order_id,
-            state: OrderState::Unknown,
-            side: event.side,
-            instrument,
-            price: event.price,
-            qty: event.qty,
-            last_event_ts_us: now,
-            ..OrderSlot::EMPTY
-        };
-        Ok(index)
-    }
-
-    fn find(&self, id: ClientOrderId) -> Option<usize> {
-        self.slots
-            .iter()
-            .position(|slot| slot.client_id == id && slot.state != OrderState::Free)
-    }
 }

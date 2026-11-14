@@ -11,9 +11,10 @@
 use crate::msg::exec::{ExecCommand, ExecEvent, ExecKind, Provenance};
 use crate::msg::ids::{ClientOrderId, InstrumentId};
 use crate::msg::time::LocalTs;
-use crate::runtime::shutdown::FatalReason;
 use crate::venues::edge::EdgeDriver;
-use crate::venues::exec::{MirroredOrder, Outgoing, ResyncPoll, SessionOutcome, blank};
+use crate::venues::exec::{
+    ExecSessionError, MirroredOrder, Outgoing, ResyncPoll, SessionOutcome, blank,
+};
 use crate::{error, info, warn};
 
 use super::super::codec::{
@@ -131,8 +132,9 @@ impl Actor {
                     "polymarket execution cannot retain venue order {:016x} in its possibly-live set ({error:?}) — quoting is disabled",
                     mirrored.client_id.0
                 );
-                self.control.fatal.trip(FatalReason::MirrorRetainFailed {
+                self.control.fail(ExecSessionError::MirrorRetainFailed {
                     venue: self.venue(),
+                    source: error,
                 });
                 self.fail_orders_read(read);
                 return None;
@@ -150,7 +152,9 @@ impl Actor {
             }
         }
         for event in events {
-            self.session.fold(&event, recon_seq, &mut outgoing);
+            if let Err(error) = self.session.fold(&event, recon_seq, &mut outgoing) {
+                self.control.fail(error);
+            }
             self.forward_exec(received_ts_us, event);
         }
         if self.next_orders_page(read, page, &seen, decoded.next_cursor.as_deref())
@@ -280,7 +284,9 @@ impl Actor {
             return;
         }
         let (received_ts_us, event) = self.adopted_event(unmapped, client_id);
-        self.session.fold(&event, 0, outgoing);
+        if let Err(error) = self.session.fold(&event, 0, outgoing) {
+            self.control.fail(error);
+        }
         self.forward_exec(received_ts_us, event);
         self.drain_pending(outgoing);
     }

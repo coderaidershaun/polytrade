@@ -1,16 +1,18 @@
 //! The start checks of a run, each before any thread: a refused start has nothing to stop, spends
 //! no run nonce, and writes no file. The lease is the last check.
 
+use crate::hot::exec::ExecCapacity;
 use crate::hot::strategy::Strategy;
 use crate::info;
-use crate::runtime::config::{Config, ExecutionMode, RunIdentity, SourceSpec};
+use crate::msg::ids::VenueId;
+use crate::runtime::config::{Config, ExecutionConfig, ExecutionMode, RunIdentity, SourceSpec};
 use crate::runtime::exposure::{self, ExposureState};
 use crate::runtime::registry::{InstrumentRow, Registry};
 use crate::venues::edge::rest_quiet::SharedRestQuiet;
 use crate::venues::port::{NetworkPort, VenuePort};
 
 use super::StartError;
-use super::exec::{ExecCheck, ExecPlan, check_execution};
+use super::exec::{ExecCheck, ExecPlan, check_execution, check_order_client_timeout};
 use super::link::{BoundLink, link_bring_up};
 
 /// The checks of one start: the run, its parsed config, and the strategy, whose features and link
@@ -63,29 +65,42 @@ impl<P> Preflight<'_, P> {
             config,
             strategy,
         } = self;
-        let mode = config.execution.as_ref().map(|execution| execution.mode);
+        let mode = config.execution_mode();
         let mut registry = Registry::build(config)?;
+        let armed = one_armed_source(config)?;
+        if let Some((venue, ..)) = armed {
+            check_rows_of_one_venue(&registry, venue)?;
+        }
         if let Some(core_id) = config.engine.hot_core_id {
             validate_core_id(core_id)?;
         }
         #[cfg(feature = "otlp")]
         let otlp = crate::runtime::otlp::OtlpPlan::check(config, identity, mode)?;
+        if let Some((_, source, execution)) =
+            armed.filter(|(.., execution)| execution.mode.needs_credentials())
+        {
+            check_order_client_timeout(source, execution)?;
+        }
         // Every venue's grid is checked against the deployment the registry names rather than a
         // constant, so a production run is checked against the production grid.
         port.read_scales(&registry)?.stamp(&mut registry);
-        if let Some(execution) = &config.execution {
-            check_execution_order_capacity(&registry, execution.max_orders_per_side)?;
+        ExecCapacity::of(registry.instruments())?;
+        for (source, venue) in config.sources.iter().zip(config.source_venues()) {
+            if let Some(execution) = &source.execution {
+                check_execution_order_capacity(&registry, venue, execution.max_orders_per_side)?;
+            }
         }
         let exposure = exposure::load(&config.exposure.dir, identity, &registry, mode)?;
         let rest_quiet = SharedRestQuiet::new();
         // One signed call that proves the key can trade, before a strategy quotes with no
         // permission.
-        let probed = live_execution_source(config)
-            .map(|source| port.probe(source, &registry, &rest_quiet))
+        let probed = armed
+            .filter(|(.., execution)| execution.mode.needs_credentials())
+            .map(|(_, source, _)| port.probe(source, &registry, &rest_quiet))
             .transpose()?;
         let link = link_bring_up(config, identity, strategy, &registry)?;
         let execution = check_execution(ExecCheck {
-            execution: config.execution.as_ref(),
+            armed: armed.map(|(venue, _, execution)| (venue, execution)),
             venue: probed.map(|probed| probed.0),
             registry: &registry,
             identity,
@@ -129,13 +144,41 @@ impl StartPlan {
     }
 }
 
-/// The source whose venue this run will place orders on, or None when nothing is armed for live.
-fn live_execution_source<P>(config: &Config<P>) -> Option<&SourceSpec> {
-    config
-        .execution
-        .as_ref()
-        .filter(|execution| execution.mode.needs_credentials())
-        .map(|_| &config.source)
+/// The source whose venue this run places orders on. This build starts one execution edge, so a
+/// second source that sends orders is refused before any check reads a venue.
+///
+/// # Errors
+/// [`StartError::ExecutionOnSeveralSources`] with the places of the two items in `sources:` when
+/// two sources send orders.
+fn one_armed_source<P>(
+    config: &Config<P>,
+) -> Result<Option<(VenueId, &SourceSpec, &ExecutionConfig)>, StartError> {
+    let mut places = config
+        .sources
+        .iter()
+        .enumerate()
+        .filter(|(_, source)| source.armed_execution().is_some())
+        .map(|(place, _)| place);
+    if let (Some(first), Some(second)) = (places.next(), places.next()) {
+        return Err(StartError::ExecutionOnSeveralSources { first, second });
+    }
+    Ok(config.armed_sources().next())
+}
+
+/// This build sends orders through one task, which takes each row of the registry and gives each
+/// of its events the venue of the first row. So a run that sends orders reads the sources of that
+/// venue only, and a row of another venue is refused before any check reads a venue.
+///
+/// # Errors
+/// [`StartError::ExecutionWithSeveralVenues`] when a row belongs to a venue other than `venue`.
+fn check_rows_of_one_venue(registry: &Registry, venue: VenueId) -> Result<(), StartError> {
+    let Some(other) = registry.instruments().iter().find(|row| row.venue != venue) else {
+        return Ok(());
+    };
+    Err(StartError::ExecutionWithSeveralVenues {
+        venue: registry.venue_name(venue),
+        other: registry.venue_name(other.venue),
+    })
 }
 
 /// Confirms the configured ladder fits every instrument's venue order ceiling before any thread
@@ -145,9 +188,14 @@ fn live_execution_source<P>(config: &Config<P>) -> Option<&SourceSpec> {
 /// [`StartError::ExecutionOrderCapacity`] on the first instrument whose ladder overruns.
 fn check_execution_order_capacity(
     registry: &Registry,
+    venue: VenueId,
     max_orders_per_side: u32,
 ) -> Result<(), StartError> {
-    for row in registry.instruments() {
+    for row in registry
+        .instruments()
+        .iter()
+        .filter(|row| row.venue == venue)
+    {
         check_symbol_order_capacity(row, max_orders_per_side)?;
     }
     Ok(())

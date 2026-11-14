@@ -4,12 +4,12 @@
 use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::hot::ledger::{PositionLedger, narrow_quote, wide};
 use crate::log::hot_warn;
-use crate::msg::ids::{InstrumentId, Notional, Price, Qty, Side};
+use crate::msg::ids::{AssetId, InstrumentId, Notional, Price, Qty, Side};
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::time::LocalTs;
 
+use super::capacity::ExecCapacity;
 use super::engine::ExecEngine;
-use super::order::MAX_ORDER_INSTRUMENTS;
 use super::reconcile::RejectReason;
 use super::spin::SpinInput;
 use super::view::{OrderReject, RejectOrigin};
@@ -25,6 +25,12 @@ labelled_enum! {
         DuplicateResting = "duplicate resting order",
         CommandBankOverflow = "command bank overflow",
         SealNotAccepted = "persistence seal not accepted",
+        OrphanFill = "fill on an order with no slot",
+        PriorRunOverflow = "prior-run order table full",
+        StatusProbesSpent = "order status probes spent",
+        StreamSilent = "order stream silent",
+        WriterFailed = "file writer failed",
+        PriorRunFillUnbooked = "prior-run fill not booked",
     }
     /// Operator words for the halt banner: a halted engine's reason is read under pressure, and the
     /// table sits beside the variants so a new reason cannot ship as a bare Rust identifier.
@@ -97,9 +103,10 @@ pub fn assess_loss(pnl: SessionPnl, max_loss: Notional) -> LossVerdict {
     if !breaches(mark_to_market_quote, max_loss) {
         return LossVerdict::Within;
     }
-    // Flat position = realised (except residue).
+    // A flat position has no side to withdraw, and its loss is realised, so the realised leg judges
+    // it: only realised loss halts.
     let Some(reducing) = reducing_side(pnl.position_base) else {
-        return LossVerdict::Realised;
+        return LossVerdict::Within;
     };
     LossVerdict::MarkToMarket { reducing }
 }
@@ -116,6 +123,46 @@ pub(super) fn reducing_side(position_base: Qty) -> Option<Side> {
         1 => Some(Side::Sell),
         -1 => Some(Side::Buy),
         _ => None,
+    }
+}
+
+/// The realised loss of each quote asset over the run, indexed by asset, and this is the one place
+/// where a sum is read. The quote pass sums the ledger again at each spin. The basis of each
+/// position that a rotation stranded stays in the sum as a loss, because its contracts can settle
+/// at nothing and no order can trade them any more.
+pub(super) struct LossSums {
+    realised_quote: Box<[i128]>,
+    stranded_quote: Box<[Notional]>,
+}
+
+digest_fields! {
+    LossSums { stranded_quote }
+    not_state {
+        // Summed again from the ledger and the instruments before each read.
+        realised_quote,
+    }
+}
+
+impl LossSums {
+    pub(super) fn new(capacity: &ExecCapacity) -> Self {
+        Self {
+            realised_quote: vec![0; capacity.assets()].into_boxed_slice(),
+            stranded_quote: vec![Notional::ZERO; capacity.assets()].into_boxed_slice(),
+        }
+    }
+
+    pub(super) fn realised(&self, asset: AssetId) -> Notional {
+        let index = usize::from(asset.0);
+        let stranded = wide(self.stranded_quote[index]);
+        narrow_quote(
+            self.realised_quote[index] - stranded,
+            "realised loss of a quote asset",
+        )
+    }
+
+    pub(super) fn strand(&mut self, asset: AssetId, basis: Notional) {
+        let stranded = &mut self.stranded_quote[usize::from(asset.0)];
+        *stranded = narrow_quote(wide(*stranded) + wide(basis), "stranded basis");
     }
 }
 
@@ -214,17 +261,16 @@ labelled_enum! {
 }
 
 const SIDES: usize = 2;
-const MAX_REFUSALS: usize = MAX_ORDER_INSTRUMENTS * SIDES;
 
 /// Why a side is not quoting, reported when the answer CHANGES rather than every spin. A refusal
 /// usually persists, so reporting each one-second spin would bury the transitions that matter, and
 /// reporting once forever would leave the panel showing a reason that has since changed. The latch
 /// reports the first spin of a reason and of its replacement, and clears when the side quotes.
 /// Nothing here reads a clock, so a replay reports the same reasons in the same order.
-#[derive(Default)]
 pub struct RefusalLatch {
-    current: [[Option<RejectReason>; SIDES]; MAX_ORDER_INSTRUMENTS],
-    pending: [Option<OrderReject>; MAX_REFUSALS],
+    current: Box<[[Option<RejectReason>; SIDES]]>,
+    /// One for each side of each instrument: a spin reports at most one reason for each.
+    pending: Box<[Option<OrderReject>]>,
     len: usize,
 }
 
@@ -232,6 +278,15 @@ digest_by_hash!(ExecHalt, Readiness);
 digest_fields! { RefusalLatch { current, pending, len } }
 
 impl RefusalLatch {
+    pub(super) fn new(capacity: &ExecCapacity) -> Self {
+        let instruments = capacity.instruments();
+        Self {
+            current: vec![[None; SIDES]; instruments].into_boxed_slice(),
+            pending: vec![None; instruments * SIDES].into_boxed_slice(),
+            len: 0,
+        }
+    }
+
     fn observe(
         &mut self,
         instrument: InstrumentId,
@@ -269,8 +324,10 @@ impl RefusalLatch {
         self.len = 0;
     }
 
-    pub fn forget(&mut self) {
-        self.current = [[None; SIDES]; MAX_ORDER_INSTRUMENTS];
+    pub(super) fn forget_instruments(&mut self, instruments: std::ops::Range<usize>) {
+        for row in &mut self.current[instruments] {
+            *row = [None; SIDES];
+        }
     }
 
     fn slot_mut(
@@ -283,7 +340,7 @@ impl RefusalLatch {
     }
 
     fn push(&mut self, reject: OrderReject) {
-        if self.len >= MAX_REFUSALS {
+        if self.len >= self.pending.len() {
             return;
         }
         self.pending[self.len] = Some(reject);
@@ -297,26 +354,15 @@ impl ExecEngine {
     /// table does. Ordered furthest-upstream first, so a diagnostic names the cause rather than a
     /// consequence of it.
     #[inline]
-    pub(super) fn readiness_gap(&self) -> Option<ReadinessGap> {
-        if !self.readiness.is_stream_ready() {
-            return Some(ReadinessGap::Stream);
-        }
-        if !self.account.has_snapshot() {
-            return Some(ReadinessGap::Balances);
-        }
-        (!self.readiness.has_open_orders_snapshot()).then_some(ReadinessGap::OpenOrders)
-    }
-
     /// Conservatively count possibly-live (pending/amending/unknown live until venue proves terminal).
-    pub(super) fn enforce_resting_limit(&mut self, at: LocalTs) {
+    pub(super) fn enforce_resting_limit(&mut self, venue: usize, at: LocalTs) {
         if self.halt.is_halted() {
             return;
         }
-        for index in 0..self.instruments.len() {
-            let instrument = InstrumentId(index as u16);
+        for instrument in self.venues[venue].instrument_ids() {
             for side in [Side::Buy, Side::Sell] {
                 let possibly_live = self.orders.possibly_live_count(instrument, side);
-                if possibly_live > self.settings.max_orders_per_side {
+                if possibly_live > self.venues[venue].settings.max_orders_per_side {
                     self.warn_duplicate_resting(instrument, side, possibly_live);
                     self.halt(HaltReason::DuplicateResting, at);
                     return;
@@ -333,7 +379,7 @@ impl ExecEngine {
             instrument.0,
             resting,
             side,
-            self.settings.max_orders_per_side
+            self.settings_of(instrument).max_orders_per_side
         );
     }
 
@@ -349,10 +395,11 @@ impl ExecEngine {
     /// delta would silently include the whole restored position's cost. Waiting for the first
     /// two-sided book makes the baseline a mark-to-market valuation, so the delta is this session's
     /// PnL and nothing else. Message-driven, so it is replay-exact and depends on no boot ordering.
-    pub(super) fn observe_pnl_baseline(&mut self, ledger: &PositionLedger) {
+    pub(super) fn observe_pnl_baseline(&mut self, venue: usize, ledger: &PositionLedger) {
+        let instruments = self.venues[venue].instruments.clone();
         for (instrument, row) in ledger.rows() {
             let index = usize::from(instrument.0);
-            if index >= self.instruments.len() || self.pnl_at_baseline[index].is_some() {
+            if !instruments.contains(&index) || self.pnl_at_baseline[index].is_some() {
                 continue;
             }
             if row.has_mark() {
@@ -361,46 +408,57 @@ impl ExecEngine {
         }
     }
 
-    /// The session loss verdict alone, over every instrument. The halt keys on THIS rather than on
-    /// the combined permission the spin pass builds, because a realised breach is the only thing
-    /// that may halt and the position ceiling withdrawing a side is not one.
-    pub(super) fn session_permission(&self, ledger: &PositionLedger) -> QuotePermission {
-        let mut permission = QuotePermission::Both;
-        for (instrument, row) in ledger.rows() {
-            if usize::from(instrument.0) >= self.instruments.len() {
-                continue;
-            }
-            // No baseline yet means no honest valuation has ever existed for this instrument, so
-            // there is no mark-to-market number to judge — a restored position with no mark is a
-            // legitimate state, not an absent one. The REALISED leg is judged regardless: a round
-            // trip closed before the first two-sided book really did lose what it lost.
-            let baseline = self.pnl_at_baseline[usize::from(instrument.0)];
-            // The realised leg is this window's PLUS every window already rotated away, because a
-            // ledger row lasts one market and the budget lasts the run.
-            match assess_loss(
-                SessionPnl {
-                    mark_to_market_quote: baseline.map(|baseline| row.pnl_quote() - baseline),
-                    realised_quote: narrow_quote(
-                        wide(row.session_realised_quote())
-                            + wide(self.realised_carried_quote(instrument)),
-                        "session realised including carried windows",
-                    ),
-                    position_base: row.position_base(),
-                },
-                self.settings.max_session_loss_quote,
-            ) {
-                LossVerdict::Within => {}
-                LossVerdict::MarkToMarket { reducing } => {
-                    // SMELL: each instrument is judged against the whole session loss budget
-                    // on its own, and the losses are never added up, so two instruments can
-                    // each lose most of the budget and both pass. The one permission set here
-                    // also covers every instrument. The budget needs one sum over them all.
-                    permission = QuotePermission::ReducingOnly { reducing };
-                }
-                LossVerdict::Realised => return QuotePermission::Neither,
-            }
+    /// Sums the realised loss of each quote asset before the quote pass reads it: each window of
+    /// each instrument that quotes in that asset, those already rotated away included, because a
+    /// ledger row lasts one market and the budget lasts the run.
+    pub(super) fn sum_realised_losses(&mut self, ledger: &PositionLedger) {
+        self.loss_sums.realised_quote.fill(0);
+        for index in 0..self.instruments.len() {
+            let instrument = InstrumentId(index as u16);
+            let realised = wide(ledger.row(instrument).session_realised_quote())
+                + wide(self.realised_carried_quote(instrument));
+            let asset = self.instruments[index].quote_asset;
+            self.loss_sums.realised_quote[usize::from(asset.0)] += realised;
         }
-        permission
+    }
+
+    /// The loss verdict of one instrument. Its realised leg is the sum of its quote asset, so one
+    /// budget holds for each instrument of that asset, and a breach there halts. Its mark-to-market
+    /// leg is its own, so a loss still open on one instrument withdraws only the side that would
+    /// add to it, on that instrument.
+    ///
+    /// The mark-to-market leg reads the change since the first honest valuation of the instrument.
+    /// With no baseline yet there is no mark-to-market number to judge: a restored position with no
+    /// mark is a legitimate state.
+    pub(super) fn loss_verdict(
+        &self,
+        instrument: InstrumentId,
+        ledger: &PositionLedger,
+    ) -> LossVerdict {
+        let index = usize::from(instrument.0);
+        let row = ledger.row(instrument);
+        let baseline = self.pnl_at_baseline[index];
+        assess_loss(
+            SessionPnl {
+                mark_to_market_quote: baseline.map(|baseline| row.pnl_quote() - baseline),
+                realised_quote: self.loss_sums.realised(self.instruments[index].quote_asset),
+                position_base: row.position_base(),
+            },
+            self.settings_of(instrument).max_session_loss_quote,
+        )
+    }
+
+    /// The sides of one instrument that the loss budget leaves open.
+    pub(super) fn loss_permission(
+        &self,
+        instrument: InstrumentId,
+        ledger: &PositionLedger,
+    ) -> QuotePermission {
+        match self.loss_verdict(instrument, ledger) {
+            LossVerdict::Within => QuotePermission::Both,
+            LossVerdict::MarkToMarket { reducing } => QuotePermission::ReducingOnly { reducing },
+            LossVerdict::Realised => QuotePermission::Neither,
+        }
     }
 
     pub(super) fn record_refusal(
@@ -412,7 +470,7 @@ impl ExecEngine {
     ) {
         let reason = reason.or_else(|| {
             let top = self.book_top(instrument, input);
-            (!top.is_quotable(self.settings.limits.max_book_age))
+            (!top.is_quotable(self.settings_of(instrument).limits.max_book_age))
                 .then_some(RejectReason::BookNotQuotable)
         });
         self.refusals

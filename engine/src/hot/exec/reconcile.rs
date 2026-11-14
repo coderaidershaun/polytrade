@@ -135,7 +135,6 @@ pub enum RejectReason {
     WouldCross,
     OutsideBand,
     Underfunded,
-    StyleNotPermitted,
     NotReady(ReadinessGap),
     Halted,
     SessionReducingOnly,
@@ -150,6 +149,8 @@ pub enum RejectReason {
     OutsideWindow,
     /// Declared for a market whose warmup has not passed: the quote is held until it is live.
     Warming,
+    /// Each idle slot of the level is retired: its next client id would wrap to one already sent.
+    IdsSpent,
 }
 
 impl RejectReason {
@@ -163,7 +164,6 @@ impl RejectReason {
             Self::WouldCross => "would cross the book",
             Self::OutsideBand => "outside the price band",
             Self::Underfunded => "underfunded",
-            Self::StyleNotPermitted => "order style not permitted",
             Self::NotReady(ReadinessGap::Stream) => "waiting for the account stream",
             Self::NotReady(ReadinessGap::Balances) => "waiting for balances",
             Self::NotReady(ReadinessGap::OpenOrders) => "waiting for open orders",
@@ -177,6 +177,7 @@ impl RejectReason {
             Self::RateBudget => "order rate budget spent",
             Self::OutsideWindow => "outside the trading window",
             Self::Warming => "market still warming up",
+            Self::IdsSpent => "client ids of this level spent",
         }
     }
 }
@@ -190,7 +191,6 @@ const REJECT_KINDS: [RejectReason; 18] = [
     RejectReason::WouldCross,
     RejectReason::OutsideBand,
     RejectReason::Underfunded,
-    RejectReason::StyleNotPermitted,
     RejectReason::NotReady(ReadinessGap::Stream),
     RejectReason::Halted,
     RejectReason::SessionReducingOnly,
@@ -202,6 +202,7 @@ const REJECT_KINDS: [RejectReason; 18] = [
     RejectReason::RateBudget,
     RejectReason::OutsideWindow,
     RejectReason::Warming,
+    RejectReason::IdsSpent,
 ];
 
 /// Prints what `{:?}` prints, `NotReady(Stream)` included, whatever the placeholder: the operator
@@ -264,9 +265,6 @@ pub fn reconcile_side(input: ReconcileInput) -> ReconcileOutcome {
     let Some(desired) = desired else {
         return withdraw(resting);
     };
-    if desired.style != OrderStyle::PostOnly {
-        return ReconcileOutcome::Reject(RejectReason::StyleNotPermitted);
-    }
 
     let price = side.snap_passive(desired.price, grid.tick);
     let qty = desired.qty.floor_to_step(grid.step);
@@ -291,7 +289,7 @@ pub fn reconcile_side(input: ReconcileInput) -> ReconcileOutcome {
     let intent = PlaceIntent {
         price,
         qty,
-        style: desired.style,
+        style: OrderStyle::PostOnly,
     };
     let Some(resting) = resting else {
         if !funds.can_spend(side.spend(price, qty)) {

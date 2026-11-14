@@ -13,7 +13,7 @@ use engine::msg::failure::{FailureClass, Halt};
 use engine::runtime::config::{Config, NoParams, RunIdentity};
 use engine::runtime::{Engine, PinRefused, Preflight, StartError};
 
-use super::config_guards::{BINANCE_SPOT_SOURCE, SIM_BLOCK, execution_block_with};
+use super::config_guards::{BINANCE_SPOT_SOURCE, SIM_BLOCK, execution_block_with, sources_with};
 use super::preflight::{Scales, StandInVenue, snapshot};
 use crate::engine_support::Idle;
 use crate::parquet_readback::TempDir;
@@ -85,6 +85,7 @@ fn identity() -> RunIdentity {
 /// collector listens, so a refusal after the log started has open lanes to close.
 fn document(root: &Path) -> String {
     let execution = execution_block_with("sim", SIM_BLOCK);
+    let sources = sources_with(BINANCE_SPOT_SOURCE, &execution);
     let otlp = if cfg!(feature = "otlp") { "otlp:\n  collector: 127.0.0.1:9\n" } else { "" };
     format!(
         "engine:
@@ -94,13 +95,12 @@ fn document(root: &Path) -> String {
 queues:
   input_capacity: 1024
   persistence_capacity: 1024
-source:
-{BINANCE_SPOT_SOURCE}strategy:
+{sources}strategy:
   instruments: all
 persistence:
   dir: \"{root}/tape\"
   retention_hours: 1
-{execution}senders:
+senders:
   placement: pinned
   core_id: {SENDER_CORE}
 logging:

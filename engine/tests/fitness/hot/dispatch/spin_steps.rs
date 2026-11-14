@@ -10,7 +10,7 @@ use engine::hot::metrics::DriverSamples;
 use engine::hot::series::FastQueue;
 use engine::hot::sink::ExecSink;
 use engine::hot::spawn::{HotDriver, Step};
-use engine::hot::strategy::{OrderStyle, Registration, Strategy, StrategyCtx};
+use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
 use engine::msg::exec::{ExecCommand, ExecLaneItem};
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
@@ -72,7 +72,6 @@ impl Strategy for OneBid {
         let quote = DesiredQuote {
             price: bid.price,
             qty: Qty::from_mantissa(ONE / 10),
-            style: OrderStyle::PostOnly,
         };
         ctx.quote(MARKET, Side::Buy, QuoteLevel::ZERO, Some(quote));
         ctx.emit(self.call.expect("features registered"), MARKET, 1.0);
@@ -131,11 +130,11 @@ impl Run {
         let engine = HotEngine::new(HotEngineSetup {
             persistence: Some(persistence),
             ui_event_sink,
-            exec: Some(ExecWiring {
+            exec: vec![ExecWiring {
                 sink: ExecSink::new(command_producer, Stamper::Off),
                 settings: exec_settings(),
                 run_nonce: 0,
-            }),
+            }],
             ..detached_setup(&rows_of_market, Box::new(strategy))
         });
         let (input, queue) = RingBuffer::new(LANE);

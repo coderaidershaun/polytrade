@@ -1,8 +1,8 @@
-//! The quotes that a strategy declares for each instrument and side. A declaration lives for its
-//! spin only, and one that is not declared again means a cancel.
+//! What a strategy declares for each market in each spin: stand aside, get flat, or a ladder of
+//! quotes. A declaration lives for its spin only, so a market that is not declared again stands
+//! aside and each of its quotes is withdrawn.
 
 use crate::hot::digest::{digest_by_hash, digest_fields};
-use crate::msg::exec::OrderStyle;
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 
@@ -43,46 +43,60 @@ impl QuoteLevel {
     }
 }
 
+/// A limit order that a strategy wants resting on the book. It has no order style: the engine
+/// always places a quote so that it cannot take liquidity, and the only order that takes
+/// liquidity is the one that gets a market flat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DesiredQuote {
     pub price: Price,
     pub qty: Qty,
-    /// Only PostOnly admitted. Reject (not downgrade) prevents unwanted position.
-    pub style: OrderStyle,
+}
+
+type Ladder = [[Option<DesiredQuote>; MAX_QUOTE_LEVELS]; 2];
+
+/// What a strategy wants of one market for one spin.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the table keeps room for a whole ladder in each market from the start, so a smaller \
+              variant saves no memory, and a boxed ladder would allocate on the hot thread"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Declaration {
+    StandAside,
+    /// Close the position, and hold no quote while doing it.
+    GetFlat,
+    /// The quote for each side and level. A level with no quote is withdrawn.
+    Ladder(Ladder),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct DesiredSide {
-    quote: Option<DesiredQuote>,
-    declared_at_spin: u64,
+struct MarketDeclaration {
+    spin: u64,
+    declaration: Declaration,
 }
 
-impl DesiredSide {
-    const EMPTY: DesiredSide = DesiredSide {
-        quote: None,
-        declared_at_spin: 0,
-    };
-}
+const EMPTY_LADDER: Ladder = [[None; MAX_QUOTE_LEVELS]; 2];
 
 pub struct DesiredBook {
-    sides: Vec<[[DesiredSide; MAX_QUOTE_LEVELS]; 2]>,
-    /// Spin each instrument's flatten was last declared on. Same level-triggered contract as a
-    /// quote, and for the same reason: a market order that outlives the intent behind it is one
-    /// nobody asked for.
-    flatten: Vec<Option<u64>>,
+    markets: Box<[MarketDeclaration]>,
 }
 
-digest_by_hash!(QuoteLevel, DesiredSide);
-digest_fields! { DesiredBook { sides, flatten } }
+digest_by_hash!(QuoteLevel, MarketDeclaration);
+digest_fields! { DesiredBook { markets } }
 
 impl DesiredBook {
     pub fn new(instrument_count: usize) -> Self {
+        let undeclared = MarketDeclaration {
+            spin: 0,
+            declaration: Declaration::StandAside,
+        };
         Self {
-            sides: vec![[[DesiredSide::EMPTY; MAX_QUOTE_LEVELS]; 2]; instrument_count],
-            flatten: vec![None; instrument_count],
+            markets: vec![undeclared; instrument_count].into_boxed_slice(),
         }
     }
 
+    /// Declares one level of the ladder of this spin. In a spin that gets the market flat, the
+    /// market holds no quote, so the quote is dropped whether it comes before or after.
     #[inline]
     pub fn declare(
         &mut self,
@@ -92,13 +106,27 @@ impl DesiredBook {
         quote: Option<DesiredQuote>,
         spin: u64,
     ) {
-        self.sides[usize::from(instrument.0)][side.index()][level.index()] = DesiredSide {
-            quote,
-            declared_at_spin: spin,
+        let market = &mut self.markets[usize::from(instrument.0)];
+        if market.spin != spin || matches!(market.declaration, Declaration::StandAside) {
+            *market = MarketDeclaration {
+                spin,
+                declaration: Declaration::Ladder(EMPTY_LADDER),
+            };
+        }
+        if let Declaration::Ladder(ladder) = &mut market.declaration {
+            ladder[side.index()][level.index()] = quote;
+        }
+    }
+
+    /// Declares that the market gets flat in this spin, which withdraws each quote of it.
+    #[inline]
+    pub fn declare_flatten(&mut self, instrument: InstrumentId, spin: u64) {
+        self.markets[usize::from(instrument.0)] = MarketDeclaration {
+            spin,
+            declaration: Declaration::GetFlat,
         };
     }
 
-    /// Expiry checked at read-time (not swept) -> stale never observed.
     #[inline]
     pub fn quote(
         &self,
@@ -107,25 +135,27 @@ impl DesiredBook {
         level: QuoteLevel,
         spin: u64,
     ) -> Option<DesiredQuote> {
-        let declared = self.sides[usize::from(instrument.0)][side.index()][level.index()];
-        (declared.declared_at_spin == spin)
-            .then_some(declared.quote)
-            .flatten()
+        match self.declaration(instrument, spin) {
+            Declaration::Ladder(ladder) => ladder[side.index()][level.index()],
+            Declaration::StandAside | Declaration::GetFlat => None,
+        }
     }
 
-    #[inline]
-    pub fn declare_flatten(&mut self, instrument: InstrumentId, spin: u64) {
-        self.flatten[usize::from(instrument.0)] = Some(spin);
-    }
-
-    /// Expiry checked at read-time, exactly as [`Self::quote`] does it.
     #[inline]
     pub fn is_flattening(&self, instrument: InstrumentId, spin: u64) -> bool {
-        self.flatten[usize::from(instrument.0)] == Some(spin)
+        matches!(self.declaration(instrument, spin), Declaration::GetFlat)
     }
 
     #[inline]
     pub fn instrument_count(&self) -> usize {
-        self.sides.len()
+        self.markets.len()
+    }
+
+    /// A declaration of an earlier spin has expired, which is read here rather than swept, so a
+    /// stale one is never seen.
+    #[inline]
+    fn declaration(&self, instrument: InstrumentId, spin: u64) -> &Declaration {
+        let market = &self.markets[usize::from(instrument.0)];
+        if market.spin == spin { &market.declaration } else { &Declaration::StandAside }
     }
 }

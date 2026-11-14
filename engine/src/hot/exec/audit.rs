@@ -1,9 +1,12 @@
-//! Slot transitions -> orders/fills rows. Banks all transitions incl. engine-driven
-//! (send/timeout/recon). Gate + drop counter via strategy bank.
+//! The audit trail of the execution engine: a row for each transition of a slot, the engine's own
+//! included, a row for each fill, and a counted row for each incident.
 
+use crate::hot::digest::digest_by_hash;
 use crate::hot::strategy::Actions;
 use crate::msg::exec::{ExecEvent, ExecKind, Provenance, RejectClass};
-use crate::msg::persist::{FillRow, OrderLifecycle, OrderRow, OrderTransition, PersistRecord};
+use crate::msg::persist::{
+    FillRow, IncidentKind, IncidentRow, OrderLifecycle, OrderRow, OrderTransition, PersistRecord,
+};
 use crate::msg::time::{LocalTs, VenueTs};
 
 use super::order::{FillDelta, OrderSlot};
@@ -15,9 +18,34 @@ struct OrderAudit<'a> {
     provenance: Provenance,
     reject: Option<RejectClass>,
     reject_code: i32,
-    /// 0 on engine-driven (venue never heard of it).
+    /// Zero for a transition that the engine made on its own: the venue never heard of it.
     exchange_ts_us: VenueTs,
     received_ts_us: LocalTs,
+}
+
+/// The incidents of each kind that the fold recorded, and the events of its own orders that held no
+/// slot and no fill, which are refused with a count and no record.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub(crate) struct IncidentCounts {
+    pub(crate) fee_gaps: u64,
+    pub(crate) stranded_positions: u64,
+    pub(crate) orphan_fills: u64,
+    pub(crate) unbooked_fees: u64,
+    pub(crate) orphan_events_without_fill: u64,
+}
+
+digest_by_hash!(IncidentCounts);
+
+/// Counts the incident whether or not the tape has room for its row.
+pub(super) fn bank_incident(bank: &mut Actions, counts: &mut IncidentCounts, row: IncidentRow) {
+    let count = match row.kind {
+        IncidentKind::FeeGap => &mut counts.fee_gaps,
+        IncidentKind::StrandedPosition => &mut counts.stranded_positions,
+        IncidentKind::OrphanFill => &mut counts.orphan_fills,
+        IncidentKind::UnbookedFee => &mut counts.unbooked_fees,
+    };
+    *count += 1;
+    bank.push_persist(PersistRecord::Incident(row));
 }
 
 /// A transition the engine made on its own, so there is no venue answer, no reject and no exchange
@@ -44,24 +72,25 @@ pub(super) fn bank_engine_driven(
     );
 }
 
-/// Chain by client_id, start at Free (dropped HEAD visible; slot recoverable from id bits).
+/// The rows of one order chain by client id from `Free`, so a lost first row shows, and the id
+/// names the slot.
 fn bank_order(bank: &mut Actions, audit: OrderAudit<'_>) {
     let slot = audit.slot;
     bank.push_persist(PersistRecord::Order(OrderRow {
-        instrument: slot.instrument,
-        client_id: slot.client_id,
-        venue_order_id: slot.venue_order_id,
+        instrument: slot.instrument(),
+        client_id: slot.client_id(),
+        venue_order_id: slot.venue_order_id(),
         transition: audit.transition,
-        state: slot.state.into(),
+        state: slot.state().into(),
         previous_state: audit.previous_state,
         provenance: audit.provenance,
-        side: slot.side,
-        quote_level: (audit.provenance == Provenance::Mine).then_some(slot.level),
-        style: slot.style,
-        price: slot.price,
-        qty: slot.qty,
-        filled_qty: slot.filled_base,
-        filled_quote: slot.filled_quote.mantissa(),
+        side: slot.side(),
+        quote_level: (audit.provenance == Provenance::Mine).then_some(slot.level()),
+        style: slot.style(),
+        price: slot.price(),
+        qty: slot.qty(),
+        filled_qty: slot.filled_base(),
+        filled_quote: slot.filled_quote().mantissa(),
         reject: audit.reject,
         reject_code: audit.reject_code,
         exchange_ts_us: audit.exchange_ts_us,
@@ -69,7 +98,8 @@ fn bank_order(bank: &mut Actions, audit: OrderAudit<'_>) {
     }));
 }
 
-/// Delta = booked cumulative (diverges from event on lost report).
+/// The booked quantity is the step of the venue's running total, which differs from the report's
+/// own quantity when a report was lost.
 pub(super) fn bank_fill(
     bank: &mut Actions,
     slot: &OrderSlot,
@@ -78,26 +108,27 @@ pub(super) fn bank_fill(
     received_ts_us: LocalTs,
 ) {
     bank.push_persist(PersistRecord::Fill(FillRow {
-        instrument: slot.instrument,
+        instrument: slot.instrument(),
         trade_id: event.trade_id,
-        venue_order_id: slot.venue_order_id,
-        client_id: slot.client_id,
+        venue_order_id: slot.venue_order_id(),
+        client_id: slot.client_id(),
         provenance: event.provenance,
-        side: slot.side,
-        quote_level: (event.provenance == Provenance::Mine).then_some(slot.level),
+        side: slot.side(),
+        quote_level: (event.provenance == Provenance::Mine).then_some(slot.level()),
         liquidity: event.liquidity,
         last_price: event.last_price,
         last_qty: event.last_qty,
         booked_qty: delta.base,
         booked_quote: delta.quote.mantissa(),
-        commission: delta.commission,
+        commission: event.commission,
         commission_asset: event.commission_asset,
         exchange_ts_us: event.exchange_ts_us,
         received_ts_us,
     }));
 }
 
-/// Order row on state/fill move, fill paired (partial fill live = no state change).
+/// An order row when the state or the fill moved, with a fill row beside it. A partial fill of a
+/// live order moves only the fill.
 pub(super) fn bank_event_rows(
     bank: &mut Actions,
     slot: &OrderSlot,
@@ -130,7 +161,7 @@ pub(super) fn bank_event_rows(
     }
 }
 
-/// None for stream events (not per-order); they bank rows elsewhere.
+/// `None` for the events of the stream itself, which name no order and bank their rows elsewhere.
 fn transition_of(kind: ExecKind) -> Option<OrderTransition> {
     match kind {
         ExecKind::AckPlaced => Some(OrderTransition::AckPlaced),
@@ -151,8 +182,8 @@ fn transition_of(kind: ExecKind) -> Option<OrderTransition> {
     }
 }
 
-/// State or fill moved (duplicates already absorbed).
+/// A repeat of a report moves neither, so it leaves no row.
 #[inline]
 fn is_worth_recording(previous_state: OrderLifecycle, slot: &OrderSlot, fill: FillDelta) -> bool {
-    OrderLifecycle::from(slot.state) != previous_state || !fill.is_empty()
+    OrderLifecycle::from(slot.state()) != previous_state || !fill.is_empty()
 }

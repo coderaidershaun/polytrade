@@ -145,7 +145,7 @@ fn issue_tick_is_read_only_by_senders() {
 /// one entry for each call. Each one says why in the reason of its
 /// `#[expect(clippy::disallowed_methods, ...)]`. A function that only reads keeps a read apart from
 /// the logic beside it, so a read added to that logic fails the lint.
-const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 114] = [
+const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 115] = [
     (
         "engine/src/hot/metrics.rs",
         "stamp",
@@ -320,6 +320,11 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 114] = [
             "engine::msg::time::EngineClock::now",
             "engine::msg::time::EngineClock::now",
         ],
+    ),
+    (
+        "engine/src/runtime/exposure/writer.rs",
+        "report",
+        &["engine::msg::time::EngineClock::now"],
     ),
     (
         "engine/src/runtime/exposure/writer.rs",
@@ -543,6 +548,11 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 114] = [
         &["std::time::SystemTime::now"],
     ),
     (
+        "engine/src/venues/edge/funnel.rs",
+        "send",
+        &["engine::msg::time::EngineClock::now"],
+    ),
+    (
         "engine/src/venues/edge/mod.rs",
         "open_exit",
         &["engine::msg::time::EngineClock::now"],
@@ -555,11 +565,6 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 114] = [
     (
         "engine/src/venues/edge/mod.rs",
         "next_attempt_at",
-        &["engine::msg::time::EngineClock::now"],
-    ),
-    (
-        "engine/src/venues/edge/mod.rs",
-        "send",
         &["engine::msg::time::EngineClock::now"],
     ),
     (

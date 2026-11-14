@@ -177,7 +177,7 @@ fn order_event(
     Ok(ExecEvent {
         venue_order_id: (record.order_id >= 0).then_some(VenueOrderId(record.order_id)),
         status: Some(venue_status("status", &record.status)?),
-        provenance: ownership.provenance,
+        provenance: ownership.provenance(),
         side: order_side("side", &record.side)?,
         price: price_field("price", &record.price)?,
         qty: qty_field("origQty", &record.orig_qty)?,
@@ -188,7 +188,7 @@ fn order_event(
         ..blank(
             kind,
             Some(instrument),
-            ownership.client_id,
+            ownership.event_client_id(),
             context.received_ts_us,
         )
     })

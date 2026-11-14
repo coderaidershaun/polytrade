@@ -12,6 +12,7 @@ mod logging;
 mod otlp;
 mod senders;
 mod simulated;
+mod source_list;
 mod sources;
 mod tables;
 mod tracker;
@@ -21,6 +22,8 @@ use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+
+use source_list::check_execution_source;
 
 pub use engine::{EngineConfig, IdleMode};
 pub use error::ConfigError;
@@ -34,8 +37,8 @@ pub use otlp::OtlpConfig;
 pub use senders::{SenderPlacement, SendersConfig};
 pub use simulated::SimConfig;
 pub use sources::{
-    BinanceEnv, BinanceMarket, KlineInterval, PolySeries, PolySubscriptions, SourceSpec,
-    Subscriptions, VenueMarket,
+    BinanceEnv, BinanceMarket, KlineInterval, PolySeries, PolySubscriptions, SourceConfig,
+    SourceSpec, Subscriptions, VenueMarket,
 };
 pub use tables::{RecordedTables, TableKind};
 pub use tracker::{
@@ -60,11 +63,11 @@ const MAX_OPERATIONAL_DURATION_MS: u64 = 24 * 60 * 60 * 1_000;
 pub struct Config<P = NoParams> {
     pub engine: EngineConfig,
     pub queues: QueuesConfig,
-    pub source: SourceSpec,
+    /// Each venue that this engine reads, in the order that gives each its venue id.
+    pub sources: Vec<SourceConfig>,
     pub strategy: StrategySpec<P>,
     pub persistence: Option<PersistenceConfig>,
     pub link: Option<LinkConfig>,
-    pub execution: Option<ExecutionConfig>,
     #[serde(default)]
     pub exposure: ExposureConfig,
     pub logging: LoggingConfig,
@@ -149,66 +152,30 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
                 )?;
             }
         }
+        check_range(
+            "exposure.max_failed_writes",
+            u64::from(self.exposure.max_failed_writes),
+            1..=u64::from(u32::MAX),
+            "1 or more",
+        )?;
         self.logging.validate(self.engine.drain_deadline_ms)?;
-        self.source.validate()?;
         self.latency.validate()?;
         self.senders.validate()?;
         if let Some(link) = &self.link {
             link.validate()?;
         }
-        if let Some(execution) = &self.execution {
-            execution.validate(self.engine.spin_interval_us)?;
-            self.check_execution_source(execution.mode)?;
-        }
-        Ok(())
-    }
-
-    fn check_execution_source(&self, mode: ExecutionMode) -> Result<(), ConfigError> {
-        if !mode.is_enabled() {
-            return Ok(());
-        }
-        if !self.source.supports_execution(mode) {
-            let supported: Vec<&str> = self
-                .source
-                .execution_modes()
-                .iter()
-                .copied()
-                .map(ExecutionMode::as_str)
-                .collect();
-            return Err(ConfigError::ExecutionModeUnsupported {
-                venue: self.source.venue(),
-                mode: mode.as_str(),
-                supported: supported.join(", ").into_boxed_str(),
-            });
-        }
-        let SourceSpec::Binance {
-            market,
-            subscriptions,
-            ..
-        } = &self.source
-        else {
-            return Ok(());
-        };
-        if !mode.is_simulated() {
-            return Ok(());
-        }
-        if *market != BinanceMarket::Spot {
-            return Err(ConfigError::SimulatedExecutionMarket {
-                market: market.as_str(),
-            });
-        }
-        let missing = subscriptions.disabled_streams();
-        if !missing.is_empty() {
-            return Err(ConfigError::SimulatedExecutionSubscriptions {
-                missing: missing.join(", ").into_boxed_str(),
-            });
+        self.check_sources()?;
+        for source in &self.sources {
+            source.feed.validate()?;
+            if let Some(execution) = &source.execution {
+                execution.validate(self.engine.spin_interval_us)?;
+                check_execution_source(&source.feed, execution.mode)?;
+            }
         }
         Ok(())
     }
 }
 
-/// The slots of each ring. Each kind of input queue has its own capacity, because a full timer or
-/// execution ring halts the engine while a full link ring drops a frame.
 impl<P> Config<P> {
     pub(crate) fn seal_try_limit(&self) -> NonZeroU32 {
         let configured = self
@@ -224,6 +191,8 @@ impl<P> Config<P> {
     }
 }
 
+/// The slots of each ring. Each kind of input queue has its own capacity, because a full timer or
+/// execution ring halts the engine while a full link ring drops a frame.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QueuesConfig {
@@ -302,12 +271,17 @@ pub struct PersistenceConfig {
 pub struct ExposureConfig {
     #[serde(default = "default_exposure_dir")]
     pub dir: PathBuf,
+    /// Failed writes of the file in a row, after which the writer reports once and quoting halts. A
+    /// write that succeeds starts the count again.
+    #[serde(default = "default_max_failed_writes")]
+    pub max_failed_writes: u32,
 }
 
 impl Default for ExposureConfig {
     fn default() -> Self {
         ExposureConfig {
             dir: default_exposure_dir(),
+            max_failed_writes: default_max_failed_writes(),
         }
     }
 }
@@ -394,4 +368,9 @@ fn default_retention_hours() -> u64 {
 
 fn default_exposure_dir() -> PathBuf {
     PathBuf::from("./exposure")
+}
+
+/// Three tries of a local file write take about 300 ms at the writer's poll.
+fn default_max_failed_writes() -> u32 {
+    3
 }

@@ -1,21 +1,17 @@
-//! Core order state machine: decides phases and order lifecycle, mirrors known orders, and
-//! coordinates fatal shutdown. Drivers provide I/O (socket/clock) and inbound events for replay.
+//! The order state machine that each venue edge shares: the phase of a session, the mirror of known
+//! orders, and the exit sweep. The driver brings the socket, the clock and the events, so a replay
+//! decides the same way.
 
 mod answer;
 mod command;
 
 use crate::msg::exec::{CancelReason, Provenance};
 use crate::msg::ids::{ClientOrderId, InstrumentId, Side};
-use crate::msg::time::DurationUs;
 
 use super::effect::{ExecEffect, ExecRequest, PlaceNotSentReason, RequestId, SkipReason};
 use super::mirror::{MirroredOrder, OrderMirror};
 
-// After this interval, treat unanswered requests as unknown (reconcile instead of retry).
-// Retrying risks two live orders at the same price.
-pub const REQUEST_TIMEOUT: DurationUs = DurationUs::from_micros(5_000_000);
-
-// Lifecycle gate. Only Quoting accepts new orders.
+/// The phase of a session. Only `Quoting` admits a new order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Phase {
     Down,
@@ -46,6 +42,7 @@ pub struct ExecCore {
     max_orders_per_side: usize,
     sweep: Option<CancelReason>,
     has_opened_quoting: bool,
+    foreign_orders: u64,
 }
 
 #[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -73,7 +70,18 @@ impl ExecCore {
             max_orders_per_side,
             sweep: None,
             has_opened_quoting: false,
+            foreign_orders: 0,
         }
+    }
+
+    /// How many times a read or the stream showed an order that this engine did not place. Each is
+    /// left alone, and the count is the only trace that one was seen.
+    pub fn foreign_orders(&self) -> u64 {
+        self.foreign_orders
+    }
+
+    pub(crate) fn count_foreign_order(&mut self) {
+        self.foreign_orders += 1;
     }
 
     pub fn phase(&self) -> Phase {
@@ -84,7 +92,8 @@ impl ExecCore {
         self.mirror.as_slice()
     }
 
-    // Move to Resyncing until stream proves itself. Quoting against stale state is a guess.
+    // The session resyncs until the stream proves itself, because a quote against stale state is
+    // a guess.
     pub fn on_connected(&mut self, emit: &mut dyn FnMut(ExecEffect)) {
         if self.phase.is_terminal() {
             return;
@@ -95,7 +104,8 @@ impl ExecCore {
         self.send(ExecRequest::SubscribeUserStream, emit);
     }
 
-    // Marks mirror stale but does not change phase if mid-sweep; orders stay resting on venue.
+    // The orders still rest at the venue, so the mirror only goes stale. A sweep under way keeps
+    // its phase.
     pub fn on_disconnected(&mut self) {
         if self.phase.is_terminal() {
             return;
@@ -137,7 +147,7 @@ impl ExecCore {
         self.mirror.find(client_id)
     }
 
-    /// Only current-run placement released; prior-run identity with same id stays.
+    /// Releases only the placement of this run. An order of a prior run with the same id stays.
     pub fn on_place_not_sent(&mut self, client_id: ClientOrderId) {
         let is_current_place = self
             .mirror
@@ -148,7 +158,8 @@ impl ExecCore {
         }
     }
 
-    /// Transport may have accepted bytes -> reservation uncertain until terminal event or proof.
+    /// The transport may have taken the bytes, so the reservation stays uncertain until a terminal
+    /// event or a read shows where the order is.
     pub fn mark_ambiguous(&mut self, client_id: ClientOrderId) {
         if let Some(order) = self.mirror.find_mut(client_id) {
             order.is_ambiguous = true;
@@ -177,7 +188,7 @@ impl ExecCore {
         });
     }
 
-    /// Exit path entry: pull every order this run owns (reason recorded for tape).
+    /// Starts the exit: pulls every order that this run owns, and records the reason for the tape.
     pub fn begin_sweep(
         &mut self,
         reason: CancelReason,
@@ -195,8 +206,9 @@ impl ExecCore {
         self.settle_if_swept(emit);
     }
 
-    /// Re-ask unresolved orders (cancel sent, answer left state unknown). Repeats on each pass
-    /// (probe can be lost mid-flight, no hot thread to re-derive by sweep time).
+    /// Asks again about each order whose cancel went out and whose answer left its state unknown.
+    /// Each pass asks again, because a probe can be lost on the way, and by sweep time no hot
+    /// thread is left to ask.
     fn probe_unresolved(
         &mut self,
         instrument: Option<InstrumentId>,

@@ -12,101 +12,123 @@ use crate::msg::persist::OrderTransition;
 use crate::msg::time::{FoldTime, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 
+use super::budget::QuotePermit;
 use super::desired::{DesiredBook, DesiredQuote, QuoteLevel};
 use super::engine::{ExecEngine, FoldStamps, resting_of};
-use super::gates::{ExposureCheck, HaltReason, QuotePermission, assess_exposure};
-use super::order::{MAX_ORDER_SLOTS, OrderState};
+use super::gates::{ExposureCheck, HaltReason, LossVerdict, QuotePermission, assess_exposure};
+use super::order::OrderState;
 use super::reconcile::{
     BookTop, FundsView, ReconcileInput, ReconcileOutcome, RejectReason, reconcile_side,
 };
 
 impl ExecEngine {
     pub(crate) fn on_spin(&mut self, mut input: SpinInput<'_>) {
-        if self.sink.is_none() {
+        if !self.has_sink() {
             return;
         }
         let now = input.now.as_local();
-        self.budget.observe_spin(now);
-        self.orders.reap(now, self.settings.order_reap_window);
-        self.sweep_timeouts(input.stamps(), input.bank);
-        self.detect_silence(now);
-        self.observe_pnl_baseline(input.ledger);
-        self.enforce_resting_limit(now);
-        // The window sweep runs first: pulling orders off a closing market becomes
-        // irreversible if it's late, and doing so frees the side for the flatten pass.
-        self.sweep_closing_windows(&mut input);
-        // Flatten runs before quote: claiming a slot marks the side as in-flight, so the
-        // quote ladder skips it. Reversing the order would send two unanswered commands on
-        // one side in a single spin.
-        self.flatten_pass(&mut input);
-        self.quote_pass(&mut input);
-        if let Some(sink) = self.sink.as_mut() {
-            self.pending.drain_into(sink, now);
+        for venue in 0..self.venues.len() {
+            self.spin_venue(venue, &mut input);
+        }
+        for venue in &mut self.venues {
+            if let Some(sink) = venue.sink.as_mut() {
+                venue.pending.drain_into(sink, now);
+            }
         }
     }
 
-    fn sweep_timeouts(&mut self, stamps: FoldStamps, bank: &mut Actions) {
-        for index in 0..MAX_ORDER_SLOTS {
-            if self
-                .orders
-                .is_timed_out(index, stamps.fold, self.settings.inflight_timeout)
-            {
+    /// The pass of one venue, over its own instruments and slots and with its own settings. A venue
+    /// with no sink places nothing, so it has no pass.
+    fn spin_venue(&mut self, venue: usize, input: &mut SpinInput<'_>) {
+        if self.venues[venue].sink.is_none() {
+            return;
+        }
+        let now = input.now.as_local();
+        let state = &mut self.venues[venue];
+        state.budget.observe_spin(now);
+        let (slots, reap_window) = (state.slots.clone(), state.settings.order_reap_window);
+        self.orders.reap_within(slots, now, reap_window);
+        self.sweep_timeouts(venue, input.stamps(), input.bank);
+        self.detect_silence(venue, now);
+        self.observe_pnl_baseline(venue, input.ledger);
+        self.enforce_resting_limit(venue, now);
+        // The window sweep runs first: pulling orders off a closing market becomes
+        // irreversible if it's late, and doing so frees the side for the flatten pass.
+        self.sweep_closing_windows(venue, input);
+        // Flatten runs before quote: claiming a slot marks the side as in-flight, so the
+        // quote ladder skips it. Reversing the order would send two unanswered commands on
+        // one side in a single spin.
+        self.flatten_pass(venue, input);
+        self.quote_pass(venue, input);
+    }
+
+    fn sweep_timeouts(&mut self, venue: usize, stamps: FoldStamps, bank: &mut Actions) {
+        let slots = self.venues[venue].slots.clone();
+        let timeout = self.venues[venue].settings.inflight_timeout;
+        let mut next = self.orders.next_in_use(slots.start);
+        while let Some(index) = next.filter(|index| slots.contains(index)) {
+            next = self.orders.next_in_use(index + 1);
+            if self.orders.is_timed_out(index, stamps.fold, timeout) {
                 self.chase_timed_out(index, stamps, bank);
             }
         }
     }
 
     /// The venue never answered this order's request, so its state is unknown until the venue is
-    /// asked about the order directly.
+    /// asked. It is asked about the order a few times, then for the open orders of its instrument
+    /// once. An order still unknown after that would leave the engine trading with an order it
+    /// cannot account for, so quoting halts.
     #[cold]
     fn chase_timed_out(&mut self, index: usize, stamps: FoldStamps, bank: &mut Actions) {
         let now = stamps.fold;
-        let slot = self.orders.slot_mut(index);
-        slot.last_event_ts_us = now;
-        let (instrument, client_id) = (slot.instrument, slot.client_id);
-        let next = OrderState::Unknown;
-        self.move_slot(index, next, OrderTransition::Timeout, stamps.received, bank);
-        self.recon_seq += 1;
-        let command = ExecCommand::ReconcileOrder {
-            instrument,
-            client_id,
-            recon_seq: self.recon_seq,
+        let probes = self.orders.slot(index).status_probes();
+        let venue = self.venue_of(self.orders.slot(index).instrument());
+        let max_probes = u16::from(self.venues[venue].settings.max_status_probes);
+        if probes > max_probes {
+            return self.halt(HaltReason::StatusProbesSpent, now);
+        }
+        let previous = self.orders.mark_timed_out(index, now);
+        self.bank_moved(
+            index,
+            previous,
+            OrderTransition::Timeout,
+            stamps.received,
+            bank,
+        );
+        let slot = self.orders.slot(index);
+        let (instrument, client_id) = (slot.instrument(), slot.client_id());
+        self.venues[venue].recon_seq += 1;
+        let recon_seq = self.venues[venue].recon_seq;
+        let command = if probes < max_probes {
+            ExecCommand::ReconcileOrder {
+                instrument,
+                client_id,
+                recon_seq,
+            }
+        } else {
+            ExecCommand::ReconcileOpenOrders {
+                instrument,
+                recon_seq,
+            }
         };
-        self.bank_or_halt(command, now);
+        self.bank_or_halt(venue, command, now);
     }
 
-    fn detect_silence(&mut self, now: LocalTs) {
-        self.spins_since_exec_event += 1;
-        let is_silent = self.spins_since_exec_event >= self.settings.exec_silence_spins;
-        let has_working =
-            (0..MAX_ORDER_SLOTS).any(|index| self.orders.slot(index).state.is_working());
-        if is_silent && has_working {
-            self.request_open_orders(now);
-        }
-    }
-
-    #[cold]
-    fn request_open_orders(&mut self, now: LocalTs) {
-        self.spins_since_exec_event = 0;
-        for index in 0..self.instruments.len() {
-            self.recon_seq += 1;
-            let command = ExecCommand::ReconcileOpenOrders {
-                instrument: InstrumentId(index as u16),
-                recon_seq: self.recon_seq,
-            };
-            self.bank_or_halt(command, now);
-        }
-    }
-
-    fn quote_pass(&mut self, input: &mut SpinInput<'_>) {
-        let session = self.session_permission(input.ledger);
-        if session == QuotePermission::Neither && !self.halt.is_halted() {
+    /// A realised loss of a quote asset at the budget halts quoting before any side is decided, and
+    /// then each instrument quotes the sides that its own loss permission leaves open.
+    fn quote_pass(&mut self, venue: usize, input: &mut SpinInput<'_>) {
+        self.sum_realised_losses(input.ledger);
+        let is_spent = (0..self.instruments.len()).any(|index| {
+            let verdict = self.loss_verdict(InstrumentId(index as u16), input.ledger);
+            verdict == LossVerdict::Realised
+        });
+        if is_spent && !self.halt.is_halted() {
             self.halt(HaltReason::RealisedLoss, input.now.as_local());
         }
-        for index in 0..self.instruments.len() {
-            let instrument = InstrumentId(index as u16);
+        for instrument in self.venues[venue].instrument_ids() {
+            let permission = self.loss_permission(instrument, input.ledger);
             for side in [Side::Buy, Side::Sell] {
-                let reason = self.reconcile_ladder(instrument, side, session, input);
+                let reason = self.reconcile_ladder(instrument, side, permission, input);
                 self.record_refusal(instrument, side, reason, input);
             }
         }
@@ -123,7 +145,7 @@ impl ExecEngine {
         if self.halt.is_halted() {
             return Err(RejectReason::Halted);
         }
-        if let Some(gap) = self.readiness_gap() {
+        if let Some(gap) = self.venue(instrument).readiness_gap() {
             return Err(RejectReason::NotReady(gap));
         }
         if !session.admits(side) {
@@ -171,28 +193,29 @@ impl ExecEngine {
         else {
             return ladder.resolve();
         };
-        if matches!(outcome, ReconcileOutcome::Place(_))
-            && let Some(reason) = self.place_refusal(instrument, side)
-        {
+        if let Some(reason) = self.act_on(instrument, side, level, outcome, input) {
             ladder.refusal.get_or_insert(reason);
-            return ladder.refusal;
         }
-        self.act_on(instrument, side, level, outcome, input);
         ladder.resolve()
     }
 
-    /// Why this side may not mint a placement this spin. Checks how many orders it already
-    /// has out, then the venue's account-wide placement budget.
+    /// The permit to place a quote on this side this spin: a free order on the side, then the
+    /// venue's account-wide placement budget.
     ///
-    /// The budget refuses QUOTES only — the flatten pass never asks. A quote can wait a spin and
-    /// lose nothing but a spread; an order that sheds a position cannot, and starving it locally
-    /// would be the engine choosing to stay exposed. Refusing quotes early is how the headroom that
-    /// exit needs is still there, since the quotes are what spend it.
-    fn place_refusal(&self, instrument: InstrumentId, side: Side) -> Option<RejectReason> {
-        if self.orders.possibly_live_count(instrument, side) >= self.settings.max_orders_per_side {
-            return Some(RejectReason::OrderLimit);
+    /// Only a quote asks. A quote can wait a spin and lose a spread, while the order that gets a
+    /// market flat cannot wait, and a local refusal of it would be the engine choosing to stay
+    /// exposed. Quotes are what spend the budget, so refusing them early leaves the headroom that
+    /// the way out needs.
+    pub(super) fn admit_quote_placement(
+        &self,
+        instrument: InstrumentId,
+        side: Side,
+    ) -> Result<QuotePermit, RejectReason> {
+        let venue = self.venue(instrument);
+        if self.orders.possibly_live_count(instrument, side) >= venue.settings.max_orders_per_side {
+            return Err(RejectReason::OrderLimit);
         }
-        (!self.budget.admits_place()).then_some(RejectReason::RateBudget)
+        venue.budget.admit_quote()
     }
 
     /// What the strategy wants on this side once every gate has had its say, level by level.
@@ -204,7 +227,10 @@ impl ExecEngine {
         input: &SpinInput<'_>,
     ) -> DesiredLadder {
         let tick = self.instruments[usize::from(instrument.0)].grid.tick;
-        let depth = self.settings.max_orders_per_side.min(MAX_QUOTE_LEVELS);
+        let depth = self
+            .settings_of(instrument)
+            .max_orders_per_side
+            .min(MAX_QUOTE_LEVELS);
         let mut ladder = DesiredLadder::default();
         let mut snapped_prices = [None; MAX_QUOTE_LEVELS];
         for level in QuoteLevel::ALL {
@@ -263,11 +289,11 @@ impl ExecEngine {
                 resting: self
                     .orders
                     .resting(instrument, side, level)
-                    .filter(|slot| slot.state == OrderState::Live)
+                    .filter(|slot| slot.state() == OrderState::Live)
                     .map(resting_of),
                 grid,
                 top,
-                limits: self.settings.limits,
+                limits: self.settings_of(instrument).limits,
                 funds,
             });
             match outcome {
@@ -285,12 +311,13 @@ impl ExecEngine {
 
     pub(super) fn funds_view(&self, instrument: InstrumentId, side: Side) -> FundsView {
         let asset = self.instruments[usize::from(instrument.0)].spend_asset(side);
+        let venue = self.venue(instrument);
         let floor = match side {
-            Side::Buy => self.settings.min_quote_balance.mantissa(),
-            Side::Sell => self.settings.min_base_balance.mantissa(),
+            Side::Buy => venue.settings.min_quote_balance.mantissa(),
+            Side::Sell => venue.settings.min_base_balance.mantissa(),
         };
         FundsView {
-            spendable: self.account.balance(asset).spendable(),
+            spendable: venue.account.balance(asset).spendable(),
             floor,
         }
     }
@@ -349,8 +376,8 @@ pub struct SpinInput<'a> {
     /// Per instrument, the window the venue last rotated it into. `None` where the venue does not
     /// rotate, which is what makes the quote-window gate inert everywhere it does not belong.
     pub windows: &'a [Option<WindowInfo>],
-    /// Per instrument, whether its market is live. A market that warms has the quote permission
-    /// `Neither`, joined after the session permission, so a warming market never halts the session.
+    /// Per instrument, whether its market is live. A market that warms quotes nothing, and that is
+    /// judged after the loss permission, so a warming market never halts quoting.
     pub(crate) gates: &'a [StrategyGate],
     pub(crate) ledger: &'a PositionLedger,
     pub(crate) bank: &'a mut Actions,

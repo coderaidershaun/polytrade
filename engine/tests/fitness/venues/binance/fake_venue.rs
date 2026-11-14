@@ -1,6 +1,7 @@
 //! Deterministic Binance Spot scenarios over the production simulator.
 
 use engine::msg::exec::{ExecEvent, OrderStyle, VenueOrderStatus};
+use engine::msg::ids::VenueId;
 use engine::msg::ids::{AssetId, ClientOrderId, Notional, Price, Qty, Side, TradeId, VenueOrderId};
 use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::time::LocalTs;
@@ -157,6 +158,7 @@ impl FakeVenue {
         DecodeContext {
             symbols: &self.symbols,
             assets: self.registry.assets(),
+            venue: VenueId(0),
             identity: self.identity,
             received_ts_us: at,
         }
@@ -419,13 +421,14 @@ fn spot_registry() -> Registry {
 queues:
   input_capacity: 65536
   persistence_capacity: 65536
-source:
-  exchange: binance
-  max_exposure_quote: 500
-  market: spot
-  base: BTC
-  quote: USDT
-  tracker: {}
+sources:
+  - feed:
+      exchange: binance
+      max_exposure_quote: 500
+      market: spot
+      base: BTC
+      quote: USDT
+      tracker: {}
 strategy:
   instruments: all
 persistence:

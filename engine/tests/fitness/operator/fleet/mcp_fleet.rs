@@ -132,8 +132,8 @@ fn set_mode_rewrites_only_the_mode_value_and_preserves_every_other_byte() {
     assert_eq!(
         changed,
         vec![(
-            "  mode: sim # live, sim, off",
-            "  mode: live # live, sim, off"
+            "      mode: sim # live, sim, off",
+            "      mode: live # live, sim, off"
         )],
         "exactly the mode value changes; its indent and trailing comment survive"
     );
@@ -144,7 +144,7 @@ fn set_mode_rewrites_only_the_mode_value_and_preserves_every_other_byte() {
         )
         .expect("the sim block is inert under live, so the edited config still loads");
     assert_eq!(
-        loaded.execution.map(|block| block.mode),
+        loaded.sources[0].execution.as_ref().map(|block| block.mode),
         Some(ExecutionMode::Live)
     );
 
@@ -157,8 +157,9 @@ fn set_mode_rewrites_only_the_mode_value_and_preserves_every_other_byte() {
         "a round trip restores the file byte for byte"
     );
 
-    let edges = "link:\n  bind: \"127.0.0.1:9399\"\n  mode: x\nexecution:\r\n  # mode: off\n  \
-                 nested:\n    mode: off\n  mode: sim # pick\r\n  max: 1\n";
+    let edges = "link:\n  bind: \"127.0.0.1:9399\"\n  mode: x\nsources:\n  - execution:\r\n      \
+                 # mode: off\n      nested:\n        mode: off\n      mode: sim # pick\r\n      \
+                 max: 1\n";
     tree.config("strat-a", "te-edges", edges);
     let change = fleet
         .set_mode(&identity("strat-a", "te-edges"), ExecutionMode::Off)
@@ -166,7 +167,7 @@ fn set_mode_rewrites_only_the_mode_value_and_preserves_every_other_byte() {
     assert_eq!(change.previous, "sim");
     assert_eq!(
         std::fs::read_to_string(tree.config_path("strat-a", "te-edges")).expect("read back"),
-        edges.replace("  mode: sim # pick\r\n", "  mode: off # pick\r\n"),
+        edges.replace("      mode: sim # pick\r\n", "      mode: off # pick\r\n"),
         "a commented mode, a nested mode and another block's mode are all left alone, and CRLF \
          endings are read as line ends and kept"
     );
@@ -176,20 +177,26 @@ fn set_mode_rewrites_only_the_mode_value_and_preserves_every_other_byte() {
 fn set_mode_never_reports_a_mode_the_file_does_not_read_as() {
     type IsExpected = fn(&FleetError) -> bool;
     let cases: [(&str, &str, IsExpected); 4] = [
-        ("te-next-line", "execution:\n  mode:\n    live\n", |error| {
-            matches!(error, FleetError::NoModeLine { .. })
-        }),
-        ("te-comment", "execution:\n  mode: # pick one\n", |error| {
-            matches!(error, FleetError::ConfigUnreadable { .. })
-        }),
         (
-            "te-duplicate",
-            "execution:\n  mode: off\n  mode: sim\n",
+            "te-next-line",
+            "sources:\n  - execution:\n      mode:\n        live\n",
+            |error| matches!(error, FleetError::NoModeLine { .. }),
+        ),
+        (
+            "te-comment",
+            "sources:\n  - execution:\n      mode: # pick one\n",
             |error| matches!(error, FleetError::ConfigUnreadable { .. }),
         ),
-        ("te-anchored", "execution:\n  mode: &m sim\n", |error| {
-            matches!(error, FleetError::RewriteNotVerified { .. })
-        }),
+        (
+            "te-duplicate",
+            "sources:\n  - execution:\n      mode: off\n      mode: sim\n",
+            |error| matches!(error, FleetError::ConfigUnreadable { .. }),
+        ),
+        (
+            "te-anchored",
+            "sources:\n  - execution:\n      mode: &m sim\n",
+            |error| matches!(error, FleetError::RewriteNotVerified { .. }),
+        ),
     ];
     let tree = EngineTree::new("mcp-unverified");
     for (te, text, _) in &cases {
@@ -533,7 +540,7 @@ async fn a_running_row_reports_what_the_engine_booted_with() {
     let engine = identity("strat-a", "te-off");
     fleet.start(&engine).await.expect("starts");
     // The engine is a shell script, so a live mode here trades nothing.
-    let edited = "execution:\n  mode: live\nlink:\n  bind: \"127.0.0.1:9400\"\n";
+    let edited = "sources:\n  - execution:\n      mode: live\nlink:\n  bind: \"127.0.0.1:9400\"\n";
     tree.config("strat-a", "te-off", edited);
 
     let row = &fleet.list().expect("lists").engines[0];

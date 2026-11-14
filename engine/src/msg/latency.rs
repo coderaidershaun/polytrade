@@ -158,12 +158,12 @@ pub struct CounterSample {
 }
 
 const _: () = {
-    assert!(size_of::<CounterSample>() == 256 && align_of::<CounterSample>() == 64);
+    assert!(size_of::<CounterSample>() == 320 && align_of::<CounterSample>() == 64);
     assert!(offset_of!(CounterSample, spin_ts_us) == 0);
     assert!(offset_of!(CounterSample, spin_seq) == 8);
     assert!(offset_of!(CounterSample, backlog) == 16);
     assert!(offset_of!(CounterSample, counters) == 96);
-    assert!(offset_of!(CounterSample, idle_parks) == 216);
+    assert!(offset_of!(CounterSample, idle_parks) == 256);
 };
 
 /// The drop and event counts of the fold since the start of the run, carried in each counter
@@ -184,6 +184,13 @@ pub struct EngineCounters {
     /// Position snapshots replaced before the exposure writer took them. Nonzero means the file on
     /// disk trails the hot side, so a hard kill would restore a stale position.
     pub exposure_superseded: u64,
+    /// One count for each kind of incident row, raised whether or not the tape took the row.
+    pub fee_gaps: u64,
+    pub stranded_positions: u64,
+    pub orphan_fills: u64,
+    pub unbooked_fees: u64,
+    /// Events of this run's own orders that held no slot and no fill: refused, with no record.
+    pub orphan_events_without_fill: u64,
 }
 
 /// Records that each lane of the strategy bank dropped because it was full. A full output lane

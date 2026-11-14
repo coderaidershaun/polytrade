@@ -7,10 +7,12 @@ use engine::hot::dispatch::{
     ExecWiring, ExposureWiring, HotEngine, HotEngineSetup, LinkWiring, PersistWiring,
 };
 use engine::hot::exec::{
-    BookTop, ClientIdLayout, ExecSettings, FundsView, RejectOrigin, RejectReason, side_base,
+    BookTop, ClientIdLayout, ExecCapacity, ExecSettings, FundsView, RejectOrigin, RejectReason,
+    side_base,
 };
 use engine::hot::sink::{
-    ExecSink, ExposureSink, LinkSink, PersistSink, StrategyLogSink, UiBookSink, UiEventSink,
+    ExecSink, ExposureReceiver, ExposureSink, LinkSink, PersistSink, StrategyLogSink, UiBookSink,
+    UiEventSink,
 };
 use engine::hot::strategy::{EngineView, Strategy, StrategyConfig};
 use engine::link::OutboundLink;
@@ -19,6 +21,7 @@ use engine::msg::exec::{
     AccountChunk, AccountChunkKind, AssetBalance, ExecEvent, ExecKind, ExecLaneItem, Liquidity,
     Provenance, VenueOrderStatus,
 };
+use engine::msg::ids::VenueId;
 use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
 };
@@ -263,6 +266,7 @@ pub const TEST_MAX_EXPOSURE_QUOTE: i64 = 1_000_000 * FIXED_SCALE;
 pub fn instrument_row(id: u16, tracker: TrackerSpec, book_capacity: usize) -> InstrumentRow {
     InstrumentRow {
         instrument_id: InstrumentId(id),
+        venue: VenueId(0),
         market: VenueMarket::Binance(BinanceMarket::Perpetual),
         venue_symbol: "btcusdt".into(),
         display: "BTC/USDT perpetual".into(),
@@ -284,6 +288,15 @@ pub fn instrument_row(id: u16, tracker: TrackerSpec, book_capacity: usize) -> In
         max_exposure_quote: Notional::from_mantissa(TEST_MAX_EXPOSURE_QUOTE),
         tracker,
     }
+}
+
+/// The size of each execution table for `instruments` rows of [`instrument_row`], whose assets are
+/// 0 and 1.
+pub fn exec_capacity(instruments: u16) -> ExecCapacity {
+    let rows: Vec<InstrumentRow> = (0..instruments)
+        .map(|id| instrument_row(id, TrackerSpec::default(), 8))
+        .collect();
+    ExecCapacity::of(&rows).expect("a test engine stays within the slots a client id addresses")
 }
 
 /// All instruments, all-default params. Generic over `P` so the one builder serves strategies with
@@ -424,7 +437,7 @@ fn ui_engine(
     let (ui_book_sink, ui_books) = ui_book_ring(UI_BOOK_RING_CAPACITY);
     let (ui_event_sink, ui_events) = ui_event_ring(UI_EVENT_RING_CAPACITY);
     let engine = HotEngine::new(HotEngineSetup {
-        exec,
+        exec: exec.into_iter().collect(),
         persistence,
         strategy_log_sink,
         ui_book_sink,
@@ -550,11 +563,31 @@ pub fn ui_event_ring(capacity: usize) -> (UiEventSink, Consumer<UiEvent>) {
     (UiEventSink::new(producer), consumer)
 }
 
-/// The exposure ring, mirroring [`persist_ring`]. Keep the consumer to read the cost basis the
-/// engine publishes; [`detached_setup`] is the shape for a test that does not.
-pub fn exposure_ring(capacity: usize) -> (ExposureSink, Consumer<ExposureSnapshot>) {
-    let (producer, consumer) = RingBuffer::<ExposureSnapshot>::new(capacity);
-    (ExposureSink::new(producer), consumer)
+/// The exposure lane of an engine of `instruments` instruments, mirroring [`persist_ring`]. Keep
+/// the reader to read the cost basis the engine publishes; [`detached_setup`] is the shape for a
+/// test that does not.
+pub fn exposure_ring(capacity: usize, instruments: usize) -> (ExposureSink, ExposureLane) {
+    let (sink, receiver) = ExposureSink::lane(capacity, instruments);
+    let lane = ExposureLane {
+        receiver,
+        copy: ExposureSnapshot::for_instruments(instruments),
+    };
+    (sink, lane)
+}
+
+/// The read end of the exposure lane as a test reads it: each snapshot is copied out, and the
+/// lane gets its room back.
+pub struct ExposureLane {
+    receiver: ExposureReceiver,
+    copy: ExposureSnapshot,
+}
+
+impl ExposureLane {
+    pub fn pop(&mut self) -> Option<ExposureSnapshot> {
+        self.receiver
+            .pop_into(&mut self.copy)
+            .then(|| self.copy.clone())
+    }
 }
 
 /// An engine wired to nothing: no venue, persistence, link or warmup, no restored position, and
@@ -576,10 +609,10 @@ pub fn detached_setup(
         ui_event_sink: ui_event_ring(256).0,
         link: None,
         warmup: DurationUs::ZERO,
-        exec: None,
+        exec: Vec::new(),
         exposure: ExposureWiring {
             restored: &[],
-            sink: exposure_ring(16).0,
+            sink: exposure_ring(16, instruments.len()).0,
         },
     }
 }
@@ -694,6 +727,7 @@ pub fn exec_event(
     when: i64,
 ) -> ExecEvent {
     ExecEvent {
+        venue: VenueId(0),
         instrument: Some(instrument),
         client_id,
         venue_order_id: None,

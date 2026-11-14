@@ -6,6 +6,8 @@ mod codec;
 mod probe;
 mod sign;
 
+use std::time::Duration;
+
 use crate::hot::exec::{FeeModel, OrderBudget};
 use crate::runtime::config::BinanceEnv;
 use crate::runtime::secrets::CredentialVariables;
@@ -39,6 +41,10 @@ pub(crate) fn capabilities(order_budget: OrderBudget) -> VenueCapabilities {
         base_asset_is_position: false,
     }
 }
+
+/// How long the signed REST client of the edge waits for an answer. It stays below the in-flight
+/// timeout, so the client gives its verdict before the in-flight table reads the request back.
+pub(crate) const ORDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(4);
 
 /// Testnet and production are separate order books reached with separate keys, so each deployment
 /// carries its own history rather than continuing the other's.

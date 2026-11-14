@@ -11,13 +11,14 @@ mod telemetry;
 mod ui_emit;
 
 use derived::Derived;
-use exposure::{moves_position, restored_snapshot, warn_uncovered_instruments};
+use exposure::{moves_position, restored_snapshot};
 use gate::MarketGates;
 
 use crate::hot::book::Book;
 use crate::hot::dispatch::ui_emit::UiEmitter;
 use crate::hot::exec::{
-    DesiredBook, ExecCallback, ExecEngine, FoldStamps, HaltReason, QuoteLevel, SpinInput,
+    DesiredBook, ExecCallback, ExecCapacity, ExecEngine, FoldStamps, HaltReason, QuoteLevel,
+    SpinInput,
 };
 use crate::hot::ledger::PositionLedger;
 use crate::hot::sink::{ExposureSink, LinkSink, PersistSink, StrategyLogSink};
@@ -25,12 +26,12 @@ use crate::hot::strategy::{Actions, ActionsSetup, DrainSinks, Strategy, Strategy
 use crate::log::hot_error;
 use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
-use crate::msg::inbound::{InboundMessage, MessageBody, SpinTick};
+use crate::msg::inbound::{InboundMessage, MessageBody, SpinTick, WriterFailure};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{FoldTime, LocalTs};
 use crate::msg::ui::{DomQuote, UI_QUOTE_LEVELS};
 use crate::runtime::config::RecordedTables;
-use crate::runtime::exposure::{ExposureSnapshot, MAX_EXPOSURE_INSTRUMENTS};
+use crate::runtime::exposure::ExposureSnapshot;
 use crate::runtime::shutdown::RunStateCell;
 
 pub use digest::StateDigest;
@@ -46,18 +47,18 @@ struct HotState {
     derived: Derived,
     windows: Vec<Option<WindowInfo>>,
     ledger: PositionLedger,
-    /// Ledger's durable half (next boot restore).
+    /// The half of the ledger that outlives the process: the next start restores it.
     exposure: ExposureSink,
-    /// Writer's state (seq is one fact with what changed).
+    /// What the exposure writer holds. Its sequence number and what changed are one fact.
     published_exposure: ExposureSnapshot,
-    /// Spin of current declarations (on state for single-arg ctx building).
+    /// The spin of the declarations in force, kept here so the context is built from one value.
     spin_seq: u64,
     /// The latest received stamp folded so far: the time that deadlines and the strategy read.
     fold_time: FoldTime,
     gates: MarketGates,
-    /// Beside ledger not inside (fill moves both, one owner per state).
+    /// Beside the ledger, not inside it: a fill moves both, and each state has one owner.
     exec: ExecEngine,
-    /// Outside exec (callback &mut desired + & exec, can't coexist in same struct).
+    /// Outside the execution engine, because a callback writes it while it reads the engine.
     desired: DesiredBook,
     actions: Actions,
     /// None if no persistence configured.
@@ -121,9 +122,6 @@ impl HotEngine {
             exec,
             exposure,
         } = setup;
-        if instruments.len() > MAX_EXPOSURE_INSTRUMENTS {
-            warn_uncovered_instruments(instruments.len());
-        }
         let (books, trackers, ewma) = per_instrument_state(instruments);
         let declarations = Declarations::resolve(strategy.as_mut(), instruments);
         let (persist_sink, tables) = match persistence {
@@ -139,9 +137,12 @@ impl HotEngine {
                 books,
                 derived: Derived { trackers, ewma },
                 windows: vec![None; instruments.len()],
-                ledger: PositionLedger::new(instruments.len(), exposure.restored),
+                ledger: PositionLedger::new(
+                    &ExecCapacity::sized_for(instruments),
+                    exposure.restored,
+                ),
                 exposure: exposure.sink,
-                published_exposure: restored_snapshot(exposure.restored),
+                published_exposure: restored_snapshot(instruments.len(), exposure.restored),
                 spin_seq: 0,
                 fold_time: FoldTime::BEFORE_FIRST,
                 gates: MarketGates::new(warmup, instruments.len()),
@@ -197,6 +198,7 @@ impl HotEngine {
             MessageBody::RunControl(control) => self.on_run_control(control, received_ts_us),
             MessageBody::Exec(event) => self.on_exec(event, received_ts_us),
             MessageBody::Account(chunk) => self.on_account(chunk),
+            MessageBody::WriterFailed(failure) => self.halt_on_writer_failure(failure),
         }
         if moves_position(message) {
             self.state.publish_exposure(received_ts_us);
@@ -220,7 +222,8 @@ impl HotEngine {
         self.emit_positions(received_ts_us);
     }
 
-    /// Post-drain per-spin (fills folded). Ahead of live gate (corrects late-attach UI).
+    /// Each spin, after the drain, so each fill is in. It runs before the live gate, so a
+    /// workstation that attaches late is put right.
     fn emit_positions(&mut self, event_ts: LocalTs) {
         for (instrument, row) in self.state.ledger.rows() {
             if row.has_mark() {
@@ -229,7 +232,8 @@ impl HotEngine {
         }
     }
 
-    /// Drain bank to sinks (fixed priority). No-emit fast path avoids cost.
+    /// Empties the bank into the sinks in a fixed order. A message that banked nothing costs one
+    /// check.
     #[inline]
     fn drain_actions(&mut self) {
         if self.state.actions.is_empty() {
@@ -259,11 +263,12 @@ impl HotEngine {
             received: received_ts_us,
         };
         let callback = exec.on_exec_event(event, stamps, ledger, actions);
-        // Tee ahead of live gate (operator sees fill/transition/refusal).
+        // Sent before the live gate, so the operator sees each fill, transition and refusal.
         match callback {
             ExecCallback::None => {}
             ExecCallback::Fill(fill) => {
-                // Fill = two UI facts: tape delta + absolute state. State first (terminal>tape).
+                // A fill is two facts for the workstation: the state of the order and the fill
+                // itself. The state goes first, so a closed order never reads as still working.
                 if let Some(order) = exec.order(fill.client_id) {
                     self.ui
                         .emit_order_update(&order.updated_at(fill.event_ts_us));
@@ -285,9 +290,10 @@ impl HotEngine {
         }
     }
 
-    /// No callback (balance=read not event). UI re-states every spin.
+    /// A balance is a reading, not an event, so it earns no callback. The workstation hears it at
+    /// each spin.
     fn on_account(&mut self, chunk: &AccountChunk) {
-        self.state.exec.on_account(chunk);
+        self.state.exec.on_account(chunk, self.state.fold_time);
     }
 
     fn sample_trackers(&mut self) {
@@ -314,6 +320,18 @@ impl HotEngine {
         );
         let at = self.state.fold_time.as_local();
         self.state.exec.halt(HaltReason::SealNotAccepted, at);
+    }
+
+    /// The message is the one point in the input where a writer gave up, so a replay halts at it.
+    #[cold]
+    fn halt_on_writer_failure(&mut self, failure: &WriterFailure) {
+        hot_error!(
+            "the {:?} writer failed {} writes in a row, so its file no longer follows the position — quoting halts",
+            failure.writer,
+            failure.consecutive_failures
+        );
+        let at = self.state.fold_time.as_local();
+        self.state.exec.halt(HaltReason::WriterFailed, at);
     }
 
     fn spin_strategy(&mut self, tick: &SpinTick, received_ts_us: LocalTs) {
@@ -359,7 +377,8 @@ impl HotEngine {
             .drain_refusals(&mut |reject| ui.emit_reject(reject));
     }
 
-    /// Halt/balances/desired every spin (corrects late-attach). Desired expires this spin.
+    /// The halt, the balances and the desired quotes, at each spin, so a workstation that attaches
+    /// late is put right. A desired quote lasts for this spin only.
     fn emit_execution_state(&mut self, tick: &SpinTick, at: LocalTs) {
         let is_execution_wired = if let Some(halt) = self.state.exec.halt_state() {
             self.ui.emit_execution(halt, at);

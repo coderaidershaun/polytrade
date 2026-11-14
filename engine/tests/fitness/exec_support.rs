@@ -9,7 +9,7 @@ use engine::hot::exec::{
 };
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::{Strategy, StrategyCtx};
-use engine::msg::exec::{CancelReason, ExecCommand, ExecEvent, ExecLaneItem, OrderStyle};
+use engine::msg::exec::{CancelReason, ExecCommand, ExecEvent, ExecLaneItem};
 use engine::msg::ids::{AssetId, InstrumentId, Notional, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::time::{DurationUs, LocalTs, Stamper};
@@ -69,7 +69,6 @@ impl Strategy for TwoSidedQuoter {
                 Some(DesiredQuote {
                     price,
                     qty: QUOTE_QTY,
-                    style: OrderStyle::PostOnly,
                 }),
             );
         }
@@ -99,9 +98,11 @@ pub(crate) fn exec_settings() -> ExecSettings {
         max_consecutive_rejects: 5,
         max_session_loss_quote: Notional::from_mantissa(1_000_000 * ONE),
         inflight_timeout: DurationUs::from_secs(3_600),
+        max_status_probes: u8::MAX,
         // No silence sweep: a reconciliation request in the command stream would be noise to filter
         // rather than a behaviour these tests are about.
-        exec_silence_spins: u32::MAX,
+        stream_silence: DurationUs::from_micros(i64::MAX),
+        max_stream_resets: 2,
         order_reap_window: DurationUs::from_secs(3_600),
         quote_stop_margin: DurationUs::ZERO,
         flatten_slack_ticks: 0,
@@ -141,15 +142,15 @@ pub(crate) fn built_quoting_engine(setup: QuotingSetup<'_>) -> QuotingEngine {
     let (persistence, _records) = persist_ring_for(1_024, setup.tables);
     let (ui_event_sink, ui_events) = ui_event_ring(256);
     let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(256);
-    let (exposure_sink, _exposure) = exposure_ring(64);
+    let (exposure_sink, _exposure) = exposure_ring(64, instruments.len());
     let engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),
         ui_event_sink,
-        exec: Some(ExecWiring {
+        exec: vec![ExecWiring {
             sink: ExecSink::new(commands_producer, Stamper::Off),
             settings: setup.settings,
             run_nonce: setup.run_nonce,
-        }),
+        }],
         exposure: ExposureWiring {
             restored: setup.restored,
             sink: exposure_sink,

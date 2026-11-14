@@ -3,23 +3,27 @@
 
 use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::hot::ledger::PositionLedger;
-use crate::hot::sink::{ExecSink, PendingCommands};
 use crate::hot::strategy::Actions;
 use crate::log::{hot_error, hot_warn};
-use crate::msg::exec::{AccountChunk, CancelReason, ExecCommand, ExecEvent, ExecKind, Provenance};
-use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Qty, Side};
+use crate::msg::exec::{
+    AccountChunk, AccountChunkKind, CancelReason, ExecCommand, ExecEvent, ExecKind, Provenance,
+};
+use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Notional, Qty, Side, VenueId};
 use crate::msg::time::{DurationUs, FoldTime, LocalTs};
 use crate::runtime::config::MAX_QUOTE_LEVELS;
 use crate::runtime::registry::InstrumentRow;
 
-use super::account::{AccountTable, Balance};
-use super::budget::{BudgetMeter, OrderBudget};
+use super::account::Balance;
+use super::audit::IncidentCounts;
+use super::budget::OrderBudget;
+use super::capacity::ExecCapacity;
 use super::desired::QuoteLevel;
-use super::event::PriorRunOrders;
 use super::flatten::FeeModel;
-use super::gates::{ExecHalt, HaltReason, Readiness, RefusalLatch};
-use super::order::{OrderSlot, OrderTable};
+use super::gates::{ExecHalt, HaltReason, LossSums, RefusalLatch};
+use super::order::{OrderSlot, OrderTable, PriorRunOrders};
 use super::reconcile::{ExecLimits, RejectReason, RestingOrder, TickGrid};
+use super::silence::is_stream_report;
+use super::venue::{ExecVenueSetup, VenueExec, venues_for};
 use super::view::{ExecCallback, OrderReject, OrderView, WorkingOrderView};
 
 /// The two times of the message under fold. The fold time stamps what the engine decides: a slot, a
@@ -41,7 +45,13 @@ pub struct ExecSettings {
     pub max_consecutive_rejects: u32,
     pub max_session_loss_quote: Notional,
     pub inflight_timeout: DurationUs,
-    pub exec_silence_spins: u32,
+    /// Probes of one unanswered order before the read of open orders, then the halt.
+    pub max_status_probes: u8,
+    /// Message time with no event of the order stream while an order works, before one read of
+    /// open orders.
+    pub stream_silence: DurationUs,
+    /// Reads that show what the stream missed, each with a new subscription, before quoting halts.
+    pub max_stream_resets: u32,
     pub order_reap_window: DurationUs,
     // How much margin before a closing window the engine stops quoting. Inert on venues
     // whose instruments never rotate.
@@ -68,15 +78,18 @@ impl ExecSettings {
     pub fn disabled() -> Self {
         Self {
             limits: ExecLimits::disabled(),
-            // Kept non-zero to avoid halting on inherited state; the zero_alloc fitness
-            // test measures this.
+            // Kept non-zero, so an engine with no venue never halts on the state it inherits.
             max_orders_per_side: MAX_QUOTE_LEVELS,
             min_base_balance: Qty::from_mantissa(0),
             min_quote_balance: Notional::ZERO,
             max_consecutive_rejects: 0,
             max_session_loss_quote: Notional::ZERO,
             inflight_timeout: DurationUs::ZERO,
-            exec_silence_spins: 0,
+            // The most that the key allows, so an engine with no limits halts on probes last.
+            max_status_probes: u8::MAX,
+            stream_silence: DurationUs::ZERO,
+            // The most that the key allows, so an engine with no limits halts on silence last.
+            max_stream_resets: u32::MAX,
             order_reap_window: DurationUs::ZERO,
             quote_stop_margin: DurationUs::ZERO,
             flatten_slack_ticks: 0,
@@ -91,6 +104,7 @@ impl ExecSettings {
 }
 
 pub(super) struct InstrumentExec {
+    pub(super) venue: VenueId,
     pub(super) grid: TickGrid,
     pub(super) base_asset: AssetId,
     pub(super) quote_asset: AssetId,
@@ -118,56 +132,57 @@ impl InstrumentExec {
 
 pub struct ExecEngineSetup<'a> {
     pub instruments: &'a [InstrumentRow],
-    pub run_nonce: u32,
-    pub settings: ExecSettings,
-    pub sink: Option<ExecSink>,
+    /// One setup for each venue, in venue order. A venue that a row names past the last setup has
+    /// execution off.
+    pub venues: Vec<ExecVenueSetup>,
 }
 
 pub struct ExecEngine {
     pub(super) orders: OrderTable,
     pub(super) prior_orders: PriorRunOrders,
-    pub(super) account: AccountTable,
-    pub(super) pending: PendingCommands,
-    pub(super) sink: Option<ExecSink>,
+    /// The state of each venue, by its [`VenueId`]. A halt, the order tables and the loss sums
+    /// stay engine-wide.
+    pub(super) venues: Vec<VenueExec>,
     pub(super) halt: ExecHalt,
-    pub(super) readiness: Readiness,
     pub(super) refusals: RefusalLatch,
-    pub(super) reject_streak: u32,
-    pub(super) budget: BudgetMeter,
     pub(super) instruments: Vec<InstrumentExec>,
-    pub(super) settings: ExecSettings,
-    pub(super) spins_since_exec_event: u32,
-    pub(super) recon_seq: u64,
+    pub(super) incidents: IncidentCounts,
     /// The PnL baseline at the first honest valuation; the session loss gate compares
     /// against this. `None` until that first mark.
     pub(super) pnl_at_baseline: Vec<Option<Notional>>,
+    pub(super) loss_sums: LossSums,
 }
 
 digest_by_hash!(ExecSettings);
 digest_fields! {
     InstrumentExec {
-        grid, base_asset, quote_asset, max_exposure_quote, last_commit_ts_us,
+        venue, grid, base_asset, quote_asset, max_exposure_quote, last_commit_ts_us,
         is_prior_run_cancel_sent, flatten_refusal, realised_carried_quote,
     }
 }
 digest_fields! {
     ExecEngine {
-        orders, prior_orders, account, pending, sink, halt, readiness, refusals, reject_streak,
-        budget, instruments, settings, spins_since_exec_event, recon_seq, pnl_at_baseline,
+        orders, prior_orders, venues, halt, refusals, instruments, incidents,
+        pnl_at_baseline, loss_sums,
     }
 }
 
 impl ExecEngine {
     pub fn new(setup: ExecEngineSetup<'_>) -> Self {
-        assert!(
-            setup.sink.is_none()
-                || (1..=MAX_QUOTE_LEVELS).contains(&setup.settings.max_orders_per_side),
-            "max_orders_per_side must be within 1..={MAX_QUOTE_LEVELS} when execution is wired"
-        );
+        let capacity = ExecCapacity::sized_for(setup.instruments);
+        let venues = venues_for(setup.instruments, setup.venues, &capacity);
+        for venue in &venues {
+            assert!(
+                venue.sink.is_none()
+                    || (1..=MAX_QUOTE_LEVELS).contains(&venue.settings.max_orders_per_side),
+                "max_orders_per_side must be within 1..={MAX_QUOTE_LEVELS} when execution is wired"
+            );
+        }
         let instruments = setup
             .instruments
             .iter()
             .map(|row| InstrumentExec {
+                venue: row.venue,
                 grid: TickGrid {
                     tick: row.tick_size.map_or(1, |tick| tick.mantissa().max(1)),
                     step: row.lot_size.map_or(1, |lot| lot.mantissa().max(1)),
@@ -190,27 +205,21 @@ impl ExecEngine {
             })
             .collect();
         Self {
-            orders: OrderTable::new(setup.run_nonce),
-            prior_orders: PriorRunOrders::new(),
-            account: AccountTable::new(),
-            pending: PendingCommands::for_sink(setup.sink.as_ref()),
-            sink: setup.sink,
+            orders: OrderTable::new(&capacity),
+            prior_orders: PriorRunOrders::new(&capacity),
+            venues,
             halt: ExecHalt::Armed,
-            readiness: Readiness::default(),
-            refusals: RefusalLatch::default(),
-            reject_streak: 0,
-            budget: BudgetMeter::new(setup.settings.order_budget),
+            refusals: RefusalLatch::new(&capacity),
             instruments,
-            settings: setup.settings,
-            spins_since_exec_event: 0,
-            recon_seq: 0,
+            incidents: IncidentCounts::default(),
             pnl_at_baseline: vec![None; setup.instruments.len()],
+            loss_sums: LossSums::new(&capacity),
         }
     }
 
     #[inline]
-    pub(crate) fn commands_banked(&self) -> u64 {
-        self.pending.banked_total()
+    pub(crate) fn incident_counts(&self) -> IncidentCounts {
+        self.incidents
     }
 
     pub fn drain_refusals(&mut self, sink: &mut impl FnMut(&OrderReject)) {
@@ -221,17 +230,25 @@ impl ExecEngine {
     /// could not send an order if it wanted to.
     #[inline]
     pub fn halt_state(&self) -> Option<ExecHalt> {
-        self.sink.is_some().then_some(self.halt)
+        self.has_sink().then_some(self.halt)
     }
 
+    /// The balance of an asset at the venue that names it. Each venue names its own assets.
     pub fn balance(&self, asset: AssetId) -> Balance {
-        self.account.balance(asset)
+        self.instruments
+            .iter()
+            .find(|row| row.base_asset == asset || row.quote_asset == asset)
+            .map_or(Balance::default(), |row| {
+                self.venues[usize::from(row.venue.0)].account.balance(asset)
+            })
     }
 
     /// Every asset the venue has named. Absolute state, so a caller may re-state it as often as it
     /// likes — see [`AccountTable::balances`].
     pub fn balances(&self) -> impl Iterator<Item = (AssetId, Balance)> + '_ {
-        self.account.balances()
+        self.venues
+            .iter()
+            .flat_map(|venue| venue.account.balances())
     }
 
     pub fn tick_grid(&self, instrument: InstrumentId) -> TickGrid {
@@ -264,10 +281,9 @@ impl ExecEngine {
     ) -> impl Iterator<Item = WorkingOrderView> + '_ {
         let current = self
             .orders
-            .side_slots(instrument, side)
-            .iter()
-            .filter(|slot| slot.state.is_working())
-            .map(|slot| working_view_of(slot, Some(slot.level)));
+            .side_in_use(instrument, side)
+            .filter(|slot| slot.state().is_working())
+            .map(|slot| working_view_of(slot, Some(slot.level())));
         let prior = self
             .prior_orders
             .working(instrument, side)
@@ -291,11 +307,14 @@ impl ExecEngine {
         bank: &mut Actions,
     ) -> ExecCallback {
         let now = stamps.fold;
-        self.spins_since_exec_event = 0;
+        let venue = self.venue_of_event(event);
+        if is_stream_report(event.kind) {
+            self.venues[venue].silence.observe_stream_event(now);
+        }
         match event.kind {
-            ExecKind::StreamReset => return self.on_stream_reset(stamps.received, bank),
+            ExecKind::StreamReset => return self.on_stream_reset(venue, stamps.received, bank),
             ExecKind::StreamReady => {
-                self.readiness.observe_stream_ready();
+                self.venues[venue].readiness.observe_stream_ready();
                 return ExecCallback::None;
             }
             ExecKind::SnapshotEnd => return self.on_snapshot_end(event, stamps, bank),
@@ -310,16 +329,32 @@ impl ExecEngine {
             }
             Provenance::Mine => {}
         }
-        let Some(index) = self.locate(event, now) else {
+        let Some(index) = self.locate(event, stamps, bank) else {
             return ExecCallback::None;
         };
-        self.apply_to_slot(index, event, stamps, ledger, bank)
+        let was_working = self.orders.slot(index).state().is_working();
+        let callback = self.apply_to_slot(index, event, stamps, ledger, bank);
+        let has_closed = was_working && !self.orders.slot(index).state().is_working();
+        let has_moved = has_closed || matches!(callback, ExecCallback::Fill(_));
+        if event.kind == ExecKind::SnapshotOrder && has_moved {
+            self.venues[venue]
+                .silence
+                .observe_read_change(event.recon_seq);
+        }
+        callback
     }
 
-    /// Absolute balances only — see [`AccountChunk`] for why a delta may never reach here.
-    pub fn on_account(&mut self, chunk: &AccountChunk) {
-        self.account.apply(chunk);
-        self.retry_reservation_releases();
+    /// Absolute balances only — see [`AccountChunk`] for why a delta may never reach here. A
+    /// balance update comes from the order stream, and a snapshot answers an own read.
+    pub fn on_account(&mut self, chunk: &AccountChunk, at: FoldTime) {
+        let venue = usize::from(chunk.venue.0);
+        if chunk.kind == AccountChunkKind::Update {
+            self.venues[venue]
+                .silence
+                .observe_stream_event(at.as_local());
+        }
+        self.venues[venue].account.apply(chunk);
+        self.retry_reservation_releases(venue);
     }
 
     /// Pulls every order this run owns, on every instrument. [`ExecEngine::halt`] is the only caller
@@ -331,7 +366,7 @@ impl ExecEngine {
         for index in 0..self.instruments.len() {
             let instrument = InstrumentId(index as u16);
             let command = ExecCommand::CancelOurs { instrument, reason };
-            if !self.pending.bank(command, at) {
+            if !self.venue_mut(instrument).pending.bank(command, at) {
                 unswept_error(instrument);
             }
         }
@@ -357,28 +392,22 @@ impl ExecEngine {
 
     /// Finds the slot an event belongs to, adopting one the venue knows about that this
     /// table does not.
-    fn locate(&mut self, event: &ExecEvent, now: LocalTs) -> Option<usize> {
+    fn locate(
+        &mut self,
+        event: &ExecEvent,
+        stamps: FoldStamps,
+        bank: &mut Actions,
+    ) -> Option<usize> {
         if let Some(index) = self.orders.find(event.client_id) {
             return Some(index);
         }
         if event.kind == ExecKind::SnapshotOrder
-            && let Some(index) = self.orders.adopt(event, now)
+            && let Some(index) = self.orders.adopt(event, stamps.fold)
         {
             return Some(index);
         }
-        // Ours by tag and nonce, but no slot claims it: the reap window is too short, or the state
-        // machine leaked. Either way it is a bug, and a silent one costs a fill.
-        self.orphan_error(event);
+        self.on_orphan(event, stamps, bank);
         None
-    }
-
-    #[cold]
-    fn orphan_error(&self, event: &ExecEvent) {
-        hot_error!(
-            "execution event {:?} for client id {:x} matches no slot — reaped too early, or a state-machine leak",
-            event.kind,
-            event.client_id.0
-        );
     }
 
     /// The latch records that the cancel WENT OUT, so it is set after the bank accepts it and never
@@ -395,7 +424,7 @@ impl ExecEngine {
             return;
         }
         let command = ExecCommand::CancelPriorRun { instrument };
-        if !self.bank_or_halt(command, now) {
+        if !self.bank_or_halt(self.venue_of(instrument), command, now) {
             return;
         }
         self.instruments[index].is_prior_run_cancel_sent = true;
@@ -420,38 +449,38 @@ fn unswept_error(instrument: InstrumentId) {
 #[inline]
 pub(super) fn view_of(slot: &OrderSlot) -> OrderView {
     OrderView {
-        client_id: slot.client_id,
-        venue_order_id: slot.venue_order_id,
-        instrument: slot.instrument,
-        side: slot.side,
-        level: slot.level,
-        state: slot.state,
-        price: slot.price,
-        qty: slot.qty,
-        filled: slot.filled_base,
+        client_id: slot.client_id(),
+        venue_order_id: slot.venue_order_id(),
+        instrument: slot.instrument(),
+        side: slot.side(),
+        level: slot.level(),
+        state: slot.state(),
+        price: slot.price(),
+        qty: slot.qty(),
+        filled: slot.filled_base(),
     }
 }
 
 #[inline]
 fn working_view_of(slot: &OrderSlot, level: Option<QuoteLevel>) -> WorkingOrderView {
     WorkingOrderView {
-        client_id: slot.client_id,
-        instrument: slot.instrument,
-        side: slot.side,
+        client_id: slot.client_id(),
+        instrument: slot.instrument(),
+        side: slot.side(),
         level,
-        state: slot.state,
-        price: slot.price,
-        qty: slot.qty,
-        filled: slot.filled_base,
+        state: slot.state(),
+        price: slot.price(),
+        qty: slot.qty(),
+        filled: slot.filled_base(),
     }
 }
 
 #[inline]
 pub(super) fn resting_of(slot: &OrderSlot) -> RestingOrder {
     RestingOrder {
-        price: slot.price,
-        qty: slot.qty,
-        filled: slot.filled_base,
-        amends_used: slot.amends_used,
+        price: slot.price(),
+        qty: slot.qty(),
+        filled: slot.filled_base(),
+        amends_used: slot.amends_used(),
     }
 }

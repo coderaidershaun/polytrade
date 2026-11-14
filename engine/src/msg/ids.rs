@@ -9,6 +9,10 @@ pub struct InstrumentId(pub u16);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SourceId(pub u16);
 
+/// The index of a venue of this engine, dense in the order of its sources.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct VenueId(pub u8);
+
 /// One input queue of the hot thread. Its index is below [`MAX_INPUT_QUEUES`] by construction, so a
 /// table of queues never meets an id past its end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

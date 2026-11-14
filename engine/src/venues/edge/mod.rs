@@ -12,6 +12,7 @@
 pub mod backoff;
 pub(crate) mod chunk;
 pub mod decode;
+mod funnel;
 pub mod http;
 pub(crate) mod lane;
 pub mod rest_quiet;
@@ -27,9 +28,8 @@ use futures_util::StreamExt;
 
 use crate::hot::sink::SampleSink;
 use crate::hot::spawn::{QueueProducer, SimTapGate};
-use crate::msg::exec::{AccountChunk, CancelReason, ExecEvent, ExecLaneItem};
+use crate::msg::exec::{CancelReason, ExecLaneItem};
 use crate::msg::ids::QueueId;
-use crate::msg::inbound::{InboundMessage, MessageBody};
 use crate::msg::latency::WireSample;
 use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, EngineClock, LocalTs, Stamper};
@@ -41,10 +41,12 @@ use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::sender::{SendWait, Sender, SenderSetup};
 use crate::venues::edge::socket::{Reader, Writer, connect};
 use crate::venues::exec::{
-    EdgeHandle, EngineIdentity, EventSink, ExecStop, ExitPlan, MirroredOrder, SessionOutcome,
-    SweepFailure,
+    EdgeHandle, EngineIdentity, ExecSessionError, ExecStop, ExitPlan, MirroredOrder,
+    SessionOutcome, SweepFailure, halt_on_session_error,
 };
 use crate::{info, warn};
+
+pub(crate) use funnel::{EventFunnel, stamp_venue};
 
 // Checks the exit latches and deadlines often enough that a stop is acted on within milliseconds.
 pub(crate) const HOUSEKEEPING: Duration = Duration::from_millis(20);
@@ -69,6 +71,7 @@ pub(crate) struct EdgeSettings {
     /// the operator's judgment.
     pub(crate) disconnect_sweep_after: DurationUs,
     pub(crate) max_orders_per_side: usize,
+    pub(crate) inflight_timeout: DurationUs,
 }
 
 /// What preflight checks a venue's bring-up against, before any thread starts or the lease spends a
@@ -181,6 +184,11 @@ impl EdgeControl {
         }
     }
 
+    /// The one reader of a fault of the session: the run halts with the fault's own reason.
+    pub(crate) fn fail(&self, error: ExecSessionError) {
+        halt_on_session_error(&error, &self.fatal);
+    }
+
     /// A terminal exit was planned and its sweep finished, so there is nothing left to reconnect
     /// for.
     pub(crate) fn is_finished(&self) -> bool {
@@ -269,46 +277,6 @@ impl EdgeControl {
     }
 }
 
-/// The one path from a venue edge to the hot thread. Every message is stamped as it is queued,
-/// because the hot side measures its own lateness against that stamp and cannot take it later.
-pub(crate) struct EventFunnel {
-    producer: QueueProducer,
-    clock: EngineClock,
-}
-
-impl EventFunnel {
-    pub(crate) fn new(producer: QueueProducer, clock: EngineClock) -> Self {
-        Self { producer, clock }
-    }
-
-    pub(crate) fn send_account(&mut self, received_ts_us: LocalTs, chunks: Vec<AccountChunk>) {
-        for chunk in chunks {
-            self.send(InboundMessage::new(
-                received_ts_us,
-                MessageBody::Account(chunk),
-            ));
-        }
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the session chassis stamps queued time and paces reconnects by wall time"
-    )]
-    pub(crate) fn send(&mut self, mut message: InboundMessage) {
-        message.header.queued_ts_us = self.clock.now();
-        self.producer.push(message);
-    }
-}
-
-impl EventSink for EventFunnel {
-    fn send_exec(&mut self, received_ts_us: LocalTs, event: ExecEvent) {
-        self.send(InboundMessage::new(
-            received_ts_us,
-            MessageBody::Exec(event),
-        ));
-    }
-}
-
 /// What one servicing step with the socket down produced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OfflineStep {
@@ -357,6 +325,9 @@ pub(crate) trait EdgeDriver {
 
     /// What this edge leaves in the log once its loop ends.
     fn report_stop(&self);
+
+    /// The orders of another trader that a read or the stream showed, each left alone.
+    fn foreign_orders(&self) -> u64;
 
     /// Stop whatever the driver spawned beside itself.
     fn abort_workers(&self);
@@ -419,6 +390,11 @@ pub(crate) async fn run_edge<D: EdgeDriver>(mut driver: D, lane: EdgeLane) {
     }
 
     driver.report_stop();
+    info!(
+        "{} execution stopped — {} orders of another trader seen and left alone",
+        driver.venue(),
+        driver.foreign_orders()
+    );
     let control = driver.control();
     control.stop.settle(control.sweep_failure.take());
     driver.abort_workers();

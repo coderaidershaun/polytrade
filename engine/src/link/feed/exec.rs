@@ -44,6 +44,9 @@ wire_enum! {
 // Each gap in the numbering is a discriminant with no payload of its own. The local arm's
 // 4 padding bytes line up with the venue arm's code field; giving that space dual meaning
 // would only confuse a reader.
+//
+// Never give code 7 to a new reason. It named a quote whose order style was refused, and a
+// workstation built before that reason went still reads 7 that way.
 wire_enum! {
     RejectReason, "reject reason";
     (RejectReason::QtyBelowMin) = 1,
@@ -52,7 +55,6 @@ wire_enum! {
     (RejectReason::WouldCross) = 4,
     (RejectReason::OutsideBand) = 5,
     (RejectReason::Underfunded) = 6,
-    (RejectReason::StyleNotPermitted) = 7,
     (RejectReason::NotReady(ReadinessGap::Stream)) = 8,
     (RejectReason::NotReady(ReadinessGap::Balances)) = 9,
     (RejectReason::NotReady(ReadinessGap::OpenOrders)) = 10,
@@ -66,6 +68,7 @@ wire_enum! {
     (RejectReason::OutsideWindow) = 18,
     (RejectReason::RateBudget) = 19,
     (RejectReason::Warming) = 20,
+    (RejectReason::IdsSpent) = 21,
 }
 
 // `Refused` is appended rather than slotted beside `Gone`, so splitting the class renumbered nothing
@@ -90,6 +93,12 @@ wire_enum! {
     (HaltReason::CommandBankOverflow) = 6,
     (HaltReason::DuplicateResting) = 7,
     (HaltReason::SealNotAccepted) = 8,
+    (HaltReason::OrphanFill) = 9,
+    (HaltReason::PriorRunOverflow) = 10,
+    (HaltReason::StatusProbesSpent) = 11,
+    (HaltReason::StreamSilent) = 12,
+    (HaltReason::WriterFailed) = 13,
+    (HaltReason::PriorRunFillUnbooked) = 14,
 }
 
 const REJECT_LOCAL: u8 = 1;

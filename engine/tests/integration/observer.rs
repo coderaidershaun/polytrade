@@ -180,7 +180,8 @@ impl RotationObserver {
             | MessageBody::Link(_)
             | MessageBody::RunControl(_)
             | MessageBody::Exec(_)
-            | MessageBody::Account(_) => {}
+            | MessageBody::Account(_)
+            | MessageBody::WriterFailed(_) => {}
         }
     }
 

@@ -76,6 +76,7 @@ impl ExecCore {
             ExecCommand::CancelPriorRun { instrument } => {
                 self.cancel_matching(Some(instrument), Provenance::PriorRun, emit);
             }
+            ExecCommand::ResubscribeStream => self.send(ExecRequest::SubscribeUserStream, emit),
         }
     }
 
