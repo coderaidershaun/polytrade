@@ -5,16 +5,86 @@ use crate::msg::ids::Price;
 use crate::msg::inbound::Level;
 use crate::msg::time::LocalTs;
 
-/// Size-weighted mid (weighted by opposite side's qty, leans to thinner side; falls back to mid if empty).
+/// The best bid and the best ask of a book, each with its size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Touch {
+    pub bid: Level,
+    pub ask: Level,
+}
+
+impl Touch {
+    /// Size-weighted mid (weighted by opposite side's qty, leans to thinner side; falls back to mid if empty).
+    #[inline]
+    pub fn microprice(&self) -> f64 {
+        let bid_qty = self.bid.qty.to_f64();
+        let ask_qty = self.ask.qty.to_f64();
+        let total_qty = bid_qty + ask_qty;
+        if total_qty <= 0.0 {
+            return self.mid();
+        }
+        (self.bid.price.to_f64() * ask_qty + self.ask.price.to_f64() * bid_qty) / total_qty
+    }
+
+    #[inline]
+    pub fn spread(&self) -> f64 {
+        self.ask.price.to_f64() - self.bid.price.to_f64()
+    }
+
+    #[inline]
+    pub fn mid(&self) -> f64 {
+        mid(self.bid.price, self.ask.price)
+    }
+}
+
+/// The levels of each side of a book, best first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BookSides<'a> {
+    pub bids: &'a [Level],
+    pub asks: &'a [Level],
+}
+
+impl BookSides<'_> {
+    /// Imbalance = (bid_qty - ask_qty) / total, ∈ [-1, 1] (0.0 if empty).
+    #[inline]
+    pub fn imbalance(&self, top_n: usize) -> f64 {
+        let bid_qty: f64 = self
+            .bids
+            .iter()
+            .take(top_n)
+            .map(|level| level.qty.to_f64())
+            .sum();
+        let ask_qty: f64 = self
+            .asks
+            .iter()
+            .take(top_n)
+            .map(|level| level.qty.to_f64())
+            .sum();
+        let total_qty = bid_qty + ask_qty;
+        if total_qty <= 0.0 {
+            return 0.0;
+        }
+        (bid_qty - ask_qty) / total_qty
+    }
+
+    #[inline]
+    pub fn banded_imbalance(&self, band: PriceBand) -> f64 {
+        let bid_qty = qty_to_edge(self.bids, |price| price <= band.low);
+        let ask_qty = qty_to_edge(self.asks, |price| price >= band.high);
+        let total_qty = bid_qty + ask_qty;
+        if total_qty <= 0.0 {
+            return 0.0;
+        }
+        (bid_qty - ask_qty) / total_qty
+    }
+}
+
 #[inline]
 pub fn microprice(best_bid: Level, best_ask: Level) -> f64 {
-    let bid_qty = best_bid.qty.to_f64();
-    let ask_qty = best_ask.qty.to_f64();
-    let total_qty = bid_qty + ask_qty;
-    if total_qty <= 0.0 {
-        return mid(best_bid.price, best_ask.price);
+    Touch {
+        bid: best_bid,
+        ask: best_ask,
     }
-    (best_bid.price.to_f64() * ask_qty + best_ask.price.to_f64() * bid_qty) / total_qty
+    .microprice()
 }
 
 /// Equilibrium = microprice; Π = M + λ(d−s) where λ = spread/(2(d+s)).
@@ -54,13 +124,7 @@ impl PriceBand {
 
 #[inline]
 pub fn banded_imbalance(bids: &[Level], asks: &[Level], band: PriceBand) -> f64 {
-    let bid_qty = qty_to_edge(bids, |price| price <= band.low);
-    let ask_qty = qty_to_edge(asks, |price| price >= band.high);
-    let total_qty = bid_qty + ask_qty;
-    if total_qty <= 0.0 {
-        return 0.0;
-    }
-    (bid_qty - ask_qty) / total_qty
+    BookSides { bids, asks }.banded_imbalance(band)
 }
 
 fn qty_to_edge(levels: &[Level], is_at_or_past_edge: impl Fn(f64) -> bool) -> f64 {
@@ -74,24 +138,9 @@ fn qty_to_edge(levels: &[Level], is_at_or_past_edge: impl Fn(f64) -> bool) -> f6
     total
 }
 
-/// Imbalance = (bid_qty - ask_qty) / total, ∈ [-1, 1] (0.0 if empty).
 #[inline]
 pub fn imbalance(bids: &[Level], asks: &[Level], top_n: usize) -> f64 {
-    let bid_qty: f64 = bids
-        .iter()
-        .take(top_n)
-        .map(|level| level.qty.to_f64())
-        .sum();
-    let ask_qty: f64 = asks
-        .iter()
-        .take(top_n)
-        .map(|level| level.qty.to_f64())
-        .sum();
-    let total_qty = bid_qty + ask_qty;
-    if total_qty <= 0.0 {
-        return 0.0;
-    }
-    (bid_qty - ask_qty) / total_qty
+    BookSides { bids, asks }.imbalance(top_n)
 }
 
 // Order-book resilience: OU rate of mid relaxation toward equilibrium (1/sec).
