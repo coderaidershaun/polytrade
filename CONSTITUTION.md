@@ -1169,6 +1169,10 @@ test, sits in a module that is a concept in its own right, or has a ruling of §
 - [ ] Concept module `engine::runtime::config`: `Config::sources` with `SourceConfig`, the new
   `ExecutionConfig` fields, `ExposureConfig::max_failed_writes`, and the new `ConfigError`
   variants. The binaries load the config.
+  - Amended 2026-11-14: `Config::execution_mode`, the mode of the run, is `pub` because the timing
+    harness calls it (`tools/latency-probe/config.rs`). Each other new getter of `Config`,
+    `SourceConfig`, and `AssetDictionary` is `pub(crate)`, or gone. WHY: the check of part 3 found
+    these getters `pub` with no merit in this list.
 - [ ] Concept module `engine::runtime::registry`: `InstrumentRow.venue`,
   `Registry::writer_status_queue_id`, `Registry::venue_name`, and `Registry::asset_symbols`. The
   other getters of `Registry` are `pub`, so one design language holds.
