@@ -1,7 +1,7 @@
 //! When the edge sends the heartbeat that keeps the venue from cancelling the book, and what it does
 //! when beats go unanswered. Pure state: each instant is a parameter.
 
-use crate::msg::time::LocalTs;
+use crate::msg::time::{DurationUs, LocalTs};
 use crate::venues::edge::http::TransportError;
 
 use super::codec::decode_heartbeat;
@@ -39,7 +39,16 @@ pub enum BeatAnswer {
 #[derive(Debug, Default)]
 pub struct HeartbeatSchedule {
     id: Option<Box<str>>,
-    last_sent: Option<LocalTs>,
+    /// When the beat in flight went out. One beat at a time: the next one waits for its answer.
+    in_flight_since: Option<LocalTs>,
+    /// When the last beat that the venue accepted went out, or the first beat before any was
+    /// accepted. The venue limit runs from here.
+    alive_since: Option<LocalTs>,
+    /// When the next beat is due. `None` is at once: the first beat, and each beat after one that
+    /// failed, so tries come before the deadline.
+    next_due: Option<LocalTs>,
+    has_reset_mirror: bool,
+    has_read_after_cancel: bool,
 }
 
 impl HeartbeatSchedule {
@@ -47,27 +56,60 @@ impl HeartbeatSchedule {
         Self::default()
     }
 
+    /// The deadline and the venue limit come first, each one time while no beat is answered.
     pub fn on_poll(&mut self, now: LocalTs) -> HeartbeatStep {
-        let is_due = self
-            .last_sent
-            .is_none_or(|sent| now.diff(sent) >= POLYMARKET_FACTS.heartbeat_period);
-        match is_due {
-            true => HeartbeatStep::Send {
-                id: self.id.clone().unwrap_or_default(),
-            },
-            false => HeartbeatStep::Wait,
+        if let Some(alive_since) = self.alive_since {
+            let silence = now.diff(alive_since);
+            if !self.has_reset_mirror && silence >= deadline() {
+                self.has_reset_mirror = true;
+                return HeartbeatStep::ResetMirror;
+            }
+            if !self.has_read_after_cancel && silence >= POLYMARKET_FACTS.heartbeat_limit {
+                self.has_read_after_cancel = true;
+                return HeartbeatStep::ReadAfterVenueCancel;
+            }
+        }
+        let is_due = self.next_due.is_none_or(|due| now >= due);
+        if self.in_flight_since.is_some() || !is_due {
+            return HeartbeatStep::Wait;
+        }
+        HeartbeatStep::Send {
+            id: self.id.clone().unwrap_or_default(),
         }
     }
 
     /// The beat is on its way. Stamped only once it is: stamping the attempt would hold the next
-    /// beat off for a whole period against the venue limit.
+    /// beat off against the venue limit.
     pub fn on_sent(&mut self, now: LocalTs) {
-        self.last_sent = Some(now);
+        self.in_flight_since = Some(now);
+        self.alive_since.get_or_insert(now);
     }
 
     /// The venue names the id of the next beat in a refusal as in a success, so either answer
-    /// continues the chain.
+    /// continues the chain. Only an accepted beat keeps the book alive, and it counts from when it
+    /// went out, because the venue heard it before it answered.
     pub fn on_answer(&mut self, answer: &Result<ClobResponse, TransportError>) -> BeatAnswer {
+        let sent_at = self.in_flight_since.take();
+        let verdict = self.read_answer(answer);
+        match (verdict, sent_at) {
+            (BeatAnswer::Accepted, Some(sent_at)) => {
+                self.alive_since = Some(sent_at);
+                self.next_due = Some(sent_at + POLYMARKET_FACTS.heartbeat_period);
+                self.has_reset_mirror = false;
+                self.has_read_after_cancel = false;
+            }
+            _ => self.next_due = None,
+        }
+        verdict
+    }
+
+    /// After the mirror was reset, until a beat is answered: the venue may cancel the book at any
+    /// moment, so an order placed now could be cancelled with no report.
+    pub fn is_placing_held(&self) -> bool {
+        self.has_reset_mirror
+    }
+
+    fn read_answer(&mut self, answer: &Result<ClobResponse, TransportError>) -> BeatAnswer {
         let Ok(response) = answer else {
             return BeatAnswer::Lost;
         };
@@ -80,8 +122,11 @@ impl HeartbeatSchedule {
             false => BeatAnswer::Refused,
         }
     }
+}
 
-    pub fn is_placing_held(&self) -> bool {
-        false
-    }
+/// The venue limit less the margin, so that the read of the mirror comes before the venue cancels
+/// the book.
+fn deadline() -> DurationUs {
+    let facts = POLYMARKET_FACTS;
+    DurationUs::from_micros(facts.heartbeat_limit.micros() - facts.heartbeat_margin.micros())
 }
