@@ -19,7 +19,7 @@ fn build_from(yaml: &str) -> Registry {
     Registry::build(&config).expect("registry builds")
 }
 
-pub(super) const POLY_SOURCE: &str = "  exchange: polymarket
+pub(crate) const POLY_SOURCE: &str = "  exchange: polymarket
   max_exposure_quote: 500
   series: btc-updown-5m
   tracker: {}
@@ -102,7 +102,7 @@ fn config_with_link(link_block: &str) -> String {
     )
 }
 
-pub(super) const BINANCE_PERP_SOURCE: &str = "  exchange: binance
+pub(crate) const BINANCE_PERP_SOURCE: &str = "  exchange: binance
   max_exposure_quote: 500
   market: perpetual
   base: BTC
@@ -629,7 +629,7 @@ fn config_with_execution(block: &str) -> String {
     config_with_execution_on(BINANCE_PERP_SOURCE, block)
 }
 
-pub(super) fn config_with_execution_on(source_block: &str, block: &str) -> String {
+pub(crate) fn config_with_execution_on(source_block: &str, block: &str) -> String {
     with_link(
         &sources_with(source_block, block),
         "  instruments: all\n",
@@ -638,7 +638,7 @@ pub(super) fn config_with_execution_on(source_block: &str, block: &str) -> Strin
     )
 }
 
-pub(super) const SIM_BLOCK: &str = "  sim:
+pub(crate) const SIM_BLOCK: &str = "  sim:
     order_entry_latency_ms: 15
     ack_latency_ms: 15
     max_market_data_delay_ms: 1000
@@ -648,7 +648,7 @@ pub(super) const SIM_BLOCK: &str = "  sim:
     maker_fee_bps: 10.0
 ";
 
-pub(super) const BINANCE_SPOT_SOURCE: &str = "  exchange: binance
+pub(crate) const BINANCE_SPOT_SOURCE: &str = "  exchange: binance
   max_exposure_quote: 500
   market: spot
   base: BTC
@@ -660,7 +660,7 @@ fn execution_block(mode: &str) -> String {
     execution_block_overriding(mode, "", "")
 }
 
-pub(super) fn execution_block_with(mode: &str, extra: &str) -> String {
+pub(crate) fn execution_block_with(mode: &str, extra: &str) -> String {
     format!("{}{extra}", execution_block(mode))
 }
 
@@ -924,7 +924,7 @@ fn a_one_second_spin_has_a_3030ms_budget_and_fits_the_default_timeout() {
 
 /// Some documents are refused by the typed parse and some only once the registry is built from
 /// them; a caller pinning the refusal cares about the field named, not which pass named it.
-fn refusal(yaml: &str) -> ConfigError {
+pub(crate) fn refusal(yaml: &str) -> ConfigError {
     match engine::runtime::config::Config::<NoParams>::from_yaml(yaml) {
         Err(error) => error,
         Ok(config) => Registry::build(&config).expect_err("this document must be refused"),

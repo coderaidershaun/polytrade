@@ -6,4 +6,5 @@ mod edge;
 mod exec;
 mod polymarket;
 mod scale_preflight;
+mod sim;
 mod sim_wire;
