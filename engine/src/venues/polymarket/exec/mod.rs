@@ -8,6 +8,7 @@ pub mod codec;
 pub mod correlate;
 pub mod facts;
 pub mod handle;
+pub mod heartbeat;
 pub mod lanes;
 mod preflight;
 pub mod probe;

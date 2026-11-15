@@ -37,6 +37,7 @@ use crate::{info, warn};
 use super::ORDER_REQUEST_TIMEOUT;
 use super::codec::{OrderIndex, OrderSigner, SettlementWatermark, TokenTable, VenueAvailability};
 use super::handle::PolymarketExecAdapterSetup;
+use super::heartbeat::HeartbeatSchedule;
 use super::rest::ClobHttp;
 use super::sign::l2::{ApiCredentials, RequestSigner};
 use super::sign::order::SignatureType;
@@ -49,10 +50,6 @@ use rest::RestPurpose;
 pub(super) const USER_STREAM_URL: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/user";
 
 const PING_INTERVAL: Duration = Duration::from_secs(10);
-
-// The venue cancels the book after 10s of silence, so a heartbeat goes out every 5s — this
-// is the published cadence, not slack.
-const HEARTBEAT_PERIOD: DurationUs = DurationUs::from_micros(5_000_000);
 
 // A backstop that cancels any remaining orders as the assignment window closes. The hot
 // engine already withdraws quotes on its own margin before that.
@@ -82,26 +79,6 @@ struct DriverCounts {
     foreign_settlement_failures: u64,
 }
 
-// Once started, heartbeats commit forever: if they stop, the venue cancels this account's
-// book as a crash-safety measure. The first one goes out as late as possible — just before
-// the first order placement — and never stops after that.
-#[derive(Debug)]
-struct Heartbeat {
-    id: Option<Box<str>>,
-    is_started: bool,
-    sent_at: LocalTs,
-}
-
-impl Heartbeat {
-    fn new() -> Self {
-        Self {
-            id: None,
-            is_started: false,
-            sent_at: LocalTs::from_micros(0),
-        }
-    }
-}
-
 pub(super) struct Actor {
     session: ExecSession<EventFunnel>,
     tokens: TokenTable,
@@ -118,7 +95,10 @@ pub(super) struct Actor {
     assignments: mpsc::Receiver<WindowAssignment>,
     pending: PendingFrames,
     delayed: DelayedOrders,
-    heartbeat: Heartbeat,
+    /// Once started, heartbeats commit forever: if they stop, the venue cancels this account's book
+    /// as a crash-safety measure. The first one goes out as late as possible, just before the first
+    /// order placement, and it never stops after that.
+    heartbeat: Option<HeartbeatSchedule>,
     parked: Option<Parked>,
     /// Balances arrive one asset per call; the sweep is assembled here so only the last chunk arms
     /// the readiness gate.
@@ -199,7 +179,7 @@ impl Actor {
             assignments,
             pending: PendingFrames::new(),
             delayed: DelayedOrders::default(),
-            heartbeat: Heartbeat::new(),
+            heartbeat: None,
             parked: None,
             balances: Vec::new(),
             balances_outstanding: 0,

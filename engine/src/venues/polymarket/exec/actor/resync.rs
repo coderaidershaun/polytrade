@@ -333,6 +333,15 @@ impl Actor {
         if self.prior_run_cancels > 0 {
             return;
         }
+        // After a heartbeat reset the venue may cancel the book at any moment, so quoting waits for
+        // a beat that the venue answers.
+        if self
+            .heartbeat
+            .as_ref()
+            .is_some_and(|schedule| schedule.is_placing_held())
+        {
+            return;
+        }
         if self.session.arm_readiness(self.control.clock.now()) {
             info!("polymarket execution quoting — state re-read and nothing inherited is resting");
         }
