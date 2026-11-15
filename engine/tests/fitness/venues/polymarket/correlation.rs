@@ -1,12 +1,18 @@
-//! Polymarket names an order only in its placement answer. These tests hold how the edge ties a venue
-//! id to an order of this run, holds a frame until it can, and never takes an order it cannot tie.
+//! Polymarket names an order only in its placement answer, and reports only running filled totals.
+//! These tests hold how the edge ties a venue id to an order of this run, and how it reads a fill.
 
 use std::cell::Cell;
+use std::sync::{Arc, Mutex};
+
+use engine::hot::dispatch::HotEngine;
+use engine::hot::exec::{ClientIdLayout, side_base};
+use engine::hot::strategy::{Fill, Strategy as EngineStrategy, StrategyCtx};
 
 use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, OrderStyle, Provenance, VenueOrderStatus,
 };
 use engine::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::time::{DurationUs, LocalTs};
 use engine::venues::exec::{
     ExecCore, ExecEffect, ExecRequest, ExecSession, MirroredOrder, RequestId, SessionSetup,
@@ -23,8 +29,13 @@ use engine::venues::polymarket::exec::facts::POLYMARKET_FACTS;
 use proptest::prelude::*;
 use proptest::test_runner::{Config, TestRunner};
 
-use crate::engine_support::ts as at;
-use crate::exec_support::SentEvents;
+use engine::runtime::config::TrackerSpec;
+
+use crate::engine_support::{
+    ONE, engine_without_warmup, exec_event, instrument_row, persist_ring, strategy_log_ring,
+    ts as at,
+};
+use crate::exec_support::{SentEvents, reseat_book};
 use crate::venues::exec::obligations::{Session, send};
 
 const UP: InstrumentId = InstrumentId(0);
@@ -771,5 +782,161 @@ fn fill_frame_before_place_answer_folds_once() {
         verdict,
         UnmappedVerdict::Adopt(OURS),
         "the read decides: the one lost placement equals the order the venue holds"
+    );
+}
+
+/// The codec of the edge with the token of the payloads bound to [`UP`], and its index naming the
+/// order of the payloads as `client_id`.
+struct MakerCodec {
+    tokens: TokenTable,
+    orders: OrderIndex,
+}
+
+impl MakerCodec {
+    fn naming(client_id: ClientOrderId) -> Self {
+        let mut tokens = TokenTable::with_retired_capacity(4);
+        tokens.bind(TokenBinding {
+            instrument: UP,
+            token_id: UP_TOKEN.into(),
+            tick: cents(1),
+            is_neg_risk: false,
+        });
+        let mut orders = OrderIndex::with_capacity(4);
+        let known = KnownOrder {
+            client_id,
+            instrument: UP,
+        };
+        orders
+            .record(VENUE_ORDER, known)
+            .expect("the index has room");
+        Self { tokens, orders }
+    }
+
+    fn context(&self, at: LocalTs) -> DecodeContext<'_> {
+        DecodeContext {
+            tokens: &self.tokens,
+            orders: &self.orders,
+            api_key: API_KEY,
+            received_ts_us: at,
+        }
+    }
+
+    fn report(&self, frame: &str, at: LocalTs) -> ExecEvent {
+        match decode_stream_frame(frame, &self.context(at)).expect("committed payload decodes") {
+            StreamEvent::Order(event) => event,
+            other => panic!("an UPDATE of a known order is an order event, got {other:?}"),
+        }
+    }
+}
+
+/// The position that the ledger shows inside each fill callback, which the engine fires only after
+/// it folded the fill.
+struct FillPositions(Arc<Mutex<Vec<Qty>>>);
+
+impl EngineStrategy for FillPositions {
+    fn on_fill(&mut self, ctx: &mut StrategyCtx<'_>, fill: &Fill) {
+        let held = ctx.position_base(fill.instrument);
+        self.0
+            .lock()
+            .expect("no reader panics while it holds the list")
+            .push(held);
+    }
+}
+
+/// An engine with one row, and the positions that its fills showed.
+fn fill_engine() -> (HotEngine, Arc<Mutex<Vec<Qty>>>) {
+    let positions = Arc::new(Mutex::new(Vec::new()));
+    let (persistence, _rows) = persist_ring(256);
+    let (log_sink, _logs) = strategy_log_ring(64);
+    let engine = engine_without_warmup(
+        &[instrument_row(0, TrackerSpec::default(), 64)],
+        Box::new(FillPositions(Arc::clone(&positions))),
+        persistence,
+        log_sink,
+    );
+    (engine, positions)
+}
+
+/// CONTRACT: the Polymarket codec, its index, and the fold meet at the maker fill. The venue's
+/// order UPDATE states only the running total of the order. A report with no quantity of its own
+/// trade leaves a fee-gap record for each fill, and such a record must mean a real gap, not one
+/// that the venue's own total already explains. So the codec states the step above the total that
+/// the edge has folded for the order, and the fold books the fill with no gap.
+#[test]
+fn a_maker_fill_of_polymarket_books_no_fee_gap() {
+    let (mut engine, fills) = fill_engine();
+    for message in reseat_book(51 * ONE / 100, 53 * ONE / 100, 0) {
+        engine.dispatch(&message);
+    }
+    let ours = ClientIdLayout { run_nonce: 0 }.encode(side_base(UP, Side::Buy), 1);
+    let resting = ExecEvent {
+        kind: ExecKind::SnapshotOrder,
+        status: Some(VenueOrderStatus::New),
+        qty: shares(10),
+        ..exec_event(UP, ours, Side::Buy, 52 * ONE / 100, 1)
+    };
+    engine.dispatch(&InboundMessage::new(at(1), MessageBody::Exec(resting)));
+
+    let mut codec = MakerCodec::naming(ours);
+    let steps = [
+        (fixture!("ws_order_update_partial"), 4, 4, vec![4]),
+        (fixture!("ws_order_update_partial"), 4, 0, vec![]),
+        (fixture!("ws_order_update_filled"), 10, 6, vec![10]),
+    ];
+    for (index, (frame, cumulative, own_step, positions)) in steps.into_iter().enumerate() {
+        let when = 1_000 * (index as i64 + 2);
+        let report = codec.report(frame, at(when));
+        assert_eq!(
+            (report.kind, report.cumulative_qty, report.last_qty),
+            (ExecKind::ReportTrade, shares(cumulative), shares(own_step)),
+            "report {index}: the venue's total, and the step of its own trade"
+        );
+        engine.dispatch(&InboundMessage::new(at(when), MessageBody::Exec(report)));
+        // As the actor does after each event that it folds.
+        codec
+            .orders
+            .record_matched(report.client_id, report.cumulative_qty);
+        let held = std::mem::take(&mut *fills.lock().expect("no writer panics"));
+        let expected: Vec<Qty> = positions.into_iter().map(shares).collect();
+        assert_eq!(
+            held, expected,
+            "report {index}: the ledger moves by the step, once"
+        );
+    }
+    let counters = engine.counters();
+    assert_eq!(
+        (counters.fee_gaps, counters.unbooked_fees),
+        (0, 0),
+        "a maker fill whose step the venue's total explains leaves no gap and books no fee"
+    );
+
+    let mut took = MakerCodec::naming(ours);
+    let answer = HttpAnswer {
+        status: 200,
+        body: &format!(
+            r#"{{"success":true,"errorMsg":"","orderID":"{VENUE_ORDER}","status":"live","makingAmount":"1.04","takingAmount":"2.0","transactionsHashes":[],"tradeIDs":[]}}"#
+        ),
+    };
+    let request = PlaceRequestContext {
+        client_id: ours,
+        ..place_request()
+    };
+    let VenueAnswer::Answered(placed) =
+        decode_place(answer, &request, &took.context(at(1))).expect("the answer decodes")
+    else {
+        panic!("a placement that rests is answered, not refused as venue state");
+    };
+    assert_eq!(
+        (placed.event.cumulative_qty, placed.event.last_qty),
+        (shares(2), shares(2)),
+        "the placement took 2 and rests the rest"
+    );
+    took.orders
+        .record_matched(ours, placed.event.cumulative_qty);
+    let report = took.report(fixture!("ws_order_update_partial"), at(2));
+    assert_eq!(
+        (report.cumulative_qty, report.last_qty),
+        (shares(4), shares(2)),
+        "after a placement that took liquidity, an UPDATE states only its own step"
     );
 }

@@ -377,6 +377,8 @@ impl Actor {
         if restates_balances(&event) {
             self.restate_balances();
         }
+        self.orders
+            .record_matched(event.client_id, event.cumulative_qty);
         self.session.events.send_exec(received_ts_us, event);
     }
 }
