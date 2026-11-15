@@ -8,6 +8,7 @@ mod poll;
 mod reads;
 mod rest;
 mod resync;
+mod unmapped;
 
 use std::sync::Arc;
 use std::time::Duration;
