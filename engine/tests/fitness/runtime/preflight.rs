@@ -8,6 +8,7 @@ use std::path::Path;
 
 use engine::msg::failure::{FailureClass, Halt};
 use engine::msg::ids::{Notional, Price, Qty};
+use engine::msg::time::LocalTs;
 use engine::runtime::config::{
     Config, ConfigError, ExecutionMode, NoParams, RunIdentity, SourceSpec,
 };
@@ -21,6 +22,7 @@ use engine::venues::binance::exec::ProbeError;
 use engine::venues::binance::preflight::{ScaleError, SymbolScales};
 use engine::venues::edge::rest_quiet::SharedRestQuiet;
 use engine::venues::exec::TeTag;
+use engine::venues::polymarket::exec::handle::PolymarketPreflightError;
 use engine::venues::port::{ProbedVenue, VenuePort, VenueScales};
 use engine::venues::sim;
 
@@ -84,11 +86,18 @@ impl VenuePort for StandInVenue {
 
     fn probe(
         &mut self,
-        _source: &SourceSpec,
+        source: &SourceSpec,
         _registry: &Registry,
         _quiet: &SharedRestQuiet,
     ) -> Result<ProbedVenue, VenueError> {
-        Err(VenueError::BinanceGate(ProbeError::TradingDisabled))
+        Err(match source {
+            SourceSpec::Binance { .. } => VenueError::BinanceGate(ProbeError::TradingDisabled),
+            SourceSpec::Polymarket { .. } => {
+                VenueError::PolymarketGate(PolymarketPreflightError::LocalClockInvalid {
+                    seen: LocalTs::from_micros(0),
+                })
+            }
+        })
     }
 }
 
@@ -381,6 +390,22 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
             StartError::Venue(VenueError::BinanceGate(ProbeError::TradingDisabled))
         ),
         "{probe}"
+    );
+
+    // The start gate of Polymarket refuses, here a host clock set at or before the epoch.
+    let polymarket = with_state(
+        config_with_execution_on(POLY_SOURCE, &execution_block_with("live", "")),
+        &state,
+    );
+    let gate = refusal(&polymarket, Scales::Unstamped, &state);
+    assert!(
+        matches!(
+            gate,
+            StartError::Venue(VenueError::PolymarketGate(
+                PolymarketPreflightError::LocalClockInvalid { seen }
+            )) if seen == LocalTs::from_micros(0)
+        ),
+        "{gate}"
     );
 
     // The order client waits for an answer as long as the in-flight timeout does.

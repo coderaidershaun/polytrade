@@ -1,23 +1,19 @@
-//! Startup gate: prove the wallet can trade before any threads start. Not a formality on Polymarket.
-//! Region geoblocks make accounts close-only (not rejected), so unchecked runs appear as strategies
-//! that never fire. L2 credentials don't exist until the wallet key mints them, so they can't be
-//! configured in advance — only checked at boot.
+//! The thin half of the start gate of Polymarket: it reads the wallet config and the venue, and
+//! the pure checks decide, before any thread starts, so a closed-only account never quotes.
 
-use std::path::Path;
-
-use crate::msg::time::DurationUs;
+use crate::msg::time::{DurationUs, LocalTs, VenueTs, wall_clock_now};
 use crate::runtime::secrets::{EnvFile, SecretError};
 use crate::venues::edge::http::TransportError;
 use crate::{info, warn};
 
+use super::assess::{AccountStanding, ProbeFacts, WalletConfig, assess};
 use super::codec::{PROTOCOL_VERSION, collateral_balance, open_orders_page};
 use super::handle::WalletIdentity;
-use super::probe::{Geoblock, Probe, ProbeError};
+use super::probe::{Probe, ProbeError};
 use super::rest::{ClobHttp, ClobResponse};
-use super::sign::address::{Address, AddressError};
+use super::sign::address::AddressError;
 use super::sign::key::{KeyError, SigningKey};
 use super::sign::l2::{ApiCredentials, RequestSigner};
-use super::sign::order::SignatureType;
 use super::{POLYMARKET_CREDENTIAL_VARIABLES, SIGNATURE_TYPE_VARIABLE, WALLET_ADDRESS_VARIABLE};
 
 /// What the gate proved, handed to the adapter so none of it is derived a second time.
@@ -30,7 +26,8 @@ pub struct PolymarketPreflight {
     pub venue_clock_offset: DurationUs,
 }
 
-/// Prove this wallet may trade before any thread spawns.
+/// Prove this wallet may trade before any thread spawns. Each check that needs no signed request
+/// runs before the first one goes out.
 ///
 /// Placement is the only ground truth for a region restriction, so a geoblocked host is REPORTED
 /// and allowed to continue; the account's own close-only flag is a refusal, because the venue has
@@ -40,36 +37,42 @@ pub struct PolymarketPreflight {
 /// [`PolymarketPreflightError`] for absent, contradictory or unproven wallet configuration, a venue
 /// that cannot be reached or speaks another protocol version, credentials it refuses to mint, and
 /// an account it will not let open a position.
-pub async fn preflight_polymarket() -> Result<PolymarketPreflight, PolymarketPreflightError> {
-    let secrets = EnvFile::load(Path::new(EnvFile::DEFAULT_PATH))?;
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a start preflight reads the wall clock once, before any message exists"
+)]
+pub async fn preflight_polymarket(
+    secrets: &EnvFile,
+) -> Result<PolymarketPreflight, PolymarketPreflightError> {
     let key =
         SigningKey::from_secret(&secrets.resolve(POLYMARKET_CREDENTIAL_VARIABLES.api_secret_env)?)?;
-    let wallet = wallet_identity(&secrets, &key)?;
+    let wallet_config = read_wallet_config(secrets, &key)?;
 
     let probe = Probe::new(key)?;
     // The probe answers in text so that an unreadable body comes back verbatim: an operator cannot
     // act on "not 2".
-    let found = probe.protocol_version().await?;
-    if found != PROTOCOL_VERSION.to_string() {
-        return Err(PolymarketPreflightError::ProtocolVersion {
-            found: found.into(),
-            expected: PROTOCOL_VERSION,
-        });
-    }
+    let protocol_version = probe.protocol_version().await?;
     let server_time_secs = probe.server_time().await?;
-    let venue_clock_offset = DurationUs::from_secs(server_time_secs - local_unix_secs());
+    // Read right after the venue's clock answered, so the offset holds no time of the other reads.
+    let local = wall_clock_now();
+    let facts = ProbeFacts {
+        protocol_version: protocol_version.into_boxed_str(),
+        server_ts_us: VenueTs::from_micros(0) + DurationUs::from_secs(server_time_secs),
+        geoblock: probe.geoblock().await?,
+    };
+    let admitted = assess(&facts, &wallet_config, local)?;
+    let venue_clock_offset = admitted.venue_clock_offset();
     info!(
         "polymarket venue clock offset {}us, protocol v{PROTOCOL_VERSION}",
         venue_clock_offset.micros()
     );
-    report_geoblock(probe.geoblock().await?);
 
     let credentials = probe.api_credentials(server_time_secs).await?.0;
-    let signer = RequestSigner::new(&credentials, wallet.signer)
+    let signer = RequestSigner::new(&credentials, admitted.signer())
         .map_err(|source| ProbeError::Credentials { source })?;
-    if probe.is_closed_only(&signer, server_time_secs).await? {
-        return Err(PolymarketPreflightError::ClosedOnly);
-    }
+    let is_closed_only = probe.is_closed_only(&signer, server_time_secs).await?;
+    let standing = if is_closed_only { AccountStanding::ClosedOnly } else { AccountStanding::Open };
+    let wallet = admitted.assess_account(standing)?;
     info!(
         "polymarket account ok: may open positions, maker {} signing as {} (signatureType {})",
         wallet.maker.to_checksum_hex(),
@@ -127,6 +130,11 @@ pub enum PolymarketPreflightError {
     )]
     ProtocolVersion { found: Box<str>, expected: u32 },
     #[error(
+        "this host's clock reads {}us since 1970, as a clock set at or before the epoch does, so the venue would reject each request it signs — set the system clock",
+        seen.micros()
+    )]
+    LocalClockInvalid { seen: LocalTs },
+    #[error(
         "this polymarket account is closed-only and may only reduce positions — a market maker on it would quote one side into rejection"
     )]
     ClosedOnly,
@@ -134,45 +142,15 @@ pub enum PolymarketPreflightError {
 
 /// The wallet type and account address are discovered, not configured, so the engine reads back what
 /// `tools/poly-probe` wrote rather than guessing at them.
-fn wallet_identity(
+fn read_wallet_config(
     secrets: &EnvFile,
     key: &SigningKey,
-) -> Result<WalletIdentity, PolymarketPreflightError> {
-    let signer = key.address();
-    let configured = read_plain(secrets, POLYMARKET_CREDENTIAL_VARIABLES.api_key_env)?;
-    if !configured.eq_ignore_ascii_case(&signer.to_checksum_hex()) {
-        return Err(PolymarketPreflightError::SignerMismatch {
-            configured: configured.into_boxed_str(),
-            derived: signer.to_checksum_hex().into_boxed_str(),
-        });
-    }
-    let maker_text = read_plain(secrets, WALLET_ADDRESS_VARIABLE)?;
-    let maker =
-        Address::parse(&maker_text).map_err(|source| PolymarketPreflightError::WalletAddress {
-            value: maker_text.into_boxed_str(),
-            source,
-        })?;
-    let code_text = read_plain(secrets, SIGNATURE_TYPE_VARIABLE)?;
-    let signature_type = code_text
-        .trim()
-        .parse::<u8>()
-        .ok()
-        .and_then(|code| SignatureType::from_code(code).ok())
-        .ok_or_else(|| PolymarketPreflightError::WalletSignatureType {
-            value: code_text.into_boxed_str(),
-        })?;
-    if !matches!(
-        signature_type,
-        SignatureType::Eoa | SignatureType::GnosisSafe
-    ) {
-        return Err(PolymarketPreflightError::UnprovenWalletType {
-            code: signature_type.code(),
-        });
-    }
-    Ok(WalletIdentity {
-        maker,
-        signer,
-        signature_type,
+) -> Result<WalletConfig, PolymarketPreflightError> {
+    Ok(WalletConfig {
+        signer: key.address(),
+        configured_signer: read_plain(secrets, POLYMARKET_CREDENTIAL_VARIABLES.api_key_env)?,
+        maker: read_plain(secrets, WALLET_ADDRESS_VARIABLE)?,
+        signature_type: read_plain(secrets, SIGNATURE_TYPE_VARIABLE)?,
     })
 }
 
@@ -181,25 +159,11 @@ fn wallet_identity(
 fn read_plain(
     secrets: &EnvFile,
     variable: &'static str,
-) -> Result<String, PolymarketPreflightError> {
+) -> Result<Box<str>, PolymarketPreflightError> {
     let value = secrets.resolve(variable)?;
     str::from_utf8(value.expose_bytes())
-        .map(str::to_owned)
+        .map(Box::from)
         .map_err(|_| PolymarketPreflightError::NotUtf8 { variable })
-}
-
-/// Reported, never refused: the flag is a website signal, and the venue's answer to a placement is
-/// the only ground truth about whether this host may trade.
-fn report_geoblock(geoblock: Geoblock) {
-    if !geoblock.blocked {
-        return;
-    }
-    warn!(
-        "polymarket reports this host geoblocked (ip {}, country {}, region {}) — placement may be refused at the venue",
-        blank_as_dash(&geoblock.ip),
-        blank_as_dash(&geoblock.country),
-        blank_as_dash(&geoblock.region)
-    );
 }
 
 /// What the operator has to see before a live arm: the collateral this wallet type actually holds,
@@ -238,18 +202,4 @@ fn report_read(what: &str, answer: Result<ClobResponse, TransportError>) {
         ),
         Err(error) => warn!("polymarket {what} read failed: {error}"),
     }
-}
-
-fn blank_as_dash(value: &str) -> &str {
-    if value.is_empty() { "-" } else { value }
-}
-
-#[expect(
-    clippy::disallowed_methods,
-    reason = "a start preflight reads the wall clock once, before any message exists"
-)]
-fn local_unix_secs() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs() as i64)
 }
