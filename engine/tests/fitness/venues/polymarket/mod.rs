@@ -13,4 +13,5 @@ mod polymarket_fixtures;
 mod polymarket_gamma;
 mod polymarket_parse;
 mod request_lanes;
+mod shadow_capture;
 mod signing;
