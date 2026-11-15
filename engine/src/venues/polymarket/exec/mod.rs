@@ -14,6 +14,7 @@ mod actor;
 pub mod binding;
 pub mod codec;
 pub mod correlate;
+pub mod facts;
 pub mod handle;
 mod preflight;
 pub mod probe;

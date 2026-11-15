@@ -3,19 +3,11 @@
 
 use crate::msg::exec::{ExecEvent, ExecKind, Provenance};
 use crate::msg::ids::ClientOrderId;
-use crate::msg::time::{DurationUs, LocalTs};
+use crate::msg::time::LocalTs;
 use crate::venues::exec::{ExecEffect, ExecRequest, MirroredOrder, RequestId};
 
 use super::codec::UnmappedOrder;
-
-// Held frames pending order id mappings. Small because the window is one HTTP round trip; excess signals a venue storm.
-pub const PENDING_CAPACITY: usize = 128;
-
-// TTL for held frames. Long enough for placement answer + recovery resync; short enough to report unmapped fills while actionable.
-pub const PENDING_TTL: DurationUs = DurationUs::from_micros(10_000_000);
-
-// Venue taker hold + wire latency. Cancels sent during this window are refused (hard reject cost).
-pub const DELAYED_HOLD: DurationUs = DurationUs::from_micros(300_000);
+use super::facts::POLYMARKET_FACTS;
 
 /// A user-stream frame whose order this run cannot yet name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,7 +33,7 @@ impl Default for PendingFrames {
 impl PendingFrames {
     pub fn new() -> Self {
         Self {
-            frames: Vec::with_capacity(PENDING_CAPACITY),
+            frames: Vec::with_capacity(POLYMARKET_FACTS.held_frame_capacity),
             dropped: 0,
             abandoned: 0,
         }
@@ -80,7 +72,7 @@ impl PendingFrames {
     pub fn expired(&mut self, now: LocalTs) -> Vec<HeldFrame> {
         let mut expired = Vec::new();
         self.frames.retain(|frame| {
-            let is_live = now.diff(frame.held_since) < PENDING_TTL;
+            let is_live = now.diff(frame.held_since) < POLYMARKET_FACTS.held_frame_lifetime;
             if !is_live {
                 expired.push(frame.clone());
             }
@@ -91,7 +83,7 @@ impl PendingFrames {
     }
 
     pub fn re_hold(&mut self, frame: HeldFrame) {
-        if self.frames.len() >= PENDING_CAPACITY {
+        if self.frames.len() >= POLYMARKET_FACTS.held_frame_capacity {
             self.frames.remove(0);
             self.dropped += 1;
         }
@@ -140,10 +132,10 @@ impl DelayedOrders {
         self.withholds
     }
 
-    /// The venue accepted a placement it will not match for another 250 ms and will not cancel
-    /// during.
+    /// The venue accepted a placement that it will not match until its taker hold passes, and will
+    /// not cancel before then.
     pub fn on_delayed(&mut self, client_id: ClientOrderId, answered_at: LocalTs) {
-        let release_at = answered_at + DELAYED_HOLD;
+        let release_at = answered_at + POLYMARKET_FACTS.taker_hold + POLYMARKET_FACTS.wire_margin;
         match self
             .holds
             .iter_mut()

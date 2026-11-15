@@ -8,9 +8,9 @@ use engine::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Sid
 use engine::venues::exec::{ExecCore, ExecEffect, ExecRequest, MirroredOrder, RequestId};
 use engine::venues::polymarket::exec::codec::UnmappedOrder;
 use engine::venues::polymarket::exec::correlate::{
-    DELAYED_HOLD, DelayedOrders, HeldFrame, PENDING_CAPACITY, PENDING_TTL, PendingFrames,
-    UnmappedVerdict, WithheldCancel, classify_unmapped,
+    DelayedOrders, HeldFrame, PendingFrames, UnmappedVerdict, WithheldCancel, classify_unmapped,
 };
+use engine::venues::polymarket::exec::facts::POLYMARKET_FACTS;
 use proptest::prelude::*;
 use proptest::test_runner::{Config, TestRunner};
 
@@ -331,14 +331,19 @@ fn minted_cancel(client_id: ClientOrderId) -> (RequestId, ExecRequest) {
 /// Each bound and each wait comes from the facts of the venue.
 #[test]
 fn held_frames_and_taker_hold_obey_the_named_facts() {
-    let capacity = PENDING_CAPACITY;
-    let lifetime = PENDING_TTL;
-    let cancel_hold = DELAYED_HOLD;
+    let facts = POLYMARKET_FACTS;
     assert_eq!(
-        (capacity, lifetime.micros(), cancel_hold.micros()),
-        (128, 10_000_000, 300_000),
+        (
+            facts.held_frame_capacity,
+            facts.held_frame_lifetime.micros(),
+            facts.taker_hold.micros(),
+            facts.wire_margin.micros()
+        ),
+        (128, 10_000_000, 250_000, 50_000),
         "the facts of the venue keep their values"
     );
+    let capacity = facts.held_frame_capacity;
+    let lifetime = facts.held_frame_lifetime;
 
     let mut frames = PendingFrames::new();
     held(&mut frames, "{\"event_type\":\"order\"}", 0);
@@ -396,7 +401,7 @@ fn held_frames_and_taker_hold_obey_the_named_facts() {
     assert_eq!(frames.len(), 1, "the younger frame keeps waiting");
 
     let client_id = ClientOrderId(0x5150);
-    let release_at = at(1_000_000) + cancel_hold;
+    let release_at = at(1_000_000) + facts.taker_hold + facts.wire_margin;
     let mut delayed = DelayedOrders::default();
     delayed.on_delayed(client_id, at(1_000_000));
     assert_eq!(

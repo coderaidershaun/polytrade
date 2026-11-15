@@ -18,9 +18,10 @@ use engine::venues::polymarket::exec::codec::{
     decode_heartbeat, decode_neg_risk, decode_orders_page,
 };
 use engine::venues::polymarket::exec::correlate::{
-    DELAYED_HOLD, DelayedOrders, PENDING_CAPACITY, PENDING_TTL, PendingFrames, UnmappedVerdict,
-    WithheldCancel, classify_unmapped, restates_balances,
+    DelayedOrders, PendingFrames, UnmappedVerdict, WithheldCancel, classify_unmapped,
+    restates_balances,
 };
+use engine::venues::polymarket::exec::facts::POLYMARKET_FACTS;
 use engine::venues::polymarket::rotation::{OutcomeLeg, TokenId, WindowAssignment};
 
 use crate::engine_support::{exec_event, ts as at, venue_ts};
@@ -297,15 +298,19 @@ fn a_held_frame_is_handed_back_intact_dropped_oldest_first_and_expired_on_its_de
     assert_eq!(frames.len(), 1);
 
     let mut frames = PendingFrames::new();
-    for index in 0..PENDING_CAPACITY {
+    for index in 0..POLYMARKET_FACTS.held_frame_capacity {
         held(&mut frames, &format!("frame-{index}"), index as i64);
     }
     assert_eq!(frames.dropped(), 0);
 
-    held(&mut frames, "frame-overflow", PENDING_CAPACITY as i64);
+    held(
+        &mut frames,
+        "frame-overflow",
+        POLYMARKET_FACTS.held_frame_capacity as i64,
+    );
     assert_eq!(
         frames.len(),
-        PENDING_CAPACITY,
+        POLYMARKET_FACTS.held_frame_capacity,
         "capacity is a cap, not a hint"
     );
     assert_eq!(frames.dropped(), 1);
@@ -325,10 +330,12 @@ fn a_held_frame_is_handed_back_intact_dropped_oldest_first_and_expired_on_its_de
     held(&mut frames, "late", 5_000_000);
 
     assert!(
-        frames.expired(at(PENDING_TTL.micros() - 1)).is_empty(),
+        frames
+            .expired(at(POLYMARKET_FACTS.held_frame_lifetime.micros() - 1))
+            .is_empty(),
         "nothing expires before the ttl"
     );
-    let expired = frames.expired(at(PENDING_TTL.micros() + 1));
+    let expired = frames.expired(at(POLYMARKET_FACTS.held_frame_lifetime.micros() + 1));
     assert_eq!(expired.len(), 1);
     assert_eq!(expired[0].text, "early");
     assert_eq!(frames.abandoned(), 1);
@@ -380,10 +387,16 @@ fn a_cancel_inside_the_taker_hold_is_withheld_and_released_once() {
     let release_at = delayed
         .held_until(client_id, at(1_000_000))
         .expect("an order inside its hold reports when it leaves it");
-    assert_eq!(release_at, at(1_000_000) + DELAYED_HOLD);
+    assert_eq!(
+        release_at,
+        at(1_000_000) + POLYMARKET_FACTS.taker_hold + POLYMARKET_FACTS.wire_margin
+    );
     assert!(
         delayed
-            .held_until(client_id, at(1_000_000) + DELAYED_HOLD)
+            .held_until(
+                client_id,
+                at(1_000_000) + POLYMARKET_FACTS.taker_hold + POLYMARKET_FACTS.wire_margin
+            )
             .is_none(),
         "the hold ends at the stamp, it does not linger"
     );
