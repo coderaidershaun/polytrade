@@ -404,6 +404,9 @@ impl ExecEngine {
         if event.kind == ExecKind::SnapshotOrder
             && let Some(index) = self.orders.adopt(event, stamps.fold)
         {
+            if event.cumulative_qty.mantissa() > 0 {
+                self.on_unbooked_adopted_total(event, stamps, bank);
+            }
             return Some(index);
         }
         self.on_orphan(event, stamps, bank);
