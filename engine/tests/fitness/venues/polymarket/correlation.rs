@@ -3,13 +3,18 @@
 
 use std::cell::Cell;
 
-use engine::msg::exec::{Provenance, VenueOrderStatus};
+use engine::msg::exec::{ExecCommand, Provenance, VenueOrderStatus};
 use engine::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use engine::venues::exec::MirroredOrder;
+use engine::venues::exec::{ExecCore, ExecEffect, ExecRequest, MirroredOrder, RequestId};
 use engine::venues::polymarket::exec::codec::UnmappedOrder;
-use engine::venues::polymarket::exec::correlate::{UnmappedVerdict, classify_unmapped};
+use engine::venues::polymarket::exec::correlate::{
+    DELAYED_HOLD, DelayedOrders, HeldFrame, PENDING_CAPACITY, PENDING_TTL, PendingFrames,
+    UnmappedVerdict, WithheldCancel, classify_unmapped,
+};
 use proptest::prelude::*;
 use proptest::test_runner::{Config, TestRunner};
+
+use crate::engine_support::ts as at;
 
 const UP: InstrumentId = InstrumentId(0);
 const DOWN: InstrumentId = InstrumentId(1);
@@ -284,4 +289,170 @@ fn order_with_no_exact_match_is_never_adopted() {
         deferred.get(),
         left_alone.get()
     );
+}
+
+fn held(frames: &mut PendingFrames, text: &str, now: i64) {
+    frames.hold(text.to_owned(), at(now));
+}
+
+fn texts(frames: &[HeldFrame]) -> Vec<&str> {
+    frames.iter().map(|frame| frame.text.as_str()).collect()
+}
+
+/// Request ids are the core's to mint, so the one under test is a real one: the identity that must
+/// survive the wait is the identity the core issued, not a number the test invented.
+fn minted_cancel(client_id: ClientOrderId) -> (RequestId, ExecRequest) {
+    let mut core = ExecCore::with_limits(4, 16);
+    // Cancels are admitted from any connected phase; a core still Down would refuse this one.
+    core.on_connected(&mut |_| {});
+    let mut minted = None;
+    core.on_command(
+        ExecCommand::Cancel {
+            instrument: UP,
+            client_id,
+        },
+        &mut |effect| {
+            if let ExecEffect::Send {
+                request_id,
+                request,
+            } = effect
+            {
+                minted = Some((request_id, request));
+            }
+        },
+    );
+    minted.expect("a cancel for an unmirrored order is sent straight through")
+}
+
+/// A frame that names an order before its placement answer is held, so a fill is not lost, and
+/// the buffer is bounded: the oldest frame leaves first, and a frame that no answer ever explains
+/// leaves at its lifetime, so the edge reads the account again. A marketable order sits in the
+/// venue's taker hold and cannot be cancelled there, so its cancel waits and goes out one time.
+/// Each bound and each wait comes from the facts of the venue.
+#[test]
+fn held_frames_and_taker_hold_obey_the_named_facts() {
+    let capacity = PENDING_CAPACITY;
+    let lifetime = PENDING_TTL;
+    let cancel_hold = DELAYED_HOLD;
+    assert_eq!(
+        (capacity, lifetime.micros(), cancel_hold.micros()),
+        (128, 10_000_000, 300_000),
+        "the facts of the venue keep their values"
+    );
+
+    let mut frames = PendingFrames::new();
+    held(&mut frames, "{\"event_type\":\"order\"}", 0);
+    assert_eq!(frames.len(), 1);
+    let drained = frames.drain();
+    assert_eq!(texts(&drained), ["{\"event_type\":\"order\"}"]);
+    assert_eq!(
+        frames.len(),
+        0,
+        "a drain empties the buffer for the re-read"
+    );
+    frames.re_hold(drained[0].clone());
+    assert_eq!(
+        frames.len(),
+        1,
+        "a frame still unattributable is handed back"
+    );
+
+    let mut frames = PendingFrames::new();
+    for index in 0..capacity {
+        held(&mut frames, &format!("frame-{index}"), index as i64);
+    }
+    assert_eq!(frames.dropped(), 0);
+    held(&mut frames, &format!("frame-{capacity}"), capacity as i64);
+    assert_eq!(frames.len(), capacity, "capacity is a cap, not a hint");
+    assert_eq!(frames.dropped(), 1);
+    let kept: Vec<String> = (1..=capacity)
+        .map(|index| format!("frame-{index}"))
+        .collect();
+    assert_eq!(
+        texts(&frames.drain()),
+        kept,
+        "the oldest frame is the one that left, and the rest come back intact, oldest first"
+    );
+
+    let mut frames = PendingFrames::new();
+    held(&mut frames, "alone", 0);
+    assert!(frames.expired(at(lifetime.micros() - 1)).is_empty());
+    assert_eq!(texts(&frames.expired(at(lifetime.micros()))), ["alone"]);
+    assert_eq!(
+        frames.abandoned(),
+        1,
+        "a frame that leaves at its lifetime is counted"
+    );
+
+    let mut frames = PendingFrames::new();
+    held(&mut frames, "early", 0);
+    held(&mut frames, "late", 5_000_000);
+    assert!(
+        frames.expired(at(lifetime.micros() - 1)).is_empty(),
+        "nothing expires before its lifetime"
+    );
+    assert_eq!(texts(&frames.expired(at(lifetime.micros() + 1))), ["early"]);
+    assert_eq!(frames.abandoned(), 1);
+    assert_eq!(frames.len(), 1, "the younger frame keeps waiting");
+
+    let client_id = ClientOrderId(0x5150);
+    let release_at = at(1_000_000) + cancel_hold;
+    let mut delayed = DelayedOrders::default();
+    delayed.on_delayed(client_id, at(1_000_000));
+    assert_eq!(
+        delayed.held_until(client_id, at(1_000_000)),
+        Some(release_at)
+    );
+    assert_eq!(
+        delayed.held_until(client_id, at(release_at.micros() - 1)),
+        Some(release_at)
+    );
+    assert_eq!(
+        delayed.held_until(client_id, release_at),
+        None,
+        "the hold ends at its stamp, it does not linger"
+    );
+
+    let (minted_id, minted_request) = minted_cancel(client_id);
+    delayed.withhold(WithheldCancel {
+        request_id: minted_id,
+        request: minted_request,
+        recon_seq: 3,
+        release_at,
+    });
+    assert!(
+        delayed.released(at(1_100_000)).is_empty(),
+        "the hold is still running"
+    );
+    assert!(delayed.released(at(release_at.micros() - 1)).is_empty());
+    let released = delayed.released(release_at);
+    assert_eq!(released.len(), 1);
+    assert_eq!(released[0].recon_seq, 3);
+    assert!(
+        delayed.released(at(1_400_000)).is_empty() && delayed.released(at(9_999_999)).is_empty(),
+        "a released cancel is sent ONCE: the rule of no resend survives the wait"
+    );
+    // Re-deciding would mint a second request id for an order that the core believes has one
+    // cancel outstanding.
+    assert_eq!(
+        released[0].into_effect(),
+        ExecEffect::Send {
+            request_id: minted_id,
+            request: ExecRequest::Cancel {
+                instrument: UP,
+                client_id,
+            },
+        }
+    );
+
+    // The hold belongs to the order: once the order is gone, a later id in its slot must not
+    // inherit a wait it never earned.
+    let mut delayed = DelayedOrders::default();
+    delayed.on_delayed(client_id, at(1_000_000));
+    delayed.forget(client_id);
+    assert_eq!(delayed.held_until(client_id, at(1_000_000)), None);
+    let other = ClientOrderId(0x5151);
+    delayed.on_delayed(other, at(0));
+    delayed.forget(other);
+    assert_eq!(delayed.held_until(other, at(1)), None);
 }
