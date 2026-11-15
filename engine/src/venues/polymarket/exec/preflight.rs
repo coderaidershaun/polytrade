@@ -1,12 +1,12 @@
 //! The thin half of the start gate of Polymarket: it reads the wallet config and the venue, and
 //! the pure checks decide, before any thread starts, so a closed-only account never quotes.
 
-use crate::msg::time::{DurationUs, VenueTs, wall_clock_now};
+use crate::msg::time::{DurationUs, LocalTs, VenueTs, wall_clock_now};
 use crate::runtime::secrets::{EnvFile, SecretError};
 use crate::venues::edge::http::TransportError;
 use crate::{info, warn};
 
-use super::assess::{ProbeFacts, WalletConfig, assess};
+use super::assess::{AccountStanding, ProbeFacts, WalletConfig, assess};
 use super::codec::{PROTOCOL_VERSION, collateral_balance, open_orders_page};
 use super::handle::WalletIdentity;
 use super::probe::{Probe, ProbeError};
@@ -70,7 +70,9 @@ pub async fn preflight_polymarket(
     let credentials = probe.api_credentials(server_time_secs).await?.0;
     let signer = RequestSigner::new(&credentials, admitted.signer())
         .map_err(|source| ProbeError::Credentials { source })?;
-    let wallet = admitted.assess_account(probe.is_closed_only(&signer, server_time_secs).await?)?;
+    let is_closed_only = probe.is_closed_only(&signer, server_time_secs).await?;
+    let standing = if is_closed_only { AccountStanding::ClosedOnly } else { AccountStanding::Open };
+    let wallet = admitted.assess_account(standing)?;
     info!(
         "polymarket account ok: may open positions, maker {} signing as {} (signatureType {})",
         wallet.maker.to_checksum_hex(),
@@ -127,6 +129,11 @@ pub enum PolymarketPreflightError {
         "the polymarket clob speaks protocol {found}, and every payload this engine signs is shaped for {expected}"
     )]
     ProtocolVersion { found: Box<str>, expected: u32 },
+    #[error(
+        "this host's clock reads {}us since 1970, as a clock set at or before the epoch does, so the venue would reject each request it signs — set the system clock",
+        seen.micros()
+    )]
+    LocalClockInvalid { seen: LocalTs },
     #[error(
         "this polymarket account is closed-only and may only reduce positions — a market maker on it would quote one side into rejection"
     )]

@@ -12,6 +12,7 @@ use super::sign::address::Address;
 use super::sign::order::SignatureType;
 
 const ONE_SECOND: DurationUs = DurationUs::from_secs(1);
+const EPOCH: LocalTs = LocalTs::from_micros(0);
 
 /// What the public reads of the venue answered, before any signed request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +35,14 @@ pub struct WalletConfig {
     pub signature_type: Box<str>,
 }
 
+/// What the signed read of the account answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AccountStanding {
+    Open,
+    /// The venue lets the account only reduce positions.
+    ClosedOnly,
+}
+
 /// A wallet that passed each check of the gate that needs no signed request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdmittedWallet {
@@ -41,9 +50,9 @@ pub struct AdmittedWallet {
     venue_clock_offset: DurationUs,
 }
 
-/// The checks of the gate before any signed request, in a fixed order: the wallet, then the
-/// protocol version. A geoblocked host is reported and never refused, because only the venue's
-/// answer to a placement says whether this host may trade.
+/// The checks of the gate before any signed request, in a fixed order: the wallet, the protocol
+/// version, then the local clock. A geoblocked host is reported and never refused, because only
+/// the venue's answer to a placement says whether this host may trade.
 ///
 /// # Errors
 /// [`PolymarketPreflightError`] of the first check that fails, in that order.
@@ -59,7 +68,7 @@ pub fn assess(
             expected: PROTOCOL_VERSION,
         });
     }
-    let venue_clock_offset = venue_clock_offset(facts.server_ts_us, local);
+    let venue_clock_offset = venue_clock_offset(facts.server_ts_us, local)?;
     report_geoblock(&facts.geoblock);
     Ok(AdmittedWallet {
         wallet,
@@ -71,16 +80,15 @@ impl AdmittedWallet {
     /// The last check of the gate, after the signed read of the account.
     ///
     /// # Errors
-    /// [`PolymarketPreflightError::ClosedOnly`] when the venue lets the account only reduce
-    /// positions.
+    /// [`PolymarketPreflightError::ClosedOnly`] for an account that is closed-only.
     pub fn assess_account(
         self,
-        is_closed_only: bool,
+        standing: AccountStanding,
     ) -> Result<WalletIdentity, PolymarketPreflightError> {
-        if is_closed_only {
-            return Err(PolymarketPreflightError::ClosedOnly);
+        match standing {
+            AccountStanding::Open => Ok(self.wallet),
+            AccountStanding::ClosedOnly => Err(PolymarketPreflightError::ClosedOnly),
         }
-        Ok(self.wallet)
     }
 
     pub(crate) fn signer(&self) -> Address {
@@ -133,11 +141,18 @@ impl WalletConfig {
     }
 }
 
-/// The venue answers its clock in whole seconds, so the local time is cut to whole seconds too
-/// before the two are compared.
-fn venue_clock_offset(server: VenueTs, local: LocalTs) -> DurationUs {
+/// A host clock set before 1970 reads as the epoch, and every request stamped from it fails at the
+/// venue as an auth refusal that names no cause. The venue answers its clock in whole seconds, so
+/// the local time is cut to whole seconds too before the two are compared.
+fn venue_clock_offset(
+    server: VenueTs,
+    local: LocalTs,
+) -> Result<DurationUs, PolymarketPreflightError> {
+    if local <= EPOCH {
+        return Err(PolymarketPreflightError::LocalClockInvalid { seen: local });
+    }
     let local_second = LocalTs::from_micros(local.micros() - local.micros() % ONE_SECOND.micros());
-    server.offset_from(local_second)
+    Ok(server.offset_from(local_second))
 }
 
 /// Reported, never refused: the flag is a website signal, and the venue's answer to a placement is

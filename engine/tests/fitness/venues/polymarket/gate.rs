@@ -3,7 +3,9 @@
 
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::runtime::secrets::Secret;
-use engine::venues::polymarket::exec::assess::{AdmittedWallet, ProbeFacts, WalletConfig, assess};
+use engine::venues::polymarket::exec::assess::{
+    AccountStanding, AdmittedWallet, ProbeFacts, WalletConfig, assess,
+};
 use engine::venues::polymarket::exec::codec::{
     PROTOCOL_VERSION, decode_closed_only, decode_protocol_version,
 };
@@ -153,13 +155,13 @@ fn preflight_gates_run_in_order_over_recorded_answers() {
     ] {
         assert_eq!(decode_closed_only(unproven), None, "{unproven:?}");
     }
-    let closed = past_the_block.assess_account(true);
+    let closed = past_the_block.assess_account(AccountStanding::ClosedOnly);
     assert!(
         matches!(closed, Err(PolymarketPreflightError::ClosedOnly)),
         "{closed:?}"
     );
     let open = past_the_block
-        .assess_account(false)
+        .assess_account(AccountStanding::Open)
         .expect("an account open to new positions passes");
     assert_eq!(open.signature_type, SignatureType::Eoa);
     assert_eq!(open.signature_type.code(), 0);
@@ -173,7 +175,7 @@ fn preflight_gates_run_in_order_over_recorded_answers() {
         ..wallet.clone()
     };
     let safe_identity = admitted(&facts, &safe)
-        .assess_account(false)
+        .assess_account(AccountStanding::Open)
         .expect("a gnosis safe passes");
     assert_eq!(safe_identity.signature_type, SignatureType::GnosisSafe);
     assert_eq!(safe_identity.signature_type.code(), 2);
@@ -210,4 +212,58 @@ fn preflight_gates_run_in_order_over_recorded_answers() {
         ),
         "{version_first}"
     );
+
+    // The local clock comes after the wallet and the version, and before the account.
+    let before_epoch = LocalTs::from_micros(-1);
+    let wallet_before_clock = refused(&facts, &unproven_and_version, before_epoch);
+    assert!(
+        matches!(
+            wallet_before_clock,
+            PolymarketPreflightError::UnprovenWalletType { code: 1 }
+        ),
+        "{wallet_before_clock}"
+    );
+    let version_before_clock = refused(&version_1, &wallet, before_epoch);
+    assert!(
+        matches!(
+            version_before_clock,
+            PolymarketPreflightError::ProtocolVersion { .. }
+        ),
+        "{version_before_clock}"
+    );
+    let clock = refused(&blocked, &wallet, before_epoch);
+    assert!(
+        matches!(clock, PolymarketPreflightError::LocalClockInvalid { seen } if seen == before_epoch),
+        "{clock}"
+    );
+}
+
+/// CONTRACT: a local clock at or before the epoch refuses the arm before any signed request, and
+/// the refusal names the value seen. A clock set before 1970 reads as 0 on this host.
+#[test]
+fn invalid_local_clock_refuses_the_arm() {
+    let key = test_key(1);
+    let facts = recorded_facts();
+    let wallet = eoa_wallet(&key);
+    admitted(&facts, &wallet);
+
+    for seen in [
+        LocalTs::from_micros(-1_000_000),
+        LocalTs::from_micros(-1),
+        LocalTs::from_micros(0),
+    ] {
+        let refusal = refused(&facts, &wallet, seen);
+        assert!(
+            matches!(refusal, PolymarketPreflightError::LocalClockInvalid { seen: found } if found == seen),
+            "local time {seen:?}: {refusal}"
+        );
+        assert!(
+            refusal
+                .to_string()
+                .contains(&format!("{}us", seen.micros())),
+            "the refusal names the value seen: {refusal}"
+        );
+    }
+    let first_microsecond = assess(&facts, &wallet, LocalTs::from_micros(1));
+    assert!(first_microsecond.is_ok(), "{first_microsecond:?}");
 }
