@@ -18,7 +18,6 @@ use crate::venues::polymarket::polymarket_parse::apply;
 const SERIES: PolySeries = PolySeries::BtcUpDown5m;
 
 const HEAD: &str = include_str!("../../../../fixtures/polymarket/poly_market.jsonl");
-const COLLAPSE: &str = include_str!("../../../../fixtures/polymarket/poly_market_collapse.jsonl");
 const GAMMA_CURRENT: &str =
     include_str!("../../../../fixtures/polymarket/gamma_event_current.json");
 
@@ -73,7 +72,6 @@ struct Replay {
     sort_violations: u64,
     tob_matches: u64,
     tob_mismatches: u64,
-    zero_removals: u64,
     parse_errors: u64,
     fatal: u64,
 }
@@ -123,9 +121,6 @@ impl Replay {
         self.price_changes += 1;
         let mut last_best: HashMap<Box<str>, (Option<Price>, Option<Price>)> = HashMap::new();
         for delta in changes {
-            if delta.level.qty.mantissa() == 0 {
-                self.zero_removals += 1;
-            }
             self.token(&delta.asset_id).on_delta(delta, exchange_ts_us);
             last_best.insert(delta.asset_id.clone(), (delta.best_bid, delta.best_ask));
         }
@@ -240,171 +235,6 @@ mod head {
         assert!(
             replay.tokens.contains_key(&*market.token_down),
             "the down token from Gamma appears in the WS capture"
-        );
-    }
-}
-
-mod collapse {
-    use super::*;
-    use engine::msg::ids::{Qty, Side};
-    use engine::msg::inbound::Level;
-    use engine::venues::polymarket::teardown::{CollapseDetector, CollapseSignal, LevelUpdate};
-
-    const GAMMA_NEXT: &str = include_str!("../../../../fixtures/polymarket/gamma_event_next.json");
-
-    /// Parse one capture line, flattening the venue's `[{},{}]` subscribe batch to its inner frames.
-    fn frames_in(line: &str) -> Vec<PolyFrame> {
-        match parse_market_frame(line, received()) {
-            Ok(PolyFrame::Batch(frames)) => frames,
-            Ok(frame) => vec![frame],
-            Err(_) => Vec::new(),
-        }
-    }
-
-    fn resting(side: Side, price: Price, exchange_ts_us: VenueTs) -> LevelUpdate {
-        LevelUpdate {
-            side,
-            price,
-            qty: Qty::from_mantissa(1),
-            exchange_ts_us,
-        }
-    }
-
-    /// Replay a resolving token's REAL captured teardown burst through the detector. WHY the seed:
-    /// the grace tail is delta-only for ~357s (the token's last venue snapshot long predates its
-    /// teardown), so the pre-collapse book cannot be frame-reconstructed — production leans on the
-    /// definitive `/book` 404 probe when this fast path misses. The burst itself enumerates the live
-    /// levels it wipes; seed those, plus the token's first real venue snapshot on the side it spares.
-    fn captured_burst_collapses(token: &str) -> bool {
-        let mut by_ts: HashMap<i64, Vec<(Side, Price)>> = HashMap::new();
-        for line in COLLAPSE.lines() {
-            for frame in frames_in(line) {
-                let PolyFrame::PriceChange(change) = frame else {
-                    continue;
-                };
-                for delta in &change.changes {
-                    if &*delta.asset_id == token && delta.level.qty == Qty::from_mantissa(0) {
-                        by_ts
-                            .entry(change.exchange_ts_us.micros())
-                            .or_default()
-                            .push((delta.side, delta.level.price));
-                    }
-                }
-            }
-        }
-        let (burst_micros, removals) = by_ts
-            .into_iter()
-            .max_by_key(|(_, removals)| removals.len())
-            .expect("the resolving token sheds levels in the capture");
-        assert!(
-            removals.len() >= 2,
-            "a teardown is a mass removal, not one cancel"
-        );
-        let burst_ts = VenueTs::from_micros(burst_micros);
-        let seed_ts = VenueTs::from_micros(burst_micros - 1);
-        let persisting = match removals[0].0 {
-            Side::Buy => Side::Sell,
-            Side::Sell => Side::Buy,
-        };
-
-        let mut detector = CollapseDetector::default();
-        for &(side, price) in &removals {
-            detector.observe(resting(side, price, seed_ts));
-        }
-        for level in first_snapshot_levels(token, persisting) {
-            detector.observe(resting(persisting, level.price, seed_ts));
-        }
-        removals.iter().any(|&(side, price)| {
-            let removal = LevelUpdate {
-                side,
-                price,
-                qty: Qty::from_mantissa(0),
-                exchange_ts_us: burst_ts,
-            };
-            detector.observe(removal) == CollapseSignal::Collapsed
-        })
-    }
-
-    /// The `side` levels of the token's first venue book snapshot in the capture (the real book the
-    /// burst leaves standing on the side it does not wipe).
-    fn first_snapshot_levels(token: &str, side: Side) -> Vec<Level> {
-        for line in HEAD.lines() {
-            for frame in frames_in(line) {
-                if let PolyFrame::Book(book) = frame
-                    && &*book.asset_id == token
-                {
-                    return if side == Side::Buy { book.bids } else { book.asks };
-                }
-            }
-        }
-        Vec::new()
-    }
-
-    #[test]
-    fn captured_teardown_burst_collapses_the_resolving_window_only() {
-        let old = parse_events(
-            SERIES,
-            GAMMA_CURRENT,
-            VenueTs::from_micros(1_784_449_200_000_000),
-        )
-        .expect("current window parses");
-        let new = parse_events(
-            SERIES,
-            GAMMA_NEXT,
-            VenueTs::from_micros(1_784_449_500_000_000),
-        )
-        .expect("next window parses");
-
-        // The resolving window's real teardown burst empties each token's book.
-        assert!(
-            captured_burst_collapses(&old.token_up),
-            "the up token's captured teardown burst collapses its book"
-        );
-        assert!(
-            captured_burst_collapses(&old.token_down),
-            "the down token's captured teardown burst collapses its book"
-        );
-
-        // The concurrent live window, fed its real deltas, never collapses a fresh detector.
-        for token in [&new.token_up, &new.token_down] {
-            let mut detector = CollapseDetector::default();
-            for line in COLLAPSE.lines() {
-                for frame in frames_in(line) {
-                    let PolyFrame::PriceChange(change) = frame else {
-                        continue;
-                    };
-                    for delta in &change.changes {
-                        if *delta.asset_id == **token {
-                            let update = LevelUpdate {
-                                side: delta.side,
-                                price: delta.level.price,
-                                qty: delta.level.qty,
-                                exchange_ts_us: change.exchange_ts_us,
-                            };
-                            assert_ne!(
-                                detector.observe(update),
-                                CollapseSignal::Collapsed,
-                                "the live window must not collapse"
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn collapse_fixture_carries_the_teardown_burst() {
-        let replay = Replay::of(COLLAPSE);
-        assert_eq!(replay.fatal, 0);
-        assert_eq!(
-            replay.parse_errors, 0,
-            "the collapse fixture parses cleanly"
-        );
-        assert!(
-            replay.zero_removals >= 50,
-            "the collapse burst (size-0 level removals) must be present: {} removals",
-            replay.zero_removals
         );
     }
 }

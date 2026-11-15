@@ -16,7 +16,7 @@ use crate::venues::polymarket::rotation::{
     ForceTeardownFacts, OutcomeLeg, ProbeOutcome, SlotAction, SlotInput, SlotMachine, TokenId,
     WindowAssignment, WindowTokens,
 };
-use crate::venues::polymarket::shadow::BookMismatch;
+use crate::venues::polymarket::shadow::{BookFrameOutcome, BookMismatch};
 
 use super::leg::Leg;
 
@@ -58,6 +58,11 @@ pub enum DriverEffect {
     /// a slot resolves its next window while its previous one is still live, and binding then
     /// would re-point the instrument the edge has orders resting on.
     BindExecution(Box<WindowAssignment>),
+    /// A book differs from the shadow, not yet a desync: nothing forwarded, the shell counts it.
+    Suspect {
+        instrument: InstrumentId,
+        streak: u32,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -364,15 +369,19 @@ impl PolyDriverCore {
             return;
         };
         self.feed(slot, now, SlotInput::Frame, emit);
-        let diverged = self.slots[slot]
+        let instrument = self.slots[slot].leg(side).instrument();
+        let outcome = self.slots[slot]
             .leg_mut(side)
             .on_venue_book(book, now, &mut |message| emit(DriverEffect::Emit(message)));
-        if let Some(mismatch) = diverged {
-            let instrument = self.slots[slot].leg(side).instrument();
-            emit(DriverEffect::Diverged {
+        match outcome {
+            BookFrameOutcome::Diverged(mismatch) => emit(DriverEffect::Diverged {
                 instrument,
                 mismatch,
-            });
+            }),
+            BookFrameOutcome::Suspect { streak } => {
+                emit(DriverEffect::Suspect { instrument, streak })
+            }
+            BookFrameOutcome::ForwardSnapshot | BookFrameOutcome::Validated => {}
         }
     }
 

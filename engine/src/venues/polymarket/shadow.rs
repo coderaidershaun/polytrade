@@ -1,13 +1,12 @@
 //! Checks the books that the venue sends about every 150 ms against a shadow of what reached the
 //! engine. A cut carries no sequence, so only several mismatches in a row mean a desync.
-//!
-//! Neutral types only (Price/Qty/`Level`) — no venue wire structs cross into this module.
 
 use std::collections::BTreeMap;
 
 use crate::msg::ids::{Price, Qty, Side};
 use crate::msg::inbound::Level;
 
+/// A book of plain prices and sizes, so no wire type of the venue reaches the check.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ShadowBook {
     bids: BTreeMap<Price, Qty>,
@@ -49,13 +48,14 @@ impl ShadowBook {
         self.bids.is_empty() || self.asks.is_empty()
     }
 
-    /// Both sides MUST arrive ascending by price.
+    /// Both sides must come in ascending order of price.
     pub fn first_mismatch(&self, bids: &[Level], asks: &[Level]) -> Option<BookMismatch> {
         Self::side_mismatch(&self.bids, bids, Side::Buy)
             .or_else(|| Self::side_mismatch(&self.asks, asks, Side::Sell))
     }
 
-    /// Skip zero-size like `apply` does; zip catches dupes.
+    /// A level of size 0 is no level, as in `apply`. Walking both sides in step also catches a
+    /// repeated level.
     fn side_mismatch(
         book: &BTreeMap<Price, Qty>,
         ascending_levels: &[Level],
@@ -92,12 +92,20 @@ pub struct BookMismatch {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BookFrameOutcome {
+    /// The first book: it becomes the shadow, and the leg forwards it as a snapshot.
     ForwardSnapshot,
+    /// The shadow equals the book of the venue.
     Validated,
+    /// The book differs from the shadow for the `streak`-th time in a row, fewer than confirm a
+    /// desync. The leg forwards nothing, and the shadow stays.
+    Suspect { streak: u32 },
+    /// The mismatch that confirms a desync: the shadow is rebuilt from the book of the venue, which
+    /// the leg forwards as a new snapshot.
     Diverged(BookMismatch),
 }
 
-/// 3 consecutive mismatches (~450ms) vs 1 timing artefact; delta reconstruction is exact.
+/// Three mismatches in a row, about 450 ms, tell a desync from one cut caught in flight, because
+/// the book rebuilt from deltas is exact.
 const DIVERGENCE_CONFIRM: u32 = 3;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -125,7 +133,9 @@ impl ShadowValidator {
         };
         self.suspect_streak += 1;
         if self.suspect_streak < DIVERGENCE_CONFIRM {
-            return BookFrameOutcome::Validated;
+            return BookFrameOutcome::Suspect {
+                streak: self.suspect_streak,
+            };
         }
         self.suspect_streak = 0;
         self.shadow.rebuild(bids, asks);
