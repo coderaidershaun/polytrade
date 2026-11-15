@@ -178,7 +178,7 @@ async fn report_account(
         "collateral",
         http.send_signed(
             signer,
-            &collateral_balance(wallet.signature_type),
+            &collateral_balance(wallet.signature_type.into()),
             timestamp_secs,
         )
         .await,

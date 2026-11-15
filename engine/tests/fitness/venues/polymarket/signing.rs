@@ -8,7 +8,9 @@ use engine::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Sid
 use engine::msg::time::LocalTs;
 use engine::runtime::secrets::Secret;
 use engine::venues::exec::ExecRequest;
-use engine::venues::polymarket::exec::assess::{AccountStanding, WalletConfig, assess};
+use engine::venues::polymarket::exec::assess::{
+    AccountStanding, ProvenSignatureType, WalletConfig, assess,
+};
 use engine::venues::polymarket::exec::codec::{
     EncodeContext, OrderIndex, OrderSigner, OrderSignerSetup, TokenBinding, TokenTable,
     encode_request,
@@ -377,6 +379,37 @@ fn each_order_vector_equals_sdk_body() {
         "each wallet type that the gate admits has one order vector or more (encoded left, \
          admitted right)"
     );
+}
+
+/// FITNESS (type test): the signer takes only a wallet type that the start gate proved. A
+/// `ProvenSignatureType` comes only from the gate, so a signer with another type does not build;
+/// this half holds that the gate proves each type that a live order has proven, and no other one.
+#[test]
+fn signer_takes_only_proven_wallet_type() {
+    let vector = sign_vector();
+    for (code, expected) in [
+        (0, Some(SignatureType::Eoa)),
+        (1, None),
+        (2, Some(SignatureType::GnosisSafe)),
+        (3, None),
+    ] {
+        let mut wallet = vector.clone();
+        wallet["signature_type"] = code.into();
+        match (admitted_identity(&wallet), expected) {
+            (Ok(identity), Some(expected)) => {
+                let proven: ProvenSignatureType = identity.signature_type;
+                assert_eq!(proven.code(), code, "wallet type {code}");
+                assert_eq!(SignatureType::from(proven), expected, "wallet type {code}");
+                signer_of(&wallet, identity, API_KEY);
+            }
+            (Err(refusal), None) => assert!(
+                matches!(refusal, PolymarketPreflightError::UnprovenWalletType { code: found } if found == code),
+                "wallet type {code}: {refusal}"
+            ),
+            (Ok(identity), None) => panic!("wallet type {code} is proven: {identity:?}"),
+            (Err(refusal), Some(_)) => panic!("wallet type {code} is refused: {refusal}"),
+        }
+    }
 }
 
 /// The place body that the encoder writes for the vector's order. The salt comes from the send

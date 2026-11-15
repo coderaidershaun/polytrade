@@ -163,7 +163,7 @@ fn preflight_gates_run_in_order_over_recorded_answers() {
     let open = past_the_block
         .assess_account(AccountStanding::Open)
         .expect("an account open to new positions passes");
-    assert_eq!(open.signature_type, SignatureType::Eoa);
+    assert_eq!(SignatureType::from(open.signature_type), SignatureType::Eoa);
     assert_eq!(open.signature_type.code(), 0);
     assert_eq!(open.signer, key.address());
     assert_eq!(open.maker, key.address());
@@ -177,7 +177,10 @@ fn preflight_gates_run_in_order_over_recorded_answers() {
     let safe_identity = admitted(&facts, &safe)
         .assess_account(AccountStanding::Open)
         .expect("a gnosis safe passes");
-    assert_eq!(safe_identity.signature_type, SignatureType::GnosisSafe);
+    assert_eq!(
+        SignatureType::from(safe_identity.signature_type),
+        SignatureType::GnosisSafe
+    );
     assert_eq!(safe_identity.signature_type.code(), 2);
     assert_eq!(safe_identity.maker, other);
     assert_eq!(safe_identity.signer, key.address());
