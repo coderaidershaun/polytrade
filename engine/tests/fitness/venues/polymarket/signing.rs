@@ -41,13 +41,13 @@ const TICK: Price = Price::from_mantissa(1_000_000);
 /// The venue writes money and shares with 6 decimals.
 const VENUE_UNIT: i128 = 1_000_000;
 
-pub(super) fn text<'a>(value: &'a Value, field: &str) -> &'a str {
+fn text<'a>(value: &'a Value, field: &str) -> &'a str {
     value[field]
         .as_str()
         .unwrap_or_else(|| panic!("vector field {field} is a string"))
 }
 
-pub(super) fn wallet_key(vector: &Value) -> SigningKey {
+fn wallet_key(vector: &Value) -> SigningKey {
     SigningKey::from_secret(&Secret::new(text(vector, "private_key")))
         .expect("throwaway vector key parses")
 }
@@ -64,7 +64,7 @@ pub(super) fn sign_vector() -> Value {
         .expect("a gnosis safe order vector")
 }
 
-pub(super) fn vector_signature_type(vector: &Value) -> u8 {
+fn vector_signature_type(vector: &Value) -> u8 {
     vector["signature_type"]
         .as_u64()
         .expect("vector signature type") as u8

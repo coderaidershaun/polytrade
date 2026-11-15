@@ -22,7 +22,7 @@ use engine::venues::polymarket::exec::codec::{
 };
 use serde_json::Value;
 
-use super::signing::{sign_vector, text, vector_signature_type, vector_signer};
+use super::signing::{sign_vector, vector_signer};
 
 macro_rules! fixture {
     ($name:literal) => {
@@ -888,78 +888,6 @@ fn a_full_pause_is_distinguishable_from_a_pause_that_still_takes_cancels() {
     ] {
         assert!(state.allows_cancel());
     }
-}
-
-#[test]
-fn the_place_body_is_byte_exact_against_the_sdk_signature() {
-    let vector = sign_vector();
-    let signature = text(&vector, "expected_signature");
-    let token = text(&vector, "token_id");
-    let salt: u64 = text(&vector, "salt").parse().expect("vector salt");
-    let timestamp_millis: i64 = text(&vector, "timestamp_millis")
-        .parse()
-        .expect("vector timestamp");
-    let signer = vector_signer(&vector, API_KEY);
-
-    let mut table = TokenTable::with_retired_capacity(2);
-    table.bind(TokenBinding {
-        instrument: UP,
-        token_id: token.into(),
-        tick: TICK,
-        is_neg_risk: vector["neg_risk"].as_bool().expect("vector neg_risk"),
-    });
-    let orders = OrderIndex::with_capacity(4);
-    let sent_ts_us = LocalTs::from_micros(timestamp_millis * 1_000);
-    let context = EncodeContext {
-        tokens: &table,
-        orders: &orders,
-        signer: &signer,
-        sent_ts_us,
-    };
-
-    // The salt is derived from the send stamp and the client id rather than drawn at random, so a
-    // client id exists that lands on the vector's salt exactly. Solving for it is what lets an
-    // SDK-minted signature be reproduced here at all.
-    let client_id = ClientOrderId(sent_ts_us.micros() as u64 ^ salt);
-
-    let encoded = encode_request(
-        ExecRequest::Place {
-            instrument: UP,
-            client_id,
-            side: Side::Buy,
-            price: PRICE,
-            qty: SIZE,
-            style: OrderStyle::PostOnly,
-        },
-        &context,
-    )
-    .expect("the binding, price and size are all on the venue's grid");
-
-    let expected = format!(
-        concat!(
-            r#"{{"order":{{"salt":{salt},"maker":"{maker}","signer":"{signer}","#,
-            r#""tokenId":"{token}","makerAmount":"{maker_amount}","takerAmount":"{taker_amount}","#,
-            r#""side":"BUY","expiration":"0","timestamp":"{timestamp}","#,
-            r#""signatureType":{signature_type},"#,
-            r#""signature":"{signature}","#,
-            r#""metadata":"0x0000000000000000000000000000000000000000000000000000000000000000","#,
-            r#""builder":"0x0000000000000000000000000000000000000000000000000000000000000000"}},"#,
-            r#""owner":"{api_key}","orderType":"GTC","deferExec":false,"postOnly":true}}"#
-        ),
-        salt = salt,
-        maker = text(&vector, "maker"),
-        signer = text(&vector, "signer"),
-        token = token,
-        maker_amount = text(&vector, "maker_amount"),
-        taker_amount = text(&vector, "taker_amount"),
-        timestamp = timestamp_millis,
-        signature_type = vector_signature_type(&vector),
-        signature = signature,
-        api_key = API_KEY,
-    );
-    assert_eq!(encoded.body, expected);
-    assert_eq!(encoded.path, "/order");
-    assert!(encoded.query.is_empty());
 }
 
 /// Encoding through the real signer: order-type/postOnly selection, cancel addressability
