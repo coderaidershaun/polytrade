@@ -86,7 +86,7 @@ fn parse_depth_diffs(fixture: &str, rule: ChainRule) -> Vec<DepthDiff> {
         .collect()
 }
 
-fn synthetic_snapshot(last_update_id: u64) -> DepthSnapshot {
+pub(crate) fn synthetic_snapshot(last_update_id: u64) -> DepthSnapshot {
     DepthSnapshot {
         instrument: INSTRUMENT,
         last_update_id,
@@ -96,7 +96,7 @@ fn synthetic_snapshot(last_update_id: u64) -> DepthSnapshot {
     }
 }
 
-fn synthetic_diff(
+pub(crate) fn synthetic_diff(
     first_update_id: u64,
     final_update_id: u64,
     prev_final_update_id: Option<u64>,
