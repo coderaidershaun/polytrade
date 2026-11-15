@@ -1,12 +1,21 @@
-//! Polymarket names an order only in its placement answer. These tests hold how the edge ties a
-//! venue id to an order of this run, and that it never takes an order it cannot tie to exactly one.
+//! Polymarket names an order only in its placement answer. These tests hold how the edge ties a venue
+//! id to an order of this run, holds a frame until it can, and never takes an order it cannot tie.
 
 use std::cell::Cell;
 
-use engine::msg::exec::{ExecCommand, Provenance, VenueOrderStatus};
+use engine::msg::exec::{
+    ExecCommand, ExecEvent, ExecKind, OrderStyle, Provenance, VenueOrderStatus,
+};
 use engine::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
-use engine::venues::exec::{ExecCore, ExecEffect, ExecRequest, MirroredOrder, RequestId};
-use engine::venues::polymarket::exec::codec::UnmappedOrder;
+use engine::msg::time::{DurationUs, LocalTs};
+use engine::venues::exec::{
+    ExecCore, ExecEffect, ExecRequest, ExecSession, MirroredOrder, RequestId, SessionSetup,
+};
+use engine::venues::polymarket::exec::codec::{
+    DecodeContext, HttpAnswer, IgnoredReason, KnownOrder, OrderIndex, OrdersRead,
+    PlaceRequestContext, StreamEvent, TokenBinding, TokenTable, UnmappedOrder, VenueAnswer,
+    decode_orders_page, decode_place, decode_stream_frame,
+};
 use engine::venues::polymarket::exec::correlate::{
     DelayedOrders, HeldFrame, PendingFrames, UnmappedVerdict, WithheldCancel, classify_unmapped,
 };
@@ -15,6 +24,8 @@ use proptest::prelude::*;
 use proptest::test_runner::{Config, TestRunner};
 
 use crate::engine_support::ts as at;
+use crate::exec_support::SentEvents;
+use crate::venues::exec::obligations::{Session, send};
 
 const UP: InstrumentId = InstrumentId(0);
 const DOWN: InstrumentId = InstrumentId(1);
@@ -460,4 +471,305 @@ fn held_frames_and_taker_hold_obey_the_named_facts() {
     delayed.on_delayed(other, at(0));
     delayed.forget(other);
     assert_eq!(delayed.held_until(other, at(1)), None);
+}
+
+macro_rules! fixture {
+    ($name:literal) => {
+        include_str!(concat!(
+            "../../../../fixtures/polymarket/exec/",
+            $name,
+            ".json"
+        ))
+    };
+}
+
+/// The names that the committed payloads of the venue carry: the token of the up outcome, the venue
+/// id of the order, and the api key that each payload names as its owner, which is no key.
+const UP_TOKEN: &str =
+    "112440684578249703625547365250874526064395690274269051885028145282946008600017";
+const VENUE_ORDER: &str = "0x3f1c9b4a72e5d08a1c6b3fd2094e7a5b81c02d6e9fa473b5c8e10d92a4f67b3c";
+const API_KEY: &str = "b1f2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+
+const OURS: ClientOrderId = ClientOrderId(0x6a64_f040_000c_0001);
+const PLACED_AT: LocalTs = LocalTs::from_micros(1_786_046_862_000_000);
+const INFLIGHT_TIMEOUT: DurationUs = DurationUs::from_millis(5_000);
+
+fn after(micros: i64) -> LocalTs {
+    PLACED_AT + DurationUs::from_micros(micros)
+}
+
+/// The buy of 10 at 0.52 that each payload is written around.
+fn place_request() -> PlaceRequestContext {
+    PlaceRequestContext {
+        instrument: UP,
+        client_id: OURS,
+        side: Side::Buy,
+        price: cents(52),
+        qty: shares(10),
+    }
+}
+
+/// The edge as its actor drives it: the codec, the index of venue ids, the held frames, and the
+/// session, each called in the order that the actor calls them.
+struct Edge {
+    tokens: TokenTable,
+    orders: OrderIndex,
+    pending: PendingFrames,
+    session: Session,
+    /// Each event that the edge folds into its session and forwards to its input queue.
+    folded: Vec<ExecEvent>,
+}
+
+impl Edge {
+    /// Quoting, with the placement of [`OURS`] sent and its answer not here.
+    fn with_placement_sent() -> Self {
+        let mut tokens = TokenTable::with_retired_capacity(4);
+        tokens.bind(TokenBinding {
+            instrument: UP,
+            token_id: UP_TOKEN.into(),
+            tick: cents(1),
+            is_neg_risk: false,
+        });
+        let mut session = ExecSession::new(SessionSetup {
+            venue: "polymarket",
+            core: ExecCore::with_limits(8, 32),
+            instruments: vec![UP],
+            events: SentEvents::default(),
+            inflight_timeout: INFLIGHT_TIMEOUT,
+        });
+        assert_eq!(
+            session.connect().len(),
+            1,
+            "a connect subscribes the stream"
+        );
+        let resync_seq = session.begin_pass(1);
+        assert!(session.resync.on_read(resync_seq));
+        session.finish_pass();
+        assert!(session.arm_readiness(PLACED_AT));
+        let request = place_request();
+        let place = ExecCommand::Place {
+            instrument: request.instrument,
+            client_id: request.client_id,
+            side: request.side,
+            price: request.price,
+            qty: request.qty,
+            style: OrderStyle::PostOnly,
+        };
+        assert_eq!(send(&mut session, place, PLACED_AT).len(), 1);
+        Self {
+            tokens,
+            orders: OrderIndex::with_capacity(16),
+            pending: PendingFrames::new(),
+            session,
+            folded: Vec::new(),
+        }
+    }
+
+    fn context(&self, at: LocalTs) -> DecodeContext<'_> {
+        DecodeContext {
+            tokens: &self.tokens,
+            orders: &self.orders,
+            api_key: API_KEY,
+            received_ts_us: at,
+        }
+    }
+
+    /// A frame of the user stream: folded when it names a known order, else held.
+    fn on_frame(&mut self, text: &str, at: LocalTs) {
+        if self.consume(text, at) {
+            self.pending.hold(text.to_owned(), at);
+        }
+    }
+
+    /// Whether the frame names an order that the index cannot map yet.
+    fn consume(&mut self, text: &str, at: LocalTs) -> bool {
+        match decode_stream_frame(text, &self.context(at)).expect("committed payload decodes") {
+            StreamEvent::Order(event) => {
+                self.fold(event);
+                false
+            }
+            StreamEvent::Ignored(IgnoredReason::UnknownOrder) => true,
+            other => panic!("an order frame names a known or an unknown order, got {other:?}"),
+        }
+    }
+
+    /// The only answer that names the order: bind the venue id, re-read each held frame, then fold
+    /// the answer itself.
+    fn on_place_answer(&mut self, at: LocalTs) {
+        let answer = HttpAnswer {
+            status: 200,
+            body: fixture!("place_live"),
+        };
+        let decoded = decode_place(answer, &place_request(), &self.context(at))
+            .expect("committed payload decodes");
+        let VenueAnswer::Answered(outcome) = decoded else {
+            panic!("a placement that rests is answered, not refused as venue state");
+        };
+        let placed = outcome.placed.expect("a live placement names its order");
+        assert!(
+            self.session
+                .inflight
+                .take_where(|entry| matches!(
+                    entry.request,
+                    ExecRequest::Place { client_id, .. } if client_id == placed.client_id
+                ))
+                .is_some(),
+            "the answer settles the placement in flight"
+        );
+        let known = KnownOrder {
+            client_id: placed.client_id,
+            instrument: UP,
+        };
+        self.orders
+            .record(&placed.venue_order_id, known)
+            .expect("the index has room");
+        for frame in self.pending.drain() {
+            if self.consume(&frame.text, at) {
+                self.pending.re_hold(frame);
+            }
+        }
+        self.fold(outcome.event);
+    }
+
+    fn fold(&mut self, event: ExecEvent) {
+        let mut outgoing = Vec::new();
+        self.session
+            .fold(&event, 0, &mut outgoing)
+            .expect("the mirror holds the order");
+        self.folded.push(event);
+    }
+
+    /// The cumulative fill of [`OURS`] that each folded report states.
+    fn fills(&self) -> Vec<Qty> {
+        self.folded
+            .iter()
+            .filter(|event| event.kind == ExecKind::ReportTrade && event.client_id == OURS)
+            .map(|event| event.cumulative_qty)
+            .collect()
+    }
+
+    fn acks(&self) -> usize {
+        self.folded
+            .iter()
+            .filter(|event| event.kind == ExecKind::AckPlaced && event.client_id == OURS)
+            .count()
+    }
+}
+
+/// The venue can report a fill of an order before its placement answer names the order, because
+/// the stream and the answer travel apart. A frame that the edge dropped would lose the fill, and a
+/// frame that it folded two times from its hold would state the fill again. So a frame of an
+/// order with no mapping is held, comes back one time when the answer binds the order, and folds
+/// once; and a frame that no answer ever explains leaves at its lifetime, with a count, so the read
+/// of open orders decides.
+#[test]
+fn fill_frame_before_place_answer_folds_once() {
+    let update = fixture!("ws_order_update_partial");
+    let four = shares(4);
+
+    let mut frame_first = Edge::with_placement_sent();
+    frame_first.on_frame(update, after(1_000));
+    assert_eq!(
+        frame_first.pending.len(),
+        1,
+        "the frame names no mapping yet, so it is held"
+    );
+    assert!(frame_first.fills().is_empty());
+    frame_first.on_place_answer(after(2_000));
+    assert_eq!(
+        frame_first
+            .orders
+            .resolve(VENUE_ORDER)
+            .map(|known| known.client_id),
+        Some(OURS)
+    );
+    assert!(
+        frame_first.pending.is_empty(),
+        "the held frame comes back when the answer binds it"
+    );
+    assert_eq!(frame_first.fills(), [four], "one fill folds for the order");
+    assert_eq!(frame_first.acks(), 1);
+
+    let mut answer_first = Edge::with_placement_sent();
+    answer_first.on_place_answer(after(1_000));
+    answer_first.on_frame(update, after(2_000));
+    assert!(
+        answer_first.pending.is_empty(),
+        "a frame of a mapped order is never held"
+    );
+    assert_eq!(answer_first.fills(), [four]);
+    assert_eq!(answer_first.acks(), 1);
+
+    let mut twice = Edge::with_placement_sent();
+    twice.on_frame(update, after(1_000));
+    twice.on_frame(update, after(1_500));
+    assert_eq!(twice.pending.len(), 2);
+    twice.on_place_answer(after(2_000));
+    assert!(twice.pending.is_empty());
+    assert_eq!(
+        twice.fills(),
+        [four, four],
+        "each delivery folds once and restates the venue's total, so the fill of 4 counts once"
+    );
+    assert_eq!((twice.pending.dropped(), twice.pending.abandoned()), (0, 0));
+
+    let lifetime = POLYMARKET_FACTS.held_frame_lifetime.micros();
+    let mut frame_only = Edge::with_placement_sent();
+    frame_only.on_frame(update, after(1_000));
+    let expired = frame_only.session.expire(after(INFLIGHT_TIMEOUT.micros()));
+    assert!(
+        expired.has_lost_placement,
+        "the answer never came, so the placement is in doubt"
+    );
+    assert!(
+        frame_only
+            .pending
+            .expired(after(1_000 + lifetime - 1))
+            .is_empty()
+    );
+    assert_eq!(frame_only.pending.expired(after(1_000 + lifetime)).len(), 1);
+    assert_eq!(
+        frame_only.pending.abandoned(),
+        1,
+        "a frame that leaves at its lifetime is counted"
+    );
+    assert!(
+        frame_only.fills().is_empty(),
+        "no answer bound it, so it folded nothing"
+    );
+
+    let read = HttpAnswer {
+        status: 200,
+        body: fixture!("data_orders_wrapped"),
+    };
+    let orders_read = OrdersRead {
+        instrument: UP,
+        recon_seq: 0,
+    };
+    let VenueAnswer::Answered(page) = decode_orders_page(
+        read,
+        orders_read,
+        &frame_only.context(after(1_000 + lifetime)),
+    )
+    .expect("committed payload decodes") else {
+        panic!("a page of open orders is answered, not refused as venue state");
+    };
+    let [resting] = page.unmapped.as_slice() else {
+        panic!(
+            "the read names one order of a bound token with no mapping: {:?}",
+            page.unmapped
+        );
+    };
+    assert_eq!(
+        (&*resting.venue_order_id, resting.filled),
+        (VENUE_ORDER, four)
+    );
+    let verdict = classify_unmapped(frame_only.session.core.mirror(), resting, |client_id| {
+        frame_only.orders.venue_order_id(client_id).is_some()
+    });
+    assert_eq!(
+        verdict,
+        UnmappedVerdict::Adopt(OURS),
+        "the read decides: the one lost placement equals the order the venue holds"
+    );
 }
