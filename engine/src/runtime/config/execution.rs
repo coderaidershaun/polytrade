@@ -12,7 +12,7 @@ use crate::msg::ids::fixed_mantissa;
 use crate::msg::labelled_enum::labelled_enum;
 
 use super::simulated::{CheckedSimBlock, SimConfig, SimProofs};
-use super::{ConfigError, MAX_OPERATIONAL_DURATION_MS, RunIdentity};
+use super::{ConfigError, MAX_OPERATIONAL_DURATION_MS};
 
 /// The declarative ladder is fixed-size so quote publication, reconciliation and the UI all share
 /// one compile-time bound. Configuration chooses how much of it is active, never its allocation.
@@ -69,18 +69,6 @@ impl ExecutionMode {
             Some(ExecutionMode::Sim) => "SIM",
             Some(ExecutionMode::Live) => "LIVE",
         }
-    }
-
-    /// Separates simulated artifacts while preserving existing live paths.
-    pub fn artifact_stem(mode: Option<Self>, identity: &RunIdentity) -> String {
-        match mode {
-            Some(ExecutionMode::Sim) => format!("{identity}-sim"),
-            _ => identity.to_string(),
-        }
-    }
-
-    pub fn artifact_segment(mode: Option<Self>) -> Option<&'static str> {
-        matches!(mode, Some(ExecutionMode::Sim)).then_some("sim")
     }
 }
 

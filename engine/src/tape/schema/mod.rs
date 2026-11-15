@@ -9,7 +9,6 @@ use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::msg::time::LocalTs;
-use crate::runtime::config::ExecutionMode;
 
 use self::column::Column;
 use super::RunMeta;
@@ -47,7 +46,7 @@ pub(super) fn footer_metadata(meta: &RunMeta) -> Vec<(String, String)> {
         // `absent` covers missing configuration and legacy files.
         (
             "execution_mode".to_owned(),
-            ExecutionMode::footer_value(meta.execution_mode).to_owned(),
+            meta.artifacts.footer_mode().to_owned(),
         ),
         ("fixed_scale".to_owned(), meta.fixed_scale.to_string()),
         (

@@ -9,6 +9,7 @@ use std::path::Path;
 use engine::msg::failure::{FailureClass, Halt};
 use engine::msg::ids::{Notional, Price, Qty};
 use engine::msg::time::LocalTs;
+use engine::runtime::artifacts::RunArtifacts;
 use engine::runtime::config::{
     Config, ConfigError, ExecutionMode, NoParams, RunIdentity, SourceSpec,
 };
@@ -16,7 +17,7 @@ use engine::runtime::exposure::ExposureError;
 #[cfg(feature = "otlp")]
 use engine::runtime::otlp::OtlpError;
 use engine::runtime::registry::{BinanceLimits, Registry};
-use engine::runtime::{ExecutionLease, Preflight, StartError, exposure};
+use engine::runtime::{ExecutionLease, Preflight, StartError};
 use engine::venues::VenueError;
 use engine::venues::binance::exec::ProbeError;
 use engine::venues::binance::preflight::{ScaleError, SymbolScales};
@@ -349,7 +350,7 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
     );
 
     // E7: the position file cannot be read.
-    let ledger = exposure::file_path(&state, &identity(), Some(ExecutionMode::Sim));
+    let ledger = RunArtifacts::new(Some(ExecutionMode::Sim), &identity()).exposure_path(&state);
     fs::write(&ledger, "not a ledger").expect("the test writes the position file");
     let unreadable = refusal(&sim_document(&state, ""), stamped, &state);
     assert!(

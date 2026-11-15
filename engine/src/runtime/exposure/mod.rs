@@ -11,7 +11,8 @@ use crate::hot::digest::digest_fields;
 use crate::msg::failure::{FailureClass, Halt};
 use crate::msg::ids::{AssetId, InstrumentId, Qty};
 use crate::msg::time::LocalTs;
-use crate::runtime::config::{ExecutionMode, RunIdentity};
+use crate::runtime::artifacts::RunArtifacts;
+use crate::runtime::config::RunIdentity;
 use crate::runtime::registry::Registry;
 use crate::warn;
 
@@ -254,14 +255,6 @@ impl ExposureError {
     }
 }
 
-/// Adds `-sim` to simulated exposure filenames.
-pub fn file_path(dir: &Path, identity: &RunIdentity, mode: Option<ExecutionMode>) -> PathBuf {
-    dir.join(format!(
-        "{}.json",
-        ExecutionMode::artifact_stem(mode, identity)
-    ))
-}
-
 /// Load position, resolved to this run's ids. A missing file is a cold start, not a fault.
 ///
 /// # Errors
@@ -271,9 +264,9 @@ pub fn load(
     dir: &Path,
     identity: &RunIdentity,
     registry: &Registry,
-    mode: Option<ExecutionMode>,
+    artifacts: &RunArtifacts,
 ) -> Result<ExposureState, ExposureError> {
-    let path = file_path(dir, identity, mode);
+    let path = artifacts.exposure_path(dir);
     let Some(document) = file::read(&path)? else {
         return Ok(ExposureState::default());
     };

@@ -6,6 +6,7 @@ use std::path::Path;
 use engine::hot::sink::ExposureSink;
 use engine::msg::ids::{InstrumentId, Qty};
 use engine::msg::time::LocalTs;
+use engine::runtime::artifacts::RunArtifacts;
 use engine::runtime::config::{Config, ExecutionMode, NoParams, RunIdentity};
 use engine::runtime::exposure::{
     ExposureError, ExposureHandle, ExposureSnapshot, ExposureState, ExposureWriter,
@@ -119,7 +120,7 @@ pub fn spawn_reporting_writer(
     let handle = ExposureWriter::spawn(ExposureWriterSetup {
         dir: dir.to_path_buf(),
         identity: identity(),
-        mode: Some(ExecutionMode::Live),
+        artifacts: RunArtifacts::new(Some(ExecutionMode::Live), &identity()),
         registry,
         status,
         restored,
@@ -137,7 +138,12 @@ pub fn drain_writer(writer: ExposureHandle) -> Result<(), ExposureError> {
 }
 
 pub fn load_live(root: &Path, registry: &Registry) -> Result<ExposureState, ExposureError> {
-    load(root, &identity(), registry, Some(ExecutionMode::Live))
+    load(
+        root,
+        &identity(),
+        registry,
+        &RunArtifacts::new(Some(ExecutionMode::Live), &identity()),
+    )
 }
 
 /// Every other output sink drops when it is full, because a dropped frame is one never sent. A
