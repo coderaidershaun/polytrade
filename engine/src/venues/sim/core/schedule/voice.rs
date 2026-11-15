@@ -1,6 +1,6 @@
 //! Typed simulated venue answers before wire encoding.
 
-use crate::msg::exec::VenueOrderStatus;
+use crate::msg::exec::{OrderStyle, VenueOrderStatus};
 use crate::msg::ids::{ClientOrderId, Qty, TradeId};
 use crate::msg::time::LocalTs;
 
@@ -19,6 +19,7 @@ pub enum Rejection {
     AmendBudgetSpent,
     AmendQuantityIncrease,
     AmendFilterFailure,
+    UnmodelledStyle { style: OrderStyle },
 }
 
 impl Rejection {
@@ -27,14 +28,14 @@ impl Rejection {
             RefusalReason::TickGrid
             | RefusalReason::StepGrid
             | RefusalReason::MinQty
-            | RefusalReason::MinNotional
-            | RefusalReason::StyleNotPermitted => Rejection::FilterFailure,
+            | RefusalReason::MinNotional => Rejection::FilterFailure,
             RefusalReason::MaxOrders => Rejection::TooManyOrders,
             RefusalReason::InsufficientFunds => Rejection::InsufficientBalance,
             RefusalReason::NoSuchOrder | RefusalReason::OrderGone => Rejection::CancelRejected,
             RefusalReason::AmendBudgetSpent => Rejection::AmendBudgetSpent,
             RefusalReason::AmendQuantityIncrease => Rejection::AmendQuantityIncrease,
             RefusalReason::AmendFilterFailure => Rejection::AmendFilterFailure,
+            RefusalReason::UnmodelledStyle { style } => Rejection::UnmodelledStyle { style },
         }
     }
 

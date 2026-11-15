@@ -138,8 +138,12 @@ impl RequestFold<'_> {
     }
 
     fn refuse_placement(&self, placement: &Placement) -> Option<RefusalReason> {
+        // SMELL: the simulator refuses every immediate order, so a flatten never fills in a
+        // simulated run.
         if placement.style != OrderStyle::PostOnly {
-            return Some(RefusalReason::StyleNotPermitted);
+            return Some(RefusalReason::UnmodelledStyle {
+                style: placement.style,
+            });
         }
         self.limits.refuse(placement.price, placement.qty)
     }
