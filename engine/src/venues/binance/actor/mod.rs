@@ -2,6 +2,7 @@
 //! queued_ts_us.
 
 mod depth_resync;
+mod frame_faults;
 mod kline_backfill;
 mod liveness;
 mod tap;
@@ -25,10 +26,10 @@ use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::fault::MarketDataError;
 use crate::venues::edge::lane::{Flow, Lane, LaneSpec, SessionEnd, run_lane};
 use crate::venues::edge::rest_quiet::SharedRestQuiet;
-use crate::{info, warn, warn_repeating};
+use crate::{info, warn};
 
 use super::kline::KlineSequencer;
-use super::parse::{ParseContext, ParseError, parse_agg_trade, parse_combined_frame};
+use super::parse::{ParseContext, parse_agg_trade, parse_combined_frame};
 use super::rest::{BinanceEnv, RestClient, RestError};
 use super::ws::{self, StreamCategory};
 use crate::venues::edge::socket::Socket;
@@ -264,38 +265,6 @@ impl Actor {
             message.header.queued_ts_us = self.clock.now();
             self.producer.push(message);
         }
-    }
-
-    fn parsed<T>(&mut self, result: Result<T, ParseError>) -> Option<T> {
-        result.map_err(|error| self.on_parse_error(error)).ok()
-    }
-
-    #[cold]
-    fn on_parse_error(&mut self, error: ParseError) {
-        if let ParseError::Decode(fault) = &error
-            && let Some(fault) = MarketDataError::of_decimal_fault(self.producer.source_id(), fault)
-        {
-            self.fault.get_or_insert(fault);
-            return;
-        }
-        warn_repeating!(
-            self.malformed_frames,
-            "binance adapter {} dropped {} malformed frames (latest: {error})",
-            self.label,
-            self.malformed_frames
-        );
-    }
-
-    /// Counted apart from malformed frames: the venue sent something well-formed and this actor has
-    /// nowhere to put it, which is a subscription or registry fault rather than a wire fault.
-    #[cold]
-    pub(super) fn on_unroutable_frame(&mut self, subject: std::fmt::Arguments<'_>) {
-        warn_repeating!(
-            self.unroutable_frames,
-            "binance adapter {} has no sequencer for {subject} — {} such frames dropped",
-            self.label,
-            self.unroutable_frames
-        );
     }
 
     #[cold]
