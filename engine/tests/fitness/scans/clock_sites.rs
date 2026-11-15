@@ -740,8 +740,8 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 115] = [
     ),
     (
         "engine/src/venues/polymarket/exec/preflight.rs",
-        "local_unix_secs",
-        &["std::time::SystemTime::now"],
+        "preflight_polymarket",
+        &["engine::msg::time::wall_clock_now"],
     ),
     (
         "engine/src/venues/polymarket/exec/probe/mod.rs",

@@ -1,6 +1,7 @@
 //! The one place where a run's choices of venue are made: which scale check and probe run, which
 //! execution edge starts, and which actor serves each producer group.
 
+use std::path::Path;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -10,6 +11,7 @@ use crate::msg::persist::RotationRow;
 use crate::msg::time::EngineClock;
 use crate::runtime::config::{Config, SourceSpec, VenueMarket};
 use crate::runtime::registry::Registry;
+use crate::runtime::secrets::EnvFile;
 use crate::runtime::shutdown::{FatalSignal, RunStateCell, TaskHandle};
 use crate::venues::binance::actor::{BinanceAdapter, BinanceAdapterContext};
 use crate::venues::binance::exec::{
@@ -105,7 +107,9 @@ impl ExecutionVenue {
                 })
             }
             SourceSpec::Polymarket { .. } => {
-                let gate = preflight_polymarket()
+                let secrets = EnvFile::load(Path::new(EnvFile::DEFAULT_PATH))
+                    .map_err(|source| VenueError::PolymarketGate(source.into()))?;
+                let gate = preflight_polymarket(&secrets)
                     .await
                     .map_err(VenueError::PolymarketGate)?;
                 Ok(Self::Polymarket(Box::new(gate)))
