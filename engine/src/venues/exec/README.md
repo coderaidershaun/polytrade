@@ -110,8 +110,11 @@ engine branches solely on the normalised enums.
      `venue_update_ts_ms` that advances only when money moved. A delta stream is converted
      to snapshots at the edge; a lagging balance read is never presented as fresh.
    - Timeouts and ambiguity reconcile — a status probe resolves them; nothing is re-sent.
-     Re-sending risks two live orders, which no reconciliation can undo. A probe that the edge
-     sends on its own answers with `recon_seq` 0: the hot side numbers its own reads, and only
+     Re-sending risks two live orders, which no reconciliation can undo. An answer that says the
+     outcome of an order action is unknown is ambiguous too (Binance -1006 and -1007 on a
+     placement, a cancel, or an amend): the edge reads the order before any second action, and
+     the cancel latch stays shut until that read answers. A probe that the edge sends on its own
+     answers with `recon_seq` 0: the hot side numbers its own reads, and only
      an answer that echoes one of them counts toward that read. The deadline is
      `execution.inflight_timeout_ms`, the one value that the hot slot and the in-flight table
      both read (`SessionSetup.inflight_timeout`). A venue's order client gives its HTTP verdict

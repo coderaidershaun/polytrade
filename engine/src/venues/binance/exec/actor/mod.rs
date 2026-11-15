@@ -8,6 +8,7 @@ mod inbound;
 mod poll;
 mod reconcile;
 mod rest;
+mod rest_failure;
 mod resync;
 
 use std::time::Duration;

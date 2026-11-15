@@ -6,8 +6,8 @@
 //! the client id to a [`Provenance`], which decides whether the engine may touch an order.
 
 use engine::msg::exec::{
-    AccountChunkKind, ExecEvent, ExecKind, Liquidity, OrderStyle, Provenance, RejectClass,
-    VenueOrderStatus,
+    AccountChunkKind, CancelReason, ExecCommand, ExecEvent, ExecKind, Liquidity, OrderStyle,
+    Provenance, RejectClass, VenueOrderStatus,
 };
 use engine::msg::ids::VenueId;
 use engine::msg::ids::{
@@ -24,10 +24,14 @@ use engine::venues::binance::exec::{
 };
 use engine::venues::binance::rest::OrderRecord;
 use engine::venues::edge::decode::DecimalFault;
-use engine::venues::exec::{EngineIdentity, ExecRequest, OrderOwnership, TeTag, TimeoutFallout};
+use engine::venues::exec::{
+    EngineIdentity, ExecEffect, ExecRequest, OrderOwnership, Outgoing, TeTag, TimeoutFallout,
+};
 use proptest::prelude::*;
 
-use crate::venues::binance::fake_venue::FakeVenue;
+use crate::venues::binance::fake_venue::{FakeVenue, exec_events};
+use crate::venues::binance::obligations::BinanceEdge;
+use crate::venues::exec::obligations::{Session, place, quoting_session, send};
 
 const NOW: LocalTs = LocalTs::from_micros(1_785_000_000_700_000);
 
@@ -400,21 +404,20 @@ fn every_code_maps_to_the_class_the_engine_may_act_on() {
             Placement,
             RejectClass::Ambiguous,
         ),
-        // The SAME two codes on a cancel stay StillLive, and the asymmetry is the point: a
-        // cancel re-sent after an unknown outcome costs one routine -2011, while a placement
-        // re-derived after one costs a second live order. Probing instead would hold the
-        // cancel latch shut on an order that is still resting.
+        // The same two codes on a cancel are Ambiguous too. The cancel can have run, so the edge
+        // reads the order before any second cancel, and never sends the cancel again. The read
+        // that answers re-arms the latch of an order that still rests.
         (
             -1006,
             "An unexpected response was received from the message bus. Execution status unknown.",
             Cancellation,
-            RejectClass::StillLive,
+            RejectClass::Ambiguous,
         ),
         (
             -1007,
             "Timeout waiting for response from backend server. Send status unknown; execution status unknown.",
             Cancellation,
-            RejectClass::StillLive,
+            RejectClass::Ambiguous,
         ),
         // The venue's ONLY statement about an amend budget. Unclassified it fell to Fatal, so
         // the first order to exhaust its amends would halt the run.
@@ -1167,4 +1170,140 @@ fn account_event_never_touches_instrument_zero() {
         "a refused subscribe raises no order event, so it has nothing to attribute: {:?}",
         refused.events
     );
+}
+
+/// The words of Binance for an answer that leaves the outcome of a request unknown.
+const EXECUTION_STATUS_UNKNOWN: [(i32, &str); 2] = [
+    (
+        -1006,
+        "An unexpected response was received from the message bus. Execution status unknown.",
+    ),
+    (
+        -1007,
+        "Timeout waiting for response from backend server. Send status unknown; execution status unknown.",
+    ),
+];
+
+/// An error answer of the WebSocket API, in the shape of the recorded refusal of a cancel.
+fn refusal(code: i32, message: &str) -> String {
+    fixture!("error_2011_cancel_rejected")
+        .replace("-2011", &code.to_string())
+        .replace("Unknown order sent.", message)
+}
+
+/// A session of the edge in which `ORDER_A` rests at the fake venue.
+fn resting_session(venue: &mut FakeVenue) -> Session {
+    let mut session = quoting_session::<BinanceEdge>();
+    for request in send(&mut session, place::<BinanceEdge>(ORDER_A), NOW) {
+        fold_answer(&mut session, &exec_events(&venue.submit(request, NOW)));
+    }
+    assert!(venue.is_resting(ORDER_A));
+    session
+}
+
+/// The requests that the edge sends when it folds the events of one answer.
+fn fold_answer(session: &mut Session, events: &[ExecEvent]) -> Vec<ExecRequest> {
+    let mut outgoing = Vec::new();
+    for event in events {
+        session
+            .fold(event, 0, &mut outgoing)
+            .expect("the session raises no fault here");
+    }
+    outgoing
+        .into_iter()
+        .filter_map(|Outgoing { effect, .. }| match effect {
+            ExecEffect::Send { request, .. } => Some(request),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A cancel or an amend that Binance answers with "execution status unknown" can have run at the
+/// venue. The edge reads the order back, and sends no second cancel or amend before that read
+/// answers: a second one would send again an action that can already be done.
+#[test]
+fn an_unknown_outcome_of_a_cancel_over_the_websocket_reads_before_any_second_cancel() {
+    let instrument = InstrumentId(0);
+    let read_of_a = ExecRequest::OrderStatus {
+        instrument,
+        client_id: ORDER_A,
+    };
+    let cancel_a = ExecCommand::Cancel {
+        instrument,
+        client_id: ORDER_A,
+    };
+    for (code, message) in EXECUTION_STATUS_UNKNOWN {
+        let mut venue = venue();
+        let mut session = resting_session(&mut venue);
+        let [cancel] = send(&mut session, cancel_a, NOW)[..] else {
+            panic!("{code}: one cancel goes out");
+        };
+
+        let answer = decoded(&refusal(code, message), cancel, &venue).events;
+        assert_eq!(answer.len(), 1, "{code}: {answer:?}");
+        assert_eq!(answer[0].client_id, ORDER_A);
+        assert_eq!(
+            answer[0].reject,
+            Some(RejectClass::Ambiguous),
+            "code {code} answering a cancel"
+        );
+        assert_eq!(
+            fold_answer(&mut session, &answer),
+            [read_of_a],
+            "{code}: one read of the order, and no second cancel"
+        );
+
+        assert_eq!(
+            send(&mut session, cancel_a, NOW),
+            [],
+            "{code}: a second cancel before the read answers"
+        );
+        let sweep = ExecCommand::CancelOurs {
+            instrument,
+            reason: CancelReason::Halt,
+        };
+        let swept = send(&mut session, sweep, NOW);
+        assert!(
+            swept.iter().all(|request| *request == read_of_a),
+            "{code}: a sweep before the read answers reads the order and sends no cancel: {swept:?}"
+        );
+
+        // The read answers that the order rests. On that answer the actor of the edge re-arms the
+        // cancel, and only then does a cancel go out again.
+        let read = exec_events(&venue.submit(read_of_a, NOW));
+        assert!(
+            read.iter()
+                .any(|event| event.status == Some(VenueOrderStatus::New)),
+            "{code}: {read:?}"
+        );
+        fold_answer(&mut session, &read);
+        session.core.re_arm_cancel(ORDER_A);
+        assert_eq!(send(&mut session, cancel_a, NOW), [cancel], "{code}");
+    }
+
+    for (code, message) in EXECUTION_STATUS_UNKNOWN {
+        let mut venue = venue();
+        let mut session = resting_session(&mut venue);
+        let amend_a = ExecCommand::AmendQty {
+            instrument,
+            client_id: ORDER_A,
+            qty: Qty::from_mantissa(6_000),
+        };
+        let [amend] = send(&mut session, amend_a, NOW)[..] else {
+            panic!("{code}: one amend goes out");
+        };
+
+        let answer = decoded(&refusal(code, message), amend, &venue).events;
+        assert_eq!(answer.len(), 1, "{code}: {answer:?}");
+        assert_eq!(
+            answer[0].reject,
+            Some(RejectClass::Ambiguous),
+            "code {code} answering an amend"
+        );
+        assert_eq!(
+            fold_answer(&mut session, &answer),
+            [read_of_a],
+            "{code}: one read of the order, and no second amend"
+        );
+    }
 }

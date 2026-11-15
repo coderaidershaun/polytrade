@@ -500,7 +500,7 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 115] = [
         &["engine::msg::time::EngineClock::now"],
     ),
     (
-        "engine/src/venues/binance/exec/actor/reconcile.rs",
+        "engine/src/venues/binance/exec/actor/rest_failure.rs",
         "on_order_read_failure",
         &["engine::msg::time::EngineClock::now"],
     ),
