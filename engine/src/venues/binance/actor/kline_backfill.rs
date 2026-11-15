@@ -111,7 +111,13 @@ impl Actor {
                 continue;
             };
             let rows = parse_rest_klines(&json, ctx, interval, RestKlineTail::OpenCandleForming);
-            let Some(events) = self.parsed(rows) else { continue };
+            let Some(events) = self.parsed(rows) else {
+                // A recorded fault halts the engine, so no read of another kline goes out first.
+                if self.fault.is_some() {
+                    return;
+                }
+                continue;
+            };
             let mut out = Vec::new();
             if let Some(sequencer) = self.kline_states.get_mut(&key) {
                 sequencer.on_backfill(&events, ctx.received_ts_us, &mut |message| {

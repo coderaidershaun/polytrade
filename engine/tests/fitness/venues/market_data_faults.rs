@@ -16,6 +16,7 @@ const SPOT_TRADES: &str = include_str!("../../../fixtures/binance/spot_aggTrade.
 const POLYMARKET_MARKET: &str = include_str!("../../../fixtures/polymarket/poly_market.jsonl");
 const OVERFLOW: &str = "99999999999.00000000";
 const RECEIVED_US: i64 = 1_784_410_630_200_000;
+const FEED: &str = "binance adapter spot/trades";
 
 fn received() -> LocalTs {
     LocalTs::from_micros(RECEIVED_US)
@@ -78,14 +79,14 @@ fn market_data_faults_halt_the_engine_with_their_reason() {
         );
         assert_eq!(error.fatal_reason(), reason, "{error}");
         let fatal = FatalSignal::new();
-        halt_on_market_data_error(error, &fatal);
+        halt_on_market_data_error(FEED, error, &fatal);
         assert!(fatal.is_tripped(), "{error}");
         assert_eq!(fatal.reason(), Some(reason), "{error}");
     }
 
     let fatal = FatalSignal::new();
-    halt_on_market_data_error(&unreadable, &fatal);
-    halt_on_market_data_error(&exhausted, &fatal);
+    halt_on_market_data_error(FEED, &unreadable, &fatal);
+    halt_on_market_data_error(FEED, &exhausted, &fatal);
     assert_eq!(
         fatal.reason(),
         Some(FatalReason::MarketDataUnreadable {
@@ -134,7 +135,7 @@ fn an_overflowing_decimal_ends_the_feed_with_a_market_data_fault() {
             })
         );
         let fatal = FatalSignal::new();
-        halt_on_market_data_error(&error.expect("a market-data fault"), &fatal);
+        halt_on_market_data_error(FEED, &error.expect("a market-data fault"), &fatal);
         assert_eq!(
             fatal.reason(),
             Some(FatalReason::MarketDataUnreadable { source_id })

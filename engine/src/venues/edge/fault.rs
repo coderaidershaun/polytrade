@@ -61,12 +61,12 @@ impl MarketDataError {
 }
 
 /// The decision that the reconnect loop of a market-data feed takes on a fault of its session: one
-/// ERROR line with the values, then the fatal latch with the typed reason. The latch keeps the first
-/// reason, so a later fault changes nothing.
-pub fn halt_on_market_data_error(error: &MarketDataError, fatal: &FatalSignal) {
+/// ERROR line that names the feed and the values, then the fatal latch with the typed reason. The
+/// latch keeps the first reason, so a later fault changes nothing.
+pub fn halt_on_market_data_error(feed: &str, error: &MarketDataError, fatal: &FatalSignal) {
     match error.failure_class() {
         FailureClass::Halt(Halt::Engine) => {
-            error!("{error}");
+            error!("{feed}: {error}");
             fatal.trip(error.fatal_reason());
         }
         other => unreachable!("a market data fault of class {other:?} has no action at the edge"),

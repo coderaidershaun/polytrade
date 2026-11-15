@@ -62,7 +62,7 @@ pub(crate) async fn run_lane(spec: LaneSpec, mut lane: impl Lane) {
         match lane.session(socket).await {
             SessionEnd::Stopped => return,
             SessionEnd::Halted(error) => {
-                halt_on_market_data_error(&error, &spec.fatal);
+                halt_on_market_data_error(&spec.name, &error, &spec.fatal);
                 return;
             }
             SessionEnd::Parked => {
