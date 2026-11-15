@@ -8,16 +8,21 @@ use engine::msg::exec::{
     Provenance, RejectClass, VenueOrderStatus,
 };
 use engine::msg::ids::{
-    AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId,
+    AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side, TradeId,
+    VenueOrderId,
 };
 use engine::msg::inbound::{InboundMessage, MessageBody};
-use engine::msg::time::LocalTs;
+use engine::msg::time::{DurationUs, LocalTs};
+use engine::runtime::config::FeeBps;
 use engine::venues::binance::exec::{
     ResponseContext, StreamEvent, decode_response, decode_stream_event,
 };
 use engine::venues::exec::ExecRequest;
 use engine::venues::sim::core::orders::SimOrder;
-use engine::venues::sim::core::wallet::FillSettlement;
+use engine::venues::sim::core::wallet::{FillSettlement, SimWalletSetup};
+use engine::venues::sim::core::{
+    InstrumentLimits, RefusalReason, SimVenue, SimVenueSetup, VenueEvent,
+};
 use engine::venues::sim::wire::{Rejection, SimBalance, SimFill, VenueWire};
 
 use crate::engine_support::ts;
@@ -517,15 +522,45 @@ fn fake_venue_scenarios_decode_through_the_codec() {
 }
 
 /// CONTRACT: an order of a style that the simulator cannot model gets a refusal that no venue
-/// sends, code 9,001, with a message that names the style. The live codec of Binance gives it
-/// class `Fatal`, so the engine halts quoting at the first one, as at a venue code it cannot map:
-/// a simulated run whose exits cannot fill must not look like a run.
+/// sends, code 9,001, with a message that names the style, and the venue emits one refusal for each
+/// such placement, which the run summary counts. The live codec of Binance gives it class `Fatal`,
+/// so the engine halts quoting at the first one, as at a venue code it cannot map: a simulated run
+/// whose exits cannot fill must not look like a run.
 #[test]
 fn unmodelled_style_gets_a_named_simulator_refusal() {
-    let venue = FakeVenue::new();
-    let refusal = wire(&venue).refusal(Rejection::UnmodelledStyle {
+    let flatten = ExecRequest::Place {
+        instrument: INSTRUMENT,
+        client_id: ORDER_A,
+        side: Side::Sell,
+        price: PRICE,
+        qty: QTY,
         style: OrderStyle::Immediate,
-    });
+    };
+    let mut simulated = simulated_venue();
+    let refused = refused_placements(&mut simulated, &flatten, 1_000);
+    assert_eq!(
+        refused,
+        [RefusalReason::UnmodelledStyle {
+            style: OrderStyle::Immediate
+        }],
+        "the venue refuses the style it cannot model, once"
+    );
+    let second = ExecRequest::Place {
+        instrument: INSTRUMENT,
+        client_id: ClientOrderId(ORDER_A.0 + 1),
+        side: Side::Sell,
+        price: PRICE,
+        qty: QTY,
+        style: OrderStyle::Immediate,
+    };
+    assert_eq!(
+        refused_placements(&mut simulated, &second, 2_000).len(),
+        1,
+        "each refused placement is one refusal, the input that the run summary counts"
+    );
+
+    let venue = FakeVenue::new();
+    let refusal = wire(&venue).refusal(Rejection::of(refused[0]));
     let body: serde_json::Value = serde_json::from_str(&refusal).expect("the refusal is json");
     assert_eq!(body["error"]["code"], 9_001, "{refusal}");
     let message = body["error"]["msg"]
@@ -536,14 +571,6 @@ fn unmodelled_style_gets_a_named_simulator_refusal() {
         "the refusal names the style: {message}"
     );
 
-    let flatten = ExecRequest::Place {
-        instrument: INSTRUMENT,
-        client_id: ORDER_A,
-        side: Side::Sell,
-        price: PRICE,
-        qty: QTY,
-        style: OrderStyle::Immediate,
-    };
     let events = answer(&refusal, flatten, &venue);
     assert_eq!(
         events.len(),
@@ -600,4 +627,49 @@ fn unmodelled_style_gets_a_named_simulator_refusal() {
         !is_placing(&after, Side::Buy) && !is_placing(&after, Side::Sell),
         "a halted engine places nothing: {after:?}"
     );
+}
+
+/// A simulated venue of one Binance spot instrument. It has seen no market data: a style that it
+/// cannot model is refused when the placement is admitted, before the book is read.
+fn simulated_venue() -> SimVenue {
+    SimVenue::new(SimVenueSetup {
+        instrument: INSTRUMENT,
+        book_capacity: 20,
+        market_inbox_capacity: 64,
+        verdict_retention: DurationUs::from_secs(60),
+        limits: InstrumentLimits {
+            tick: Price::from_mantissa(FIXED_SCALE / 100),
+            step: Qty::from_mantissa(1_000),
+            min_qty: Qty::from_mantissa(1_000),
+            min_notional: Notional::from_mantissa(5 * FIXED_SCALE),
+            max_orders_per_side: 4,
+            max_amends: 4,
+        },
+        wallet: SimWalletSetup {
+            base_asset: AssetId(0),
+            quote_asset: AssetId(1),
+            opening_base: QTY,
+            opening_quote: Notional::from_mantissa(1_000 * FIXED_SCALE),
+            maker_fee_bps: FeeBps::from_bps(0.0).expect("no fee is a rate"),
+        },
+    })
+    .expect("two distinct assets and non-negative balances")
+}
+
+/// The reason of each placement refusal that the venue emits for `request`, once it is due.
+fn refused_placements(
+    venue: &mut SimVenue,
+    request: &ExecRequest,
+    at_us: i64,
+) -> Vec<RefusalReason> {
+    let at = LocalTs::from_micros(at_us);
+    venue.on_request(request, at);
+    let mut due = Vec::new();
+    venue.advance_to_watermark(at, &mut due);
+    due.iter()
+        .filter_map(|emission| match emission.event {
+            VenueEvent::PlaceRefused { reason, .. } => Some(reason),
+            _ => None,
+        })
+        .collect()
 }
