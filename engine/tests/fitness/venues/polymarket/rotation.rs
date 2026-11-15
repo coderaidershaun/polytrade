@@ -39,14 +39,16 @@ fn window_tokens(tag: &str) -> WindowTokens {
 fn assignment(open_secs: i64, tag: &str, legs: SlotLegs) -> WindowAssignment {
     let WindowTokens { up, down } = window_tokens(tag);
     WindowAssignment {
-        up: OutcomeLeg {
-            instrument: legs.up,
-            token: up,
-        },
-        down: OutcomeLeg {
-            instrument: legs.down,
-            token: down,
-        },
+        legs: [
+            OutcomeLeg {
+                instrument: legs.up,
+                token: up,
+            },
+            OutcomeLeg {
+                instrument: legs.down,
+                token: down,
+            },
+        ],
         window_open_ts_us: venue_ts_secs(open_secs),
         window_close_ts_us: venue_ts_secs(open_secs + WINDOW_SECS),
         condition_id: Arc::from(format!("cond-{tag}").as_str()),
@@ -55,8 +57,7 @@ fn assignment(open_secs: i64, tag: &str, legs: SlotLegs) -> WindowAssignment {
 
 fn forced_facts(window: &WindowAssignment, grace_age: DurationUs) -> ForceTeardownFacts {
     ForceTeardownFacts {
-        up_instrument: UP,
-        down_instrument: DOWN,
+        instruments: [UP, DOWN],
         window_open_ts_us: window.window_open_ts_us,
         grace_age,
         tokens: window.tokens(),

@@ -59,18 +59,11 @@ impl PendingBinding {
     fn from_assignment(assignment: &WindowAssignment) -> Self {
         Self {
             condition_id: Arc::clone(&assignment.condition_id),
-            legs: [
-                LegBinding {
-                    instrument: assignment.up.instrument,
-                    token_id: Arc::from(assignment.up.token.as_str()),
-                    is_neg_risk: None,
-                },
-                LegBinding {
-                    instrument: assignment.down.instrument,
-                    token_id: Arc::from(assignment.down.token.as_str()),
-                    is_neg_risk: None,
-                },
-            ],
+            legs: assignment.legs.each_ref().map(|leg| LegBinding {
+                instrument: leg.instrument,
+                token_id: Arc::from(leg.token.as_str()),
+                is_neg_risk: None,
+            }),
             window_open_ts_us: assignment.window_open_ts_us,
             window_close_ts_us: assignment.window_close_ts_us,
             tick: None,

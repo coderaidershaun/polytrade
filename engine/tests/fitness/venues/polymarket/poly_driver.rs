@@ -56,14 +56,16 @@ fn assignment(open_secs: i64) -> WindowAssignment {
         (InstrumentId(2), InstrumentId(3))
     };
     WindowAssignment {
-        up: OutcomeLeg {
-            instrument: up,
-            token: up_token,
-        },
-        down: OutcomeLeg {
-            instrument: down,
-            token: down_token,
-        },
+        legs: [
+            OutcomeLeg {
+                instrument: up,
+                token: up_token,
+            },
+            OutcomeLeg {
+                instrument: down,
+                token: down_token,
+            },
+        ],
         window_open_ts_us: venue_ts_secs(open_secs),
         window_close_ts_us: venue_ts_secs(open_secs + WINDOW_SECS),
         condition_id: Arc::from(format!("cond-{open_secs}").as_str()),
@@ -170,7 +172,7 @@ fn tag(effect: &DriverEffect) -> Tag {
         DriverEffect::Diverged { instrument, .. } => Tag::Diverged(instrument.0),
         DriverEffect::TickSizeChange { .. } => Tag::TickSize,
         DriverEffect::BindExecution(assignment) => {
-            Tag::BindExecution(assignment.up.token.as_str().to_owned())
+            Tag::BindExecution(assignment.legs[0].token.as_str().to_owned())
         }
         DriverEffect::PersistRotation(row) => Tag::PersistRotation(row.instrument.0),
         DriverEffect::Emit(message) => match &message.body {

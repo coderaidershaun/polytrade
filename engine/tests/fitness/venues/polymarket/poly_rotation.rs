@@ -28,14 +28,16 @@ fn tokens(tag: &str) -> WindowTokens {
 
 fn window(open_secs: i64, tag: &str) -> WindowAssignment {
     WindowAssignment {
-        up: OutcomeLeg {
-            instrument: UP,
-            token: TokenId::from(format!("{tag}-up")),
-        },
-        down: OutcomeLeg {
-            instrument: DOWN,
-            token: TokenId::from(format!("{tag}-down")),
-        },
+        legs: [
+            OutcomeLeg {
+                instrument: UP,
+                token: TokenId::from(format!("{tag}-up")),
+            },
+            OutcomeLeg {
+                instrument: DOWN,
+                token: TokenId::from(format!("{tag}-down")),
+            },
+        ],
         window_open_ts_us: venue_ts_secs(open_secs),
         window_close_ts_us: venue_ts_secs(open_secs + 300),
         condition_id: Arc::from(format!("cond-{tag}").as_str()),
@@ -66,7 +68,7 @@ fn book_exists(tag: &str) -> SlotInput {
 /// `Rotation` carries the window's shared token pair + condition id (the lineage side-channel feed).
 fn subscribe_actions(assignment: &WindowAssignment) -> Vec<SlotAction> {
     let mut actions = vec![SlotAction::Subscribe(assignment.clone())];
-    for instrument in [assignment.up.instrument, assignment.down.instrument] {
+    for instrument in assignment.legs.each_ref().map(|leg| leg.instrument) {
         actions.push(SlotAction::Rotation(RotationFacts {
             instrument,
             window_open_ts_us: assignment.window_open_ts_us,
@@ -217,8 +219,7 @@ fn force_teardown_when_next_subscribe_finds_slot_occupied() {
         SlotAction::BookReset(UP),
         SlotAction::BookReset(DOWN),
         SlotAction::ForceTeardown(ForceTeardownFacts {
-            up_instrument: UP,
-            down_instrument: DOWN,
+            instruments: [UP, DOWN],
             window_open_ts_us: venue_ts_secs(OPEN),
             grace_age: DurationUs::from_micros(240 * SECOND_US),
             tokens: tokens("n"),
