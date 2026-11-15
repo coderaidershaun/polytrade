@@ -104,7 +104,6 @@ impl<P> Preflight<'_, P> {
             venue: probed.map(|probed| probed.0),
             registry: &registry,
             identity,
-            spin_interval: config.engine.spin_interval(),
             input_capacity: config.queues.input_capacity,
             lease_dir: &config.exposure.dir,
         })?;

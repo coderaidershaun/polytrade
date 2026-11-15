@@ -35,7 +35,7 @@ pub use logging::LoggingConfig;
 #[cfg(feature = "otlp")]
 pub use otlp::OtlpConfig;
 pub use senders::{SenderPlacement, SendersConfig};
-pub use simulated::SimConfig;
+pub use simulated::{FeeBps, SimConfig};
 pub use sources::{
     BinanceEnv, BinanceMarket, KlineInterval, PolySeries, PolySubscriptions, SourceConfig,
     SourceSpec, Subscriptions, VenueMarket,
@@ -49,6 +49,7 @@ pub use tracker::{
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use execution::DEFAULT_QUOTE_STOP_MARGIN_MS;
 pub(crate) use execution::validated_mantissa;
+pub(crate) use simulated::SimProofs;
 pub(crate) use tracker::TARGET_WINDOW_CANDLES;
 
 const MAX_OPERATIONAL_DURATION_MS: u64 = 24 * 60 * 60 * 1_000;
@@ -95,15 +96,21 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
     /// # Errors
     /// [`ConfigError::Parse`] for malformed YAML or unknown/misspelt fields.
     pub fn from_yaml(contents: &str) -> Result<Config<P>, ConfigError> {
-        let config: Config<P> =
+        let mut config: Config<P> =
             serde_saphyr::from_str(contents).map_err(|error| ConfigError::Parse {
                 detail: error.to_string().into_boxed_str(),
             })?;
-        config.validate()?;
+        let proofs = config.validate()?;
+        for (source, proofs) in config.sources.iter_mut().zip(proofs) {
+            if let (Some(execution), Some(proofs)) = (source.execution.as_mut(), proofs) {
+                execution.keep_sim_proofs(proofs);
+            }
+        }
         Ok(config)
     }
 
-    fn validate(&self) -> Result<(), ConfigError> {
+    /// The proofs of each source that runs in mode `sim`, in source order.
+    fn validate(&self) -> Result<Vec<Option<SimProofs>>, ConfigError> {
         self.engine.validate()?;
         if self.persistence.is_none() && !self.strategy.tables.is_empty() {
             let named: Vec<&str> = self
@@ -165,14 +172,20 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
             link.validate()?;
         }
         self.check_sources()?;
-        for source in &self.sources {
-            source.feed.validate()?;
-            if let Some(execution) = &source.execution {
-                execution.validate(self.engine.spin_interval_us)?;
-                check_execution_source(&source.feed, execution.mode)?;
-            }
-        }
-        Ok(())
+        self.sources
+            .iter()
+            .map(|source| {
+                source.feed.validate()?;
+                let Some(execution) = &source.execution else {
+                    return Ok(None);
+                };
+                let checked = execution.validate(self.engine.spin_interval_us)?;
+                let support = check_execution_source(&source.feed, execution.mode)?;
+                Ok(support
+                    .zip(checked)
+                    .map(|(support, checked)| checked.supported_by(support)))
+            })
+            .collect()
     }
 }
 

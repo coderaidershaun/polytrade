@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 use crate::hot::spawn::QueueProducer;
 use crate::msg::persist::RotationRow;
 use crate::msg::time::EngineClock;
-use crate::runtime::config::{Config, SourceSpec, VenueMarket};
+use crate::runtime::config::{Config, SimProofs, SourceSpec, VenueMarket};
 use crate::runtime::registry::Registry;
 use crate::runtime::secrets::EnvFile;
 use crate::runtime::shutdown::{FatalSignal, RunStateCell, TaskHandle};
@@ -74,7 +74,7 @@ pub(crate) async fn read_scales(registry: &Registry) -> Result<VenueScales, Venu
 /// are boxed — a probed REST client and a wallet key are different sizes, and this is moved, never
 /// hot.
 pub(crate) enum ExecutionVenue {
-    Simulated,
+    Simulated(SimProofs),
     Binance {
         gate: Box<ExecutionPreflight>,
         /// The deployment the gate was probed against, read once from the registry.
@@ -122,7 +122,7 @@ impl ExecutionVenue {
         registry: &Registry,
     ) -> Result<VenueCapabilities, VenueError> {
         Ok(match self {
-            Self::Simulated => sim::capabilities(),
+            Self::Simulated(_) => sim::capabilities(),
             Self::Binance { .. } => binance_exec::capabilities(binance_preflight::order_budget(
                 registry.order_rate_limits(),
             )?),
@@ -134,7 +134,9 @@ impl ExecutionVenue {
     /// at the start cannot refuse once the lease has spent a run nonce.
     pub(crate) fn check(self, check: EdgeCheck<'_>) -> Result<CheckedVenue, VenueError> {
         Ok(match self {
-            Self::Simulated => CheckedVenue::Simulated(Box::new(sim::plan(check)?)),
+            Self::Simulated(proofs) => {
+                CheckedVenue::Simulated(Box::new(sim::plan(check, &proofs)?))
+            }
             Self::Binance { gate, env } => CheckedVenue::Binance {
                 gate,
                 env,

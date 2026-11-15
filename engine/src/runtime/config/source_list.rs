@@ -2,6 +2,7 @@
 //! source, the sources that send orders, and the checks on each venue's execution block.
 
 use super::execution::{ExecutionConfig, ExecutionMode};
+use super::simulated::SimSupport;
 use super::sources::{BinanceMarket, SourceConfig, SourceSpec};
 use super::{Config, ConfigError};
 use crate::msg::ids::VenueId;
@@ -58,12 +59,13 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
     }
 }
 
+/// The support of the simulator when `mode` is `sim`, and `None` in each other mode.
 pub(super) fn check_execution_source(
     source: &SourceSpec,
     mode: ExecutionMode,
-) -> Result<(), ConfigError> {
+) -> Result<Option<SimSupport>, ConfigError> {
     if !mode.is_enabled() {
-        return Ok(());
+        return Ok(None);
     }
     if !source.supports_execution(mode) {
         let supported: Vec<&str> = source
@@ -84,10 +86,10 @@ pub(super) fn check_execution_source(
         ..
     } = source
     else {
-        return Ok(());
+        return Ok(None);
     };
     if !mode.is_simulated() {
-        return Ok(());
+        return Ok(None);
     }
     if *market != BinanceMarket::Spot {
         return Err(ConfigError::SimulatedExecutionMarket {
@@ -100,7 +102,7 @@ pub(super) fn check_execution_source(
             missing: missing.join(", ").into_boxed_str(),
         });
     }
-    Ok(())
+    Ok(Some(SimSupport::of_checked_source()))
 }
 
 impl<P> Config<P> {

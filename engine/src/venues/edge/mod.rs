@@ -81,7 +81,6 @@ pub(crate) struct EdgeSettings {
 pub(crate) struct EdgeCheck<'a> {
     pub(crate) registry: &'a Registry,
     pub(crate) execution: &'a ExecutionConfig,
-    pub(crate) spin_interval: DurationUs,
     pub(crate) input_capacity: usize,
 }
 
