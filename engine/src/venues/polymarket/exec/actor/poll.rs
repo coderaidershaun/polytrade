@@ -14,7 +14,8 @@ use super::super::binding::{BindingStep, EnrichmentRead, TokenOfInstrument};
 use super::super::codec::{
     cancel_market_orders, clob_market_request, heartbeat, neg_risk_request, trades_page,
 };
-use super::rest::{Lane, RestJob, RestPurpose};
+use super::super::lanes::{Lane, RestJob};
+use super::rest::RestPurpose;
 use super::{Actor, CLOSE_MARGIN, Writer};
 
 impl Actor {

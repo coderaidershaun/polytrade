@@ -12,8 +12,9 @@ use super::super::codec::{
     OrdersRead, VenueAnswer, cancel_venue_order, decode_orders_page, open_orders_for_token,
     open_orders_page, trades_page,
 };
+use super::super::lanes::{Lane, RestJob};
 use super::super::rest::ClobResponse;
-use super::rest::{Lane, OpenOrdersRead, RestJob, RestPurpose};
+use super::rest::{OpenOrdersRead, RestPurpose};
 use super::{Actor, Writer};
 
 /// Open orders, fills, and the balance sweep. The sweep counts as one read however many assets it

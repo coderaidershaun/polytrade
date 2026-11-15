@@ -6,7 +6,7 @@ mod apply;
 mod inbound;
 mod poll;
 mod reads;
-mod rest;
+pub(super) mod rest;
 mod resync;
 mod unmapped;
 
@@ -43,7 +43,7 @@ use super::sign::order::SignatureType;
 
 use super::binding::{Bindings, RETIRED_BINDINGS};
 use super::correlate::{DelayedOrders, PendingFrames};
-use rest::{Lane, LaneSetup, RestLanes, RestOutcome, Submitted, spawn_lanes};
+use super::lanes::{Lane, LaneSetup, RestLanes, RestOutcome, Submitted, spawn_lanes};
 
 pub(super) const USER_STREAM_URL: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/user";
 
@@ -226,7 +226,7 @@ impl Actor {
             .map_or(AssetId::UNKNOWN, |row| row.quote_asset)
     }
 
-    fn submit(&self, lane: Lane, job: rest::RestJob) -> Submitted {
+    fn submit(&self, lane: Lane, job: super::lanes::RestJob) -> Submitted {
         self.lanes.submit(lane, job)
     }
 

@@ -15,8 +15,9 @@ use super::super::codec::{
     DecodeContext, KnownOrder, PlaceRequestContext, PlacementStatus, VenueAnswer, WireError,
     decode_cancel, decode_neg_risk, decode_place, decode_single_order,
 };
+use super::super::lanes::RestOutcome;
 use super::super::rest::ClobResponse;
-use super::rest::{OpenOrdersRead, RestOutcome, RestPurpose};
+use super::rest::{OpenOrdersRead, RestPurpose};
 use super::{Actor, Writer};
 
 impl Actor {

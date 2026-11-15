@@ -1,32 +1,11 @@
-//! The venue's request half. Polymarket has no request socket: placements, cancels and reads are
-//! all HTTP, and the user stream only listens.
-//!
-//! Three lanes, not one. A marketable order is held 250 ms at the venue and `POST /order` BLOCKS for
-//! that hold, so a cancel queued behind a place would inherit a delay the venue imposed on somebody
-//! else's risk; the two buckets are metered separately at the venue too. The heartbeat gets the
-//! third lane because going quiet for ten seconds cancels the whole book — it must not queue behind
-//! a read that is waiting out a timeout.
-//!
-//! L2 headers are signed HERE rather than at the call site: the timestamp they carry is the send
-//! stamp, and this is the last moment before the bytes leave.
+//! Why the actor asked for each request, and what it needs to read the answer.
 
 use std::sync::Arc;
 
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
-
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId};
-use crate::msg::time::{DurationUs, EngineClock};
-use crate::venues::edge::http::TransportError;
 use crate::venues::exec::{ExecRequest, RequestId};
-use crate::warn;
 
-use super::super::codec::{EncodedRequest, PlaceRequestContext};
-use super::super::rest::{ClobHttp, ClobResponse};
-use super::super::sign::l2::RequestSigner;
-
-/// Backpressure on a stalled venue. A full lane means something upstream is wrong.
-pub(super) const LANE_CAPACITY: usize = 64;
+use super::super::codec::PlaceRequestContext;
 
 /// Who asked for an open-orders page, and so whether its answer settles a resync read.
 ///
@@ -35,7 +14,7 @@ pub(super) const LANE_CAPACITY: usize = 64;
 /// never landed — the pass then finishes on two of its three reads and opens quoting having never
 /// seen the balance sweep. Naming the asker is what makes that impossible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum OpenOrdersRead {
+pub(in crate::venues::polymarket::exec) enum OpenOrdersRead {
     /// Account-wide, one of the reads a resync pass is waiting on.
     Pass { resync_seq: u64 },
     /// One instrument's page, asked for by the hot side's silence detector. `recon_seq` belongs to
@@ -61,7 +40,7 @@ impl OpenOrdersRead {
 
 /// Why the call was made, and everything needed to read its answer.
 #[derive(Debug, Clone)]
-pub(super) enum RestPurpose {
+pub(in crate::venues::polymarket::exec) enum RestPurpose {
     /// A request the execution core minted. `place` carries what was asked, because this venue
     /// echoes neither the client id nor the price back on the placement path.
     Core {
@@ -112,180 +91,4 @@ pub(super) enum RestPurpose {
     MarketCancel {
         instrument: InstrumentId,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Lane {
-    Place,
-    Control,
-    Heartbeat,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Auth {
-    Public,
-    Signed,
-}
-
-/// A refused job is a DROPPED request, never a delayed one, so every caller has to say what that
-/// costs it — hence the `must_use`. Silence here is how an unclaimed allowance refresh and an
-/// unsent heartbeat both went unnoticed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[must_use]
-pub(super) enum Submitted {
-    Queued,
-    LaneFull,
-}
-
-impl Submitted {
-    pub(super) fn is_queued(self) -> bool {
-        self == Submitted::Queued
-    }
-}
-
-#[derive(Debug)]
-pub(super) struct RestJob {
-    pub purpose: RestPurpose,
-    pub request: EncodedRequest,
-    auth: Auth,
-}
-
-impl RestJob {
-    pub(super) fn signed(purpose: RestPurpose, request: EncodedRequest) -> Self {
-        Self {
-            purpose,
-            request,
-            auth: Auth::Signed,
-        }
-    }
-
-    pub(super) fn public(purpose: RestPurpose, request: EncodedRequest) -> Self {
-        Self {
-            purpose,
-            request,
-            auth: Auth::Public,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(super) struct RestOutcome {
-    pub purpose: RestPurpose,
-    pub answer: Result<ClobResponse, TransportError>,
-}
-
-pub(super) struct RestLanes {
-    place: mpsc::Sender<RestJob>,
-    control: mpsc::Sender<RestJob>,
-    heartbeat: mpsc::Sender<RestJob>,
-    joins: Vec<JoinHandle<()>>,
-}
-
-impl RestLanes {
-    /// Dropped job = a silent reconciliation skip, so refusal is reported and returned.
-    pub(super) fn submit(&self, lane: Lane, job: RestJob) -> Submitted {
-        let sender = match lane {
-            Lane::Place => &self.place,
-            Lane::Control => &self.control,
-            Lane::Heartbeat => &self.heartbeat,
-        };
-        match sender.try_send(job) {
-            Ok(()) => Submitted::Queued,
-            Err(error) => {
-                report_full_lane(lane, &error.into_inner());
-                Submitted::LaneFull
-            }
-        }
-    }
-
-    pub(super) fn abort(&self) {
-        for join in &self.joins {
-            join.abort();
-        }
-    }
-}
-
-pub(super) struct LaneSetup {
-    pub http: Arc<ClobHttp>,
-    pub signer: Arc<RequestSigner>,
-    pub clock: EngineClock,
-    pub venue_clock_offset: DurationUs,
-}
-
-pub(super) fn spawn_lanes(
-    setup: LaneSetup,
-    runtime: &tokio::runtime::Handle,
-) -> (RestLanes, mpsc::Receiver<RestOutcome>) {
-    let (outcomes_tx, outcomes_rx) = mpsc::channel(LANE_CAPACITY * 3);
-    let mut joins = Vec::with_capacity(3);
-    let mut lane = |tag: &'static str| {
-        let (jobs_tx, jobs_rx) = mpsc::channel(LANE_CAPACITY);
-        let worker = Worker {
-            http: Arc::clone(&setup.http),
-            signer: Arc::clone(&setup.signer),
-            clock: setup.clock.clone(),
-            venue_clock_offset: setup.venue_clock_offset,
-        };
-        let body = worker.run(jobs_rx, outcomes_tx.clone());
-        joins.push(runtime.spawn(crate::log::tag_task(tag, body)));
-        jobs_tx
-    };
-    let lanes = RestLanes {
-        place: lane("polymarket-exec-place"),
-        control: lane("polymarket-exec-control"),
-        heartbeat: lane("polymarket-exec-heartbeat"),
-        joins,
-    };
-    (lanes, outcomes_rx)
-}
-
-struct Worker {
-    http: Arc<ClobHttp>,
-    signer: Arc<RequestSigner>,
-    clock: EngineClock,
-    /// Added to the local clock so `POLY_TIMESTAMP` is stamped in the venue's own seconds.
-    venue_clock_offset: DurationUs,
-}
-
-impl Worker {
-    async fn run(self, mut jobs: mpsc::Receiver<RestJob>, outcomes: mpsc::Sender<RestOutcome>) {
-        while let Some(job) = jobs.recv().await {
-            let answer = self.execute(&job).await;
-            let outcome = RestOutcome {
-                purpose: job.purpose,
-                answer,
-            };
-            if outcomes.send(outcome).await.is_err() {
-                return;
-            }
-        }
-    }
-
-    async fn execute(&self, job: &RestJob) -> Result<ClobResponse, TransportError> {
-        match job.auth {
-            Auth::Public => self.http.send_public(&job.request).await,
-            Auth::Signed => {
-                self.http
-                    .send_signed(&self.signer, &job.request, self.venue_seconds())
-                    .await
-            }
-        }
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
-    )]
-    fn venue_seconds(&self) -> i64 {
-        (self.clock.now() + self.venue_clock_offset).micros() / 1_000_000
-    }
-}
-
-#[cold]
-fn report_full_lane(lane: Lane, job: &RestJob) {
-    warn!(
-        "polymarket execution {lane:?} lane full at {LANE_CAPACITY} — dropped {} {}",
-        job.request.method.as_str(),
-        job.request.path
-    );
 }

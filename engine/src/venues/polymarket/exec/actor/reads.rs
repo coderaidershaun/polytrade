@@ -15,10 +15,11 @@ use super::super::codec::{
     AccountStamps, account_snapshot, collateral_balance, conditional_balance, decode_balance,
     decode_clob_market, decode_heartbeat, decode_trades_page, trades_page,
 };
+use super::super::lanes::{Lane, RestJob, Submitted};
 use super::super::rest::ClobResponse;
 use super::Actor;
 use super::answer::read_body;
-use super::rest::{Lane, RestJob, RestPurpose, Submitted};
+use super::rest::RestPurpose;
 use super::resync::{MAX_PAGES, PageWalk};
 
 /// A balance sweep that belongs to no resync pass: a post-fill restatement answers the account
