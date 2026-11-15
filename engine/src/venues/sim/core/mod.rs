@@ -1,5 +1,6 @@
 //! Pure simulated-venue state transitions.
 
+mod emission;
 pub(crate) mod latency;
 // SMELL: no test pins the fill model in `market` or the horizon of the latency lanes, so a change
 // to how the simulator fills an order passes every gate.
@@ -13,17 +14,16 @@ pub(crate) mod request;
 pub(crate) mod resting;
 mod revise;
 pub(crate) mod schedule;
-// SMELL: the venue and the request fold import each other, because the fold writes into the
-// venue's emission book. The book and its events in a file of their own would end the loop.
 mod venue;
 /// Public by decision: balances and fee settlement are the other half of what the wire contract
 /// carries, and a fill payload cannot be checked without the numbers behind it.
 pub mod wallet;
 
+pub(crate) use emission::EmissionBook;
+pub use emission::{SimEmission, VenueEvent};
 pub use latency::LatencyBudget;
 pub use market::{ResetReason, UnmatchedPrints};
 pub use queue::QueueAhead;
 pub use resting::{ClosedReason, InstrumentLimits, OrderPhase, OrderSnapshot, RefusalReason};
 pub(crate) use revise::ForcedOrderExit;
-pub(crate) use venue::EmissionBook;
-pub use venue::{SimEmission, SimVenue, SimVenueSetup, VenueEvent};
+pub use venue::{SimVenue, SimVenueSetup};
