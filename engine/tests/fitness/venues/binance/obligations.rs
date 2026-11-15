@@ -22,7 +22,7 @@ pub(crate) struct BinanceEdge {
 }
 
 /// An answer that the codec of this build knows no code for.
-const UNMAPPED_REFUSAL: &str = r#"{"id":"0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0","status":400,
+pub(crate) const UNMAPPED_REFUSAL: &str = r#"{"id":"0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0","status":400,
     "error":{"code":-9999,"msg":"A refusal this build has never seen."}}"#;
 
 fn order_record(client_order_id: &str, price: &str, status: &str) -> OrderRecord {

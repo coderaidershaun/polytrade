@@ -23,33 +23,33 @@ use engine::venues::sim::core::{
 use engine::venues::sim::lanes::{SimHorizon, SimLane};
 use engine::venues::sim::{SimEdgeError, halt_on_sim_error};
 
-const INSTRUMENT: InstrumentId = InstrumentId(0);
+pub(super) const INSTRUMENT: InstrumentId = InstrumentId(0);
 const BASE_US: i64 = 1_800_000_000_000_000;
-const LATENCY: LatencyBudget = LatencyBudget {
+pub(super) const LATENCY: LatencyBudget = LatencyBudget {
     order_entry: DurationUs::from_millis(15),
     ack: DurationUs::from_millis(15),
     max_market_data_delay: DurationUs::from_millis(100),
 };
 
-const fn at_ms(ms: i64) -> i64 {
+pub(super) const fn at_ms(ms: i64) -> i64 {
     BASE_US + ms * 1_000
 }
 
-const fn cents(cents: i64) -> Price {
+pub(super) const fn cents(cents: i64) -> Price {
     Price::from_mantissa(cents * 1_000_000)
 }
 
-const fn milli_btc(milli: i64) -> Qty {
+pub(super) const fn milli_btc(milli: i64) -> Qty {
     Qty::from_mantissa(milli * 100_000)
 }
 
-fn stamp(us: i64) -> LocalTs {
+pub(super) fn stamp(us: i64) -> LocalTs {
     LocalTs::from_micros(us)
 }
 
 /// A venue with one instrument, live on a small book: bids at 100.00 and 99.00, an ask at 101.00,
 /// and a trade stream whose first print has seeded its ids.
-fn live_venue(inbox_capacity: usize) -> SimVenue {
+pub(super) fn live_venue(inbox_capacity: usize) -> SimVenue {
     let mut venue = SimVenue::new(SimVenueSetup {
         instrument: INSTRUMENT,
         book_capacity: 20,
@@ -141,7 +141,13 @@ fn tap(received_us: i64, body: MessageBody, venue_meta: VenueMeta) -> TappedMess
 }
 
 /// A print with trade ids `id`, stamped by the venue at its receipt.
-fn print(received_us: i64, id: u64, side: Side, price: Price, qty: Qty) -> TappedMessage {
+pub(super) fn print(
+    received_us: i64,
+    id: u64,
+    side: Side,
+    price: Price,
+    qty: Qty,
+) -> TappedMessage {
     let trade = TradeEvent {
         instrument: INSTRUMENT,
         price,
