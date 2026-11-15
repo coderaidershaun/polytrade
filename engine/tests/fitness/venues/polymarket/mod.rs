@@ -1,5 +1,6 @@
 //! Tests of the Polymarket venue: discovery, parsing, signing, the order codec, and rotation.
 
+mod correlation;
 mod poly_discovery;
 mod poly_driver;
 mod poly_exec_codec;
