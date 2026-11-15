@@ -1,36 +1,9 @@
 //! Exact balances, reservations, fills, and fees for simulated execution.
 
 use crate::msg::exec::AssetBalance;
-use crate::msg::ids::{AssetId, FIXED_SCALE, Notional, Price, Qty, Side};
+use crate::msg::ids::{AssetId, Notional, Price, Qty, Side};
 
-const WHOLE_FILL_BPS: i64 = 10_000;
-
-/// Basis points as a 1e-8 mantissa, so a fractional rate stays exact. Negative is a rebate: the
-/// fill pays the maker on top of what it traded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct FeeBps(i64);
-
-impl FeeBps {
-    const WHOLE_FILL: i64 = WHOLE_FILL_BPS * FIXED_SCALE;
-
-    /// # Errors
-    /// Returns [`WalletError::FeeOutOfRange`] when the rate is more than the whole fill, as a fee
-    /// or as a rebate.
-    pub fn new(mantissa: i64) -> Result<Self, WalletError> {
-        match (-Self::WHOLE_FILL..=Self::WHOLE_FILL).contains(&mantissa) {
-            true => Ok(Self(mantissa)),
-            false => Err(WalletError::FeeOutOfRange { mantissa }),
-        }
-    }
-
-    fn charge(self, amount: i64) -> i64 {
-        narrow(i128::from(amount) * i128::from(self.0) / i128::from(Self::WHOLE_FILL))
-    }
-
-    fn is_rebate(self) -> bool {
-        self.0 < 0
-    }
-}
+pub use crate::runtime::config::FeeBps;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SimWalletSetup {
@@ -394,17 +367,10 @@ impl SimWallet {
 
 #[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WalletError {
-    #[error("maker fee {mantissa}e-8bps is outside -10000..=10000bps")]
-    FeeOutOfRange { mantissa: i64 },
     #[error("base and quote asset both resolve to {}", asset.0)]
     SameAsset { asset: AssetId },
     #[error("opening balance {amount} for asset {} is negative", asset.0)]
     NegativeOpeningBalance { asset: AssetId, amount: i64 },
-}
-
-fn narrow(amount: i128) -> i64 {
-    i64::try_from(amount)
-        .unwrap_or_else(|_| panic!("simulated wallet amount {amount} does not fit a mantissa"))
 }
 
 fn checked_add(left: i64, right: i64, kind: &str) -> i64 {

@@ -1,7 +1,17 @@
 //! What config validation proves about a simulated run before it starts: the source can be
 //! simulated, a command is answered inside the in-flight timeout, and the fee is a rate it can charge.
 
-use engine::runtime::config::{Config, ConfigError, ExecutionMode, NoParams};
+use engine::msg::ids::{
+    AssetId, ClientOrderId, FIXED_SCALE, Notional, Price, Qty, Side, TradeId, VenueOrderId,
+};
+use engine::msg::time::LocalTs;
+use engine::runtime::config::{Config, ConfigError, ExecutionMode, FeeBps, NoParams, RunIdentity};
+use engine::venues::exec::{EngineIdentity, TeTag};
+use engine::venues::sim::core::orders::SimOrder;
+use engine::venues::sim::core::wallet::{
+    ReservationRequest, ReserveOutcome, SimWallet, SimWalletSetup,
+};
+use engine::venues::sim::wire::{SimFill, VenueWire};
 
 use crate::runtime::config_guards::{
     BINANCE_PERP_SOURCE, BINANCE_SPOT_SOURCE, POLY_SOURCE, SIM_BLOCK, config_with_execution_on,
@@ -153,4 +163,191 @@ fn round_trip_at_or_above_timeout_refuses_start() {
 
     Config::<NoParams>::from_yaml(&with_timeout(3_031))
         .expect("one millisecond beyond the worst legal answer is sufficient");
+}
+
+struct FeeRow {
+    name: &'static str,
+    side: Side,
+    maker_fee_bps: f64,
+    price: Price,
+    qty: Qty,
+    slices: &'static [i64],
+    last_fee: i64,
+    fee_asset: &'static str,
+    last_received_net: i64,
+    base_free: i64,
+    quote_free: i64,
+    wire_fee: &'static str,
+}
+
+/// The configured rate in basis points becomes the rate the simulated wallet charges. A rate that
+/// lost its scale on the way would still compile and charge almost nothing, so each row states the
+/// amount it charges. A charge is taken from the asset received, and a rebate is paid in quote.
+#[test]
+fn maker_fee_of_10_bps_charges_known_amount() {
+    const BASE: AssetId = AssetId(0);
+    const QUOTE: AssetId = AssetId(1);
+    let at_100_000 = Price::from_mantissa(100_000 * FIXED_SCALE);
+    let at_117_999 = Price::from_mantissa(117_999 * FIXED_SCALE);
+    let rows = [
+        FeeRow {
+            name: "10 bps charged on a buy of 0.001 BTC",
+            side: Side::Buy,
+            maker_fee_bps: 10.0,
+            price: at_100_000,
+            qty: Qty::from_mantissa(100_000),
+            slices: &[100_000],
+            last_fee: 100,
+            fee_asset: "BTC",
+            last_received_net: 99_900,
+            base_free: 99_900,
+            quote_free: 0,
+            wire_fee: "0.00000100",
+        },
+        FeeRow {
+            name: "a 0.4 bps rebate on a sell of 100 USDT",
+            side: Side::Sell,
+            maker_fee_bps: -0.4,
+            price: at_100_000,
+            qty: Qty::from_mantissa(100_000),
+            slices: &[100_000],
+            last_fee: -400_000,
+            fee_asset: "USDT",
+            last_received_net: 10_000_000_000 + 400_000,
+            base_free: 0,
+            quote_free: 10_000_000_000 + 400_000,
+            wire_fee: "-0.00400000",
+        },
+        FeeRow {
+            name: "rebated sell",
+            side: Side::Sell,
+            maker_fee_bps: -0.4,
+            price: at_117_999,
+            qty: Qty::from_mantissa(10_000),
+            slices: &[10_000],
+            last_fee: -47_199,
+            fee_asset: "USDT",
+            last_received_net: 1_179_990_000 + 47_199,
+            base_free: 0,
+            quote_free: 1_179_990_000 + 47_199,
+            wire_fee: "-0.00047199",
+        },
+        FeeRow {
+            name: "charged buy",
+            side: Side::Buy,
+            maker_fee_bps: 7.5,
+            price: at_117_999,
+            qty: Qty::from_mantissa(10_000),
+            slices: &[10_000],
+            last_fee: 7,
+            fee_asset: "BTC",
+            last_received_net: 9_993,
+            base_free: 9_993,
+            quote_free: 0,
+            wire_fee: "0.00000007",
+        },
+        FeeRow {
+            name: "rebated buy",
+            side: Side::Buy,
+            maker_fee_bps: -0.4,
+            price: at_117_999,
+            qty: Qty::from_mantissa(10_000),
+            slices: &[5_000, 5_000],
+            last_fee: -23_599,
+            fee_asset: "USDT",
+            last_received_net: 5_000,
+            base_free: 10_000,
+            quote_free: 2 * 23_599,
+            wire_fee: "-0.00023599",
+        },
+    ];
+
+    for row in rows {
+        let name = row.name;
+        let (opening_base, opening_quote) = match row.side {
+            Side::Buy => (Qty::from_mantissa(0), row.price.notional(row.qty)),
+            Side::Sell => (row.qty, Notional::ZERO),
+        };
+        let maker_fee_bps = FeeBps::from_bps(row.maker_fee_bps)
+            .unwrap_or_else(|error| panic!("{name}: the rate is in range: {error}"));
+        let mut wallet = SimWallet::new(SimWalletSetup {
+            base_asset: BASE,
+            quote_asset: QUOTE,
+            opening_base,
+            opening_quote,
+            maker_fee_bps,
+        })
+        .expect("two distinct assets and non-negative balances");
+        let request = ReservationRequest {
+            side: row.side,
+            price: row.price,
+            qty: row.qty,
+        };
+        let ReserveOutcome::Reserved(mut reservation) = wallet.reserve(request) else {
+            panic!("{name}: the opening balance covers the whole order");
+        };
+
+        let settlement = row
+            .slices
+            .iter()
+            .map(|&slice| wallet.fill(&mut reservation, Qty::from_mantissa(slice)))
+            .last()
+            .expect("every row fills at least once");
+
+        let fee_asset = match settlement.fee_asset {
+            BASE => "BTC",
+            QUOTE => "USDT",
+            other => panic!(
+                "{name}: the fee was paid in asset {} of neither slot",
+                other.0
+            ),
+        };
+        assert_eq!(
+            (settlement.fee, fee_asset, settlement.received_net),
+            (row.last_fee, row.fee_asset, row.last_received_net),
+            "{name}: the last fill's fee, the asset it is paid in, and what the received asset rose by"
+        );
+        let [base, quote] = wallet.settle(0).balances;
+        assert_eq!(
+            (base.free, quote.free),
+            (row.base_free, row.quote_free),
+            "{name}: free balances after the order is fully filled"
+        );
+
+        let order = SimOrder {
+            client_id: ClientOrderId(42),
+            venue_order_id: VenueOrderId(12_510_053_281),
+            side: row.side,
+            price: row.price,
+            qty: row.qty,
+            filled: settlement.cumulative_qty,
+            filled_quote: settlement.cumulative_quote,
+        };
+        let report = wire().trade_report(
+            &order,
+            SimFill {
+                trade_id: TradeId(778_291),
+                settlement: &settlement,
+                fee_asset,
+            },
+            LocalTs::from_micros(1_785_000_123_456_789),
+        );
+        assert!(
+            report.contains(&format!("\"n\":\"{}\"", row.wire_fee)),
+            "{name}: the wire commission amount: {report}"
+        );
+        assert!(
+            report.contains(&format!("\"N\":\"{}\"", row.fee_asset)),
+            "{name}: the wire commission asset: {report}"
+        );
+    }
+}
+
+fn wire() -> VenueWire {
+    let identity = RunIdentity::new("strat-micro-recorder", "te-binance-spot-btcusdt")
+        .expect("the fixture strategy and trading engine ids are well formed");
+    VenueWire::new(EngineIdentity {
+        te_tag: TeTag::of(&identity),
+        run_nonce: 1_785_000_000,
+    })
 }

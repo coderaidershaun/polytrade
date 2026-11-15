@@ -5,9 +5,11 @@ use std::sync::Arc;
 
 use rtrb::{Consumer, RingBuffer};
 
+use super::error::SimVenueError;
 use super::lanes::SimLane;
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::info;
+use crate::msg::ids::QueueId;
 use crate::msg::inbound::{
     BookChunkKind, InboundMessage, MarketTapItem, MessageBody, TappedMessage, VenueMeta,
 };
@@ -93,12 +95,41 @@ pub(super) struct MarketTaps {
     pub(super) gate: Arc<SimTapGate>,
 }
 
+/// The input queues of the Binance spot trades and depth lanes, found in preflight, so the taps
+/// attach at the start with nothing left to find.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct TapLanes {
+    trades: QueueId,
+    depth: QueueId,
+}
+
+impl TapLanes {
+    /// # Errors
+    /// [`SimVenueError::LaneMissing`] when the registry holds no Binance spot producer group for a
+    /// lane.
+    pub(super) fn find(registry: &Registry) -> Result<Self, SimVenueError> {
+        let queue_of = |lane: SimLane| {
+            registry
+                .producer_groups()
+                .iter()
+                .find(|group| tapped_lane(group.market, group.category) == Some(lane))
+                .map(|group| group.queue_id)
+                .ok_or(SimVenueError::LaneMissing { lane })
+        };
+        Ok(Self {
+            trades: queue_of(SimLane::Trade)?,
+            depth: queue_of(SimLane::Depth)?,
+        })
+    }
+}
+
 /// # Panics
-/// If either Binance Spot lane is missing or duplicated.
+/// If a Binance spot lane appears twice in the producer groups.
 pub(super) fn attach_market_taps(
     registry: &Registry,
     capacity: usize,
     groups: Vec<QueueProducer>,
+    lanes: TapLanes,
 ) -> (Vec<QueueProducer>, MarketTaps) {
     assert_eq!(
         groups.len(),
@@ -106,16 +137,29 @@ pub(super) fn attach_market_taps(
         "the zip below would silently drop a hot producer"
     );
     let gate = Arc::new(SimTapGate::new());
-    let mut trades = None;
-    let mut depth = None;
+    let (trades_tap, trades) = RingBuffer::<MarketTapItem>::new(capacity);
+    let (depth_tap, depth) = RingBuffer::<MarketTapItem>::new(capacity);
+    let mut taps = [
+        (lanes.trades, Some(trades_tap)),
+        (lanes.depth, Some(depth_tap)),
+    ];
     let mut tapped = Vec::with_capacity(groups.len());
 
     for (group, producer) in registry.producer_groups().iter().zip(groups) {
-        let Some(slot) = tapped_slot(group.market, group.category, &mut trades, &mut depth) else {
+        if tapped_lane(group.market, group.category).is_none() {
             tapped.push(producer);
             continue;
+        }
+        let tap = taps
+            .iter_mut()
+            .find(|(queue, _)| *queue == group.queue_id)
+            .and_then(|(_, tap)| tap.take());
+        let Some(tap) = tap else {
+            panic!(
+                "one simulator tap per lane: {} appears twice in the producer groups",
+                group.category.as_str()
+            );
         };
-        let (tap_producer, tap_consumer) = RingBuffer::<MarketTapItem>::new(capacity);
         info!(
             "market tap for input queue {} ({}) allocated {} slots of {} bytes",
             group.queue_id.index(),
@@ -123,39 +167,24 @@ pub(super) fn attach_market_taps(
             capacity,
             size_of::<MarketTapItem>()
         );
-        *slot = Some(tap_consumer);
-        tapped.push(producer.with_tap(tap_producer, Arc::clone(&gate)));
+        tapped.push(producer.with_tap(tap, Arc::clone(&gate)));
     }
 
-    // SMELL: these two expects repeat a config check as a panic at the start, after threads run.
-    // Config validation already refuses a simulated run off Binance spot, so the check belongs
-    // in preflight, as a typed refusal of the start.
     let taps = MarketTaps {
-        trades: trades.expect("simulator requires a binance spot trades producer group"),
-        depth: depth.expect("simulator requires a binance spot depth producer group"),
+        trades,
+        depth,
         gate,
     };
     (tapped, taps)
 }
 
-fn tapped_slot<'a>(
-    market: VenueMarket,
-    category: ConnectionCategory,
-    trades: &'a mut Option<Consumer<MarketTapItem>>,
-    depth: &'a mut Option<Consumer<MarketTapItem>>,
-) -> Option<&'a mut Option<Consumer<MarketTapItem>>> {
+fn tapped_lane(market: VenueMarket, category: ConnectionCategory) -> Option<SimLane> {
     if market != VenueMarket::Binance(BinanceMarket::Spot) {
         return None;
     }
-    let slot = match category {
-        ConnectionCategory::Trades => trades,
-        ConnectionCategory::Depth => depth,
-        ConnectionCategory::Klines | ConnectionCategory::Market => return None,
-    };
-    assert!(
-        slot.is_none(),
-        "one simulator tap per lane: {} appears twice in the producer groups",
-        category.as_str()
-    );
-    Some(slot)
+    match category {
+        ConnectionCategory::Trades => Some(SimLane::Trade),
+        ConnectionCategory::Depth => Some(SimLane::Depth),
+        ConnectionCategory::Klines | ConnectionCategory::Market => None,
+    }
 }

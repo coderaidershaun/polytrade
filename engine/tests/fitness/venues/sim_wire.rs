@@ -124,7 +124,8 @@ fn a_rebate_is_paid_in_quote_and_a_charge_in_the_asset_received() {
             quote_asset: QUOTE,
             opening_base,
             opening_quote,
-            maker_fee_bps: FeeBps::new(row.rate_bps_e8).expect("the row's rate is in range"),
+            maker_fee_bps: FeeBps::from_bps(row.rate_bps_e8 as f64 / FIXED_SCALE as f64)
+                .expect("the row's rate is in range"),
         })
         .expect("two distinct assets and non-negative balances");
         let request = ReservationRequest {
