@@ -8,7 +8,6 @@ mod poly_exec_codec;
 mod poly_exec_policy;
 mod poly_exec_rows;
 mod poly_rotation;
-mod poly_shadow;
 mod polymarket_fixtures;
 mod polymarket_gamma;
 mod polymarket_parse;
