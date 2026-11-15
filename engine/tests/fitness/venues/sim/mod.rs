@@ -3,4 +3,5 @@
 mod config_proofs;
 mod fill_model;
 mod lane_order;
+mod obligations;
 mod wire_contract;

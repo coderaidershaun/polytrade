@@ -256,7 +256,14 @@ variant there, and a dependency-allowlist amendment if signing needs a new crate
 Each venue gets a simulator behind the same contract. The seam suite of the fitness target
 holds one test body for each written obligation above, over a harness: a venue stand-in
 behind the venue's real codec. A venue passes the contract when its harness runs every body
-(`venue_edge_keeps_each_written_obligation!`); Binance runs it today. A new venue's
+(`venue_edge_keeps_each_written_obligation!`). Binance, Polymarket, and the simulator run it.
+A harness says whether its venue reports a change of balance and whether it has a pending
+cancel, and the queued stamps are held for each edge that writes its queue through
+`EventFunnel`; the simulator stamps its own messages, so its queued stamps are not held yet.
+Two lines of the Polymarket edge sit in its private actor, where no harness reaches: the count
+of an unmapped order that is left alone, and the halt on an open order that does not decode. The
+verdict on the unmapped order and the codec's naming of the undecodable one are held. A new
+venue's
 determinism evidence is that run, its codec goldens, and a test double driven through its
 real codec, delivery-permutation style (ack-first, report-first, ack-only, report-only,
 ambiguous, duplicated, reordered — the seven ways two answers to one request arrive).

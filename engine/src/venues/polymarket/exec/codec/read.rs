@@ -78,7 +78,8 @@ pub struct OrdersRead {
 }
 
 /// # Errors
-/// Malformed JSON, a decimal out of scale, or an unknown status or side spelling.
+/// Malformed JSON. [`WireError::UndecodableOpenOrder`] names the first order of the page with a
+/// decimal out of scale, or an unknown status or side spelling.
 pub fn decode_orders_page(
     answer: HttpAnswer<'_>,
     read: OrdersRead,
@@ -98,13 +99,12 @@ pub fn decode_orders_page(
         ..DecodedOrders::default()
     };
     for record in &page.data {
-        match decode_order_record(record, ExecKind::SnapshotOrder, recon_seq, context)? {
-            Some(event) => decoded.events.push(event),
-            None => match unmapped_order(record, context)? {
-                Some(unmapped) => decoded.unmapped.push(unmapped),
-                None => decoded.unattributable.push(unattributable_order(record)?),
-            },
-        }
+        file_record(record, recon_seq, context, &mut decoded).map_err(|source| {
+            WireError::UndecodableOpenOrder {
+                venue_order_id: record.id.as_str().into(),
+                source: Box::new(source),
+            }
+        })?;
     }
     // Push end marker even on empty page: an account with nothing resting still finishes resync.
     decoded.events.push(ExecEvent {
@@ -117,6 +117,24 @@ pub fn decode_orders_page(
         )
     });
     Ok(VenueAnswer::Answered(decoded))
+}
+
+/// An order of this run, one whose id this run does not know, or one on a token that no binding
+/// names.
+fn file_record(
+    record: &OrderRecord,
+    recon_seq: u64,
+    context: &DecodeContext<'_>,
+    decoded: &mut DecodedOrders,
+) -> Result<(), WireError> {
+    match decode_order_record(record, ExecKind::SnapshotOrder, recon_seq, context)? {
+        Some(event) => decoded.events.push(event),
+        None => match unmapped_order(record, context)? {
+            Some(unmapped) => decoded.unmapped.push(unmapped),
+            None => decoded.unattributable.push(unattributable_order(record)?),
+        },
+    }
+    Ok(())
 }
 
 /// # Errors

@@ -2,20 +2,25 @@
 //! venue stand-in behind the real codec of that venue. Each venue runs every body, so a new venue
 //! cannot skip one.
 
+use engine::hot::spawn::QueueProducer;
 use engine::msg::exec::{
     AccountChunk, CancelReason, ExecCommand, ExecEvent, ExecKind, OrderStyle, RejectClass,
     VenueOrderStatus,
 };
 use engine::msg::failure::{FailureClass, Halt};
-use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side, TradeId};
+use engine::msg::ids::{
+    ClientOrderId, InstrumentId, Price, Qty, QueueId, Side, SourceId, TradeId, VenueId,
+};
 use engine::msg::inbound::{InboundMessage, MessageBody};
-use engine::msg::time::{DurationUs, LocalTs};
+use engine::msg::time::{DurationUs, EngineClock, LocalTs};
 use engine::runtime::config::RecordedTables;
 use engine::runtime::shutdown::{AnswerPart, FatalReason, FatalSignal};
+use engine::venues::edge::EventFunnel;
 use engine::venues::exec::{
-    ExecCore, ExecEffect, ExecRequest, ExecSession, ExecSessionError, InFlightRequest,
+    EventSink, ExecCore, ExecEffect, ExecRequest, ExecSession, ExecSessionError, InFlightRequest,
     ObserveOrderError, Outgoing, PlaceNotSentReason, SessionSetup, halt_on_session_error,
 };
+use rtrb::RingBuffer;
 
 use crate::engine_support::ts;
 use crate::exec_support::{
@@ -44,6 +49,13 @@ pub(crate) trait EdgeHarness: Sized {
     /// A price on this venue's grid at which a buy rests and does not cross.
     const RESTING_BID: Price;
     const QTY: Qty;
+    /// Whether the venue also reports a change of balance, which the edge must not fold. A venue
+    /// with no such report sends only absolute balances.
+    const SENDS_BALANCE_DELTAS: bool;
+    /// Whether the edge writes its input queue through the event funnel, which stamps the time each
+    /// message is queued. The simulator edge stamps its messages itself, so its queued stamps are a
+    /// gap that this suite does not hold.
+    const QUEUES_THROUGH_FUNNEL: bool;
 
     fn new() -> Self;
     /// What the edge pushes to its input queue for the stand-in's answer to `request`, after the
@@ -56,8 +68,9 @@ pub(crate) trait EdgeHarness: Sized {
     /// The events of an answer that refuses `request` with a venue code that the codec does not
     /// map.
     fn unmapped_refusal(&mut self, request: ExecRequest, at: LocalTs) -> Vec<ExecEvent>;
-    /// The event of a report that says the cancel of `client_id` is pending.
-    fn pending_cancel(&mut self, client_id: ClientOrderId, at: LocalTs) -> ExecEvent;
+    /// The event of a report that says the cancel of `client_id` is pending. `None` for a venue
+    /// whose cancel answer is final, which has no such report.
+    fn pending_cancel(&mut self, client_id: ClientOrderId, at: LocalTs) -> Option<ExecEvent>;
     /// An open order of `client_id` whose price does not decode: its venue order id, and whether
     /// the codec decoded it anyway.
     fn undecodable_open_order(&mut self, client_id: ClientOrderId) -> (i64, bool);
@@ -254,6 +267,55 @@ pub(crate) fn one_input_queue_with_monotone_queued_stamps<H: EdgeHarness>() {
         stamps.windows(2).all(|pair| pair[0] <= pair[1]),
         "received stamps never go back: {stamps:?}"
     );
+    if H::QUEUES_THROUGH_FUNNEL {
+        let queued = queued_through_funnel(&pushed);
+        assert!(
+            queued.windows(2).all(|pair| pair[0] <= pair[1]),
+            "queued stamps never go back: {queued:?}"
+        );
+    }
+}
+
+/// The venue that the funnel of the test stamps on each message.
+const FUNNEL_VENUE: VenueId = VenueId(3);
+
+/// Sends each event of `pushed` through the event funnel into a real input ring, as the edge does,
+/// and gives the queued stamp of each message that the ring holds, in order. Each message keeps its
+/// received stamp and carries the venue of the funnel.
+fn queued_through_funnel(pushed: &[InboundMessage]) -> Vec<LocalTs> {
+    let (producer, mut ring) = RingBuffer::<InboundMessage>::new(pushed.len().max(1));
+    let queue = QueueProducer::new(
+        producer,
+        FatalSignal::new(),
+        QueueId::new(1).expect("a queue id below the cap"),
+        SourceId(0),
+    );
+    let mut funnel = EventFunnel::new(queue, EngineClock::start(), FUNNEL_VENUE);
+    for message in pushed {
+        if let MessageBody::Exec(event) = message.body {
+            funnel.send_exec(message.header.received_ts_us, event);
+        }
+    }
+    let mut queued = Vec::new();
+    for message in pushed {
+        let MessageBody::Exec(sent) = message.body else {
+            continue;
+        };
+        let drained = ring
+            .pop()
+            .expect("the ring holds each message that the funnel sent");
+        let MessageBody::Exec(event) = drained.body else {
+            panic!("the funnel sent an execution event and the ring holds {drained:?}");
+        };
+        assert_eq!(
+            (event.venue, event.kind, event.client_id),
+            (FUNNEL_VENUE, sent.kind, sent.client_id),
+            "the funnel names the venue and keeps the order of the events"
+        );
+        assert_eq!(drained.header.received_ts_us, message.header.received_ts_us);
+        queued.push(drained.header.queued_ts_us);
+    }
+    queued
 }
 
 /// A fill carries the venue's cumulative total for its order, so a report that arrives twice or
@@ -296,10 +358,14 @@ pub(crate) fn balance_chunks_are_absolute_with_a_monotone_venue_stamp<H: EdgeHar
             BalanceReport::Delta => deltas += 1,
         }
     }
-    assert!(
-        stamps.len() >= 2 && deltas >= 1,
-        "{stamps:?}, {deltas} deltas"
-    );
+    assert!(stamps.len() >= 2, "{stamps:?}");
+    match H::SENDS_BALANCE_DELTAS {
+        true => assert!(deltas >= 1, "{stamps:?}, {deltas} deltas"),
+        false => assert_eq!(
+            deltas, 0,
+            "a venue with no change of balance sent one: {stamps:?}"
+        ),
+    }
     assert!(
         stamps.windows(2).all(|pair| pair[0] <= pair[1]),
         "the venue stamp never goes back: {stamps:?}"
@@ -389,16 +455,17 @@ pub(crate) fn a_cancel_answer_is_a_finality_promise<H: EdgeHarness>() {
     let mut session = quoting_session::<H>();
     send(&mut session, place::<H>(client_id), NOW);
 
-    let pending = harness.pending_cancel(client_id, NOW);
-    assert_eq!(pending.status, Some(VenueOrderStatus::PendingCancel));
-    assert!(!VenueOrderStatus::PendingCancel.is_terminal());
-    session
-        .fold(&pending, 0, &mut Vec::new())
-        .expect("the session raises no fault here");
-    assert!(
-        session.core.is_mirrored(client_id),
-        "a pending cancel ends nothing"
-    );
+    if let Some(pending) = harness.pending_cancel(client_id, NOW) {
+        assert_eq!(pending.status, Some(VenueOrderStatus::PendingCancel));
+        assert!(!VenueOrderStatus::PendingCancel.is_terminal());
+        session
+            .fold(&pending, 0, &mut Vec::new())
+            .expect("the session raises no fault here");
+        assert!(
+            session.core.is_mirrored(client_id),
+            "a pending cancel ends nothing"
+        );
+    }
 
     harness.answer(place_request::<H>(client_id), NOW);
     let cancel = ExecRequest::Cancel {
