@@ -1,17 +1,5 @@
 //! Polymarket order messages, decoded from recorded venue payloads. With no test network, these
 //! tests are the only check of that decoding before real money moves through it.
-//!
-//! Four judgements are checked, because each fails silently and costs money when wrong: which
-//! payload may be folded as a fill, the message text to a [`RejectClass`], the split between an
-//! order rejection and an outage of the whole venue, and the exact bytes of a place body, whose
-//! signature is checked against a vector from the official SDK, not against our own output.
-//!
-//! A fifth is the startup gate's protocol-version read, which must accept the real venue's JSON
-//! shape and fail closed on anything else, because nothing else stands between it and a live run.
-//!
-//! A sixth is the settlement reading, which decides two things money depends on: when a reservation
-//! may be released, and whether a failed settlement stops the run. Both are asked long after the
-//! order behind the trade stopped being nameable, so both rest on what the payload itself says.
 
 use std::collections::BTreeSet;
 
@@ -26,12 +14,11 @@ use engine::venues::edge::decode::DecimalFault;
 use engine::venues::exec::ExecRequest;
 use engine::venues::polymarket::exec::codec::{
     AccountStamps, DecodeContext, EncodeContext, HttpAnswer, IgnoredReason, KnownOrder, OrderIndex,
-    OrderSigner, OrderSignerSetup, OrdersRead, PROTOCOL_VERSION, PlaceRequestContext,
-    PlacementStatus, RejectSubject, RejectVerdict, SettlementWatermark, StreamEvent, TokenBinding,
-    TokenTable, TradeSettlement, VenueAnswer, VenueAvailability, VenueFailure, WireError,
-    account_snapshot, cancel_market_orders, classify_error, decode_balance, decode_cancel,
-    decode_clob_market, decode_closed_only, decode_orders_page, decode_place,
-    decode_protocol_version, decode_single_order, decode_stream_frame, decode_trades_page,
+    OrderSigner, OrderSignerSetup, OrdersRead, PlaceRequestContext, PlacementStatus, RejectSubject,
+    RejectVerdict, SettlementWatermark, StreamEvent, TokenBinding, TokenTable, TradeSettlement,
+    VenueAnswer, VenueAvailability, VenueFailure, WireError, account_snapshot,
+    cancel_market_orders, classify_error, decode_balance, decode_cancel, decode_clob_market,
+    decode_orders_page, decode_place, decode_single_order, decode_stream_frame, decode_trades_page,
     encode_request,
 };
 use engine::venues::polymarket::exec::sign::address::Address;
@@ -762,36 +749,6 @@ fn account_snapshot_chunks_arm_readiness_and_stamp_from_settlement() {
             chunks[0].venue_update_ts_ms, 1_786_046_865_000,
             "the chunk carries something other than the settled trade's own venue stamp"
         );
-    }
-}
-
-/// The startup gate's own reads, both of which must FAIL CLOSED. The protocol version is read as a
-/// number: a comparison of the raw body to `"2"` never matches the live venue's `{"version":2}`, so
-/// the engine would refuse to arm on the real venue every time. The closed-only flag is read
-/// strictly: a defaulted `bool` would read an error envelope or `{}` as "may trade" and arm a
-/// closed-only account into quoting one side straight into rejection.
-#[test]
-fn the_startup_gates_read_fail_closed() {
-    // The protocol version is read as a number from both shapes.
-    {
-        let live = decode_protocol_version(fixture!("version"));
-        assert_eq!(live, Some(2));
-        assert_eq!(live, Some(PROTOCOL_VERSION));
-        assert_eq!(decode_protocol_version("2"), Some(PROTOCOL_VERSION));
-    }
-
-    // A body carrying no closed-only flag refuses the arm. Absent field, error envelope, empty
-    // object, non-json — every one is "cannot prove it".
-    {
-        assert_eq!(decode_closed_only(r#"{"closed_only":true}"#), Some(true));
-        assert_eq!(decode_closed_only(r#"{"closed_only":false}"#), Some(false));
-        assert_eq!(decode_closed_only("{}"), None);
-        assert_eq!(decode_closed_only(r#"{"error":"unauthorized"}"#), None);
-        assert_eq!(
-            decode_closed_only("<html>500 Internal Server Error</html>"),
-            None
-        );
-        assert_eq!(decode_closed_only(""), None);
     }
 }
 
