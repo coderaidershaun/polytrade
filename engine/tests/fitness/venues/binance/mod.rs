@@ -5,6 +5,7 @@ mod binance_kline_sequencing;
 mod binance_parse;
 mod binance_rest_plan;
 mod binance_sign;
+mod depth_chain;
 mod exec_codec;
 /// The deterministic Binance Spot matching model. It is where every fill, partial fill,
 /// post-only rejection and ack/report race is exercised, because production is the only other
