@@ -18,6 +18,20 @@ pub enum ResetReason {
     VenueParked,
 }
 
+/// The prints that walked no queue, by the reason each was set aside. With the prints that walked,
+/// they add up to each print that reached the venue.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct UnmatchedPrints {
+    /// Matching was suspended, or the ids of the print broke continuity and suspended it.
+    pub suspended: u64,
+    /// The venue stamp of the print is at or before the last depth commit.
+    pub before_last_commit: u64,
+    /// The ids of the print are ones that its stream epoch has passed already.
+    pub stale_id: u64,
+    /// The first print of a stream epoch, which only seeds its ids.
+    pub epoch_seed: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MatchingState {
     Live,
@@ -129,6 +143,7 @@ pub struct MarketFold {
     staged: Option<StagedDelta>,
     matching: MatchingState,
     recovery: MarketRecovery,
+    unmatched: UnmatchedPrints,
 }
 
 impl MarketFold {
@@ -147,6 +162,7 @@ impl MarketFold {
                 snapshot_complete: false,
                 bridging_delta: false,
             },
+            unmatched: UnmatchedPrints::default(),
         }
     }
 
@@ -164,6 +180,10 @@ impl MarketFold {
 
     pub fn recovery(&self) -> MarketRecovery {
         self.recovery
+    }
+
+    pub fn unmatched_prints(&self) -> UnmatchedPrints {
+        self.unmatched
     }
 
     pub fn ladder(&self, side: Side) -> &PriceLadder {
@@ -314,11 +334,26 @@ impl MarketFold {
             trade.instrument.0, self.instrument.0
         );
         match self.continuity.admit(evidence) {
-            ContinuityVerdict::Seed | ContinuityVerdict::Ignore => return None,
-            ContinuityVerdict::Reset(reason) => return Some(self.suspend_matching(reason)),
+            ContinuityVerdict::Seed => {
+                self.unmatched.epoch_seed += 1;
+                return None;
+            }
+            ContinuityVerdict::Ignore => {
+                self.unmatched.stale_id += 1;
+                return None;
+            }
+            ContinuityVerdict::Reset(reason) => {
+                self.unmatched.suspended += 1;
+                return Some(self.suspend_matching(reason));
+            }
             ContinuityVerdict::Accept => {}
         }
-        if !self.is_matching_live() || trade.exchange_ts_us <= self.last_commit_venue_ts_us {
+        if !self.is_matching_live() {
+            self.unmatched.suspended += 1;
+            return None;
+        }
+        if trade.exchange_ts_us <= self.last_commit_venue_ts_us {
+            self.unmatched.before_last_commit += 1;
             return None;
         }
         self.walk_aggressor(trade, take);
