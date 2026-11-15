@@ -189,7 +189,7 @@ impl Actor {
             orders: OrderIndex::with_capacity(ORDER_INDEX_CAPACITY),
             bindings: Bindings::default(),
             instruments,
-            signature_type: wallet.signature_type,
+            signature_type: wallet.signature_type.into(),
             signer,
             credentials,
             control: EdgeControl::new(&edge, stop),

@@ -19,7 +19,7 @@ const OPEN_HOST: &str = r#"{"blocked":false,"ip":"192.0.2.7","country":"GB","reg
 const BLOCKED_HOST: &str = r#"{"blocked":true,"ip":"192.0.2.7","country":"US","region":"NY"}"#;
 const SERVER_SECS: i64 = 1_700_000_000;
 /// Read 0.4 s after the venue's own clock answered.
-const LOCAL: LocalTs = LocalTs::from_micros(SERVER_SECS * 1_000_000 + 400_000);
+pub(super) const LOCAL: LocalTs = LocalTs::from_micros(SERVER_SECS * 1_000_000 + 400_000);
 
 /// A throwaway key of this test: the secp256k1 scalar `scalar`, which holds no funds anywhere.
 fn test_key(scalar: u8) -> SigningKey {
@@ -32,7 +32,7 @@ fn geoblock(body: &str) -> Geoblock {
 }
 
 /// The answers of the public reads: the recorded `/version`, the venue clock, an open host.
-fn recorded_facts() -> ProbeFacts {
+pub(super) fn recorded_facts() -> ProbeFacts {
     let version = decode_protocol_version(VERSION_ANSWER).expect("the recorded answer names one");
     ProbeFacts {
         protocol_version: version.to_string().into(),
@@ -163,7 +163,7 @@ fn preflight_gates_run_in_order_over_recorded_answers() {
     let open = past_the_block
         .assess_account(AccountStanding::Open)
         .expect("an account open to new positions passes");
-    assert_eq!(open.signature_type, SignatureType::Eoa);
+    assert_eq!(SignatureType::from(open.signature_type), SignatureType::Eoa);
     assert_eq!(open.signature_type.code(), 0);
     assert_eq!(open.signer, key.address());
     assert_eq!(open.maker, key.address());
@@ -177,7 +177,10 @@ fn preflight_gates_run_in_order_over_recorded_answers() {
     let safe_identity = admitted(&facts, &safe)
         .assess_account(AccountStanding::Open)
         .expect("a gnosis safe passes");
-    assert_eq!(safe_identity.signature_type, SignatureType::GnosisSafe);
+    assert_eq!(
+        SignatureType::from(safe_identity.signature_type),
+        SignatureType::GnosisSafe
+    );
     assert_eq!(safe_identity.signature_type.code(), 2);
     assert_eq!(safe_identity.maker, other);
     assert_eq!(safe_identity.signer, key.address());

@@ -120,7 +120,7 @@ pub enum PolymarketPreflightError {
     )]
     WalletSignatureType { value: Box<str> },
     #[error(
-        "this wallet signs orders as signatureType {code}, which needs the erc-7739 wrap — the wrap is implemented and pinned against a vector, but no live order has ever been signed with it, and an unproven signing path fails at the venue as a generic refusal"
+        "this wallet signs orders as signatureType {code}, a wallet type that no live order has proven — only 0 (eoa) and 2 (gnosis safe) are; an unproven signing path fails at the venue as a generic refusal, and a deposit wallet (3) also needs the erc-7739 wrap, which only a vector pins"
     )]
     UnprovenWalletType { code: u8 },
     #[error(transparent)]
@@ -178,7 +178,7 @@ async fn report_account(
         "collateral",
         http.send_signed(
             signer,
-            &collateral_balance(wallet.signature_type),
+            &collateral_balance(wallet.signature_type.into()),
             timestamp_secs,
         )
         .await,

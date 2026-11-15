@@ -14,18 +14,15 @@ use engine::venues::edge::decode::DecimalFault;
 use engine::venues::exec::ExecRequest;
 use engine::venues::polymarket::exec::codec::{
     AccountStamps, DecodeContext, EncodeContext, HttpAnswer, IgnoredReason, KnownOrder, OrderIndex,
-    OrderSigner, OrderSignerSetup, OrdersRead, PlaceRequestContext, PlacementStatus, RejectSubject,
-    RejectVerdict, SettlementWatermark, StreamEvent, TokenBinding, TokenTable, TradeSettlement,
-    VenueAnswer, VenueAvailability, VenueFailure, WireError, account_snapshot,
-    cancel_market_orders, classify_error, decode_balance, decode_cancel, decode_clob_market,
-    decode_orders_page, decode_place, decode_single_order, decode_stream_frame, decode_trades_page,
-    encode_request,
+    OrdersRead, PlaceRequestContext, PlacementStatus, RejectSubject, RejectVerdict,
+    SettlementWatermark, StreamEvent, TokenBinding, TokenTable, TradeSettlement, VenueAnswer,
+    VenueAvailability, VenueFailure, WireError, account_snapshot, cancel_market_orders,
+    classify_error, decode_balance, decode_cancel, decode_clob_market, decode_orders_page,
+    decode_place, decode_single_order, decode_stream_frame, decode_trades_page, encode_request,
 };
-use engine::venues::polymarket::exec::sign::address::Address;
-use engine::venues::polymarket::exec::sign::order::SignatureType;
 use serde_json::Value;
 
-use crate::venues::polymarket::poly_sign::{text, wallet_key};
+use super::signing::{sign_vector, vector_signer};
 
 macro_rules! fixture {
     ($name:literal) => {
@@ -36,8 +33,6 @@ macro_rules! fixture {
         ))
     };
 }
-
-const SIGN_VECTORS: &str = include_str!("../../../../fixtures/polymarket/sign_vectors.json");
 
 const NOW: LocalTs = LocalTs::from_micros(1_786_046_870_000_000);
 
@@ -51,7 +46,7 @@ const ORDER_A: &str = "0x3f1c9b4a72e5d08a1c6b3fd2094e7a5b81c02d6e9fa473b5c8e10d9
 const ORDER_B: &str = "0x7d2e8a015c93b64fe0a17d3b28c95f4610ed7b3a92c4085fd61b73e2a908c54d";
 const ORDER_FOREIGN: &str = "0xc4a90b7e13d582f6a08b4c17e29d360f5ba81c7d049e3b62f18a05c937de4b21";
 
-const API_KEY: &str = "b1f2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+pub(super) const API_KEY: &str = "b1f2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
 
 const UP: InstrumentId = InstrumentId(3);
 const DOWN: InstrumentId = InstrumentId(4);
@@ -895,114 +890,13 @@ fn a_full_pause_is_distinguishable_from_a_pause_that_still_takes_cancels() {
     }
 }
 
-fn sign_vector() -> Value {
-    let vectors: Value =
-        serde_json::from_str(SIGN_VECTORS).expect("sign vector fixture is valid json");
-    vectors["orders"]
-        .as_array()
-        .expect("order vectors")
-        .iter()
-        .find(|vector| vector["signature_type"] == 2)
-        .cloned()
-        .expect("a gnosis safe order vector")
-}
-
-fn vector_signature_type(vector: &Value) -> u8 {
-    vector["signature_type"]
-        .as_u64()
-        .expect("vector signature type") as u8
-}
-
-fn vector_signer(vector: &Value) -> OrderSigner {
-    OrderSigner::new(OrderSignerSetup {
-        key: wallet_key(vector),
-        maker: Address::parse(text(vector, "maker")).expect("vector maker parses"),
-        signer: Address::parse(text(vector, "signer")).expect("vector signer parses"),
-        signature_type: SignatureType::from_code(vector_signature_type(vector))
-            .expect("vector names a wallet type this engine knows"),
-        api_key: API_KEY.to_owned(),
-    })
-}
-
-#[test]
-fn the_place_body_is_byte_exact_against_the_sdk_signature() {
-    let vector = sign_vector();
-    let signature = text(&vector, "expected_signature");
-    let token = text(&vector, "token_id");
-    let salt: u64 = text(&vector, "salt").parse().expect("vector salt");
-    let timestamp_millis: i64 = text(&vector, "timestamp_millis")
-        .parse()
-        .expect("vector timestamp");
-    let signer = vector_signer(&vector);
-
-    let mut table = TokenTable::with_retired_capacity(2);
-    table.bind(TokenBinding {
-        instrument: UP,
-        token_id: token.into(),
-        tick: TICK,
-        is_neg_risk: vector["neg_risk"].as_bool().expect("vector neg_risk"),
-    });
-    let orders = OrderIndex::with_capacity(4);
-    let sent_ts_us = LocalTs::from_micros(timestamp_millis * 1_000);
-    let context = EncodeContext {
-        tokens: &table,
-        orders: &orders,
-        signer: &signer,
-        sent_ts_us,
-    };
-
-    // The salt is derived from the send stamp and the client id rather than drawn at random, so a
-    // client id exists that lands on the vector's salt exactly. Solving for it is what lets an
-    // SDK-minted signature be reproduced here at all.
-    let client_id = ClientOrderId(sent_ts_us.micros() as u64 ^ salt);
-
-    let encoded = encode_request(
-        ExecRequest::Place {
-            instrument: UP,
-            client_id,
-            side: Side::Buy,
-            price: PRICE,
-            qty: SIZE,
-            style: OrderStyle::PostOnly,
-        },
-        &context,
-    )
-    .expect("the binding, price and size are all on the venue's grid");
-
-    let expected = format!(
-        concat!(
-            r#"{{"order":{{"salt":{salt},"maker":"{maker}","signer":"{signer}","#,
-            r#""tokenId":"{token}","makerAmount":"{maker_amount}","takerAmount":"{taker_amount}","#,
-            r#""side":"BUY","expiration":"0","timestamp":"{timestamp}","#,
-            r#""signatureType":{signature_type},"#,
-            r#""signature":"{signature}","#,
-            r#""metadata":"0x0000000000000000000000000000000000000000000000000000000000000000","#,
-            r#""builder":"0x0000000000000000000000000000000000000000000000000000000000000000"}},"#,
-            r#""owner":"{api_key}","orderType":"GTC","deferExec":false,"postOnly":true}}"#
-        ),
-        salt = salt,
-        maker = text(&vector, "maker"),
-        signer = text(&vector, "signer"),
-        token = token,
-        maker_amount = text(&vector, "maker_amount"),
-        taker_amount = text(&vector, "taker_amount"),
-        timestamp = timestamp_millis,
-        signature_type = vector_signature_type(&vector),
-        signature = signature,
-        api_key = API_KEY,
-    );
-    assert_eq!(encoded.body, expected);
-    assert_eq!(encoded.path, "/order");
-    assert!(encoded.query.is_empty());
-}
-
 /// Encoding through the real signer: order-type/postOnly selection, cancel addressability
 /// (mapped vs never-acknowledged), and read/rotation requests scoped by token — plus the token
 /// table's own rebind policy, which every encoded request ultimately depends on.
 #[test]
 fn requests_encode_by_token_and_the_token_table_rebinds_correctly() {
     let vector = sign_vector();
-    let signer = vector_signer(&vector);
+    let signer = vector_signer(&vector, API_KEY);
     let table = tokens();
     let orders = index();
     let context = EncodeContext {

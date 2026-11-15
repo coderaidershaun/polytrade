@@ -35,6 +35,34 @@ pub struct WalletConfig {
     pub signature_type: Box<str>,
 }
 
+/// A wallet type that a live order has proven this engine signs for. Only the gate makes one, so a
+/// signer cannot be built for a type whose signature no venue has accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProvenSignatureType(SignatureType);
+
+impl ProvenSignatureType {
+    pub const fn code(self) -> u8 {
+        self.0.code()
+    }
+
+    fn admit(signature_type: SignatureType) -> Result<Self, PolymarketPreflightError> {
+        match signature_type {
+            SignatureType::Eoa | SignatureType::GnosisSafe => Ok(Self(signature_type)),
+            SignatureType::Proxy | SignatureType::DepositWallet => {
+                Err(PolymarketPreflightError::UnprovenWalletType {
+                    code: signature_type.code(),
+                })
+            }
+        }
+    }
+}
+
+impl From<ProvenSignatureType> for SignatureType {
+    fn from(proven: ProvenSignatureType) -> Self {
+        proven.0
+    }
+}
+
 /// What the signed read of the account answered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AccountStanding {
@@ -125,18 +153,10 @@ impl WalletConfig {
             .ok_or_else(|| PolymarketPreflightError::WalletSignatureType {
                 value: self.signature_type.clone(),
             })?;
-        if !matches!(
-            signature_type,
-            SignatureType::Eoa | SignatureType::GnosisSafe
-        ) {
-            return Err(PolymarketPreflightError::UnprovenWalletType {
-                code: signature_type.code(),
-            });
-        }
         Ok(WalletIdentity {
             maker,
             signer: self.signer,
-            signature_type,
+            signature_type: ProvenSignatureType::admit(signature_type)?,
         })
     }
 }
