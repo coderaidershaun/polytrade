@@ -14,18 +14,15 @@ use engine::venues::edge::decode::DecimalFault;
 use engine::venues::exec::ExecRequest;
 use engine::venues::polymarket::exec::codec::{
     AccountStamps, DecodeContext, EncodeContext, HttpAnswer, IgnoredReason, KnownOrder, OrderIndex,
-    OrderSigner, OrderSignerSetup, OrdersRead, PlaceRequestContext, PlacementStatus, RejectSubject,
-    RejectVerdict, SettlementWatermark, StreamEvent, TokenBinding, TokenTable, TradeSettlement,
-    VenueAnswer, VenueAvailability, VenueFailure, WireError, account_snapshot,
-    cancel_market_orders, classify_error, decode_balance, decode_cancel, decode_clob_market,
-    decode_orders_page, decode_place, decode_single_order, decode_stream_frame, decode_trades_page,
-    encode_request,
+    OrdersRead, PlaceRequestContext, PlacementStatus, RejectSubject, RejectVerdict,
+    SettlementWatermark, StreamEvent, TokenBinding, TokenTable, TradeSettlement, VenueAnswer,
+    VenueAvailability, VenueFailure, WireError, account_snapshot, cancel_market_orders,
+    classify_error, decode_balance, decode_cancel, decode_clob_market, decode_orders_page,
+    decode_place, decode_single_order, decode_stream_frame, decode_trades_page, encode_request,
 };
-use engine::venues::polymarket::exec::sign::address::Address;
-use engine::venues::polymarket::exec::sign::order::SignatureType;
 use serde_json::Value;
 
-use crate::venues::polymarket::poly_sign::{text, wallet_key};
+use super::signing::{sign_vector, text, vector_signature_type, vector_signer};
 
 macro_rules! fixture {
     ($name:literal) => {
@@ -36,8 +33,6 @@ macro_rules! fixture {
         ))
     };
 }
-
-const SIGN_VECTORS: &str = include_str!("../../../../fixtures/polymarket/sign_vectors.json");
 
 const NOW: LocalTs = LocalTs::from_micros(1_786_046_870_000_000);
 
@@ -895,35 +890,6 @@ fn a_full_pause_is_distinguishable_from_a_pause_that_still_takes_cancels() {
     }
 }
 
-fn sign_vector() -> Value {
-    let vectors: Value =
-        serde_json::from_str(SIGN_VECTORS).expect("sign vector fixture is valid json");
-    vectors["orders"]
-        .as_array()
-        .expect("order vectors")
-        .iter()
-        .find(|vector| vector["signature_type"] == 2)
-        .cloned()
-        .expect("a gnosis safe order vector")
-}
-
-fn vector_signature_type(vector: &Value) -> u8 {
-    vector["signature_type"]
-        .as_u64()
-        .expect("vector signature type") as u8
-}
-
-fn vector_signer(vector: &Value) -> OrderSigner {
-    OrderSigner::new(OrderSignerSetup {
-        key: wallet_key(vector),
-        maker: Address::parse(text(vector, "maker")).expect("vector maker parses"),
-        signer: Address::parse(text(vector, "signer")).expect("vector signer parses"),
-        signature_type: SignatureType::from_code(vector_signature_type(vector))
-            .expect("vector names a wallet type this engine knows"),
-        api_key: API_KEY.to_owned(),
-    })
-}
-
 #[test]
 fn the_place_body_is_byte_exact_against_the_sdk_signature() {
     let vector = sign_vector();
@@ -933,7 +899,7 @@ fn the_place_body_is_byte_exact_against_the_sdk_signature() {
     let timestamp_millis: i64 = text(&vector, "timestamp_millis")
         .parse()
         .expect("vector timestamp");
-    let signer = vector_signer(&vector);
+    let signer = vector_signer(&vector, API_KEY);
 
     let mut table = TokenTable::with_retired_capacity(2);
     table.bind(TokenBinding {
@@ -1002,7 +968,7 @@ fn the_place_body_is_byte_exact_against_the_sdk_signature() {
 #[test]
 fn requests_encode_by_token_and_the_token_table_rebinds_correctly() {
     let vector = sign_vector();
-    let signer = vector_signer(&vector);
+    let signer = vector_signer(&vector, API_KEY);
     let table = tokens();
     let orders = index();
     let context = EncodeContext {

@@ -13,7 +13,6 @@ use engine::runtime::secrets::Secret;
 use engine::venues::polymarket::exec::sign::address::Address;
 use engine::venues::polymarket::exec::sign::amount::{AmountRequest, order_amounts};
 use engine::venues::polymarket::exec::sign::eip712::{word_from_decimal, word_from_uint};
-use engine::venues::polymarket::exec::sign::key::SigningKey;
 use engine::venues::polymarket::exec::sign::l1::{ClobAuthRequest, clob_auth_headers};
 use engine::venues::polymarket::exec::sign::l2::{
     ApiCredentials, HttpMethod, RequestSigner, RequestToSign,
@@ -24,21 +23,12 @@ use engine::venues::polymarket::exec::sign::order::{
 use proptest::prelude::*;
 use serde_json::Value;
 
+use super::signing::{text, wallet_key};
+
 const VECTORS: &str = include_str!("../../../../fixtures/polymarket/sign_vectors.json");
 
 fn vectors() -> Value {
     serde_json::from_str(VECTORS).expect("sign vector fixture is valid json")
-}
-
-pub(crate) fn text<'a>(value: &'a Value, field: &str) -> &'a str {
-    value[field]
-        .as_str()
-        .unwrap_or_else(|| panic!("vector field {field} is a string"))
-}
-
-pub(crate) fn wallet_key(vector: &Value) -> SigningKey {
-    SigningKey::from_secret(&Secret::new(text(vector, "private_key")))
-        .expect("throwaway vector key parses")
 }
 
 /// The L1 `ClobAuth` vector: the signature that `derive-api-key` and every private call after it

@@ -13,3 +13,4 @@ mod poly_sign;
 mod polymarket_fixtures;
 mod polymarket_gamma;
 mod polymarket_parse;
+mod signing;
