@@ -1,103 +1,20 @@
 //! The simulated venue: one value that holds the book, the orders, and the wallet, and applies
 //! market data and requests in the order of their effective time.
 
+use super::emission::{EmissionBook, SimEmission, VenueEvent};
 use super::latency;
 use super::market::{MarketFold, ResetReason, TradeEvidence, UnmatchedPrints};
 use super::ordering::{Phase, Sequenced, SequencedByKey};
-use super::queue::{self, OwnFill, SimOrderIndex};
+use super::queue::{OwnFill, SimOrderIndex};
 use super::request::{RequestFold, TimedAction, close_order};
-use super::resting::{
-    ClosedReason, InstrumentLimits, OrderPhase, OrderSnapshot, RefusalReason, RestingOrders,
-};
-use super::wallet::{FillSettlement, SimWallet, SimWalletSetup, WalletError};
+use super::resting::{ClosedReason, InstrumentLimits, OrderPhase, RestingOrders};
+use super::wallet::{SimWallet, SimWalletSetup, WalletError};
 
-use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, TradeId};
+use crate::msg::ids::{InstrumentId, Qty};
 use crate::msg::inbound::{BookChunkKind, InboundMessage, MessageBody, TappedMessage, VenueMeta};
 use crate::msg::time::{DurationUs, LocalTs};
 use crate::venues::exec::ExecRequest;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SimEmission {
-    pub at_ts_us: LocalTs,
-    pub sequence: u64,
-    pub event: VenueEvent,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum VenueEvent {
-    Rested {
-        snapshot: OrderSnapshot,
-        queue_ahead: queue::QueueAhead,
-    },
-    PostOnlyCrossed {
-        snapshot: OrderSnapshot,
-    },
-    PlaceRefused {
-        snapshot: OrderSnapshot,
-        reason: RefusalReason,
-    },
-    Filled {
-        snapshot: OrderSnapshot,
-        last_qty: Qty,
-        last_price: Price,
-        trade_id: TradeId,
-        settlement: FillSettlement,
-    },
-    Canceled {
-        snapshot: OrderSnapshot,
-    },
-    CancelRefused {
-        client_id: ClientOrderId,
-        reason: RefusalReason,
-    },
-    Amended {
-        snapshot: OrderSnapshot,
-        total_qty: Qty,
-    },
-    AmendRefused {
-        client_id: ClientOrderId,
-        reason: RefusalReason,
-    },
-    OrderStatus {
-        snapshot: OrderSnapshot,
-    },
-    NoSuchOrder {
-        client_id: ClientOrderId,
-    },
-    OpenOrders {
-        rows: Vec<OrderSnapshot>,
-    },
-    StreamSubscribed,
-    MarketReset {
-        reason: ResetReason,
-    },
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct EmissionBook {
-    pending: Vec<SimEmission>,
-    sequence: u64,
-}
-
-impl EmissionBook {
-    pub fn push(&mut self, at_ts_us: LocalTs, event: VenueEvent) {
-        self.pending.push(SimEmission {
-            at_ts_us,
-            sequence: self.sequence,
-            event,
-        });
-        self.sequence += 1;
-    }
-
-    fn drain_through(&mut self, horizon: LocalTs, out: &mut Vec<SimEmission>) {
-        self.pending
-            .sort_by_key(|emission| (emission.at_ts_us, emission.sequence));
-        let split = self
-            .pending
-            .partition_point(|emission| emission.at_ts_us <= horizon);
-        out.extend(self.pending.drain(..split));
-    }
-}
+use crate::venues::sim::SimEdgeError;
 
 #[derive(Debug)]
 pub struct SimVenue {
@@ -136,7 +53,7 @@ impl SimVenue {
     pub fn new(setup: SimVenueSetup) -> Result<Self, WalletError> {
         Ok(Self {
             market: MarketFold::new(setup.instrument, setup.book_capacity),
-            inbox: SequencedByKey::default(),
+            inbox: SequencedByKey::with_capacity(setup.market_inbox_capacity),
             inbox_capacity: setup.market_inbox_capacity,
             orders: RestingOrders::new(),
             limits: setup.limits,
@@ -163,24 +80,28 @@ impl SimVenue {
         }
     }
 
-    /// # Panics
-    /// When the market inbox is full.
-    pub fn on_market_batch(&mut self, tapped: &[TappedMessage], latency: latency::LatencyBudget) {
+    /// # Errors
+    /// [`SimEdgeError::InboxFull`] when the inbox holds its capacity. The events that it holds stay,
+    /// and the event that does not fit is not pushed: evicting one would change which orders fill.
+    pub fn on_market_batch(
+        &mut self,
+        tapped: &[TappedMessage],
+        latency: latency::LatencyBudget,
+    ) -> Result<(), SimEdgeError> {
         for item in tapped {
             let effective_ts_us = latency.market_effective(item.message.header.received_ts_us);
             let Some(phase) = self.phase_of(&item.message, item.venue_meta) else {
                 continue;
             };
-            assert!(
-                self.inbox.len() < self.inbox_capacity,
-                "the simulated venue's market inbox is full at {} events — the safe horizon \
-                 has lagged its receipts for longer than the declared delay bound allows, and \
-                 evicting one would silently change which orders filled",
-                self.inbox_capacity
-            );
+            if self.inbox.len() >= self.inbox_capacity {
+                return Err(SimEdgeError::InboxFull {
+                    capacity: self.inbox_capacity,
+                });
+            }
             self.inbox
                 .push(effective_ts_us, phase, (item.message, item.venue_meta));
         }
+        Ok(())
     }
 
     pub fn advance_to_watermark(&mut self, horizon: LocalTs, due: &mut Vec<SimEmission>) {

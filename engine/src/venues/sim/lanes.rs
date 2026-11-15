@@ -26,7 +26,7 @@ impl fmt::Display for SimLane {
 
 #[derive(thiserror::Error, Debug, Clone, Copy, PartialEq, Eq)]
 #[error("{lane} lane buffer reached capacity {capacity}")]
-pub struct LaneBufferFull {
+pub(crate) struct LaneBufferFull {
     pub lane: SimLane,
     pub capacity: usize,
 }
@@ -53,7 +53,7 @@ impl SimHorizon {
         self.observed[lane as usize] = true;
     }
 
-    pub fn watermark(&self, lane: SimLane) -> LocalTs {
+    pub(crate) fn watermark(&self, lane: SimLane) -> LocalTs {
         self.watermarks[lane as usize]
     }
 
@@ -71,7 +71,7 @@ impl SimHorizon {
 }
 
 #[derive(Debug, Clone)]
-pub struct LaneBuffer<T> {
+pub(crate) struct LaneBuffer<T> {
     lane: SimLane,
     capacity: usize,
     items: VecDeque<(LocalTs, T)>,

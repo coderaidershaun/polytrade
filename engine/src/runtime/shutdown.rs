@@ -64,6 +64,10 @@ pub enum FatalReason {
     },
     #[error("the exchange simulator's command lane is full at capacity {capacity}")]
     SimulatorCommandLaneFull { capacity: usize },
+    #[error(
+        "the simulated venue's market inbox is full at {capacity} events — the run is not valid"
+    )]
+    SimulatorInboxFull { capacity: usize },
     #[error("{venue} execution: the rest worker stopped answering")]
     RestWorkerGone { venue: &'static str },
     #[error("{venue} execution cannot decode {}", part.noun())]
@@ -102,6 +106,7 @@ impl FatalReason {
             | FatalReason::MirrorRetainFailed { .. }
             | FatalReason::PlacementFailedClosed { .. }
             | FatalReason::SimulatorCommandLaneFull { .. }
+            | FatalReason::SimulatorInboxFull { .. }
             | FatalReason::RestWorkerGone { .. }
             | FatalReason::UndecodableAnswer { .. }
             | FatalReason::SubscribeRefused { .. }

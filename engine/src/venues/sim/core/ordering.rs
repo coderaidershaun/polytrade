@@ -1,4 +1,7 @@
-//! Effective-time ordering for buffered simulator inputs.
+//! Effective-time ordering for the buffered inputs and the emissions of the simulator.
+
+use std::cmp::{Ordering, Reverse};
+use std::collections::BinaryHeap;
 
 use crate::msg::time::LocalTs;
 
@@ -10,6 +13,8 @@ pub enum Phase {
     Trade,
     OrderAction,
     Reconcile,
+    /// The one phase of each emission, which only ties with another emission.
+    Emission,
 }
 
 pub(super) type EventKey = (LocalTs, Phase, u64);
@@ -28,15 +33,49 @@ impl<T> Sequenced<T> {
     }
 }
 
+/// An entry compared by its whole key alone. The key holds the sequence, so no two entries tie,
+/// and the heap pops them in the one order of their keys.
+#[derive(Debug, Clone)]
+struct ByKey<T>(Sequenced<T>);
+
+impl<T> PartialEq for ByKey<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.key() == other.0.key()
+    }
+}
+
+impl<T> Eq for ByKey<T> {}
+
+impl<T> PartialOrd for ByKey<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T> Ord for ByKey<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.0.key().cmp(&other.0.key())
+    }
+}
+
 /// Every buffered simulator input is ordered by the same key, so the rule lives here once: two
 /// copies of it could drift apart and only one of them would fail a test.
 #[derive(Debug, Clone)]
 pub(super) struct SequencedByKey<T> {
-    entries: Vec<Sequenced<T>>,
+    entries: BinaryHeap<Reverse<ByKey<T>>>,
     sequence: u64,
 }
 
 impl<T> SequencedByKey<T> {
+    /// Reserves room for `capacity` entries at start, so a queue that stays within its bound never
+    /// allocates again.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            entries: BinaryHeap::with_capacity(capacity),
+            sequence: 0,
+        }
+    }
+
     pub fn push(&mut self, at_ts_us: LocalTs, phase: Phase, item: T) {
         let entry = Sequenced {
             at_ts_us,
@@ -45,18 +84,15 @@ impl<T> SequencedByKey<T> {
             item,
         };
         self.sequence += 1;
-        let at = self
-            .entries
-            .partition_point(|held| held.key() <= entry.key());
-        self.entries.insert(at, entry);
+        self.entries.push(Reverse(ByKey(entry)));
     }
 
     pub fn peek(&self) -> Option<EventKey> {
-        self.entries.first().map(Sequenced::key)
+        self.entries.peek().map(|Reverse(ByKey(entry))| entry.key())
     }
 
     pub fn pop(&mut self) -> Option<Sequenced<T>> {
-        (!self.entries.is_empty()).then(|| self.entries.remove(0))
+        self.entries.pop().map(|Reverse(ByKey(entry))| entry)
     }
 
     pub fn len(&self) -> usize {
@@ -66,9 +102,6 @@ impl<T> SequencedByKey<T> {
 
 impl<T> Default for SequencedByKey<T> {
     fn default() -> Self {
-        Self {
-            entries: Vec::new(),
-            sequence: 0,
-        }
+        Self::with_capacity(0)
     }
 }
