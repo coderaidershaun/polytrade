@@ -46,7 +46,7 @@ const ORDER_A: &str = "0x3f1c9b4a72e5d08a1c6b3fd2094e7a5b81c02d6e9fa473b5c8e10d9
 const ORDER_B: &str = "0x7d2e8a015c93b64fe0a17d3b28c95f4610ed7b3a92c4085fd61b73e2a908c54d";
 const ORDER_FOREIGN: &str = "0xc4a90b7e13d582f6a08b4c17e29d360f5ba81c7d049e3b62f18a05c937de4b21";
 
-const API_KEY: &str = "b1f2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+pub(super) const API_KEY: &str = "b1f2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
 
 const UP: InstrumentId = InstrumentId(3);
 const DOWN: InstrumentId = InstrumentId(4);

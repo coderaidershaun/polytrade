@@ -19,7 +19,7 @@ const OPEN_HOST: &str = r#"{"blocked":false,"ip":"192.0.2.7","country":"GB","reg
 const BLOCKED_HOST: &str = r#"{"blocked":true,"ip":"192.0.2.7","country":"US","region":"NY"}"#;
 const SERVER_SECS: i64 = 1_700_000_000;
 /// Read 0.4 s after the venue's own clock answered.
-const LOCAL: LocalTs = LocalTs::from_micros(SERVER_SECS * 1_000_000 + 400_000);
+pub(super) const LOCAL: LocalTs = LocalTs::from_micros(SERVER_SECS * 1_000_000 + 400_000);
 
 /// A throwaway key of this test: the secp256k1 scalar `scalar`, which holds no funds anywhere.
 fn test_key(scalar: u8) -> SigningKey {
@@ -32,7 +32,7 @@ fn geoblock(body: &str) -> Geoblock {
 }
 
 /// The answers of the public reads: the recorded `/version`, the venue clock, an open host.
-fn recorded_facts() -> ProbeFacts {
+pub(super) fn recorded_facts() -> ProbeFacts {
     let version = decode_protocol_version(VERSION_ANSWER).expect("the recorded answer names one");
     ProbeFacts {
         protocol_version: version.to_string().into(),
