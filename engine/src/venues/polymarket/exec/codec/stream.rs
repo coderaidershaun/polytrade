@@ -144,9 +144,13 @@ fn decode_order_event(
         side: order_side("side", &event.side)?,
         price,
         qty,
+        // A resting order fills at its own limit, exactly.
+        last_price: match own_trade.mantissa() > 0 {
+            true => price,
+            false => Price::from_mantissa(0),
+        },
         last_qty: own_trade,
         cumulative_qty: filled,
-        // A resting order fills at its own limit, exactly.
         cumulative_quote: price.notional(filled),
         exchange_ts_us: venue_stamp(&event.timestamp, 1, context),
         ..blank_event(kind, Some(instrument), known.client_id, context)

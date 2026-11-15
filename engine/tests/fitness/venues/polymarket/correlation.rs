@@ -11,7 +11,7 @@ use engine::hot::strategy::{Fill, Strategy as EngineStrategy, StrategyCtx};
 use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, OrderStyle, Provenance, VenueOrderStatus,
 };
-use engine::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::time::{DurationUs, LocalTs};
 use engine::venues::exec::{
@@ -829,32 +829,52 @@ impl MakerCodec {
     }
 }
 
-/// The position that the ledger shows inside each fill callback, which the engine fires only after
-/// it folded the fill.
-struct FillPositions(Arc<Mutex<Vec<Qty>>>);
+/// A fill as a strategy sees it: the position that the ledger shows inside the fill callback, which
+/// the engine fires only after it folded the fill, and the price and the quote amount of the fill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SeenFill {
+    position: Qty,
+    price: Price,
+    notional: Notional,
+}
 
-impl EngineStrategy for FillPositions {
+struct SeenFills(Arc<Mutex<Vec<SeenFill>>>);
+
+impl EngineStrategy for SeenFills {
     fn on_fill(&mut self, ctx: &mut StrategyCtx<'_>, fill: &Fill) {
-        let held = ctx.position_base(fill.instrument);
+        let seen = SeenFill {
+            position: ctx.position_base(fill.instrument),
+            price: fill.price,
+            notional: fill.notional,
+        };
         self.0
             .lock()
             .expect("no reader panics while it holds the list")
-            .push(held);
+            .push(seen);
     }
 }
 
-/// An engine with one row, and the positions that its fills showed.
-fn fill_engine() -> (HotEngine, Arc<Mutex<Vec<Qty>>>) {
-    let positions = Arc::new(Mutex::new(Vec::new()));
+/// An engine with one row, and the fills that its strategy saw.
+fn fill_engine() -> (HotEngine, Arc<Mutex<Vec<SeenFill>>>) {
+    let fills = Arc::new(Mutex::new(Vec::new()));
     let (persistence, _rows) = persist_ring(256);
     let (log_sink, _logs) = strategy_log_ring(64);
     let engine = engine_without_warmup(
         &[instrument_row(0, TrackerSpec::default(), 64)],
-        Box::new(FillPositions(Arc::clone(&positions))),
+        Box::new(SeenFills(Arc::clone(&fills))),
         persistence,
         log_sink,
     );
-    (engine, positions)
+    (engine, fills)
+}
+
+/// The fill of `step` shares of the resting buy at 0.52, after which the ledger holds `position`.
+fn fill_at_52(step: i64, position: i64) -> SeenFill {
+    SeenFill {
+        position: shares(position),
+        price: cents(52),
+        notional: cents(52).notional(shares(step)),
+    }
 }
 
 /// CONTRACT: the Polymarket codec, its index, and the fold meet at the maker fill. The venue's
@@ -879,11 +899,21 @@ fn a_maker_fill_of_polymarket_books_no_fee_gap() {
 
     let mut codec = MakerCodec::naming(ours);
     let steps = [
-        (fixture!("ws_order_update_partial"), 4, 4, vec![4]),
+        (
+            fixture!("ws_order_update_partial"),
+            4,
+            4,
+            vec![fill_at_52(4, 4)],
+        ),
         (fixture!("ws_order_update_partial"), 4, 0, vec![]),
-        (fixture!("ws_order_update_filled"), 10, 6, vec![10]),
+        (
+            fixture!("ws_order_update_filled"),
+            10,
+            6,
+            vec![fill_at_52(6, 10)],
+        ),
     ];
-    for (index, (frame, cumulative, own_step, positions)) in steps.into_iter().enumerate() {
+    for (index, (frame, cumulative, own_step, expected)) in steps.into_iter().enumerate() {
         let when = 1_000 * (index as i64 + 2);
         let report = codec.report(frame, at(when));
         assert_eq!(
@@ -891,16 +921,20 @@ fn a_maker_fill_of_polymarket_books_no_fee_gap() {
             (ExecKind::ReportTrade, shares(cumulative), shares(own_step)),
             "report {index}: the venue's total, and the step of its own trade"
         );
+        let trade_price = if own_step > 0 { cents(52) } else { Price::from_mantissa(0) };
+        assert_eq!(
+            report.last_price, trade_price,
+            "report {index}: a resting order fills at its own limit, which the frame names"
+        );
         engine.dispatch(&InboundMessage::new(at(when), MessageBody::Exec(report)));
         // As the actor does after each event that it folds.
         codec
             .orders
             .record_matched(report.client_id, report.cumulative_qty);
-        let held = std::mem::take(&mut *fills.lock().expect("no writer panics"));
-        let expected: Vec<Qty> = positions.into_iter().map(shares).collect();
+        let seen = std::mem::take(&mut *fills.lock().expect("no writer panics"));
         assert_eq!(
-            held, expected,
-            "report {index}: the ledger moves by the step, once"
+            seen, expected,
+            "report {index}: the ledger moves by the step, once, at the price of the fill"
         );
     }
     let counters = engine.counters();
