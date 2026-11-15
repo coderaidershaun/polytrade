@@ -93,6 +93,7 @@ impl RateLimit {
 #[derive(Debug, Clone)]
 pub struct ClobHttp {
     http: HttpClient,
+    base: Box<str>,
 }
 
 impl ClobHttp {
@@ -106,7 +107,25 @@ impl ClobHttp {
             connect: connect_timeout,
             request: request_timeout,
         })?;
-        Ok(Self { http })
+        Ok(Self {
+            http,
+            base: CLOB_BASE.into(),
+        })
+    }
+
+    /// A client that sends each request to a stand-in on this host at `port`, so that a test can
+    /// watch what the edge sends. It reaches no other host, and the engine never builds one.
+    ///
+    /// # Errors
+    /// [`TransportError::ClientBuild`] if the TLS backend fails to initialise.
+    pub fn on_loopback(
+        port: u16,
+        connect_timeout: Duration,
+        request_timeout: Duration,
+    ) -> Result<Self, TransportError> {
+        let mut client = Self::new(connect_timeout, request_timeout)?;
+        client.base = format!("http://127.0.0.1:{port}").into();
+        Ok(client)
     }
 
     /// Unsigned, at an absolute url — the one check that does not live on the api host.
@@ -118,7 +137,7 @@ impl ClobHttp {
         &self,
         request: &EncodedRequest,
     ) -> Result<ClobResponse, TransportError> {
-        let url = url_of(request);
+        let url = self.url_of(request);
         self.send(self.builder(request, &url), &url).await
     }
 
@@ -163,12 +182,19 @@ impl ClobHttp {
         request: &EncodedRequest,
         headers: impl IntoIterator<Item = (&'static str, &str)>,
     ) -> Result<ClobResponse, TransportError> {
-        let url = url_of(request);
+        let url = self.url_of(request);
         let mut builder = self.builder(request, &url);
         for (name, value) in headers {
             builder = builder.header(name, value);
         }
         self.send(builder, &url).await
+    }
+
+    fn url_of(&self, request: &EncodedRequest) -> String {
+        match request.query.is_empty() {
+            true => format!("{}{}", self.base, request.path),
+            false => format!("{}{}?{}", self.base, request.path, request.query),
+        }
     }
 
     /// The body is handed over as the exact bytes that were signed; reqwest's own json helper would
@@ -202,13 +228,6 @@ impl ClobHttp {
             body,
             rate_limit,
         })
-    }
-}
-
-fn url_of(request: &EncodedRequest) -> String {
-    match request.query.is_empty() {
-        true => format!("{CLOB_BASE}{}", request.path),
-        false => format!("{CLOB_BASE}{}?{}", request.path, request.query),
     }
 }
 

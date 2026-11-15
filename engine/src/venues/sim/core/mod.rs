@@ -20,5 +20,10 @@ mod venue;
 /// carries, and a fill payload cannot be checked without the numbers behind it.
 pub mod wallet;
 
+pub use latency::LatencyBudget;
+pub use market::{ResetReason, UnmatchedPrints};
+pub use queue::QueueAhead;
+pub use resting::{ClosedReason, InstrumentLimits, OrderPhase, OrderSnapshot, RefusalReason};
 pub(crate) use revise::ForcedOrderExit;
-pub(crate) use venue::{EmissionBook, SimEmission, SimVenue, SimVenueSetup, VenueEvent};
+pub(crate) use venue::EmissionBook;
+pub use venue::{SimEmission, SimVenue, SimVenueSetup, VenueEvent};

@@ -14,7 +14,9 @@ use super::super::binding::{BindingStep, EnrichmentRead, TokenOfInstrument};
 use super::super::codec::{
     cancel_market_orders, clob_market_request, heartbeat, neg_risk_request, trades_page,
 };
-use super::rest::{Lane, RestJob, RestPurpose};
+use super::super::heartbeat::{HeartbeatSchedule, HeartbeatStep};
+use super::super::lanes::{Lane, RestJob};
+use super::rest::RestPurpose;
 use super::{Actor, CLOSE_MARGIN, Writer};
 
 impl Actor {
@@ -38,7 +40,9 @@ impl Actor {
         if let Some(ended) = self.poll_resync(now) {
             return Some(ended);
         }
-        self.send_heartbeat(now);
+        if let Some(ended) = self.send_heartbeat(now) {
+            return Some(ended);
+        }
         self.retry_binding_reads(now);
         if let Some(ended) = self.sweep_expiring_windows(writer).await {
             return Some(ended);
@@ -92,36 +96,42 @@ impl Actor {
         None
     }
 
-    /// Arms once orders become possible; once started, the venue cancels the book after 10s
-    /// of silence.
-    fn send_heartbeat(&mut self, now: LocalTs) {
-        if !self.heartbeat.is_started {
+    /// Starts once orders become possible. Past the deadline the order mirror is rebuilt through the
+    /// path of a lost connection, and placing waits for a beat that the venue answers.
+    fn send_heartbeat(&mut self, now: LocalTs) -> Option<SessionOutcome> {
+        if self.heartbeat.is_none() {
             if !self.session.core.phase().admits_new_orders() {
-                return;
+                return None;
             }
-            self.heartbeat.is_started = true;
+            self.heartbeat = Some(HeartbeatSchedule::new());
             info!(
                 "polymarket execution starting its dead-man's-switch heartbeat — the venue will cancel this book if the process stops"
             );
         }
-        if now.diff(self.heartbeat.sent_at) < super::HEARTBEAT_PERIOD {
-            return;
-        }
-        let id = self.heartbeat.id.clone().unwrap_or_default();
-        let Ok(request) = heartbeat(&id) else {
-            return;
-        };
-        // Stamped only once the beat is on its way. Stamping the attempt would hold the next one off
-        // for five seconds against a ten-second deadline, and the venue cancels the whole book when
-        // that deadline passes.
-        if self
-            .submit(
-                Lane::Heartbeat,
-                RestJob::signed(RestPurpose::Heartbeat, request),
-            )
-            .is_queued()
-        {
-            self.heartbeat.sent_at = now;
+        let step = self.heartbeat.as_mut()?.on_poll(now);
+        match step {
+            HeartbeatStep::Wait => None,
+            HeartbeatStep::Send { id } => {
+                let request = heartbeat(&id).ok()?;
+                let job = RestJob::signed(RestPurpose::Heartbeat, request);
+                if self.submit(Lane::Heartbeat, job).is_queued() {
+                    self.heartbeat.as_mut()?.on_sent(now);
+                }
+                None
+            }
+            HeartbeatStep::ResetMirror => {
+                warn!(
+                    "polymarket execution has had no heartbeat answered for too long — reconnecting to read the venue again, and placing nothing until a heartbeat is answered"
+                );
+                Some(SessionOutcome::Reconnect)
+            }
+            HeartbeatStep::ReadAfterVenueCancel => {
+                warn!(
+                    "polymarket execution passed the venue's heartbeat limit — the venue has cancelled this book, so the open orders are read again"
+                );
+                self.start_resync();
+                None
+            }
         }
     }
 

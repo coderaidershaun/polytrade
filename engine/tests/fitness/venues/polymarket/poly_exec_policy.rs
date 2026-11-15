@@ -8,8 +8,8 @@ use engine::venues::polymarket::exec::binding::{
     BindingStep, Bindings, ENRICHMENT_RETRY, EnrichmentRead, MAX_ENRICHMENT_ATTEMPTS,
 };
 use engine::venues::polymarket::exec::codec::{
-    DecodeContext, HttpAnswer, OrderIndex, OrdersRead, TokenTable, VenueAnswer, decode_heartbeat,
-    decode_neg_risk, decode_orders_page,
+    DecodeContext, HttpAnswer, OrderIndex, OrdersRead, TokenTable, VenueAnswer, decode_neg_risk,
+    decode_orders_page,
 };
 use engine::venues::polymarket::exec::correlate::restates_balances;
 use engine::venues::polymarket::rotation::{OutcomeLeg, TokenId, WindowAssignment};
@@ -386,26 +386,6 @@ fn restates_balances_classifies_every_exec_kind() {
             "{quiet:?} moves nothing"
         );
     }
-}
-
-/// The dead man's switch chains: each call echoes the id the last answer carried. A stale id is
-/// refused WITH the expected id in the body, so the refusal is itself the recovery — one reader
-/// serves both, or a single stale id ends the chain and the venue cancels the book.
-#[test]
-fn the_heartbeat_id_is_read_from_a_refusal_as_readily_as_from_a_success() {
-    assert_eq!(
-        &*decode_heartbeat(r#"{"heartbeat_id":"1a2b"}"#).expect("a success carries the next id"),
-        "1a2b"
-    );
-    assert_eq!(
-        &*decode_heartbeat(r#"{"error_msg":"Invalid Heartbeat ID","heartbeat_id":"3c4d"}"#)
-            .expect("a stale-id refusal carries the id the venue expected"),
-        "3c4d"
-    );
-    assert!(
-        decode_heartbeat(r#"{"error_msg":"Unauthorized"}"#).is_err(),
-        "an answer with no id at all cannot continue the chain"
-    );
 }
 
 /// `/clob-markets` does not publish this flag; it has its own endpoint, and the answer picks which

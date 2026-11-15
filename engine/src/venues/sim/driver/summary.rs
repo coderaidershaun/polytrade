@@ -1,8 +1,7 @@
 //! End-of-run simulator counters.
 
 use super::super::core::queue::QueueAhead;
-use super::super::core::resting::RefusalReason;
-use super::super::core::{SimEmission, VenueEvent};
+use super::super::core::{RefusalReason, SimEmission, UnmatchedPrints, VenueEvent};
 use super::SimExecDriver;
 use crate::info;
 
@@ -23,12 +22,12 @@ pub(super) struct SimRunSummary {
 
 impl SimExecDriver {
     pub fn log_summary(&self) {
-        self.summary.log();
+        self.summary.log(self.venue.unmatched_prints());
     }
 }
 
 impl SimRunSummary {
-    fn log(&self) {
+    fn log(&self, unmatched: UnmatchedPrints) {
         info!(
             "sim SUMMARY joins={} refusals={} refused_styles={} fills={} full_fills={} cancels={} amends={} resets={} filled_base={} filled_quote={}",
             self.joins,
@@ -41,6 +40,13 @@ impl SimRunSummary {
             self.resets,
             self.filled_base,
             self.filled_quote
+        );
+        info!(
+            "sim UNMATCHED PRINTS suspended={} before_last_commit={} stale_id={} epoch_seed={}",
+            unmatched.suspended,
+            unmatched.before_last_commit,
+            unmatched.stale_id,
+            unmatched.epoch_seed
         );
     }
 
