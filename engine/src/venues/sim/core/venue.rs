@@ -14,6 +14,7 @@ use crate::msg::ids::{InstrumentId, Qty};
 use crate::msg::inbound::{BookChunkKind, InboundMessage, MessageBody, TappedMessage, VenueMeta};
 use crate::msg::time::{DurationUs, LocalTs};
 use crate::venues::exec::ExecRequest;
+use crate::venues::sim::SimEdgeError;
 
 #[derive(Debug)]
 pub struct SimVenue {
@@ -79,24 +80,28 @@ impl SimVenue {
         }
     }
 
-    /// # Panics
-    /// When the market inbox is full.
-    pub fn on_market_batch(&mut self, tapped: &[TappedMessage], latency: latency::LatencyBudget) {
+    /// # Errors
+    /// [`SimEdgeError::InboxFull`] when the inbox holds its capacity. The events that it holds stay,
+    /// and the event that does not fit is not pushed: evicting one would change which orders fill.
+    pub fn on_market_batch(
+        &mut self,
+        tapped: &[TappedMessage],
+        latency: latency::LatencyBudget,
+    ) -> Result<(), SimEdgeError> {
         for item in tapped {
             let effective_ts_us = latency.market_effective(item.message.header.received_ts_us);
             let Some(phase) = self.phase_of(&item.message, item.venue_meta) else {
                 continue;
             };
-            assert!(
-                self.inbox.len() < self.inbox_capacity,
-                "the simulated venue's market inbox is full at {} events — the safe horizon \
-                 has lagged its receipts for longer than the declared delay bound allows, and \
-                 evicting one would silently change which orders filled",
-                self.inbox_capacity
-            );
+            if self.inbox.len() >= self.inbox_capacity {
+                return Err(SimEdgeError::InboxFull {
+                    capacity: self.inbox_capacity,
+                });
+            }
             self.inbox
                 .push(effective_ts_us, phase, (item.message, item.venue_meta));
         }
+        Ok(())
     }
 
     pub fn advance_to_watermark(&mut self, horizon: LocalTs, due: &mut Vec<SimEmission>) {

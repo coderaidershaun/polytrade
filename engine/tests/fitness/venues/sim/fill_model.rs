@@ -236,7 +236,9 @@ impl LiveVenue {
                 venue_meta,
             })
             .collect();
-        self.venue.on_market_batch(&tapped, NO_LATENCY);
+        self.venue
+            .on_market_batch(&tapped, NO_LATENCY)
+            .expect("the inbox holds each event");
         self.advance()
     }
 

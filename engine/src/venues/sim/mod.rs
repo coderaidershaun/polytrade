@@ -19,7 +19,7 @@ pub mod wire;
 /// The only way to stand this venue up: a caller hands over its inputs here and reaches nothing
 /// deeper.
 pub(crate) use bringup::{SimPlan, bring_up, plan};
-pub use error::SimVenueError;
+pub use error::{SimEdgeError, SimVenueError, halt_on_sim_error};
 
 use crate::hot::exec::OrderBudget;
 use crate::venues::exec::{LeaseNamespace, VenueCapabilities};

@@ -35,7 +35,7 @@ use crate::parquet_readback::TempDir;
 const REQUESTS: [&str; 3] = ["SIGTERM", "SIGINT", "shutdown request"];
 
 /// One value of each variant, listed in the order of `variant_index`.
-fn each_fatal_reason() -> [FatalReason; 15] {
+fn each_fatal_reason() -> [FatalReason; 16] {
     [
         FatalReason::InputQueueFull {
             queue: QueueId::new(0).unwrap(),
@@ -81,6 +81,7 @@ fn each_fatal_reason() -> [FatalReason; 15] {
             venue: "polymarket",
             trade: TradeId(99),
         },
+        FatalReason::SimulatorInboxFull { capacity: 131_072 },
     ]
 }
 
@@ -103,6 +104,7 @@ fn variant_index(reason: FatalReason) -> usize {
         FatalReason::OrderIndexFull { .. } => 12,
         FatalReason::SubscribeUnbuildable { .. } => 13,
         FatalReason::SettlementFailed { .. } => 14,
+        FatalReason::SimulatorInboxFull { .. } => 15,
     }
 }
 
@@ -428,7 +430,7 @@ fn fatal_is_never_a_graceful_exit() {
         .collect();
     assert_eq!(
         indexes,
-        (0..15).collect::<Vec<_>>(),
+        (0..16).collect::<Vec<_>>(),
         "one value of each variant, once"
     );
     for reason in reasons {
@@ -477,7 +479,7 @@ fn fatal_is_never_a_graceful_exit() {
             }
         }
     }
-    assert_eq!(combinations, (3 * 16 + 15) * 6 * 2);
+    assert_eq!(combinations, (3 * 17 + 16) * 6 * 2);
 
     // The six cases that the exit decision held before its reasons were typed.
     let old_cases = [

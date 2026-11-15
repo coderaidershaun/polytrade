@@ -2,6 +2,7 @@
 //! never past the horizon, so no arrival order of the lanes changes a fill.
 
 use engine::msg::exec::OrderStyle;
+use engine::msg::failure::{FailureClass, Halt};
 use engine::msg::ids::{
     AggregateTradeId, AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, RawTradeId, Side,
     StreamEpoch,
@@ -12,12 +13,15 @@ use engine::msg::inbound::{
 };
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::runtime::config::FeeBps;
+use engine::runtime::shutdown::{FatalReason, FatalSignal};
+use engine::runtime::{DrainDeadline, DrainOutcome, Exit, Trigger};
 use engine::venues::exec::ExecRequest;
 use engine::venues::sim::core::wallet::SimWalletSetup;
 use engine::venues::sim::core::{
     InstrumentLimits, LatencyBudget, SimEmission, SimVenue, SimVenueSetup, VenueEvent,
 };
 use engine::venues::sim::lanes::{SimHorizon, SimLane};
+use engine::venues::sim::{SimEdgeError, halt_on_sim_error};
 
 const INSTRUMENT: InstrumentId = InstrumentId(0);
 const BASE_US: i64 = 1_800_000_000_000_000;
@@ -99,7 +103,9 @@ fn live_venue(inbox_capacity: usize) -> SimVenue {
         depth_meta(at_ms(1)),
     ));
     tapped.push(print(at_ms(2), 0, Side::Buy, cents(10_100), milli_btc(1)));
-    venue.on_market_batch(&tapped, LATENCY);
+    venue
+        .on_market_batch(&tapped, LATENCY)
+        .expect("the inbox holds the events that bring the venue live");
     let live_through = LATENCY.market_effective(stamp(at_ms(1)));
     let mut due = Vec::new();
     venue.advance_to_watermark(live_through, &mut due);
@@ -278,7 +284,9 @@ fn replay(arrivals: &[LaneEvent]) -> Vec<SimEmission> {
                 venue.on_request(request, LATENCY.arrival(stamp(*issued_us)));
             }
             LaneEvent::Market { lane, tapped } => {
-                venue.on_market_batch(std::slice::from_ref(tapped.as_ref()), LATENCY);
+                venue
+                    .on_market_batch(std::slice::from_ref(tapped.as_ref()), LATENCY)
+                    .expect("the inbox holds each event of the lanes");
                 horizon.observe(*lane, tapped.message.header.received_ts_us);
             }
             LaneEvent::Watermark { lane, at_us } => horizon.observe(*lane, stamp(*at_us)),
@@ -418,10 +426,12 @@ fn nothing_is_applied_past_the_horizon() {
         "the order rests at its effective time, once the horizon reaches it"
     );
 
-    venue.on_market_batch(
-        &[print(at_ms(300), 1, Side::Sell, cents(9_950), milli_btc(1))],
-        LATENCY,
-    );
+    venue
+        .on_market_batch(
+            &[print(at_ms(300), 1, Side::Sell, cents(9_950), milli_btc(1))],
+            LATENCY,
+        )
+        .expect("the inbox holds the print");
     horizon.observe(SimLane::Command, stamp(at_ms(400)));
     horizon.observe(SimLane::Depth, stamp(at_ms(300) - 1));
     let short = horizon.safe_venue_horizon();
@@ -445,4 +455,112 @@ fn nothing_is_applied_past_the_horizon() {
         [(200, "filled", 1, milli_btc(1).mantissa())],
         "the print applies once the horizon reaches its effective time"
     );
+}
+
+/// The exit that a halted run gives, from the first reason of its latch.
+fn exit_of(fatal: &FatalSignal) -> Exit {
+    let reason = fatal.reason().expect("the latch has tripped");
+    Exit::decide(DrainOutcome {
+        trigger: Trigger::Fatal(reason),
+        fatal: Some(reason),
+        failures: Vec::new(),
+        deadline: DrainDeadline::Kept,
+    })
+}
+
+/// CONTRACT: a full inbox of the simulator halts the run, because the only room left would come
+/// from evicting an event, and that would change which orders filled. The venue returns the error
+/// and keeps each event that it holds; the one reader at the root of its edge trips the latch.
+#[test]
+fn full_simulator_inbox_halts_the_run_and_evicts_nothing() {
+    let mut venue = live_venue(4);
+    let mut horizon = SimHorizon::unseeded(LATENCY);
+    horizon.observe(SimLane::Command, stamp(at_ms(5)));
+    horizon.observe(SimLane::Trade, stamp(at_ms(150)));
+    horizon.observe(SimLane::Depth, stamp(at_ms(150)));
+    venue.on_request(
+        &place_buy(1, cents(9_950), milli_btc(5)),
+        LATENCY.arrival(stamp(at_ms(5))),
+    );
+    let mut due = Vec::new();
+    venue.advance_to_watermark(horizon.safe_venue_horizon(), &mut due);
+    assert_eq!(
+        described(&due),
+        [(20, "rested", 1, milli_btc(5).mantissa())]
+    );
+
+    for id in 1..=4 {
+        let held = print(
+            at_ms(200 + id as i64),
+            id,
+            Side::Sell,
+            cents(9_950),
+            milli_btc(1),
+        );
+        venue
+            .on_market_batch(&[held], LATENCY)
+            .expect("the inbox holds four events");
+    }
+    let fifth = print(at_ms(205), 5, Side::Sell, cents(9_950), milli_btc(1));
+    let error = venue
+        .on_market_batch(&[fifth], LATENCY)
+        .expect_err("a fifth event does not fit an inbox of four");
+    assert_eq!(error, SimEdgeError::InboxFull { capacity: 4 });
+
+    let fatal = FatalSignal::new();
+    halt_on_sim_error(&error, &fatal);
+    assert_eq!(
+        fatal.reason(),
+        Some(FatalReason::SimulatorInboxFull { capacity: 4 }),
+        "the edge halts the engine with the reason of a full inbox"
+    );
+    let exit = exit_of(&fatal);
+    assert_eq!(
+        exit,
+        Exit::Halted(FatalReason::SimulatorInboxFull { capacity: 4 })
+    );
+    assert_ne!(exit.code(), 0, "a halted run does not exit graceful");
+
+    let mut due = Vec::new();
+    venue.advance_to_watermark(LATENCY.market_effective(stamp(at_ms(300))), &mut due);
+    assert_eq!(
+        described(&due),
+        [101, 102, 103, 104].map(|ms| (ms, "filled", 1, milli_btc(1).mantissa())),
+        "the four held prints apply in the order of their keys, and nothing else"
+    );
+}
+
+/// CONTRACT: each fault of the simulator edge is an engine halt with a reason of its own, read in
+/// one place at the root of the edge. The latch keeps the first reason, and the run exits halted.
+#[test]
+fn a_full_command_lane_halts_the_simulated_run() {
+    let lane_full = SimEdgeError::CommandLaneFull { capacity: 64 };
+    let inbox_full = SimEdgeError::InboxFull { capacity: 4 };
+    for (error, reason) in [
+        (
+            lane_full,
+            FatalReason::SimulatorCommandLaneFull { capacity: 64 },
+        ),
+        (inbox_full, FatalReason::SimulatorInboxFull { capacity: 4 }),
+    ] {
+        assert_eq!(
+            error.failure_class(),
+            FailureClass::Halt(Halt::Engine),
+            "{error}"
+        );
+        assert_eq!(error.fatal_reason(), reason, "{error}");
+    }
+
+    let fatal = FatalSignal::new();
+    halt_on_sim_error(&lane_full, &fatal);
+    halt_on_sim_error(&inbox_full, &fatal);
+    let first = FatalReason::SimulatorCommandLaneFull { capacity: 64 };
+    assert_eq!(
+        fatal.reason(),
+        Some(first),
+        "the latch keeps the first reason"
+    );
+    let exit = exit_of(&fatal);
+    assert_eq!(exit, Exit::Halted(first));
+    assert_ne!(exit.code(), 0, "a halted run does not exit graceful");
 }
