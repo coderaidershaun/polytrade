@@ -1,6 +1,7 @@
 //! End-of-run simulator counters.
 
 use super::super::core::queue::QueueAhead;
+use super::super::core::resting::RefusalReason;
 use super::super::core::{SimEmission, VenueEvent};
 use super::SimExecDriver;
 use crate::info;
@@ -9,6 +10,8 @@ use crate::info;
 pub(super) struct SimRunSummary {
     joins: u64,
     refusals: u64,
+    /// Placements of a style that the simulator cannot model, which the run therefore never filled.
+    refused_styles: u64,
     fills: u64,
     full_fills: u64,
     cancels: u64,
@@ -27,9 +30,10 @@ impl SimExecDriver {
 impl SimRunSummary {
     fn log(&self) {
         info!(
-            "sim SUMMARY joins={} refusals={} fills={} full_fills={} cancels={} amends={} resets={} filled_base={} filled_quote={}",
+            "sim SUMMARY joins={} refusals={} refused_styles={} fills={} full_fills={} cancels={} amends={} resets={} filled_base={} filled_quote={}",
             self.joins,
             self.refusals,
+            self.refused_styles,
             self.fills,
             self.full_fills,
             self.cancels,
@@ -70,6 +74,9 @@ impl SimRunSummary {
             }
             VenueEvent::PlaceRefused { snapshot, reason } => {
                 self.refusals += 1;
+                if matches!(reason, RefusalReason::UnmodelledStyle { .. }) {
+                    self.refused_styles += 1;
+                }
                 info!(
                     "sim REFUSE client={} side={:?} price={} reason={reason:?}",
                     snapshot.order.client_id.0,

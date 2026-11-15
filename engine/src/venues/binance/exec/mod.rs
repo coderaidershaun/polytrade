@@ -14,6 +14,7 @@ use crate::runtime::secrets::CredentialVariables;
 use crate::venues::exec::{LeaseNamespace, VenueCapabilities};
 
 pub(crate) use actor::handle::bring_up;
+pub(crate) use codec::SIMULATOR_UNMODELLED_STYLE;
 pub use codec::{
     CLIENT_ORDER_ID_LEN, DecodeContext, DecodedResponse, EncodeContext, EncodedRequest,
     IgnoredReason, RejectSubject, ResponseContext, StreamEvent, SymbolTable, WireError,

@@ -4,12 +4,13 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use engine::msg::exec::{
-    AccountChunkKind, ExecEvent, ExecKind, Liquidity, OrderStyle, Provenance, RejectClass,
-    VenueOrderStatus,
+    AccountChunkKind, CancelReason, ExecCommand, ExecEvent, ExecKind, Liquidity, OrderStyle,
+    Provenance, RejectClass, VenueOrderStatus,
 };
 use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId,
 };
+use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::time::LocalTs;
 use engine::venues::binance::exec::{
     ResponseContext, StreamEvent, decode_response, decode_stream_event,
@@ -19,6 +20,10 @@ use engine::venues::sim::core::orders::SimOrder;
 use engine::venues::sim::core::wallet::FillSettlement;
 use engine::venues::sim::wire::{Rejection, SimBalance, SimFill, VenueWire};
 
+use crate::engine_support::ts;
+use crate::exec_support::{
+    ASK, BID, CEILING, drain_commands, is_placing, make_ready, quoting_engine, reseat_book, spin_at,
+};
 use crate::venues::binance::fake_venue::{Delivery, FakeVenue, exec_events};
 
 macro_rules! twin {
@@ -509,4 +514,90 @@ fn fake_venue_scenarios_decode_through_the_codec() {
             "{delivery:?}: the venue's own state never depends on what we were told"
         );
     }
+}
+
+/// CONTRACT: an order of a style that the simulator cannot model gets a refusal that no venue
+/// sends, code 9,001, with a message that names the style. The live codec of Binance gives it
+/// class `Fatal`, so the engine halts quoting at the first one, as at a venue code it cannot map:
+/// a simulated run whose exits cannot fill must not look like a run.
+#[test]
+fn unmodelled_style_gets_a_named_simulator_refusal() {
+    let venue = FakeVenue::new();
+    let refusal = wire(&venue).refusal(Rejection::UnmodelledStyle {
+        style: OrderStyle::Immediate,
+    });
+    let body: serde_json::Value = serde_json::from_str(&refusal).expect("the refusal is json");
+    assert_eq!(body["error"]["code"], 9_001, "{refusal}");
+    let message = body["error"]["msg"]
+        .as_str()
+        .expect("the refusal has a message");
+    assert!(
+        message.contains("immediate"),
+        "the refusal names the style: {message}"
+    );
+
+    let flatten = ExecRequest::Place {
+        instrument: INSTRUMENT,
+        client_id: ORDER_A,
+        side: Side::Sell,
+        price: PRICE,
+        qty: QTY,
+        style: OrderStyle::Immediate,
+    };
+    let events = answer(&refusal, flatten, &venue);
+    assert_eq!(
+        events.len(),
+        1,
+        "one event answers the placement: {events:?}"
+    );
+    assert_eq!(events[0].client_id, ORDER_A);
+    assert_eq!(events[0].reject, Some(RejectClass::Fatal));
+    assert_eq!(events[0].reject_code, 9_001);
+
+    let (mut engine, mut commands) = quoting_engine(CEILING, &[]);
+    make_ready(&mut engine, 0);
+    for message in reseat_book(BID, ASK, 10) {
+        engine.dispatch(&message);
+    }
+    spin_at(&mut engine, 1, 20);
+    let sell = drain_commands(&mut commands)
+        .into_iter()
+        .find_map(|command| match command {
+            ExecCommand::Place {
+                instrument,
+                client_id,
+                side: Side::Sell,
+                price,
+                qty,
+                style,
+            } => Some(ExecRequest::Place {
+                instrument,
+                client_id,
+                side: Side::Sell,
+                price,
+                qty,
+                style,
+            }),
+            _ => None,
+        })
+        .expect("a ready engine places its sell");
+    for event in answer(&refusal, sell, &venue) {
+        engine.dispatch(&InboundMessage::new(ts(30), MessageBody::Exec(event)));
+    }
+    spin_at(&mut engine, 2, 40);
+    let after = drain_commands(&mut commands);
+    assert!(
+        after.iter().any(|command| matches!(
+            command,
+            ExecCommand::CancelOurs {
+                reason: CancelReason::Halt,
+                ..
+            }
+        )),
+        "the first named refusal halts quoting: {after:?}"
+    );
+    assert!(
+        !is_placing(&after, Side::Buy) && !is_placing(&after, Side::Sell),
+        "a halted engine places nothing: {after:?}"
+    );
 }
