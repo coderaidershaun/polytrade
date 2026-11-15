@@ -1,12 +1,5 @@
 //! The quoting admission gate, and the one place that rebuilds state after a disconnect: the stream
 //! of this venue replays nothing, so what rests is read again.
-//!
-//! The hard question this file answers is what to do with an open order the run cannot name. At
-//! BOOT every such order predates the process and is swept, which is the binance cold-start rule.
-//! MID-RUN it is not: it may be the order whose placement answer was lost in transport, in which
-//! case adopting it is the only way the engine ever regains the ability to cancel it — and if
-//! nothing was placed there, it may be a person's order in the venue's own UI, which this engine
-//! never touches.
 
 use crate::msg::exec::{ExecCommand, ExecEvent, ExecKind, Provenance};
 use crate::msg::ids::{ClientOrderId, InstrumentId};

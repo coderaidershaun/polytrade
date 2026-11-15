@@ -1,5 +1,5 @@
-//! An open order that this run cannot name, read mid-run. It may be the order whose placement
-//! answer was lost, or a person's order from the venue's own UI, which this engine never touches.
+//! An open order that this run cannot name. Mid-run it may be the order whose placement answer was
+//! lost, or a person's order from the venue's own UI, which this engine never touches.
 
 use crate::msg::exec::{ExecEvent, ExecKind};
 use crate::msg::ids::ClientOrderId;
@@ -12,7 +12,8 @@ use super::super::correlate::{UnmappedVerdict, classify_unmapped};
 use super::Actor;
 
 impl Actor {
-    /// An order resting under an id this run never recorded.
+    /// An order resting under an id this run never recorded. Before quoting opens, each such order
+    /// predates this process, so it is cancelled by its venue id, as at a cold start.
     pub(super) fn on_unmapped_order(
         &mut self,
         unmapped: &UnmappedOrder,
@@ -32,9 +33,9 @@ impl Actor {
             // adopted into our slot.
             UnmappedVerdict::Defer => return,
             UnmappedVerdict::LeaveAlone => {
-                self.counts.unmapped_left_alone += 1;
+                self.session.core.count_foreign_order();
                 warn!(
-                    "polymarket execution left an unmapped order alone on instrument {}: {:?} {} @ {} (venue id {}) — nothing this run placed matches it",
+                    "polymarket execution left an unmapped order alone on instrument {}: {:?} {} @ {} (venue id {}) — no single lost placement of this run equals it",
                     unmapped.instrument.0,
                     unmapped.side,
                     unmapped.qty.mantissa(),
