@@ -8,4 +8,3 @@ mod market_data_faults;
 mod polymarket;
 mod scale_preflight;
 mod sim;
-mod sim_wire;
