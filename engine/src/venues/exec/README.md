@@ -144,6 +144,14 @@ because the socket stayed down or nothing answered in time, ends the same way wi
 The edge settles its latch with that failure, and the drain counts it as a failed step, so
 the exit is not graceful.
 
+A venue with a heartbeat (Polymarket): once it has started, the venue cancels each order of the
+account when it hears no beat for its limit, and the edge learns that only from reports. So a beat
+that fails is due again at the next poll. When no beat is answered for the limit less a margin, the
+edge drops its connection, so the order mirror is rebuilt by the path of a lost connection, and
+quoting does not open until a beat is answered again. When the limit itself passes, the venue has
+cancelled the book, and a new resync pass reads the open orders again. The limit, the margin and
+the period come from the facts of the venue.
+
 A new subscription: when a read of open orders shows a change that the order stream never
 reported, the hot side sends `ResubscribeStream`. The core turns it into the same
 `SubscribeUserStream` request that a connect sends, and no order request is sent again for it.

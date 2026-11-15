@@ -15,14 +15,15 @@ use super::super::codec::{
     DecodeContext, KnownOrder, PlaceRequestContext, PlacementStatus, VenueAnswer, WireError,
     decode_cancel, decode_neg_risk, decode_place, decode_single_order,
 };
+use super::super::lanes::RestOutcome;
 use super::super::rest::ClobResponse;
-use super::rest::{OpenOrdersRead, RestOutcome, RestPurpose};
+use super::rest::{OpenOrdersRead, RestPurpose};
 use super::{Actor, Writer};
 
 impl Actor {
     pub(super) async fn on_rest_answer(
         &mut self,
-        outcome: Option<RestOutcome>,
+        outcome: Option<RestOutcome<RestPurpose>>,
         writer: &mut Writer,
     ) -> Option<SessionOutcome> {
         let outcome = outcome?;
@@ -31,7 +32,7 @@ impl Actor {
 
     pub(super) async fn on_rest_outcome(
         &mut self,
-        outcome: RestOutcome,
+        outcome: RestOutcome<RestPurpose>,
         writer: Option<&mut Writer>,
     ) -> Option<SessionOutcome> {
         let RestOutcome { purpose, answer } = outcome;

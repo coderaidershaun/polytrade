@@ -12,8 +12,9 @@ use super::super::codec::{
     OrdersRead, VenueAnswer, cancel_venue_order, decode_orders_page, open_orders_for_token,
     open_orders_page, trades_page,
 };
+use super::super::lanes::{Lane, RestJob};
 use super::super::rest::ClobResponse;
-use super::rest::{Lane, OpenOrdersRead, RestJob, RestPurpose};
+use super::rest::{OpenOrdersRead, RestPurpose};
 use super::{Actor, Writer};
 
 /// Open orders, fills, and the balance sweep. The sweep counts as one read however many assets it
@@ -330,6 +331,15 @@ impl Actor {
     )]
     pub(super) fn finish_readiness_if_clean(&mut self) {
         if self.prior_run_cancels > 0 {
+            return;
+        }
+        // After a heartbeat reset the venue may cancel the book at any moment, so quoting waits for
+        // a beat that the venue answers.
+        if self
+            .heartbeat
+            .as_ref()
+            .is_some_and(|schedule| schedule.is_placing_held())
+        {
             return;
         }
         if self.session.arm_readiness(self.control.clock.now()) {

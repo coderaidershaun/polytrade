@@ -19,7 +19,8 @@ use super::super::codec::{
     encode_request, subscribe_user_stream,
 };
 use super::super::correlate::{WithheldCancel, restates_balances};
-use super::rest::{Lane, RestJob, RestPurpose, Submitted};
+use super::super::lanes::{Lane, RestJob, Submitted};
+use super::rest::RestPurpose;
 use super::{Actor, Writer};
 
 impl Actor {
