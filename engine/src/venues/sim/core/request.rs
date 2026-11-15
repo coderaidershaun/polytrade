@@ -139,7 +139,9 @@ impl RequestFold<'_> {
 
     fn refuse_placement(&self, placement: &Placement) -> Option<RefusalReason> {
         if placement.style != OrderStyle::PostOnly {
-            return Some(RefusalReason::StyleNotPermitted);
+            return Some(RefusalReason::UnmodelledStyle {
+                style: placement.style,
+            });
         }
         self.limits.refuse(placement.price, placement.qty)
     }

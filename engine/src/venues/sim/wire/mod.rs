@@ -4,7 +4,6 @@ mod decode;
 mod templates;
 
 use super::core::orders::SimOrder;
-use super::core::schedule::Rejection;
 use super::core::wallet::FillSettlement;
 use crate::msg::exec::VenueOrderStatus;
 use crate::msg::ids::{FIXED_SCALE, Qty, TradeId};
@@ -12,6 +11,7 @@ use crate::msg::time::LocalTs;
 use crate::venues::binance::exec::format_client_order_id;
 use crate::venues::exec::EngineIdentity;
 
+pub use super::core::schedule::Rejection;
 pub use decode::{response_messages, stream_messages};
 
 const NO_VENUE_ORDER_ID: i64 = -1;
@@ -50,13 +50,13 @@ impl VenueWire {
         templates::ERROR_UNKNOWN_ORDER.to_owned()
     }
 
-    pub(crate) fn refusal(&self, rejection: Rejection) -> String {
+    pub fn refusal(&self, rejection: Rejection) -> String {
         match rejection {
             Rejection::WouldMatchImmediately => self.would_match_error(),
             Rejection::InsufficientBalance => templates::ERROR_INSUFFICIENT_BALANCE.to_owned(),
-            Rejection::FilterFailure | Rejection::TooManyOrders => {
-                templates::ERROR_FILTER_FAILURE.to_owned()
-            }
+            Rejection::FilterFailure
+            | Rejection::TooManyOrders
+            | Rejection::UnmodelledStyle { .. } => templates::ERROR_FILTER_FAILURE.to_owned(),
             Rejection::CancelRejected => self.unknown_order_error(),
             Rejection::NoSuchOrder => templates::ERROR_NO_SUCH_ORDER.to_owned(),
             Rejection::AmendBudgetSpent => templates::ERROR_AMEND_BUDGET_SPENT.to_owned(),
