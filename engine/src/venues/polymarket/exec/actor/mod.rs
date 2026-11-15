@@ -8,6 +8,7 @@ mod poll;
 mod reads;
 mod rest;
 mod resync;
+mod unmapped;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -74,7 +75,6 @@ struct DriverCounts {
     dropped_frames: u64,
     untracked_events: u64,
     unmatched_answers: u64,
-    unmapped_left_alone: u64,
     adopted: u64,
     availability_refusals: u64,
     settlement_failures: u64,
@@ -416,7 +416,6 @@ impl EdgeDriver for Actor {
         }
         let counts = &self.counts;
         let is_notable = counts.adopted > 0
-            || counts.unmapped_left_alone > 0
             || counts.dropped_frames > 0
             || counts.untracked_events > 0
             || counts.unmatched_answers > 0
@@ -426,9 +425,8 @@ impl EdgeDriver for Actor {
             || self.bindings.refused() > 0;
         if is_notable {
             info!(
-                "polymarket execution correlation summary: {} orders adopted, {} unmapped left alone, {} cancels withheld for the taker hold, {} placements refused on venue state, {} bindings displaced before they completed, {} stream frames dropped, {} untracked-token events, {} answers matched no request, {} of this run's fills failed to settle, {} other accounts' did",
+                "polymarket execution correlation summary: {} orders adopted, {} cancels withheld for the taker hold, {} placements refused on venue state, {} bindings displaced before they completed, {} stream frames dropped, {} untracked-token events, {} answers matched no request, {} of this run's fills failed to settle, {} other accounts' did",
                 counts.adopted,
-                counts.unmapped_left_alone,
                 self.delayed.withholds(),
                 counts.availability_refusals,
                 self.bindings.refused(),

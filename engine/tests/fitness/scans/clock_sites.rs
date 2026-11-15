@@ -730,12 +730,12 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 115] = [
     ),
     (
         "engine/src/venues/polymarket/exec/actor/resync.rs",
-        "adopted_event",
+        "finish_readiness_if_clean",
         &["engine::msg::time::EngineClock::now"],
     ),
     (
-        "engine/src/venues/polymarket/exec/actor/resync.rs",
-        "finish_readiness_if_clean",
+        "engine/src/venues/polymarket/exec/actor/unmapped.rs",
+        "adopted_event",
         &["engine::msg::time::EngineClock::now"],
     ),
     (

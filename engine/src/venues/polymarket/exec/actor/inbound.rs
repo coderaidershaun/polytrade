@@ -18,6 +18,7 @@ use crate::{error, warn};
 use super::super::codec::{
     IgnoredReason, StreamEvent, TradeLineage, TradeSettlement, decode_stream_frame,
 };
+use super::super::facts::POLYMARKET_FACTS;
 use super::{Actor, Writer};
 
 impl Actor {
@@ -232,14 +233,12 @@ impl Actor {
     #[cold]
     fn report_holding(&mut self) {
         let dropped = self.pending.dropped();
-        if self.pending.len() < super::super::correlate::PENDING_CAPACITY
-            || !dropped.is_power_of_two()
-        {
+        let capacity = POLYMARKET_FACTS.held_frame_capacity;
+        if self.pending.len() < capacity || !dropped.is_power_of_two() {
             return;
         }
         warn!(
-            "polymarket execution correlation buffer full at {} — dropped {dropped} of the oldest held frames",
-            super::super::correlate::PENDING_CAPACITY
+            "polymarket execution correlation buffer full at {capacity} — dropped {dropped} of the oldest held frames"
         );
     }
 }

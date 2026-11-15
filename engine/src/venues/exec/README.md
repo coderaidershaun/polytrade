@@ -167,10 +167,16 @@ Two identity patterns exist, chosen by whether the venue echoes a client id:
   order id format and recovers ownership by parsing what the venue echoes, through
   `OrderOwnership::of`. Stateless and restart-safe.
 - **Venue-minted ids** (Polymarket shape): the venue names the order in its placement
-  answer. The adapter keeps a fixed-capacity id index, holds stream frames that name
-  unknown orders until the mapping lands, and decides adopt / defer / leave-alone by
-  policy. An order is unattributable between send and answer — the adapter carries that
-  window, never the engine.
+  answer. The adapter keeps a fixed-capacity id index, and holds stream frames that name
+  unknown orders until the mapping lands. An open order with an unknown id defers while a
+  placement of this run is in flight on its side. Otherwise it is adopted only when exactly
+  one lost slot of this run (a placement whose answer will never come) equals it in
+  instrument, side, price, and original size. No match, and two or more matches, leave it
+  alone: a near match can be a person's order, and a pick between two equal slots binds the
+  fills of one order to another. An order left alone is counted with the orders this engine
+  did not place, and is never mirrored and never cancelled; the lost slot stays ambiguous
+  until its status probes end it. An order is unattributable between send and answer — the
+  adapter carries that window, never the engine.
 
 Every venue declares a `LeaseNamespace` beside its capabilities. The execution lease locks
 one live process per engine identity per host and advances a durable run nonce per
