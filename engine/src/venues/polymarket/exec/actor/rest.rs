@@ -14,7 +14,7 @@ use super::super::codec::PlaceRequestContext;
 /// never landed — the pass then finishes on two of its three reads and opens quoting having never
 /// seen the balance sweep. Naming the asker is what makes that impossible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::venues::polymarket::exec) enum OpenOrdersRead {
+pub(super) enum OpenOrdersRead {
     /// Account-wide, one of the reads a resync pass is waiting on.
     Pass { resync_seq: u64 },
     /// One instrument's page, asked for by the hot side's silence detector. `recon_seq` belongs to
@@ -40,7 +40,7 @@ impl OpenOrdersRead {
 
 /// Why the call was made, and everything needed to read its answer.
 #[derive(Debug, Clone)]
-pub(in crate::venues::polymarket::exec) enum RestPurpose {
+pub(super) enum RestPurpose {
     /// A request the execution core minted. `place` carries what was asked, because this venue
     /// echoes neither the client id nor the price back on the placement path.
     Core {

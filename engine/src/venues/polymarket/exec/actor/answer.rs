@@ -23,7 +23,7 @@ use super::{Actor, Writer};
 impl Actor {
     pub(super) async fn on_rest_answer(
         &mut self,
-        outcome: Option<RestOutcome>,
+        outcome: Option<RestOutcome<RestPurpose>>,
         writer: &mut Writer,
     ) -> Option<SessionOutcome> {
         let outcome = outcome?;
@@ -32,7 +32,7 @@ impl Actor {
 
     pub(super) async fn on_rest_outcome(
         &mut self,
-        outcome: RestOutcome,
+        outcome: RestOutcome<RestPurpose>,
         writer: Option<&mut Writer>,
     ) -> Option<SessionOutcome> {
         let RestOutcome { purpose, answer } = outcome;

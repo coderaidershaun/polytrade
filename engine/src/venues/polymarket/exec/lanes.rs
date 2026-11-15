@@ -1,14 +1,5 @@
-//! The venue's request half. Polymarket has no request socket: placements, cancels and reads are
-//! all HTTP, and the user stream only listens.
-//!
-//! Three lanes, not one. A marketable order is held 250 ms at the venue and `POST /order` BLOCKS for
-//! that hold, so a cancel queued behind a place would inherit a delay the venue imposed on somebody
-//! else's risk; the two buckets are metered separately at the venue too. The heartbeat gets the
-//! third lane because going quiet for ten seconds cancels the whole book — it must not queue behind
-//! a read that is waiting out a timeout.
-//!
-//! L2 headers are signed HERE rather than at the call site: the timestamp they carry is the send
-//! stamp, and this is the last moment before the bytes leave.
+//! The request half of the venue: placements, cancels, reads and the heartbeat all go by HTTP, on
+//! three lanes, so that a slow request on one lane never delays the others.
 
 use std::sync::Arc;
 
@@ -19,16 +10,20 @@ use crate::msg::time::{DurationUs, EngineClock};
 use crate::venues::edge::http::TransportError;
 use crate::warn;
 
-use super::actor::rest::RestPurpose;
 use super::codec::EncodedRequest;
 use super::rest::{ClobHttp, ClobResponse};
 use super::sign::l2::RequestSigner;
 
 /// Backpressure on a stalled venue. A full lane means something upstream is wrong.
-pub(super) const LANE_CAPACITY: usize = 64;
+pub(crate) const LANE_CAPACITY: usize = 64;
 
+/// Three lanes, not one. A marketable order is held 250 ms at the venue and `POST /order` blocks
+/// for that hold, so a cancel queued behind a placement would wait out a delay that the venue set
+/// for another order; the venue also meters the two separately. The heartbeat gets the third lane
+/// because ten seconds of silence cancel the whole book, so it must not wait behind a read that
+/// runs into its timeout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Lane {
+pub enum Lane {
     Place,
     Control,
     Heartbeat,
@@ -45,26 +40,27 @@ enum Auth {
 /// unsent heartbeat both went unnoticed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
-pub(super) enum Submitted {
+pub enum Submitted {
     Queued,
     LaneFull,
 }
 
 impl Submitted {
-    pub(super) fn is_queued(self) -> bool {
+    pub fn is_queued(self) -> bool {
         self == Submitted::Queued
     }
 }
 
+/// One request, and why it was asked for: the purpose comes back with the answer.
 #[derive(Debug)]
-pub(super) struct RestJob {
-    pub purpose: RestPurpose,
+pub struct RestJob<P> {
+    pub purpose: P,
     pub request: EncodedRequest,
     auth: Auth,
 }
 
-impl RestJob {
-    pub(super) fn signed(purpose: RestPurpose, request: EncodedRequest) -> Self {
+impl<P> RestJob<P> {
+    pub fn signed(purpose: P, request: EncodedRequest) -> Self {
         Self {
             purpose,
             request,
@@ -72,7 +68,7 @@ impl RestJob {
         }
     }
 
-    pub(super) fn public(purpose: RestPurpose, request: EncodedRequest) -> Self {
+    pub fn public(purpose: P, request: EncodedRequest) -> Self {
         Self {
             purpose,
             request,
@@ -82,21 +78,21 @@ impl RestJob {
 }
 
 #[derive(Debug)]
-pub(super) struct RestOutcome {
-    pub purpose: RestPurpose,
+pub struct RestOutcome<P> {
+    pub purpose: P,
     pub answer: Result<ClobResponse, TransportError>,
 }
 
-pub(super) struct RestLanes {
-    place: mpsc::Sender<RestJob>,
-    control: mpsc::Sender<RestJob>,
-    heartbeat: mpsc::Sender<RestJob>,
+pub struct RestLanes<P> {
+    place: mpsc::Sender<RestJob<P>>,
+    control: mpsc::Sender<RestJob<P>>,
+    heartbeat: mpsc::Sender<RestJob<P>>,
     joins: Vec<JoinHandle<()>>,
 }
 
-impl RestLanes {
+impl<P> RestLanes<P> {
     /// Dropped job = a silent reconciliation skip, so refusal is reported and returned.
-    pub(super) fn submit(&self, lane: Lane, job: RestJob) -> Submitted {
+    pub fn submit(&self, lane: Lane, job: RestJob<P>) -> Submitted {
         let sender = match lane {
             Lane::Place => &self.place,
             Lane::Control => &self.control,
@@ -111,24 +107,26 @@ impl RestLanes {
         }
     }
 
-    pub(super) fn abort(&self) {
+    pub(crate) fn abort(&self) {
         for join in &self.joins {
             join.abort();
         }
     }
 }
 
-pub(super) struct LaneSetup {
+pub struct LaneSetup {
     pub http: Arc<ClobHttp>,
     pub signer: Arc<RequestSigner>,
     pub clock: EngineClock,
     pub venue_clock_offset: DurationUs,
 }
 
-pub(super) fn spawn_lanes(
+/// One worker for each lane, on `runtime`. Each outcome reaches the one receiver when its worker
+/// has the answer, so the outcomes of two lanes arrive in the order the venue answered them.
+pub fn spawn_lanes<P: Send + 'static>(
     setup: LaneSetup,
     runtime: &tokio::runtime::Handle,
-) -> (RestLanes, mpsc::Receiver<RestOutcome>) {
+) -> (RestLanes<P>, mpsc::Receiver<RestOutcome<P>>) {
     let (outcomes_tx, outcomes_rx) = mpsc::channel(LANE_CAPACITY * 3);
     let mut joins = Vec::with_capacity(3);
     let mut lane = |tag: &'static str| {
@@ -161,25 +159,37 @@ struct Worker {
 }
 
 impl Worker {
-    async fn run(self, mut jobs: mpsc::Receiver<RestJob>, outcomes: mpsc::Sender<RestOutcome>) {
+    async fn run<P>(
+        self,
+        mut jobs: mpsc::Receiver<RestJob<P>>,
+        outcomes: mpsc::Sender<RestOutcome<P>>,
+    ) {
         while let Some(job) = jobs.recv().await {
-            let answer = self.execute(&job).await;
-            let outcome = RestOutcome {
-                purpose: job.purpose,
-                answer,
-            };
+            let RestJob {
+                purpose,
+                request,
+                auth,
+            } = job;
+            let answer = self.execute(&request, auth).await;
+            let outcome = RestOutcome { purpose, answer };
             if outcomes.send(outcome).await.is_err() {
                 return;
             }
         }
     }
 
-    async fn execute(&self, job: &RestJob) -> Result<ClobResponse, TransportError> {
-        match job.auth {
-            Auth::Public => self.http.send_public(&job.request).await,
+    /// The L2 headers are signed here rather than where the job is made: the timestamp that they
+    /// carry is the send stamp, and this is the last moment before the bytes leave.
+    async fn execute(
+        &self,
+        request: &EncodedRequest,
+        auth: Auth,
+    ) -> Result<ClobResponse, TransportError> {
+        match auth {
+            Auth::Public => self.http.send_public(request).await,
             Auth::Signed => {
                 self.http
-                    .send_signed(&self.signer, &job.request, self.venue_seconds())
+                    .send_signed(&self.signer, request, self.venue_seconds())
                     .await
             }
         }
@@ -195,7 +205,7 @@ impl Worker {
 }
 
 #[cold]
-fn report_full_lane(lane: Lane, job: &RestJob) {
+fn report_full_lane<P>(lane: Lane, job: &RestJob<P>) {
     warn!(
         "polymarket execution {lane:?} lane full at {LANE_CAPACITY} — dropped {} {}",
         job.request.method.as_str(),

@@ -6,7 +6,7 @@ mod apply;
 mod inbound;
 mod poll;
 mod reads;
-pub(super) mod rest;
+mod rest;
 mod resync;
 mod unmapped;
 
@@ -43,7 +43,8 @@ use super::sign::order::SignatureType;
 
 use super::binding::{Bindings, RETIRED_BINDINGS};
 use super::correlate::{DelayedOrders, PendingFrames};
-use super::lanes::{Lane, LaneSetup, RestLanes, RestOutcome, Submitted, spawn_lanes};
+use super::lanes::{Lane, LaneSetup, RestJob, RestLanes, RestOutcome, Submitted, spawn_lanes};
+use rest::RestPurpose;
 
 pub(super) const USER_STREAM_URL: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/user";
 
@@ -112,8 +113,8 @@ pub(super) struct Actor {
     // The user stream uses this credential; no other channel does.
     credentials: ApiCredentials,
     control: EdgeControl,
-    lanes: RestLanes,
-    outcomes: mpsc::Receiver<RestOutcome>,
+    lanes: RestLanes<RestPurpose>,
+    outcomes: mpsc::Receiver<RestOutcome<RestPurpose>>,
     assignments: mpsc::Receiver<WindowAssignment>,
     pending: PendingFrames,
     delayed: DelayedOrders,
@@ -226,7 +227,7 @@ impl Actor {
             .map_or(AssetId::UNKNOWN, |row| row.quote_asset)
     }
 
-    fn submit(&self, lane: Lane, job: super::lanes::RestJob) -> Submitted {
+    fn submit(&self, lane: Lane, job: RestJob<RestPurpose>) -> Submitted {
         self.lanes.submit(lane, job)
     }
 
