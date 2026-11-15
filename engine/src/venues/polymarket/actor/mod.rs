@@ -89,6 +89,7 @@ struct Actor {
     dropped_frames: u64,
     suppressed_rest: u64,
     divergences: u64,
+    suspects: u64,
     label: String,
 }
 
@@ -127,6 +128,7 @@ impl Actor {
             dropped_frames: 0,
             suppressed_rest: 0,
             divergences: 0,
+            suspects: 0,
             label: series.as_str().to_owned(),
         };
         (actor, results_rx)

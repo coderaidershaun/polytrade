@@ -147,12 +147,12 @@ fn the_validator_resets_only_after_three_in_a_row() {
     let size_80 = SIZE_100 / 10 * 8;
     assert_eq!(
         validator.on_venue_book(&bid_at(size_90), &asks()),
-        BookFrameOutcome::Validated,
+        BookFrameOutcome::Suspect { streak: 1 },
         "B1"
     );
     assert_eq!(
         validator.on_venue_book(&bid_at(size_90), &asks()),
-        BookFrameOutcome::Validated,
+        BookFrameOutcome::Suspect { streak: 2 },
         "B2"
     );
     assert_eq!(
@@ -173,7 +173,7 @@ fn the_validator_resets_only_after_three_in_a_row() {
     );
     assert_eq!(
         validator.on_venue_book(&bid_at(size_80), &asks()),
-        BookFrameOutcome::Validated,
+        BookFrameOutcome::Suspect { streak: 1 },
         "B5"
     );
     assert_eq!(
@@ -192,6 +192,56 @@ fn the_validator_resets_only_after_three_in_a_row() {
     );
 }
 
+/// One cut that disagrees and then agrees is a cut caught in flight; a desync disagrees at each
+/// cut and confirms on the third; a venue level of size 0 is no level.
+fn a_cut_caught_in_flight_clears_and_a_desync_confirms() {
+    let bids = [level(50_000_000, 100)];
+    let asks = [level(51_000_000, 150)];
+    let stale_bids = [level(50_000_000, 80)];
+    let fresh = || {
+        let mut validator = ShadowValidator::default();
+        assert_eq!(
+            validator.on_venue_book(&bids, &asks),
+            BookFrameOutcome::ForwardSnapshot
+        );
+        validator
+    };
+
+    let mut validator = fresh();
+    assert_eq!(
+        validator.on_venue_book(&stale_bids, &asks),
+        BookFrameOutcome::Suspect { streak: 1 }
+    );
+    assert_eq!(
+        validator.on_venue_book(&bids, &asks),
+        BookFrameOutcome::Validated
+    );
+
+    let mut validator = fresh();
+    for streak in 1..=2 {
+        assert_eq!(
+            validator.on_venue_book(&stale_bids, &asks),
+            BookFrameOutcome::Suspect { streak }
+        );
+    }
+    assert!(matches!(
+        validator.on_venue_book(&stale_bids, &asks),
+        BookFrameOutcome::Diverged(_)
+    ));
+    assert_eq!(
+        validator.on_venue_book(&stale_bids, &asks),
+        BookFrameOutcome::Validated,
+        "the shadow is rebuilt from the desynced book"
+    );
+
+    let mut validator = fresh();
+    let venue_asks = [level(51_000_000, 150), level(52_000_000, 0)];
+    assert_eq!(
+        validator.on_venue_book(&bids, &venue_asks),
+        BookFrameOutcome::Validated
+    );
+}
+
 fn the_driver_forwards_no_unconfirmed_mismatch() {
     let open = VenueTs::from_micros(WINDOW_START_US);
     let close = VenueTs::from_micros(WINDOW_START_US + 300_000_000);
@@ -203,11 +253,14 @@ fn the_driver_forwards_no_unconfirmed_mismatch() {
         first.iter().any(is_snapshot),
         "the first book forwards a snapshot: {first:?}"
     );
-    for mismatch in 1..=2 {
-        let effects = effects_of(&mut core, &book_of("up", size_90));
-        assert!(
-            effects.is_empty(),
-            "mismatch {mismatch} forwards nothing: {effects:?}"
+    for streak in 1..=2 {
+        assert_eq!(
+            effects_of(&mut core, &book_of("up", size_90)),
+            [DriverEffect::Suspect {
+                instrument: UP,
+                streak
+            }],
+            "an unconfirmed mismatch is a suspect, and forwards nothing"
         );
     }
     let effects = effects_of(&mut core, &book_of("up", size_90));
@@ -246,6 +299,7 @@ fn three_mismatches_in_a_row_reset_once() {
         Ok(())
     })
     .unwrap_or_else(|error| panic!("{error}"));
+    a_cut_caught_in_flight_clears_and_a_desync_confirms();
     the_driver_forwards_no_unconfirmed_mismatch();
 }
 
@@ -463,4 +517,50 @@ fn collapse_needs_a_burst_of_one_stamp() {
     a_burst_of_one_stamp_that_empties_a_side_collapses();
     the_collapse_capture_carries_the_burst();
     the_captured_burst_collapses_the_resolving_window_only();
+}
+
+/// The counts that the market capture gave before the driver named its suspects: no book of the
+/// capture differs from the shadow, so neither a suspect nor a reset.
+const RECORDED_SUSPECTS: usize = 0;
+const RECORDED_DIVERGENCES: usize = 0;
+
+/// FITNESS: the recorded market capture, through the driver with its window assigned, gives the
+/// recorded counts of suspects and resets. A leg that compared the books in another order, or
+/// lost a delta on the way to its shadow, would see mismatches in a capture that has none.
+#[test]
+fn capture_gives_recorded_counts_of_suspect_and_diverged() {
+    let market = parse_events(SERIES, GAMMA_CURRENT, VenueTs::from_micros(WINDOW_START_US))
+        .expect("current window parses");
+    let mut core = driver_with(window(
+        &market.token_up,
+        &market.token_down,
+        market.window_open_ts_us,
+        market.window_close_ts_us,
+    ));
+    let (mut suspects, mut divergences) = (0, 0);
+    let mut forwarded = [false, false];
+    for line in HEAD.lines().filter(|line| !is_frameless(line)) {
+        let frame = parse_market_frame(line, received()).expect("each frame of the capture parses");
+        for effect in effects_of(&mut core, &frame) {
+            match &effect {
+                DriverEffect::Suspect { .. } => suspects += 1,
+                DriverEffect::Diverged { .. } => divergences += 1,
+                DriverEffect::Emit(message) => {
+                    if let MessageBody::Book(chunk) = &message.body
+                        && chunk.kind == BookChunkKind::Snapshot
+                    {
+                        forwarded[usize::from(chunk.instrument.0)] = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(
+        forwarded,
+        [true, true],
+        "the capture reaches both legs of the window"
+    );
+    assert_eq!(suspects, RECORDED_SUSPECTS, "suspects");
+    assert_eq!(divergences, RECORDED_DIVERGENCES, "resets");
 }

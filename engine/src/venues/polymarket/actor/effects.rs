@@ -140,6 +140,10 @@ impl Actor {
                 self.bind_execution(*assignment);
                 None
             }
+            DriverEffect::Suspect { instrument, streak } => {
+                self.warn_suspect(instrument, streak);
+                None
+            }
             DriverEffect::TickSizeChange(change) => {
                 warn!(
                     "polymarket adapter {} tick_size_change (unverified shape) asset {} tick {} -> {} — counted",
@@ -228,6 +232,20 @@ impl Actor {
             mismatch.shadow_levels,
             level_word(mismatch.venue),
             mismatch.venue_levels
+        );
+    }
+
+    /// A book that differs from the shadow, not yet confirmed, is a cut caught in flight or the
+    /// start of a desync. It is counted always and warned at each power of two, as a divergence is.
+    #[cold]
+    fn warn_suspect(&mut self, instrument: InstrumentId, streak: u32) {
+        warn_repeating!(
+            self.suspects,
+            "polymarket adapter {} saw {} books that differ from the shadow — latest on book {}, {} in a row",
+            self.label,
+            self.suspects,
+            instrument.0,
+            streak
         );
     }
 

@@ -1,4 +1,5 @@
-//! Outcome leg: Up/Down token. Validates book vs shadow, detects collapse, emits normalized.
+//! One leg of a window, its up or down token: it checks each book of the venue against its shadow,
+//! spots a collapse, and forwards normalised book messages.
 
 use crate::msg::ids::{InstrumentId, Qty, Side};
 use crate::msg::inbound::{BookReset, InboundMessage, Level, MessageBody};
@@ -6,7 +7,7 @@ use crate::msg::time::{LocalTs, VenueTs};
 use crate::venues::polymarket::book::{BookNormaliser, ChunkStamps};
 use crate::venues::polymarket::parse::{PolyBook, PolyDelta};
 use crate::venues::polymarket::rotation::TokenId;
-use crate::venues::polymarket::shadow::{BookFrameOutcome, BookMismatch, ShadowValidator};
+use crate::venues::polymarket::shadow::{BookFrameOutcome, ShadowValidator};
 use crate::venues::polymarket::teardown::{CollapseDetector, LevelUpdate};
 
 pub(super) struct Leg {
@@ -62,21 +63,23 @@ impl Leg {
         self.token = None;
     }
 
+    /// Forwards a snapshot only for the first book and for a confirmed desync. The caller counts a
+    /// suspect and a divergence from the outcome.
     pub(super) fn on_venue_book(
         &mut self,
         book: &PolyBook,
         now: LocalTs,
         emit: &mut impl FnMut(InboundMessage),
-    ) -> Option<BookMismatch> {
+    ) -> BookFrameOutcome {
         let bids_ascending: Vec<Level> = book.bids.iter().rev().copied().collect();
-        match self.shadow.on_venue_book(&bids_ascending, &book.asks) {
-            BookFrameOutcome::Validated => None,
+        let outcome = self.shadow.on_venue_book(&bids_ascending, &book.asks);
+        match outcome {
+            BookFrameOutcome::Validated | BookFrameOutcome::Suspect { .. } => {}
             BookFrameOutcome::ForwardSnapshot => {
                 self.normaliser.emit_snapshot(book, emit);
                 self.reseed_collapse(book);
-                None
             }
-            BookFrameOutcome::Diverged(mismatch) => {
+            BookFrameOutcome::Diverged(_) => {
                 emit(InboundMessage::new(
                     now,
                     MessageBody::BookReset(BookReset {
@@ -85,12 +88,13 @@ impl Leg {
                 ));
                 self.normaliser.emit_snapshot(book, emit);
                 self.reseed_collapse(book);
-                Some(mismatch)
             }
         }
+        outcome
     }
 
-    /// Forward leg's price-change slice as Delta chunks, mirror into shadow, feed collapse detector.
+    /// Forwards the part of a price change for this leg as delta chunks, applies it to the shadow,
+    /// and feeds the collapse detector. Returns whether the book has collapsed.
     pub(super) fn on_deltas(
         &mut self,
         deltas: &[&PolyDelta],
@@ -119,7 +123,8 @@ impl Leg {
         self.collapse.has_collapsed()
     }
 
-    /// Rebuild collapse detector from full snapshot so two-sided view survives re-baseline.
+    /// Rebuilds the collapse detector from a full book, so it still sees both sides after a new
+    /// baseline.
     fn reseed_collapse(&mut self, book: &PolyBook) {
         self.collapse.reset();
         for level in &book.bids {

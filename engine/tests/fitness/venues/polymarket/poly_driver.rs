@@ -153,6 +153,7 @@ enum Tag {
     ForcedTeardown(i64),
     Diverged(u16),
     TickSize,
+    Suspect(u16),
     /// The window handed to the execution edge. Tagged by the UP token so the sequence proves it
     /// names the same market the subscribe that follows it does.
     BindExecution(String),
@@ -169,6 +170,7 @@ fn tag(effect: &DriverEffect) -> Tag {
         }
         DriverEffect::Diverged { instrument, .. } => Tag::Diverged(instrument.0),
         DriverEffect::TickSizeChange { .. } => Tag::TickSize,
+        DriverEffect::Suspect { instrument, .. } => Tag::Suspect(instrument.0),
         DriverEffect::BindExecution(assignment) => {
             Tag::BindExecution(assignment.up.token.as_str().to_owned())
         }

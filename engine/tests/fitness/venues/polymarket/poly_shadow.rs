@@ -3,10 +3,7 @@
 
 use engine::msg::ids::{Price, Qty, Side};
 use engine::msg::time::VenueTs;
-use engine::venues::polymarket::shadow::{BookFrameOutcome, ShadowValidator};
 use engine::venues::polymarket::teardown::{CollapseDetector, CollapseSignal, LevelUpdate};
-
-use crate::engine_support::level;
 
 fn update(side: Side, price: i64, qty: i64, venue_ts: i64) -> LevelUpdate {
     LevelUpdate {
@@ -43,68 +40,4 @@ fn same_ts_removal_burst_emptying_a_side_collapses() {
         CollapseSignal::Collapsed
     );
     assert!(detector.has_collapsed());
-}
-
-#[test]
-fn only_a_confirmed_desync_resets_the_shadow() {
-    let bids = [level(50_000_000, 100)];
-    let asks = [level(51_000_000, 150)];
-
-    let mut validator = ShadowValidator::default();
-    assert_eq!(
-        validator.on_venue_book(&bids, &asks),
-        BookFrameOutcome::ForwardSnapshot
-    );
-
-    // One venue cut disagrees (a ~150ms snapshot caught mid-flight) — suspected, not yet a desync.
-    let stale_bids = [level(50_000_000, 80)];
-    assert_eq!(
-        validator.on_venue_book(&stale_bids, &asks),
-        BookFrameOutcome::Validated
-    );
-    // The next cut agrees again (the delta stream never desynced) — the suspicion clears, no reset.
-    assert_eq!(
-        validator.on_venue_book(&bids, &asks),
-        BookFrameOutcome::Validated
-    );
-
-    let mut validator = ShadowValidator::default();
-    assert_eq!(
-        validator.on_venue_book(&bids, &asks),
-        BookFrameOutcome::ForwardSnapshot
-    );
-
-    // A real desync mismatches every cut; the first two are suspected silently (shadow untouched).
-    let desynced = [level(50_000_000, 80)];
-    assert_eq!(
-        validator.on_venue_book(&desynced, &asks),
-        BookFrameOutcome::Validated
-    );
-    assert_eq!(
-        validator.on_venue_book(&desynced, &asks),
-        BookFrameOutcome::Validated
-    );
-
-    // The third confirms it: exactly one reset, and the shadow re-baselines to the venue.
-    assert!(matches!(
-        validator.on_venue_book(&desynced, &asks),
-        BookFrameOutcome::Diverged(_)
-    ));
-    assert_eq!(
-        validator.on_venue_book(&desynced, &asks),
-        BookFrameOutcome::Validated
-    );
-
-    let mut validator = ShadowValidator::default();
-    assert_eq!(
-        validator.on_venue_book(&bids, &asks),
-        BookFrameOutcome::ForwardSnapshot
-    );
-
-    // A stray zero-size level is no level — it must not diverge (else every ~150ms frame would).
-    let venue_asks = [level(51_000_000, 150), level(52_000_000, 0)];
-    assert_eq!(
-        validator.on_venue_book(&bids, &venue_asks),
-        BookFrameOutcome::Validated
-    );
 }
