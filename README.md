@@ -162,7 +162,7 @@ Go ahead and select you jupyter notebook and start analysing data.
 
 ## Live Tests
 
-Live-network tests live in `engine/tests/integration/`. They are `#[ignore]`d and never run in CI. Only the `live-runner` role of a job runs a signed test or the probe, by a runbook and the live policy. An agent runs a public read only where a plan names it, by its exact name and with an empty environment.
+Live-network tests live in `engine/tests/integration/`. They are `#[ignore]`d and never run in CI. Only the `live-runner` role of a job runs a signed test or the probe, by a runbook and the live policy. It runs them at the live venue. An agent runs a public read only where a plan names it, in the role that the plan names. It starts the test binary by its path, with the exact name of the test. The run starts in an empty folder outside each checkout, and its environment is empty except `PATH`, `HOME`, and `TMPDIR`.
 
 The signed tests of `engine/tests/integration/binance_recording.rs` record a small order on live Binance spot, cancel by the client order id of the test, sell back the base above the start, and read the venue before and after. Each has a dry-run form, and a dry run is a live run too, because it loads the live keys. Their runbook sections are in `engine/tests/integration/README.md`. No README holds a command that runs them: the run commands stay in the runbook of the job that runs them.
 
