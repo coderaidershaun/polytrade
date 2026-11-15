@@ -52,14 +52,16 @@ fn asks() -> [Level; 1] {
 /// The window of slot A that the driver hosts, with the up and down tokens given.
 fn window(up: &str, down: &str, open: VenueTs, close: VenueTs) -> WindowAssignment {
     WindowAssignment {
-        up: OutcomeLeg {
-            instrument: UP,
-            token: TokenId::from(up),
-        },
-        down: OutcomeLeg {
-            instrument: InstrumentId(1),
-            token: TokenId::from(down),
-        },
+        legs: [
+            OutcomeLeg {
+                instrument: UP,
+                token: TokenId::from(up),
+            },
+            OutcomeLeg {
+                instrument: InstrumentId(1),
+                token: TokenId::from(down),
+            },
+        ],
         window_open_ts_us: open,
         window_close_ts_us: close,
         condition_id: Arc::from("cond"),

@@ -27,7 +27,7 @@ use engine::venues::edge::decode::DecimalFault;
 use engine::venues::exec::{EngineIdentity, ExecRequest, OrderOwnership, TeTag, TimeoutFallout};
 use proptest::prelude::*;
 
-use crate::venues::binance::fake_venue::{Delivery, FakeVenue, exec_events};
+use crate::venues::binance::fake_venue::FakeVenue;
 
 const NOW: LocalTs = LocalTs::from_micros(1_785_000_000_700_000);
 
@@ -933,64 +933,6 @@ proptest! {
         prop_assert_eq!(Price::parse_decimal(price).expect("wire form parses"), Price::from_mantissa(mantissa));
         let quantity = value(&params, "quantity").expect("a quantity is always sent");
         prop_assert_eq!(Qty::parse_decimal(quantity).expect("wire form parses"), Qty::from_mantissa(mantissa));
-    }
-}
-
-/// The fake venue's own scenarios, driven through the real decoders rather than a hand-built copy
-/// of what they should say — so a scenario exercises the classification layer itself.
-#[test]
-fn fake_venue_events_match_the_real_decoders() {
-    // A placement and its fill come back as decoded events, cumulative on every redelivery.
-    {
-        let mut venue = venue();
-        let placed = venue.submit(place_request(ORDER_A), NOW);
-        let events = exec_events(&placed);
-        assert_eq!(events.len(), 2, "the ack and the report");
-        assert_eq!(events[0].kind, ExecKind::AckPlaced);
-        assert_eq!(events[1].kind, ExecKind::ReportNew);
-        assert!(venue.is_resting(ORDER_A));
-
-        let filled = exec_events(&venue.fill(ORDER_A, Qty::from_mantissa(4_000), NOW));
-        assert_eq!(filled.len(), 1);
-        assert_eq!(filled[0].kind, ExecKind::ReportTrade);
-        assert_eq!(filled[0].status, Some(VenueOrderStatus::PartiallyFilled));
-        assert_eq!(filled[0].cumulative_qty, Qty::from_mantissa(4_000));
-
-        let rest = exec_events(&venue.fill(ORDER_A, Qty::from_mantissa(6_000), NOW));
-        assert_eq!(rest[0].status, Some(VenueOrderStatus::Filled));
-        assert_eq!(
-            rest[0].cumulative_qty,
-            Qty::from_mantissa(10_000),
-            "cumulative, so a duplicate folds to nothing"
-        );
-        assert!(!venue.is_resting(ORDER_A), "a filled order stops resting");
-    }
-
-    // The ack and its report race on the network, and the venue's story about the order is the
-    // same whichever lands first. What varies is only how many messages arrive.
-    {
-        let deliveries = [
-            (Delivery::AckFirst, 2),
-            (Delivery::ReportFirst, 2),
-            (Delivery::AckOnly, 1),
-            (Delivery::ReportOnly, 1),
-            (Delivery::Ambiguous, 0),
-            (Delivery::Duplicated, 4),
-        ];
-        for (delivery, expected) in deliveries {
-            let mut venue = venue();
-            venue.set_delivery(delivery);
-            let events = exec_events(&venue.submit(place_request(ORDER_A), NOW));
-            assert_eq!(events.len(), expected, "{delivery:?} message count");
-            for event in &events {
-                assert_eq!(event.client_id, ORDER_A, "{delivery:?} addresses one order");
-                assert_eq!(event.provenance, Provenance::Mine);
-            }
-            assert!(
-                venue.is_resting(ORDER_A),
-                "{delivery:?} — the venue's own state never depends on what we were told"
-            );
-        }
     }
 }
 

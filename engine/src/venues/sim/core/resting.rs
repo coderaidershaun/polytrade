@@ -3,7 +3,7 @@
 use super::orders::{CORPUS_VENUE_ORDER_ID, SimOrder};
 use super::queue::SimOrderIndex;
 use super::wallet::Reservation;
-use crate::msg::exec::VenueOrderStatus;
+use crate::msg::exec::{OrderStyle, VenueOrderStatus};
 use crate::msg::ids::{ClientOrderId, Notional, Price, Qty, Side, TradeId, VenueOrderId};
 use crate::msg::time::{DurationUs, LocalTs};
 
@@ -44,7 +44,10 @@ pub enum RefusalReason {
     MinQty,
     MinNotional,
     MaxOrders,
-    StyleNotPermitted,
+    /// The simulator models only resting post-only orders, so it fills no order of this style.
+    UnmodelledStyle {
+        style: OrderStyle,
+    },
     NoSuchOrder,
     OrderGone,
     AmendBudgetSpent,

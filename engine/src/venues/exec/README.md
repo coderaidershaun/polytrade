@@ -258,6 +258,10 @@ determinism evidence is that run, its codec goldens, and a test double driven th
 real codec, delivery-permutation style (ack-first, report-first, ack-only, report-only,
 ambiguous, duplicated, reordered — the seven ways two answers to one request arrive).
 
+A simulator answers in its venue's own wire, with one exception: it refuses an order of a style
+that it cannot model with code 9001, which no venue sends, so that refusal never reads as an
+answer of the venue. The codec classifies it `Fatal`, and the run summary counts it.
+
 ## What not to do
 
 Do not re-implement tier-2 machinery, however small it looks. Do not give a venue a second

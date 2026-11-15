@@ -20,6 +20,7 @@ pub(super) const FRAME: JsonFrame = JsonFrame("binance execution");
 pub use client_id::{
     CLIENT_ORDER_ID_LEN, classify_client_order_id, format_client_order_id, parse_client_order_id,
 };
+pub(crate) use reject::SIMULATOR_UNMODELLED_STYLE;
 pub use reject::{RejectSubject, classify_error};
 pub use request::{EncodedRequest, encode_request};
 pub use response::{DecodedResponse, ResponseContext, decode_order_record, decode_response};

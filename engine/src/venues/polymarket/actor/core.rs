@@ -26,31 +26,33 @@ pub struct SlotLegs {
     pub down: InstrumentId,
 }
 
-/// Work shell must perform. Order matters: `Rotation → BookReset → Snapshot` per slot,
-/// `Unsubscribe → BookReset` on teardown.
+/// The work that the shell of the actor does for the core. For each instrument a rotation comes
+/// first, then its book reset, then its snapshot; a teardown unsubscribes, then resets each book.
 // `Emit` carries a whole `InboundMessage`; boxing it would allocate per book chunk on the
 // adapter's steady path to shrink a Vec the shell drains immediately.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum DriverEffect {
-    /// Idempotent resolve (shell de-dupes in-flight).
+    /// Ask for the market of the window that starts here. The shell drops a request that is already
+    /// in flight, so the core may ask again.
     Resolve(VenueTs),
     Subscribe(WindowTokens),
     Unsubscribe(WindowTokens),
-    /// Grace-tail `/book` 404 probe on both tokens.
+    /// Probe the books of both tokens in the grace tail, where a 404 ends the window.
     Probe(WindowTokens),
-    /// Pushed to hot ring; shell stamps `queued_ts_us`.
+    /// A message for the hot thread. The shell stamps its queued time.
     Emit(InboundMessage),
-    /// Venue lineage → rotations side-channel (off hot ring).
+    /// A row of the rotations table, which goes to the tape and not to the hot thread.
     PersistRotation(RotationRow),
-    /// Slot occupied at next subscribe — WARN + counted.
+    /// A slot still held its window when the next one subscribed. The shell warns and counts it.
     ForcedTeardown(ForceTeardownFacts),
-    /// Book diverged from shadow — WARN + counted. Carries cut point so WARN names cause.
+    /// The book of the venue differs from the shadow book. The shell warns and counts it, and the
+    /// mismatch says where the two differ.
     Diverged {
         instrument: InstrumentId,
         mismatch: BookMismatch,
     },
-    /// `tick_size_change` frame; WARN records old→new shape.
+    /// A `tick_size_change` frame. The shell warns with the old and the new tick size.
     TickSizeChange(PolyTickSizeChange),
     /// The window an execution edge may now trade. Emitted at SUBSCRIBE rather than at resolve:
     /// a slot resolves its next window while its previous one is still live, and binding then
@@ -73,9 +75,9 @@ struct SlotRuntime {
     machine: SlotMachine,
     up: Leg,
     down: Leg,
-    /// Resolved window awaiting subscribe instant.
+    /// A resolved window that waits for its subscribe instant.
     resolved: Option<WindowAssignment>,
-    /// Highest handled index — guards re-resolve/re-assign.
+    /// The highest window index handed to the slot, so no window is resolved or assigned twice.
     handled_index: Option<i64>,
 }
 
@@ -165,10 +167,10 @@ impl PolyDriverCore {
         self.try_assign(slot, now, emit);
     }
 
-    /// Pair a resolved market's tokens with the legs of the slot hosting the window at `start` —
-    /// the driver's single leg/parity authority, so shell-side instrument picks can never disagree
-    /// with the slot the core routes to. `start` is schedule-minted at every call site, so
-    /// [`PolySchedule::window_at`]'s grid assert holds by construction.
+    /// Pairs the tokens of a resolved market with the legs of the slot that hosts the window at
+    /// `start`. Only the core picks the instruments, so the shell cannot pick others than the slot
+    /// that the core routes to. Each caller takes `start` from the schedule, so the grid check of
+    /// [`PolySchedule::window_at`] holds.
     pub(super) fn assignment_from_market(
         &self,
         start: VenueTs,
@@ -176,22 +178,24 @@ impl PolyDriverCore {
     ) -> WindowAssignment {
         let legs = &self.slots[self.schedule.window_at(start).slot.as_usize()];
         WindowAssignment {
-            up: OutcomeLeg {
-                instrument: legs.up.instrument(),
-                token: TokenId::from(market.token_up.as_ref()),
-            },
-            down: OutcomeLeg {
-                instrument: legs.down.instrument(),
-                token: TokenId::from(market.token_down.as_ref()),
-            },
+            legs: [
+                OutcomeLeg {
+                    instrument: legs.up.instrument(),
+                    token: TokenId::from(market.token_up.as_ref()),
+                },
+                OutcomeLeg {
+                    instrument: legs.down.instrument(),
+                    token: TokenId::from(market.token_down.as_ref()),
+                },
+            ],
             window_open_ts_us: market.window_open_ts_us,
             window_close_ts_us: market.window_close_ts_us,
             condition_id: Arc::from(market.condition_id.as_ref()),
         }
     }
 
-    /// A `/book` probe returned: the FSM self-defends against a stale window, so feeding both slots is
-    /// safe — only the one whose live window matches the probed tokens acts.
+    /// A probe of `/book` answered. A slot machine ignores an answer for tokens that are not its
+    /// live window, so both slots get it.
     pub fn on_probe_result(
         &mut self,
         now: LocalTs,
@@ -212,8 +216,8 @@ impl PolyDriverCore {
         }
     }
 
-    /// A fresh socket: every live leg re-baselines (the venue resends full books), so emit a BookReset
-    /// per live instrument now and forward the coming book as a Snapshot.
+    /// A new socket: the venue sends each full book again, so each live leg resets its book now and
+    /// forwards the next one as a snapshot.
     pub fn on_reconnect(&mut self, now: LocalTs, emit: &mut dyn FnMut(DriverEffect)) {
         for slot in &mut self.slots {
             for side in [LegSide::Up, LegSide::Down] {
@@ -231,7 +235,7 @@ impl PolyDriverCore {
         }
     }
 
-    /// Every token currently subscribed — the plain-subscribe set the shell replays on each connect.
+    /// Each token subscribed now, which the shell subscribes again on each connect.
     pub fn live_tokens(&self) -> Vec<TokenId> {
         let mut tokens = Vec::new();
         for slot in &self.slots {
@@ -317,8 +321,9 @@ impl PolyDriverCore {
             SlotAction::Subscribe(assignment) => {
                 let tokens = assignment.tokens();
                 emit(DriverEffect::BindExecution(Box::new(assignment.clone())));
-                self.slots[slot].up.assign(assignment.up.token, now);
-                self.slots[slot].down.assign(assignment.down.token, now);
+                let [up, down] = assignment.legs;
+                self.slots[slot].up.assign(up.token, now);
+                self.slots[slot].down.assign(down.token, now);
                 emit(DriverEffect::Subscribe(tokens));
             }
             SlotAction::Rotation(facts) => {

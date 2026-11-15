@@ -2,3 +2,4 @@
 
 mod config_proofs;
 mod fill_model;
+mod wire_contract;
