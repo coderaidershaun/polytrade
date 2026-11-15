@@ -24,11 +24,14 @@ pub fn classify_error(code: i32, message: &str, subject: RejectSubject) -> Rejec
         // The gateway rejected this before it reached the match engine, so the order's state
         // is unchanged; the engine's normal spin cadence will simply retry it.
         -1003 | -1021 | -1015 => RejectClass::StillLive,
-        // Binance calls this "execution status unknown" — the request may have gone through.
-        // A placement is Ambiguous under that doubt; every other request type stays StillLive.
+        // Binance calls this "execution status unknown": the request can have run, or not. A
+        // placement, a cancel, or an amend is then Ambiguous, so the edge reads the order before
+        // any second one, and never sends it again. A read changes nothing, so it stays StillLive.
         -1006 | -1007 => match subject {
-            RejectSubject::Placement => RejectClass::Ambiguous,
-            _ => RejectClass::StillLive,
+            RejectSubject::Placement | RejectSubject::Cancellation | RejectSubject::Amendment => {
+                RejectClass::Ambiguous
+            }
+            RejectSubject::StatusQuery => RejectClass::StillLive,
         },
         // The amend was refused but the order is still resting. The specific reason is read
         // from the message text by amend_budget_remaining().

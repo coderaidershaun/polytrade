@@ -156,8 +156,8 @@ impl Actor {
         self.session.arm_readiness(self.control.clock.now());
     }
 
-    // A -2011 on cancel probes whether the order is open and holds the latch. Anything else
-    // re-arms it.
+    // An ambiguous cancel (-2011, an execution status unknown, or no answer) probes whether the
+    // order is open and holds the latch. Any other class re-arms it.
     async fn unresolved_over_rest(
         &mut self,
         class: RejectClass,
