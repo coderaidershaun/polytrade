@@ -48,6 +48,8 @@ impl EdgeHarness for BinanceEdge {
     const RUN_NONCE: u32 = RUN_NONCE;
     const RESTING_BID: Price = Price::from_mantissa(117_000 * FIXED_SCALE);
     const QTY: Qty = Qty::from_mantissa(10_000);
+    const SENDS_BALANCE_DELTAS: bool = true;
+    const QUEUES_THROUGH_FUNNEL: bool = true;
 
     fn new() -> Self {
         Self {
@@ -114,16 +116,17 @@ impl EdgeHarness for BinanceEdge {
         &mut self,
         client_id: engine::msg::ids::ClientOrderId,
         at: LocalTs,
-    ) -> ExecEvent {
+    ) -> Option<ExecEvent> {
         let text = format_client_order_id(self.venue.identity().te_tag, client_id);
-        decode_order_record(
+        let pending = decode_order_record(
             &order_record(&text, "117000.00000000", "PENDING_CANCEL"),
             ExecKind::SnapshotOrder,
             0,
             &self.venue.decode_context(at),
         )
         .expect("the record decodes")
-        .expect("the symbol is tracked")
+        .expect("the symbol is tracked");
+        Some(pending)
     }
 
     fn undecodable_open_order(
