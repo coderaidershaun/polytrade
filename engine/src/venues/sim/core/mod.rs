@@ -21,7 +21,7 @@ mod venue;
 pub mod wallet;
 
 pub use latency::LatencyBudget;
-pub use market::ResetReason;
+pub use market::{ResetReason, UnmatchedPrints};
 pub use queue::QueueAhead;
 pub use resting::{ClosedReason, InstrumentLimits, OrderPhase, OrderSnapshot, RefusalReason};
 pub(crate) use revise::ForcedOrderExit;

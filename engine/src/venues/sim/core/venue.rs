@@ -2,7 +2,7 @@
 //! market data and requests in the order of their effective time.
 
 use super::latency;
-use super::market::{MarketFold, ResetReason, TradeEvidence};
+use super::market::{MarketFold, ResetReason, TradeEvidence, UnmatchedPrints};
 use super::ordering::{Phase, Sequenced, SequencedByKey};
 use super::queue::{self, OwnFill, SimOrderIndex};
 use super::request::{RequestFold, TimedAction, close_order};
@@ -292,6 +292,10 @@ impl SimVenue {
     pub fn suspend_matching(&mut self, reason: ResetReason, at_ts_us: LocalTs) {
         let reason = self.market.suspend_matching(reason);
         self.record_reset(reason, at_ts_us);
+    }
+
+    pub fn unmatched_prints(&self) -> UnmatchedPrints {
+        self.market.unmatched_prints()
     }
 
     fn apply_trade(

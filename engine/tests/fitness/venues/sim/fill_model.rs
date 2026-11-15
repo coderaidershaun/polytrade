@@ -19,7 +19,7 @@ use engine::venues::exec::ExecRequest;
 use engine::venues::sim::core::wallet::SimWalletSetup;
 use engine::venues::sim::core::{
     InstrumentLimits, LatencyBudget, QueueAhead, ResetReason, SimEmission, SimVenue, SimVenueSetup,
-    VenueEvent,
+    UnmatchedPrints, VenueEvent,
 };
 use proptest::prelude::*;
 
@@ -486,5 +486,79 @@ fn trade_id_gap_suspends_matching_until_snapshot() {
         own_fill(&after),
         print_qty.mantissa(),
         "once matching is restored, a print through the bid fills it again"
+    );
+}
+
+/// A print that the venue sets aside fills nothing, so a run that drops many of them reports fewer
+/// fills than its market gave, with no sign why. Each one is counted by its reason, and with the
+/// prints that walk the queue the counts add up to every print.
+#[test]
+fn unmatched_prints_are_counted_by_reason() {
+    let mut live = LiveVenue::start();
+    let seeded = live.venue.unmatched_prints();
+    assert_eq!(
+        seeded,
+        UnmatchedPrints {
+            epoch_seed: 1,
+            ..UnmatchedPrints::default()
+        },
+        "the first recorded print only seeds the ids of its stream epoch"
+    );
+    let empty_level = Price::from_mantissa(5_500_000_000_000);
+    let print_qty = Qty::from_mantissa(1_000);
+    let rested = live.place_buy(1, empty_level, OWN_QTY);
+    assert_eq!(
+        queue_ahead(&rested),
+        Some(QueueAhead::Known(Qty::from_mantissa(0))),
+        "the own bid rests at a level that the book shows empty"
+    );
+
+    let mut emissions = Vec::new();
+    for _ in 0..4 {
+        emissions.extend(live.print(Side::Sell, empty_level, print_qty));
+    }
+    live.venue_us += 1_000;
+    let stale = (live.aggregate_id, live.trade_id);
+    emissions.extend(live.print_with(Side::Sell, empty_level, print_qty, stale, live.venue_us));
+    emissions.extend(live.set_level(
+        Side::Buy,
+        Price::from_mantissa(5_174_610_000_000),
+        Qty::from_mantissa(50_000),
+    ));
+    let commit_us = live.venue_us;
+    for venue_us in [commit_us, commit_us - 1_000] {
+        let next = (live.aggregate_id + 1, live.trade_id + 1);
+        emissions.extend(live.print_with(Side::Sell, empty_level, print_qty, next, venue_us));
+    }
+    live.venue_us += 1_000;
+    let after_gap = (live.aggregate_id + 1, live.trade_id + 2);
+    emissions.extend(live.print_with(Side::Sell, empty_level, print_qty, after_gap, live.venue_us));
+    for _ in 0..2 {
+        emissions.extend(live.print(Side::Sell, empty_level, print_qty));
+    }
+
+    assert_eq!(
+        own_fill(&emissions),
+        4 * print_qty.mantissa(),
+        "four of the ten prints walk the queue and fill the own bid"
+    );
+    let counted = live.venue.unmatched_prints();
+    assert_eq!(
+        counted,
+        UnmatchedPrints {
+            suspended: 3,
+            before_last_commit: 2,
+            stale_id: 1,
+            epoch_seed: 1,
+        },
+        "each print that walks no queue is counted by its reason"
+    );
+    let set_aside =
+        counted.suspended + counted.before_last_commit + counted.stale_id + counted.epoch_seed
+            - seeded.epoch_seed;
+    assert_eq!(
+        set_aside + 4,
+        10,
+        "the counts and the walked prints add up to the ten prints"
     );
 }
