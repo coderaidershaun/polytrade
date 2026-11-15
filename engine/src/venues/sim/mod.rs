@@ -7,7 +7,9 @@ mod bringup;
 pub mod core;
 mod driver;
 mod error;
-mod lanes;
+/// Public by decision: the horizon decides when the venue may advance, so the order of its three
+/// lanes can be held to account from outside.
+pub mod lanes;
 mod readiness;
 mod tap;
 /// Public by decision: these are the Binance-shaped payloads the live codec must keep parsing, so
