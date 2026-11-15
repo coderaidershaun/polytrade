@@ -12,6 +12,7 @@
 pub mod backoff;
 pub(crate) mod chunk;
 pub mod decode;
+pub mod fault;
 mod funnel;
 pub mod http;
 pub(crate) mod lane;

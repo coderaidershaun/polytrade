@@ -1,10 +1,11 @@
 //! One reconnect loop for both market-data feeds. Each feed supplies only its session, so the rule
-//! for when the back-off starts over is written once.
+//! for when the back-off starts over, and the halt on a fault of a feed, are written once.
 
 use crate::msg::run_state::RunState;
 use crate::runtime::shutdown::{FatalSignal, RunStateCell};
 use crate::venues::IDLE_POLL;
 use crate::venues::edge::backoff::BackoffCaps;
+use crate::venues::edge::fault::{MarketDataError, halt_on_market_data_error};
 use crate::venues::edge::socket::{Socket, connect};
 use crate::{info, warn};
 
@@ -14,7 +15,7 @@ pub(crate) enum Flow {
     Reconnect,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SessionEnd {
     Stopped,
     Parked,
@@ -23,6 +24,8 @@ pub(crate) enum SessionEnd {
     Reconnect {
         is_endpoint_proven: bool,
     },
+    /// The session met a fault that halts the engine. It never trips the latch itself.
+    Halted(MarketDataError),
 }
 
 pub(crate) struct LaneSpec {
@@ -58,6 +61,10 @@ pub(crate) async fn run_lane(spec: LaneSpec, mut lane: impl Lane) {
         info!("{} connected", spec.name);
         match lane.session(socket).await {
             SessionEnd::Stopped => return,
+            SessionEnd::Halted(error) => {
+                halt_on_market_data_error(&error, &spec.fatal);
+                return;
+            }
             SessionEnd::Parked => {
                 info!("{} parked — socket dropped", spec.name);
                 attempt = 0;

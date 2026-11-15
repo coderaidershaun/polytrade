@@ -20,11 +20,12 @@ use crate::msg::run_state::RunState;
 use crate::msg::time::{EngineClock, LocalTs};
 use crate::runtime::config::{BinanceMarket, KlineInterval};
 use crate::runtime::registry::{ConnectionCategory, InstrumentRow, ProducerGroup};
-use crate::runtime::shutdown::{FatalReason, FatalSignal, RunStateCell, TaskHandle};
+use crate::runtime::shutdown::{FatalSignal, RunStateCell, TaskHandle};
 use crate::venues::edge::backoff::BackoffCaps;
+use crate::venues::edge::fault::MarketDataError;
 use crate::venues::edge::lane::{Flow, Lane, LaneSpec, SessionEnd, run_lane};
 use crate::venues::edge::rest_quiet::SharedRestQuiet;
-use crate::{error, info, warn, warn_repeating};
+use crate::{info, warn, warn_repeating};
 
 use super::kline::KlineSequencer;
 use super::parse::{ParseContext, ParseError, parse_agg_trade, parse_combined_frame};
@@ -99,6 +100,9 @@ struct Actor {
     rest_quiet: SharedRestQuiet,
     malformed_frames: u64,
     unroutable_frames: u64,
+    /// A parse inside a depth resync or a kline backfill cannot hand its fault back, so the fault
+    /// waits here until the session ends on it.
+    fault: Option<MarketDataError>,
     stream_epoch: StreamEpoch,
     tap_heartbeat: Duration,
 }
@@ -179,6 +183,7 @@ impl Actor {
             rest_quiet: context.rest_quiet,
             malformed_frames: 0,
             unroutable_frames: 0,
+            fault: None,
             tap_heartbeat: context.tap_heartbeat,
             stream_epoch: StreamEpoch::default(),
         }
@@ -265,14 +270,12 @@ impl Actor {
         result.map_err(|error| self.on_parse_error(error)).ok()
     }
 
-    // Mantissa overflow is fatal (never truncate market data).
     #[cold]
     fn on_parse_error(&mut self, error: ParseError) {
-        if error.is_fatal() {
-            error!("binance adapter {} fatal parse: {error}", self.label);
-            self.fatal.trip(FatalReason::MarketDataUnreadable {
-                source_id: self.producer.source_id(),
-            });
+        if let ParseError::Decode(fault) = &error
+            && let Some(fault) = MarketDataError::of_decimal_fault(self.producer.source_id(), fault)
+        {
+            self.fault.get_or_insert(fault);
             return;
         }
         warn_repeating!(
@@ -343,14 +346,19 @@ impl Lane for Actor {
         reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
     )]
     async fn session(&mut self, mut socket: Socket) -> SessionEnd {
+        // A sequence generation is never reused, so a counter at its end halts the feed.
         let Some(epoch) = self.stream_epoch.next() else {
-            self.on_epoch_exhausted();
-            return SessionEnd::Stopped;
+            return SessionEnd::Halted(MarketDataError::EpochExhausted {
+                source_id: self.producer.source_id(),
+            });
         };
         self.stream_epoch = epoch;
         self.liveness.arm();
         if self.category == StreamCategory::Klines {
             self.backfill_klines().await;
+            if let Some(fault) = self.fault.take() {
+                return SessionEnd::Halted(fault);
+            }
         }
 
         let mut is_endpoint_proven = false;
@@ -372,7 +380,11 @@ impl Lane for Actor {
                     // closes must keep backing off.
                     is_endpoint_proven = true;
                     let received_ts_us = self.clock.now();
-                    if self.handle_text(text.as_str(), received_ts_us).await == Flow::Reconnect {
+                    let flow = self.handle_text(text.as_str(), received_ts_us).await;
+                    if let Some(fault) = self.fault.take() {
+                        return SessionEnd::Halted(fault);
+                    }
+                    if flow == Flow::Reconnect {
                         return SessionEnd::Reconnect { is_endpoint_proven };
                     }
                 }
