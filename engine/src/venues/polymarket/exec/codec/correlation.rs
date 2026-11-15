@@ -7,7 +7,7 @@
 //! shutdown sweep can reach it), but a stream event racing the HTTP answer resolves to nothing here
 //! and the driver must hold it rather than discard it.
 
-use crate::msg::ids::{ClientOrderId, InstrumentId, TradeId, VenueOrderId};
+use crate::msg::ids::{ClientOrderId, InstrumentId, Qty, TradeId, VenueOrderId};
 
 /// An order this run placed, resolved from the venue's own id.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -20,6 +20,8 @@ pub struct KnownOrder {
 struct IndexRow {
     venue_order_id: Box<str>,
     known: KnownOrder,
+    /// The filled total of the order that the edge has folded so far.
+    matched: Qty,
 }
 
 /// Fixed-capacity `orderID` ↔ [`ClientOrderId`] map. Sized at startup like every other execution
@@ -72,8 +74,30 @@ impl OrderIndex {
         self.rows.push(IndexRow {
             venue_order_id: venue_order_id.into(),
             known,
+            matched: Qty::from_mantissa(0),
         });
         Ok(())
+    }
+
+    /// After the edge folds an event of the order: the venue states only the running total of an
+    /// order, so the next report states its own trade as the step above this total. A total below
+    /// the one held is a report that came late, and it changes nothing.
+    pub fn record_matched(&mut self, client_id: ClientOrderId, total: Qty) {
+        if let Some(row) = self
+            .rows
+            .iter_mut()
+            .find(|row| row.known.client_id == client_id)
+        {
+            row.matched = row.matched.max(total);
+        }
+    }
+
+    /// Zero for an order that the index does not hold.
+    pub(crate) fn matched(&self, venue_order_id: &str) -> Qty {
+        self.rows
+            .iter()
+            .find(|row| &*row.venue_order_id == venue_order_id)
+            .map_or(Qty::from_mantissa(0), |row| row.matched)
     }
 
     pub fn resolve(&self, venue_order_id: &str) -> Option<KnownOrder> {
