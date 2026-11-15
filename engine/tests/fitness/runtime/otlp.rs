@@ -249,6 +249,34 @@ fn down_address() -> SocketAddr {
 }
 
 fn plan_for(collector: SocketAddr) -> OtlpPlan {
+    let identity = RunIdentity::new(STRATEGY, ENGINE).expect("a valid identity");
+    plan_of(collector, &identity, Some(ExecutionMode::Sim))
+}
+
+/// The service name under which a run of `identity` in `mode` exports, as it reaches a stand-in
+/// collector on one metrics request.
+pub(crate) fn exported_service(identity: &RunIdentity, mode: Option<ExecutionMode>) -> String {
+    let collector = Collector::answering(&[Answer::Accepted]);
+    let (mut rows, lanes) = plan_of(collector.address(), identity, mode).open();
+    let exporter = lanes.start().expect("the OS starts the exporter thread");
+    write_rows(&mut rows, &[drop_row(SinkKind::StageSamples, 1)]);
+    exporter.stop();
+    let requests = collector.requests_once(Duration::from_secs(3), |requests| {
+        !metrics_requests(requests).is_empty()
+    });
+    let metrics = metrics_requests(&requests);
+    let request = metrics
+        .first()
+        .expect("the collector got a /v1/metrics request within 3 s");
+    let service = &request.body["resourceMetrics"][0]["resource"]["attributes"][0];
+    assert_eq!(service["key"], "service.name");
+    service["value"]["stringValue"]
+        .as_str()
+        .expect("the service name is a string")
+        .to_owned()
+}
+
+fn plan_of(collector: SocketAddr, identity: &RunIdentity, mode: Option<ExecutionMode>) -> OtlpPlan {
     let execution = execution_block_with("sim", SIM_BLOCK);
     // The exit sweep takes half of the engine's drain deadline first, so the default deadlines
     // leave the exporter no room to stop.
@@ -261,8 +289,7 @@ fn plan_for(collector: SocketAddr) -> OtlpPlan {
         )
     );
     let config = Config::<NoParams>::from_yaml(&document).expect("the document is valid");
-    let identity = RunIdentity::new(STRATEGY, ENGINE).expect("a valid identity");
-    OtlpPlan::check(&config, &identity, Some(ExecutionMode::Sim))
+    OtlpPlan::check(&config, identity, mode)
         .expect("the otlp block passes its check")
         .expect("the document has an otlp block")
 }
