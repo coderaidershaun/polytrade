@@ -41,7 +41,7 @@ use crate::msg::persist::RotationRow;
 use crate::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, Stamper};
 use crate::msg::ui::UiCatalog;
 use crate::msg::ui::channel::{UiLifecycle, UiWiring, ui_channel};
-use crate::runtime::config::{Config, ExecutionMode, SenderPlacement};
+use crate::runtime::config::{Config, SenderPlacement};
 use crate::runtime::exposure::{ExposureHandle, ExposureWriter, ExposureWriterSetup, WriterStatus};
 #[cfg(feature = "otlp")]
 use crate::runtime::otlp::{OtlpExporter, OtlpLanes, OtlpPlan};
@@ -158,10 +158,10 @@ impl Engine {
         } = wiring;
 
         let identity = plan.identity.clone();
-        let mode = plan.mode;
+        let artifacts = plan.artifacts.clone();
         let log_config = LogConfig {
             dir: config.logging.dir.clone(),
-            file_stem: ExecutionMode::artifact_stem(mode, &identity).into(),
+            file_stem: artifacts.stem().into(),
             ring_capacity: config.logging.ring_capacity,
             drain_deadline: Duration::from_millis(config.logging.drain_deadline_ms),
             reopen_limit: config.logging.reopen_limit,
@@ -273,6 +273,7 @@ impl Engine {
         } = persist_bring_up(PersistBringUpSetup {
             config: &config,
             identity: &identity,
+            artifacts: &artifacts,
             registry: &registry,
             feature_names: &feature_names,
             rotations: rotations_rx,
@@ -369,7 +370,7 @@ impl Engine {
         let exposure = ExposureWriter::spawn(ExposureWriterSetup {
             dir: config.exposure.dir.clone(),
             identity: identity.clone(),
-            mode,
+            artifacts: artifacts.clone(),
             registry: &registry,
             status: writer_status.map(|queue| WriterStatus {
                 queue,
@@ -427,7 +428,7 @@ impl Engine {
         // with try_send, so it can never block startup.
         let catalog = UiCatalog::from_registry(
             &identity.strategy_id,
-            mode,
+            artifacts.mode(),
             config.engine.spin_interval_us,
             feature_names,
             &registry,

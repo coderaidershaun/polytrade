@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use engine::log::{self, LogConfig, LogHandle};
 use engine::msg::failure::FailureClass;
 use engine::msg::time::{EngineClock, LocalTs};
+use engine::runtime::artifacts::RunArtifacts;
 use engine::runtime::config::{Config, ExecutionMode, NoParams, RunIdentity};
 use engine::runtime::metrics::{DropRow, RollupRow, RollupSink, SinkKind};
 use engine::runtime::otlp::{OtlpPlan, OtlpReport, OtlpRows};
@@ -289,7 +290,7 @@ fn plan_of(collector: SocketAddr, identity: &RunIdentity, mode: Option<Execution
         )
     );
     let config = Config::<NoParams>::from_yaml(&document).expect("the document is valid");
-    OtlpPlan::check(&config, identity, mode)
+    OtlpPlan::check(&config, &RunArtifacts::new(mode, identity))
         .expect("the otlp block passes its check")
         .expect("the document has an otlp block")
 }

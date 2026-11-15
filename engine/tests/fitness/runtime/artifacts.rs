@@ -9,8 +9,8 @@ use engine::msg::ids::InstrumentId;
 use engine::msg::persist::{FeatureId, FeatureRow, PersistRecord};
 use engine::msg::time::LocalTs;
 use engine::runtime::ExecutionLease;
+use engine::runtime::artifacts::RunArtifacts;
 use engine::runtime::config::{BinanceEnv, ExecutionMode, RecordedTables, RunIdentity, TableKind};
-use engine::runtime::exposure;
 use engine::tape::PersistConfig;
 use engine::venues::binance::exec as binance_exec;
 use engine::venues::exec::TeTag;
@@ -47,10 +47,11 @@ struct Marks {
 
 fn marks(mode: Option<ExecutionMode>) -> Marks {
     let identity = identity();
+    let artifacts = RunArtifacts::new(mode, &identity);
     let (tape_dir, footer_mode) = tape_of(mode);
     Marks {
-        log_stem: ExecutionMode::artifact_stem(mode, &identity),
-        exposure_file: file_name(&exposure::file_path(Path::new("state"), &identity, mode)),
+        log_stem: artifacts.stem().to_owned(),
+        exposure_file: file_name(&artifacts.exposure_path(Path::new("state"))),
         tape_dir,
         footer_mode,
         nonce_file: nonce_file_of(mode, &identity),

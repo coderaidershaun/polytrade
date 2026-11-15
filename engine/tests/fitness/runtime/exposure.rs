@@ -19,9 +19,10 @@ use engine::msg::ids::{
 use engine::msg::inbound::{FileWriter, InboundMessage, MessageBody, SpinTick, WriterFailure};
 use engine::msg::time::{EngineClock, Stamper};
 use engine::msg::ui::{UiEvent, UiHalt};
+use engine::runtime::artifacts::RunArtifacts;
 use engine::runtime::config::{Config, ExecutionMode, TrackerSpec};
 use engine::runtime::exposure::{
-    ExposureError, ExposureSnapshot, ExposureState, InstrumentExposure, WriterStatus, file_path,
+    ExposureError, ExposureSnapshot, ExposureState, InstrumentExposure, WriterStatus,
 };
 use engine::runtime::registry::{InstrumentRow, Registry};
 use engine::runtime::shutdown::FatalSignal;
@@ -76,7 +77,9 @@ fn a_missing_file_is_a_cold_start() {
     assert!(state.is_empty());
     assert!(state.assets().is_empty());
     assert!(
-        !file_path(root.path(), &identity(), Some(ExecutionMode::Live)).exists(),
+        !RunArtifacts::new(Some(ExecutionMode::Live), &identity())
+            .exposure_path(root.path())
+            .exists(),
         "reading a position must not create one"
     );
 }
@@ -143,7 +146,7 @@ fn a_run_that_folds_nothing_leaves_its_inherited_file_as_it_was() {
     let registry = registry_for(BINANCE_SOURCE);
     let rows = [row(0, 250_000, -29_500_000_000, 30_100_000_000)];
     write_through_the_writer(root.path(), &registry, &[snapshot(1, &rows)]);
-    let path = file_path(root.path(), &identity(), Some(ExecutionMode::Live));
+    let path = RunArtifacts::new(Some(ExecutionMode::Live), &identity()).exposure_path(root.path());
     let after_first_run = std::fs::read_to_string(&path).expect("the first run wrote a file");
 
     let restored = load_live(root.path(), &registry).expect("loads");
@@ -167,7 +170,7 @@ fn a_run_that_folds_nothing_leaves_its_inherited_file_as_it_was() {
 fn the_sections_for_a_person_are_never_read_back() {
     let root = TempDir::new("exposure-informational");
     let registry = registry_for(BINANCE_SOURCE);
-    let path = file_path(root.path(), &identity(), Some(ExecutionMode::Live));
+    let path = RunArtifacts::new(Some(ExecutionMode::Live), &identity()).exposure_path(root.path());
     std::fs::create_dir_all(root.path()).expect("create the exposure directory");
     let rows = r#"{ "venue": "binance", "market": "spot", "symbol": "btcusdt", "position_base": 100000, "cash_quote": -11800000000, "basis_quote": 11800000000 }"#;
     let body = document(CURRENT_VERSION, "te-recorder", FIXED_SCALE, rows).replace(
@@ -450,7 +453,8 @@ fn untrusted_exposure_file_refuses_start() {
     for (case, body, expect) in cases {
         let root = TempDir::new("exposure-untrusted");
         std::fs::create_dir_all(root.path()).expect("create the exposure directory");
-        let path = file_path(root.path(), &identity(), Some(ExecutionMode::Live));
+        let path =
+            RunArtifacts::new(Some(ExecutionMode::Live), &identity()).exposure_path(root.path());
         std::fs::write(&path, &body).expect("write the case");
         let loaded = load_live(root.path(), &registry);
         assert_eq!(
@@ -646,7 +650,9 @@ fn a_folder_that_does_not_sync_counts_as_a_failed_write() {
         })
     );
     assert!(
-        file_path(root.path(), &identity(), Some(ExecutionMode::Live)).exists(),
+        RunArtifacts::new(Some(ExecutionMode::Live), &identity())
+            .exposure_path(root.path())
+            .exists(),
         "each try wrote the file, and only its folder did not sync"
     );
     drop(unsynced);
@@ -667,7 +673,7 @@ fn a_write_that_passes_starts_the_count_again() {
         &ExposureState::default(),
         Some(status),
     );
-    let path = file_path(root.path(), &identity(), Some(ExecutionMode::Live));
+    let path = RunArtifacts::new(Some(ExecutionMode::Live), &identity()).exposure_path(root.path());
     let folder = FolderMode::set(root.path(), 0o300);
     for seq in 1..=2 {
         sink.push(&snapshot(seq, &[row(0, seq as i64 * ONE, 0, 0)]));

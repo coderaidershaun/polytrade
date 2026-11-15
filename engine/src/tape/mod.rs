@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::msg::failure::{FailureClass, Halt};
-use crate::runtime::config::{ExecutionMode, RecordedTables, StrategyId, TradingEngineId};
+use crate::runtime::artifacts::RunArtifacts;
+use crate::runtime::config::{RecordedTables, StrategyId, TradingEngineId};
 
 pub use drain::{PersistHandle, PersistWriter};
 
@@ -27,8 +28,9 @@ pub struct PersistConfig {
 pub struct RunMeta {
     pub strategy_id: StrategyId,
     pub te_id: TradingEngineId,
-    /// Records the execution mode and isolates simulated artifacts.
-    pub execution_mode: Option<ExecutionMode>,
+    /// The tape folder of the run and the mode its footer records, so a simulated run writes
+    /// below `sim/`.
+    pub artifacts: RunArtifacts,
     pub fixed_scale: i64,
     pub engine_version: Box<str>,
     pub feature_names: Vec<Box<str>>,

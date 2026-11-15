@@ -11,6 +11,7 @@ use crate::hot::sink::PersistSink;
 use crate::info;
 use crate::msg::ids::FIXED_SCALE;
 use crate::msg::persist::{PersistRecord, RotationRow};
+use crate::runtime::artifacts::RunArtifacts;
 use crate::runtime::config::{Config, RecordedTables, RunIdentity};
 use crate::runtime::registry::Registry;
 use crate::tape::{PersistConfig, PersistHandle, PersistWriter, RunMeta};
@@ -24,8 +25,10 @@ pub(super) struct PersistBringUp {
 pub(super) struct PersistBringUpSetup<'a, P> {
     pub(super) config: &'a Config<P>,
     pub(super) identity: &'a RunIdentity,
+    pub(super) artifacts: &'a RunArtifacts,
     pub(super) registry: &'a Registry,
-    /// Read off strategy before it moved to engine -> footer needs them, later none available.
+    /// Read from the strategy before the engine takes it, because the footer needs them and nothing
+    /// gives them later.
     pub(super) feature_names: &'a [Box<str>],
     pub(super) rotations: mpsc::Receiver<RotationRow>,
 }
@@ -65,12 +68,13 @@ pub(super) fn persist_bring_up<P>(setup: PersistBringUpSetup<'_, P>) -> PersistB
     }
 }
 
-/// Dictionaries so dense indices decode.
+/// The footer of each file of the run: its identity, its mode, and the dictionaries that decode
+/// its dense ids.
 fn run_meta<P>(setup: &PersistBringUpSetup<'_, P>) -> RunMeta {
     RunMeta {
         strategy_id: setup.identity.strategy_id.clone(),
         te_id: setup.identity.te_id.clone(),
-        execution_mode: setup.config.execution_mode(),
+        artifacts: setup.artifacts.clone(),
         fixed_scale: FIXED_SCALE,
         engine_version: env!("CARGO_PKG_VERSION").into(),
         feature_names: setup.feature_names.to_vec(),
