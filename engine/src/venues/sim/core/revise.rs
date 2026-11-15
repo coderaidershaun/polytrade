@@ -14,7 +14,7 @@ pub struct ForcedOrderExit {
 }
 
 impl SimVenue {
-    pub fn force_exit_open_orders(
+    pub(crate) fn force_exit_open_orders(
         &mut self,
         at_ts_us: LocalTs,
         cancelling: &[ClientOrderId],

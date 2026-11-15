@@ -17,14 +17,14 @@ use crate::msg::time::{DurationUs, LocalTs};
 use crate::venues::exec::ExecRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct SimEmission {
+pub struct SimEmission {
     pub at_ts_us: LocalTs,
     pub sequence: u64,
     pub event: VenueEvent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) enum VenueEvent {
+pub enum VenueEvent {
     Rested {
         snapshot: OrderSnapshot,
         queue_ahead: queue::QueueAhead,
@@ -100,7 +100,7 @@ impl EmissionBook {
 }
 
 #[derive(Debug)]
-pub(crate) struct SimVenue {
+pub struct SimVenue {
     market: MarketFold,
     inbox: SequencedByKey<(InboundMessage, VenueMeta)>,
     inbox_capacity: usize,
@@ -115,7 +115,7 @@ pub(crate) struct SimVenue {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) struct SimVenueSetup {
+pub struct SimVenueSetup {
     pub instrument: InstrumentId,
     pub book_capacity: usize,
     pub market_inbox_capacity: usize,
@@ -153,7 +153,7 @@ impl SimVenue {
         &mut self.wallet
     }
 
-    pub fn market(&self) -> &MarketFold {
+    pub(crate) fn market(&self) -> &MarketFold {
         &self.market
     }
 
