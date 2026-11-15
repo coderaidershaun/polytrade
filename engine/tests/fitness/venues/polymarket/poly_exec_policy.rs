@@ -24,14 +24,16 @@ const DOWN_TOKEN: &str = "222";
 
 fn assignment(open: i64, close: i64) -> WindowAssignment {
     WindowAssignment {
-        up: OutcomeLeg {
-            instrument: UP,
-            token: TokenId::from(UP_TOKEN),
-        },
-        down: OutcomeLeg {
-            instrument: DOWN,
-            token: TokenId::from(DOWN_TOKEN),
-        },
+        legs: [
+            OutcomeLeg {
+                instrument: UP,
+                token: TokenId::from(UP_TOKEN),
+            },
+            OutcomeLeg {
+                instrument: DOWN,
+                token: TokenId::from(DOWN_TOKEN),
+            },
+        ],
         window_open_ts_us: venue_ts(open),
         window_close_ts_us: venue_ts(close),
         condition_id: std::sync::Arc::from(CONDITION),
