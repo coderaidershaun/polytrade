@@ -2,6 +2,7 @@
 
 mod correlation;
 mod gate;
+mod obligations;
 mod poly_exec_codec;
 mod poly_exec_policy;
 mod poly_exec_rows;

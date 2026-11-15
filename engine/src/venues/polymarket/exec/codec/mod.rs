@@ -199,6 +199,14 @@ pub enum WireError {
     Signing(#[from] super::sign::order::OrderSignError),
     #[error(transparent)]
     Amount(#[from] super::sign::amount::AmountError),
+    /// One order of a page of open orders does not decode. The error names the order, so the edge
+    /// halts on it rather than reading the whole page as failed.
+    #[error("open order {venue_order_id} does not decode: {source}")]
+    UndecodableOpenOrder {
+        venue_order_id: Box<str>,
+        #[source]
+        source: Box<WireError>,
+    },
 }
 
 impl WireError {

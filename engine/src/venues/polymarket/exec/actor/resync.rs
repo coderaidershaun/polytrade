@@ -9,8 +9,8 @@ use crate::venues::exec::{ExecSessionError, MirroredOrder, Outgoing, ResyncPoll,
 use crate::{error, info, warn};
 
 use super::super::codec::{
-    OrdersRead, VenueAnswer, cancel_venue_order, decode_orders_page, open_orders_for_token,
-    open_orders_page, trades_page,
+    OrdersRead, VenueAnswer, WireError, cancel_venue_order, decode_orders_page,
+    open_orders_for_token, open_orders_page, trades_page, venue_order_id_digest,
 };
 use super::super::lanes::{Lane, RestJob};
 use super::super::rest::ClobResponse;
@@ -93,6 +93,21 @@ impl Actor {
             Ok(VenueAnswer::Unavailable(availability)) => {
                 self.on_unavailable(availability);
                 self.fail_orders_read(read);
+                return None;
+            }
+            // An open order that this build cannot read leaves the mirror incomplete, and quoting
+            // against an incomplete mirror is what strands somebody's order.
+            Err(WireError::UndecodableOpenOrder {
+                venue_order_id,
+                source,
+            }) => {
+                error!(
+                    "polymarket execution cannot read open order {venue_order_id} ({source}) — the engine halts"
+                );
+                let digest = venue_order_id_digest(&venue_order_id);
+                let error = self.session.undecodable_open_order(digest.0);
+                self.fail_orders_read(read);
+                self.control.fail(error);
                 return None;
             }
             Err(error) => {
