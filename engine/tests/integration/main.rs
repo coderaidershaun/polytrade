@@ -1,9 +1,10 @@
 //! Integration suite: real venue, real time, real serialisation — never CI. Every test is `#[ignore]`.
 //! Only the live-runner role of a job runs a test that signs, by its runbook and the live policy. An
 //! agent runs a public read only where a plan names it, by its exact name and with an empty
-//! environment. Only the signed tests of `binance_recording` place or cancel an order, one small
-//! order of the tests at a time, inside the caps of the live policy. A person runs the timing test
-//! of the pinned sender on a linux host, by the latency runbook.
+//! environment. Only the signed tests of `binance_recording`, `binance_silence` and `poly_live`
+//! place or cancel an order, one small order of the tests at a time, inside the caps of the live
+//! policy. A person runs the timing test of the pinned sender on a linux host, by the latency
+//! runbook.
 
 #![allow(
     clippy::disallowed_methods,
@@ -14,7 +15,9 @@ mod binance_live;
 mod binance_recording;
 mod binance_scale;
 mod binance_signed;
+mod binance_silence;
 mod observer;
+mod poly_live;
 mod poly_rotation;
 mod rest_check;
 mod rotations_parquet;
