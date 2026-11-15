@@ -1,6 +1,7 @@
 //! What the simulated venue emits, held in time order until the horizon releases it.
 
 use super::market::ResetReason;
+use super::ordering::{Phase, SequencedByKey};
 use super::queue;
 use super::resting::{OrderSnapshot, RefusalReason};
 use super::wallet::FillSettlement;
@@ -65,28 +66,33 @@ pub enum VenueEvent {
     },
 }
 
+/// The emissions leave in the order of their time, and in the order of their push at one time.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct EmissionBook {
-    pending: Vec<SimEmission>,
+    pending: SequencedByKey<SimEmission>,
     sequence: u64,
 }
 
 impl EmissionBook {
     pub fn push(&mut self, at_ts_us: LocalTs, event: VenueEvent) {
-        self.pending.push(SimEmission {
+        let emission = SimEmission {
             at_ts_us,
             sequence: self.sequence,
             event,
-        });
+        };
         self.sequence += 1;
+        self.pending.push(at_ts_us, Phase::Emission, emission);
     }
 
     pub(super) fn drain_through(&mut self, horizon: LocalTs, out: &mut Vec<SimEmission>) {
-        self.pending
-            .sort_by_key(|emission| (emission.at_ts_us, emission.sequence));
-        let split = self
+        while self
             .pending
-            .partition_point(|emission| emission.at_ts_us <= horizon);
-        out.extend(self.pending.drain(..split));
+            .peek()
+            .is_some_and(|(at_ts_us, ..)| at_ts_us <= horizon)
+        {
+            if let Some(due) = self.pending.pop() {
+                out.push(due.item);
+            }
+        }
     }
 }

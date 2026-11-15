@@ -53,7 +53,7 @@ impl SimVenue {
     pub fn new(setup: SimVenueSetup) -> Result<Self, WalletError> {
         Ok(Self {
             market: MarketFold::new(setup.instrument, setup.book_capacity),
-            inbox: SequencedByKey::default(),
+            inbox: SequencedByKey::with_capacity(setup.market_inbox_capacity),
             inbox_capacity: setup.market_inbox_capacity,
             orders: RestingOrders::new(),
             limits: setup.limits,
