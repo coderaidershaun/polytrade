@@ -15,42 +15,53 @@ use super::Actor;
 
 impl Actor {
     /// An order resting under an id this run never recorded, named by a read received at
-    /// `received_ts_us`.
+    /// `received_ts_us`. The verdict goes back to the read, which ends the first read of the token
+    /// only when no order deferred.
     pub(super) fn on_unmapped_order(
         &mut self,
         unmapped: &UnmappedOrder,
         read: TokenRead,
         received_ts_us: LocalTs,
         outgoing: &mut Vec<Outgoing>,
-    ) {
+    ) -> UnmappedVerdict {
         let verdict = classify_unmapped(
             self.session.core.mirror(),
             unmapped,
             |client_id| self.orders.venue_order_id(client_id).is_some(),
             read,
         );
-        let client_id = match verdict {
-            UnmappedVerdict::Adopt(client_id) => client_id,
-            // A placement on this side is still in flight. The resync re-reads once it answers, and
-            // by then our own order carries its venue id, so this one is left alone rather than
-            // adopted into our slot.
-            UnmappedVerdict::Defer => return,
-            UnmappedVerdict::LeaveAlone => {
-                self.session.core.count_foreign_order();
-                warn!(
-                    "polymarket execution left an unmapped order alone on instrument {}: {:?} {} @ {} (venue id {}) — no single lost placement of this run equals it",
-                    unmapped.instrument.0,
-                    unmapped.side,
-                    unmapped.qty.mantissa(),
-                    unmapped.price.mantissa(),
-                    unmapped.venue_order_id
-                );
-                return;
-            }
+        match verdict {
+            UnmappedVerdict::Adopt(client_id) => self.adopt(unmapped, client_id, outgoing),
+            // A placement on this side is still in flight. At a first read its answer asks for one
+            // more read of the token, and by then our own order carries its venue id, so this one
+            // is not adopted into our slot.
+            UnmappedVerdict::Defer => {}
+            UnmappedVerdict::LeaveAlone => self.leave_alone(unmapped),
             UnmappedVerdict::Unproven => {
-                return self.on_unproven_order(unmapped, received_ts_us, outgoing);
+                self.on_unproven_order(unmapped, received_ts_us, outgoing);
             }
-        };
+        }
+        verdict
+    }
+
+    fn leave_alone(&mut self, unmapped: &UnmappedOrder) {
+        self.session.core.count_foreign_order();
+        warn!(
+            "polymarket execution left an unmapped order alone on instrument {}: {:?} {} @ {} (venue id {}) — no single lost placement of this run equals it",
+            unmapped.instrument.0,
+            unmapped.side,
+            unmapped.qty.mantissa(),
+            unmapped.price.mantissa(),
+            unmapped.venue_order_id
+        );
+    }
+
+    fn adopt(
+        &mut self,
+        unmapped: &UnmappedOrder,
+        client_id: ClientOrderId,
+        outgoing: &mut Vec<Outgoing>,
+    ) {
         self.counts.adopted += 1;
         warn!(
             "polymarket execution adopted venue order {} as {:016x} — its placement answer never arrived",

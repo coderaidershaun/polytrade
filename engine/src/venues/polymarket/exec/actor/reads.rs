@@ -314,6 +314,7 @@ impl Actor {
             });
             // Both of these are per-token reads, and both are needed before trading begins:
             // any resting orders on the token, and a warm allowance cache.
+            self.first_reads.on_bound(entry.instrument);
             self.read_bound_token(entry.instrument, &entry.token_id);
             self.warm_allowance(&entry.token_id);
         }

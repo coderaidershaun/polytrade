@@ -196,10 +196,12 @@ Two identity patterns exist, chosen by whether the venue echoes a client id:
   alone: a near match can be a person's order, and a pick between two equal slots binds the
   fills of one order to another. An order left alone is counted with the orders this engine
   did not place, and is never mirrored and never cancelled; the lost slot stays ambiguous
-  until its status probes end it. At the first read of its token (the first pass of a run, or
-  the read of a token that a rotation has just bound), an order that no placement of this run
-  explains is unproven instead: it can be an order of an earlier run of this engine, whose fills
-  the fold could not book, or a person's. The edge never cancels it: it counts it and sends one
+  until its status probes end it. At the first read of its token, an order that no placement of
+  this run explains is unproven instead: it can be an order of an earlier run of this engine,
+  whose fills the fold could not book, or a person's. A binding of a token makes its first read
+  due (`FirstReads`), and only a read of that token in which no unknown order deferred ends it:
+  an order that defers waits for a placement of this run, whose answer asks for one more read of
+  the token, and that read is still a first read. The edge never cancels it: it counts it and sends one
   `UnprovenOrder` event, and the fold halts quoting (`UnprovenOrderResting`) at that message, so
   a person decides. An order on a token that no binding names is counted and left alone, and
   halts nothing. An order is unattributable between send and answer — the adapter carries that
@@ -278,9 +280,10 @@ cancel, and the queued stamps are held for each edge that writes its queue throu
 `EventFunnel`; the simulator stamps its own messages, so its queued stamps are not held yet.
 Some lines of the Polymarket edge sit in its private actor, where no harness reaches: the count
 of an unmapped order that is left alone or has no bound token, the call that sends the event of
-an unproven order, the halt on an open order that does not decode, and the reconnect after a lost
-heartbeat. The verdict on the unmapped order, the event of an unproven order and the halt it
-gives, the codec's naming of the undecodable order, and the heartbeat schedule are held. A new
+an unproven order, the calls of `FirstReads` and the read that a placement answer asks for, the
+halt on an open order that does not decode, and the reconnect after a lost heartbeat. The verdict
+on the unmapped order, the state of the first reads, the event of an unproven order and the halt
+it gives, the codec's naming of the undecodable order, and the heartbeat schedule are held. A new
 venue's determinism evidence is that run, its codec goldens, and a test double driven through its
 real codec, delivery-permutation style (ack-first, report-first, ack-only, report-only,
 ambiguous, duplicated, reordered — the seven ways two answers to one request arrive).

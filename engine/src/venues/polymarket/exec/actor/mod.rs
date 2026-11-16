@@ -43,7 +43,7 @@ use super::sign::l2::{ApiCredentials, RequestSigner};
 use super::sign::order::SignatureType;
 
 use super::binding::{Bindings, RETIRED_BINDINGS};
-use super::correlate::{DelayedOrders, PendingFrames};
+use super::correlate::{DelayedOrders, FirstReads, PendingFrames};
 use super::lanes::{Lane, LaneSetup, RestJob, RestLanes, RestOutcome, Submitted, spawn_lanes};
 use rest::RestPurpose;
 
@@ -95,6 +95,7 @@ pub(super) struct Actor {
     assignments: mpsc::Receiver<WindowAssignment>,
     pending: PendingFrames,
     delayed: DelayedOrders,
+    first_reads: FirstReads,
     /// Once started, heartbeats commit forever: if they stop, the venue cancels this account's book
     /// as a crash-safety measure. The first one goes out as late as possible, just before the first
     /// order placement, and it never stops after that.
@@ -176,6 +177,7 @@ impl Actor {
             assignments,
             pending: PendingFrames::new(),
             delayed: DelayedOrders::default(),
+            first_reads: FirstReads::default(),
             heartbeat: None,
             parked: None,
             balances: Vec::new(),
