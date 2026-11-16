@@ -349,8 +349,8 @@ fn described(emissions: &[SimEmission]) -> Vec<(i64, &'static str, u64, i64)> {
         .collect()
 }
 
-/// The emissions of the streams below, as the venue gave them when it kept its inbox and timeline
-/// in a sorted vector.
+/// The emissions of the streams below in the order that a sorted queue gives, which each queue of
+/// the venue must keep.
 const EXPECTED: [(i64, &str, u64, i64); 5] = [
     (20, "rested", 1, 300_000),
     (60, "rested", 2, 100_000),

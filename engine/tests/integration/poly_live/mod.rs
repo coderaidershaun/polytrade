@@ -47,8 +47,8 @@ async fn venue_accepts_one_signed_order_dry_run() {
 }
 
 /// Sends a marketable buy and, on another lane at the same time, the cancel of a resting buy of the
-/// tests, and prints which answer came first. It holds two buys on one side, so the live policy of
-/// today refuses it in code before it sends an order.
+/// tests, and prints which answer came first. It holds two buys on one side, so the cap of one
+/// order for each side refuses it in code before it sends an order.
 #[ignore = "real funds on live polymarket: only the live-runner role of a job runs it, by the runbook of its job and the live policy"]
 #[tokio::test]
 async fn cancel_finishes_while_a_marketable_place_is_held() {

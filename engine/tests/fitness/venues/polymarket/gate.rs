@@ -41,7 +41,8 @@ pub(super) fn recorded_facts() -> ProbeFacts {
     }
 }
 
-/// A plain wallet whose key signs for itself, configured as `tools/poly-probe` writes it.
+/// A plain wallet whose key signs for itself, configured as an operator writes it: the signer in
+/// lower case and the maker checksummed.
 fn eoa_wallet(key: &SigningKey) -> WalletConfig {
     let address = key.address().to_checksum_hex();
     WalletConfig {

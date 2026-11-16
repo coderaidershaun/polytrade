@@ -1,6 +1,5 @@
-//! The rotation of Polymarket windows: a slot subscribes each window once and tears it down once,
-//! the window grid and the slot parity hold, and the driver turns a fixed event sequence into
-//! fixed effects.
+//! The rotation of Polymarket windows: a slot subscribes and tears down each window once, the grid
+//! and the slot parity hold, and a fixed sequence of events gives fixed effects.
 
 use std::sync::Arc;
 

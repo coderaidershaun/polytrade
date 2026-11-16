@@ -1,6 +1,6 @@
 # Integration tests: runbook sections
 
-Each test of this folder is ignored. The signed tests of `binance_recording.rs` use real funds on live Binance spot, BTCUSDT.
+Each test of this folder is ignored. The signed tests of `binance_recording.rs` and `binance_silence.rs` use real funds on live Binance spot, BTCUSDT. The signed tests of the folder `poly_live/` use real funds on live Polymarket, in one window of `btc-updown-5m`.
 
 Only the role `live-runner` runs a test of this file, by the runbook of its job and the live policy. The run command of each test is in the runbook of the job, and in no other place.
 
@@ -193,7 +193,7 @@ The test refuses each of these in code, before it sends an order:
 This test is written, and no run of this job starts it or its dry run. The live policy permits one signed order test at Polymarket and one order for each side. This test is a second signed order test, and it holds two buys at one time. So its live form refuses in code before it sends an order.
 
 - **Dry run:** `cancel_finishes_while_a_marketable_place_is_held_dry_run` builds the resting buy, the marketable buy and the cancel, and prints them redacted. It sends no order action.
-- **What it does, when a policy permits it:** it places one resting post-only buy of 5 shares at 0.01. Then it sends a marketable buy of 5 shares at the best ask on the placement lane of the engine, and at the same time the cancel of the resting buy on the control lane. It prints which answer came first: the answer to U-V3.
+- **What it does, when a policy permits it:** it places one resting post-only buy of 5 shares at 0.01. Then it sends a marketable buy of 5 shares at the best ask on the placement lane of the engine, and at the same time the cancel of the resting buy on the control lane. It prints which answer came first, which says whether a cancel finishes while a marketable placement is held.
 - **Kill switch:** `cancels_only_the_orders_of_the_polymarket_tests`. **Rollback:** `sells_back_the_shares_of_the_held_placement`.
 
 ## `cancels_only_the_orders_of_the_polymarket_tests`
@@ -233,7 +233,7 @@ Only `live-runner` runs this test, by the runbook of its job. It uses real funds
   4. It waits 35 seconds, and counts the execution reports of the stream in that time: 0 is expected.
   5. It reads the open orders on the same session. The answer names the buy.
   6. It cancels the buy by its client order id. The stream sends the report `CANCELED`.
-  7. It prints the answer to U-V2: YES when the read of step 5 answered inside 10 seconds while step 4 saw no report, ELSE NO.
+  7. It prints whether a read still answers while the stream is silent: YES when the read of step 5 answered inside 10 seconds while step 4 saw no report, ELSE NO.
 - **Expected outcome:** the buy is cancelled by its client order id, with no fill. Each request, answer and stream event in `silence/` of the run folder is redacted at write, and no balance event is written.
 - **Check at the venue:** the order history shows one buy of the tests, cancelled.
 - **Kill switch:** `cancels_only_the_orders_of_the_tests`. **Rollback:** `sells_back_the_base_above_before`, IF the buy filled.

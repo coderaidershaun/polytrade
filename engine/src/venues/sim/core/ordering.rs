@@ -13,7 +13,8 @@ pub enum Phase {
     Trade,
     OrderAction,
     Reconcile,
-    /// The one phase of each emission, which only ties with another emission.
+    /// Every emission takes this one phase, so emissions at one time leave in the order of their
+    /// push.
     Emission,
 }
 

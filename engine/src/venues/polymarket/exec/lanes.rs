@@ -91,7 +91,8 @@ pub struct RestLanes<P> {
 }
 
 impl<P> RestLanes<P> {
-    /// Dropped job = a silent reconciliation skip, so refusal is reported and returned.
+    /// A full lane drops the job, which would skip a reconciliation with no sign, so the refusal is
+    /// logged and returned.
     pub fn submit(&self, lane: Lane, job: RestJob<P>) -> Submitted {
         let sender = match lane {
             Lane::Place => &self.place,

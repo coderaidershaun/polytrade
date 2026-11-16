@@ -1,6 +1,5 @@
 //! The mark of a simulated run on each of its artifacts, and its absence on a live run: the log,
-//! the exposure file, the tape folder and footer, the nonce file, the console log, the OTLP
-//! service, and the badge.
+//! the exposure, tape, nonce, and console files, the export service, and the badge.
 
 use std::path::Path;
 use std::time::Duration;
