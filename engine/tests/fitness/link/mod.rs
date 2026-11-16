@@ -2,6 +2,5 @@
 //! reach the hot thread.
 
 mod control_plane;
-mod link_control;
 mod link_ingress;
 mod link_wire;
