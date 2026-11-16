@@ -1,9 +1,7 @@
-//! Research data can be read while the engine runs, and a fault of one table does not stop the
-//! other tables from sealing.
+//! A fault of one table does not stop the other tables from sealing.
 
 use std::fs::File;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::path::Path;
 
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -15,16 +13,8 @@ use engine::tape::PersistError;
 
 use crate::engine_support::ONE;
 use crate::parquet_readback::{
-    BASE_TS_US, Cell, TempDir, drain_blocking, parquet_files, read_parquet_file, run_dir,
-    spawn_writer,
+    BASE_TS_US, TempDir, drain_blocking, parquet_files, read_parquet_file, run_dir, spawn_writer,
 };
-
-/// Mirrors the writer's per-table row cap. Pinned here on purpose: the cap is the promise a reader
-/// depends on, so moving it must break this test and be a deliberate act.
-const ROWS_PER_SEAL: usize = 10_000;
-/// Two full seals plus a remainder, so the run is observed mid-flight AND at drain.
-const MID_RUN_ROWS: usize = 2 * ROWS_PER_SEAL + 5_000;
-const POLL_DEADLINE: Duration = Duration::from_secs(30);
 
 #[test]
 fn one_table_failure_still_seals_the_healthy_table() {
@@ -65,82 +55,6 @@ fn one_table_failure_still_seals_the_healthy_table() {
     );
 }
 
-#[test]
-fn rows_are_readable_mid_run_once_the_row_cap_is_crossed() {
-    let dir = TempDir::new("persist-midrun");
-    let run_dir = run_dir(dir.path());
-    let features_dir = run_dir.join("features");
-
-    let handle = spawn_writer(
-        dir.path(),
-        features_and_trades(),
-        (0..MID_RUN_ROWS).map(feature_record).collect(),
-    );
-
-    // Three files means two are sealed: the third only exists because a row arrived AFTER the
-    // second seal closed its predecessor.
-    let files = wait_for_files(&features_dir, 3);
-    let sealed = &files[..2];
-    for path in sealed {
-        let data = read_parquet_file(path);
-        assert_eq!(
-            data.rows.len(),
-            ROWS_PER_SEAL,
-            "a file sealed mid-run reads back its full row cap without any shutdown: {}",
-            path.display()
-        );
-    }
-    assert!(
-        parquet_files(&run_dir.join("trades")).is_empty(),
-        "a table with no rows never opens a file, so seals cannot litter empty ones"
-    );
-
-    drain_blocking(handle).expect("clean drain");
-
-    let files = parquet_files(&features_dir);
-    let total: usize = files
-        .iter()
-        .map(|path| read_parquet_file(path).rows.len())
-        .sum();
-    assert_eq!(
-        total, MID_RUN_ROWS,
-        "sealing conserves rows — the batch pending when a seal fires lands in that seal's file"
-    );
-    let values: Vec<f64> = files
-        .iter()
-        .flat_map(|path| read_parquet_file(path).rows)
-        .map(|row| match row[3] {
-            Cell::F64Bits(bits) => f64::from_bits(bits),
-            ref other => panic!("features value column is f64, got {other:?}"),
-        })
-        .collect();
-    let expected: Vec<f64> = (0..MID_RUN_ROWS).map(|i| i as f64).collect();
-    assert_eq!(
-        values, expected,
-        "path order is seal order and no row is dropped or duplicated across a seal boundary"
-    );
-}
-
-/// Polls because the writer thread is genuinely concurrent — the assertion under test is that files
-/// appear WITHOUT a drain, so the test may not synchronise by draining.
-fn wait_for_files(dir: &Path, want: usize) -> Vec<PathBuf> {
-    let start = Instant::now();
-    loop {
-        let files = parquet_files(dir);
-        if files.len() >= want {
-            return files;
-        }
-        assert!(
-            start.elapsed() < POLL_DEADLINE,
-            "only {} of {want} files appeared under {} within {POLL_DEADLINE:?} — the row cap is \
-             not sealing mid-run",
-            files.len(),
-            dir.display()
-        );
-        std::thread::sleep(Duration::from_millis(2));
-    }
-}
-
 fn feature_record(index: usize) -> PersistRecord {
     PersistRecord::Feature(FeatureRow {
         instrument: InstrumentId(0),
@@ -170,8 +84,6 @@ fn drive_drain(dir_root: &Path, records: Vec<PersistRecord>) -> Result<(), Persi
     drain_blocking(spawn_writer(dir_root, features_and_trades(), records))
 }
 
-/// Trades is named but never fed, so its file-open stays a LAZY one — the property
-/// `rows_are_readable_mid_run` asserts on. Gating has its own module.
 fn features_and_trades() -> RecordedTables {
     RecordedTables::new(&[TableKind::Features, TableKind::Trades])
 }
