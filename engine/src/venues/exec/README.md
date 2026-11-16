@@ -115,11 +115,14 @@ engine branches solely on the normalised enums.
    - Timeouts and ambiguity reconcile — a status probe resolves them; nothing is re-sent.
      Re-sending risks two live orders, which no reconciliation can undo. An answer that says the
      outcome of an order action is unknown is ambiguous too (Binance -1006 and -1007 on a
-     placement, a cancel, or an amend): the edge reads the order first, and the cancel latch
-     stays shut while that read is out. A read that fails, or that itself answers -1006 or
-     -1007, re-arms the cancel, and so does a cancel that the gateway refused (`StillLive`). So
-     a second cancel can go out while the outcome of the first is unknown; a second cancel of
-     one client order id adds no order. A probe that the edge sends on its own
+     placement, a cancel, or an amend, and an HTTP 5xx with no code on a REST cancel): the edge
+     reads the order first, and the cancel latch stays shut while that read is out. Over REST, a
+     cancel refused at HTTP 429 or 418, the rate limit (-1003 or -1015), is ambiguous too: the
+     client reads no code at those statuses. A read that fails, or that itself answers -1006 or
+     -1007, re-arms the cancel, and so does a cancel that the gateway refused (`StillLive`:
+     -1021, and -1003 and -1015 only over the WebSocket API, where the codec reads each code).
+     So a second cancel can go out while the outcome of the first is unknown; a second cancel
+     of one client order id adds no order. A probe that the edge sends on its own
      answers with `recon_seq` 0: the hot side numbers its own reads, and only
      an answer that echoes one of them counts toward that read. The deadline is
      `execution.inflight_timeout_ms`, the one value that the hot slot and the in-flight table
@@ -199,9 +202,10 @@ Two identity patterns exist, chosen by whether the venue echoes a client id:
   until its status probes end it. At the first read of its token, an order that no placement of
   this run explains is unproven instead: it can be an order of an earlier run of this engine,
   whose fills the fold could not book, or a person's. A binding of a token makes its first read
-  due (`FirstReads`), and only a read of that token in which no unknown order deferred ends it:
-  an order that defers waits for a placement of this run, whose answer asks for one more read of
-  the token, and that read is still a first read. The edge never cancels it: it counts it and sends one
+  due (`FirstReads`). The first read ends only at a fresh-binding read of that token, while it is
+  still bound, in which no unknown order deferred: an order that defers waits for a placement of
+  this run, whose answer asks for one more read of the token, and that read is still a first
+  read. The edge never cancels an unproven order: it counts it and sends one
   `UnprovenOrder` event, and the fold halts quoting (`UnprovenOrderResting`) at that message, so
   a person decides. An order on a token that no binding names is counted and left alone, and
   halts nothing. An order is unattributable between send and answer — the adapter carries that
@@ -283,10 +287,12 @@ of an unmapped order that is left alone or has no bound token, the call that sen
 an unproven order, the calls of `FirstReads` and the read that a placement answer asks for, the
 halt on an open order that does not decode, and the reconnect after a lost heartbeat. The verdict
 on the unmapped order, the state of the first reads, the event of an unproven order and the halt
-it gives, the codec's naming of the undecodable order, and the heartbeat schedule are held. A new
-venue's determinism evidence is that run, its codec goldens, and a test double driven through its
-real codec, delivery-permutation style (ack-first, report-first, ack-only, report-only,
-ambiguous, duplicated, reordered — the seven ways two answers to one request arrive).
+it gives, the codec's naming of the undecodable order, and the heartbeat schedule are held. The
+Binance edge sets the class of a failed REST cancel in its private actor too; the client and the
+core on each side of that step are held. A new venue's determinism evidence is that run, its
+codec goldens, and a test double driven through its real codec, delivery-permutation style
+(ack-first, report-first, ack-only, report-only, ambiguous, duplicated, reordered — the seven
+ways two answers to one request arrive).
 
 A simulator answers in its venue's own wire, with one exception: it refuses an order of a style
 that it cannot model with code 9001, which no venue sends, so that refusal never reads as an

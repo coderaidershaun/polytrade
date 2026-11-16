@@ -1406,8 +1406,12 @@ order as its own.
   same credentials. A cancel can touch an order that this engine did not place (third Never
   line). Quoting beside it risks fills that the fold cannot book, and exposure outside the caps
   (§6, money).
-  - First read of a token: the first pass of a run, and the first read of each token that a
-    rotation binds.
+  - First read of a token: each read of the open orders of the token, from its binding at a start
+    or at a rotation, until its first read ends. The first read ends only at a fresh-binding read
+    of that token, while the token is still bound, in which no unknown order got `Defer`.
+  - A `Defer` keeps the first read open: the order waits for the answer of a placement of this
+    run. The answer of the venue to a placement on that instrument, accepted or refused, asks for
+    one more read of the token, and that read is still a first read.
   - IF a first read names an open order on the token, and neither `Defer` nor `Adopt` applies,
     THEN the order is unproven. The edge counts it and never cancels it, and quoting halts with
     the halt reason of an unproven order. A person decides.
@@ -1424,6 +1428,22 @@ order as its own.
     `HaltReason::UnprovenOrderResting` (§6). The edge has no request that cancels by a venue id
     alone: the prior-run cancel and its wait of readiness are gone. WHY: a reader finds each
     part of the rule by its name in the code.
+  - Amended 2026-11-16, as built: `FirstReads` (`engine::venues::polymarket::exec::correlate`)
+    holds the tokens whose first read has not ended. `on_bound` makes it due at a binding,
+    `read_of` gives the `TokenRead` of each unknown order, `on_read_answered` ends it at a
+    fresh-binding read with no `Defer`, and `take_read_after_answer` asks for the one more read
+    at a placement answer. A fresh-binding read that its lane drops leaves the first read due, so
+    each later read of the token is a first read too, until its next binding: an error toward a
+    halt. Pin: `a_first_read_that_defers_stays_first_until_the_placement_answers`. The calls of
+    the actor have no pin, because the actor runs only inside a live edge: the binding, the read
+    kind of each unknown order, the check that the token is still bound, and the read after the
+    answer. WHY: a pass, or a read of a token since rebound, can miss the orders of the token that
+    is bound now, so only the fresh-binding read of that token can end its first read.
+  - Replaced 2026-11-16: "First read of a token: the first pass of a run, and the first read of
+    each token that a rotation binds." WHY: a first read that deferred an order ended at that
+    read, and no later read of the token was a first read. So the edge left the order alone and
+    quoted beside it, at the binding of a token, where an order of an earlier run of this engine
+    rests (the review of part 4, round 2, F6).
 - [ ] Amended 2026-11-16: the heartbeat deadline. WHY: Polymarket cancels each order of the account
   when no heartbeat reaches it within its limit. An edge that kept its mirror past that limit would
   quote from orders that no longer rest.
@@ -1468,12 +1488,19 @@ order as its own.
   - WebSocket API: the edge sends one read of the order, and the cancel latch stays shut until the
     read answers. IF the read itself answers -1006 or -1007, THEN the read is `StillLive`, and
     the edge re-arms the cancel.
-  - REST: after a cancel of class `Ambiguous` (-2011, -1006, -1007, or no answer), the edge reads
-    the order back at once, and the cancel latch stays shut. IF that read fails, THEN the edge
-    re-arms the cancel.
-  - A cancel answered `StillLive` (-1003, -1015, -1021) re-arms the cancel. The gateway refused
-    the request before the match engine, so the cancel did not run, and a later cancel is a new
-    action.
+  - REST: after a cancel of class `Ambiguous`, the edge reads the order back at once, and the
+    cancel latch stays shut. A REST cancel is `Ambiguous` at -2011, -2013, -1006, and -1007, at
+    HTTP 429 or 418, at an HTTP 5xx with no code of the venue, and at a failure with no answer
+    of the venue. IF that read fails, THEN the edge re-arms the cancel.
+  - Binance gives an HTTP 5xx as an execution status unknown. Thus a REST cancel answered 5xx
+    with no code can have run, as at -1006. A 5xx with a code keeps the class of that code.
+  - At HTTP 429 or 418 the REST client reads no code: it gives `RestError::RateLimited`, the
+    rate limit of the venue, and the edge classes it `Ambiguous`. Binance sends -1003 and -1015
+    with these statuses. Thus over REST a cancel that a rate limit refused reads the order back.
+  - A cancel answered `StillLive` re-arms the cancel: -1021 on both paths, and -1003 and -1015
+    over the WebSocket API only, where the codec reads the code of each answer. The gateway
+    refused the request before the match engine, so the cancel did not run, and a later cancel
+    is a new action.
   - Thus a second cancel can go out, from the next cancel or from the exit sweep, while the
     outcome of the first is still unknown. No money moves, because a second cancel of one client
     order id adds no order.
@@ -1483,8 +1510,17 @@ order as its own.
     shut until the read answers.", and "-1021 stays `StillLive`, and only -1021 re-arms the
     cancel." WHY: a read that fails, and a read that answers -1006 or -1007, re-arm the cancel
     too, and so does each cancel answered `StillLive` (the review of part 4, F3).
+  - Replaced 2026-11-16: "REST: after a cancel of class `Ambiguous` (-2011, -1006, -1007, or no
+    answer), the edge reads the order back at once, and the cancel latch stays shut." and "A
+    cancel answered `StillLive` (-1003, -1015, -1021) re-arms the cancel." WHY: at HTTP 429 or
+    418 the REST client reads no code, so over REST -1003 and -1015 read the order back, and
+    only the WebSocket API re-arms the cancel at them (the review of part 4, round 2, F7).
   - Pins: `an_unknown_outcome_of_a_cancel_over_the_websocket_reads_before_any_second_cancel`,
-    `an_unknown_outcome_of_a_rest_cancel_reads_before_any_second_cancel`.
+    `an_unknown_outcome_of_a_rest_cancel_reads_before_any_second_cancel`, and
+    `a_rest_cancel_answered_5xx_with_no_code_reads_before_any_second_cancel`.
+  - The class of a failed REST cancel is set in the private actor of the Binance edge, which runs
+    only inside a live edge. The REST pins hold the client and the core on each side of that
+    step, and no test drives a REST cancel that a rate limit refused.
 - [ ] Amended 2026-11-16, as built: the seam suite runs for the Polymarket edge and the simulator
   edge too. WHY: one suite for each edge holds the written obligations, so a new edge cannot keep
   only some of them.
@@ -1628,6 +1664,11 @@ test, sits in a module that is a concept in its own right, or has a ruling of §
     part 4, above).
   - WHY: §12 (2026-07-28) forbids `pub` for a test's sake, so each item of the round names its
     merit.
+- [ ] Amended 2026-11-16, as built: the `pub` item of correction round 2 of part 4. `FirstReads`
+  with `on_bound`, `read_of`, `on_read_answered`, and `take_read_after_answer`: merit, the concept
+  module `engine::venues::polymarket::exec::correlate`, where it is pure state beside
+  `PendingFrames` and `DelayedOrders`. The class of a failed REST cancel of Binance stays
+  private. WHY: §12 (2026-07-28) forbids `pub` for a test's sake.
 - [ ] The integration tests of part 4 use only items that were `pub` before them. No item became
   `pub` for them.
 - [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
