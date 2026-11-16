@@ -114,7 +114,8 @@ pub(super) fn is_stream_report(kind: ExecKind) -> bool {
         | ExecKind::SnapshotOrder
         | ExecKind::SnapshotEnd
         | ExecKind::StreamReset
-        | ExecKind::StreamReady => false,
+        | ExecKind::StreamReady
+        | ExecKind::UnprovenOrder => false,
     }
 }
 

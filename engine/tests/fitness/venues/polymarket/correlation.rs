@@ -5,25 +5,31 @@ use std::cell::Cell;
 use std::sync::{Arc, Mutex};
 
 use engine::hot::dispatch::HotEngine;
-use engine::hot::exec::{ClientIdLayout, side_base};
+use engine::hot::exec::{ClientIdLayout, HaltReason, side_base};
 use engine::hot::strategy::{Fill, Strategy as EngineStrategy, StrategyCtx};
+use engine::link::{
+    Envelope, FrameGuard, LINK_MAX_DATAGRAM, LinkBody, LinkDatagram, LinkHash, LinkIdentity,
+    TopicId,
+};
 
 use engine::msg::exec::{
-    ExecCommand, ExecEvent, ExecKind, OrderStyle, Provenance, VenueOrderStatus,
+    CancelReason, ExecCommand, ExecEvent, ExecKind, OrderStyle, Provenance, VenueOrderStatus,
 };
 use engine::msg::ids::{ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody};
-use engine::msg::time::{DurationUs, LocalTs};
+use engine::msg::time::{DurationUs, LocalTs, VenueTs};
+use engine::msg::ui::{UiEvent, UiHalt};
 use engine::venues::exec::{
     ExecCore, ExecEffect, ExecRequest, ExecSession, MirroredOrder, RequestId, SessionSetup,
 };
 use engine::venues::polymarket::exec::codec::{
     DecodeContext, HttpAnswer, IgnoredReason, KnownOrder, OrderIndex, OrdersRead,
     PlaceRequestContext, StreamEvent, TokenBinding, TokenTable, UnmappedOrder, VenueAnswer,
-    decode_orders_page, decode_place, decode_stream_frame,
+    decode_orders_page, decode_place, decode_stream_frame, venue_order_id_digest,
 };
 use engine::venues::polymarket::exec::correlate::{
-    DelayedOrders, HeldFrame, PendingFrames, UnmappedVerdict, WithheldCancel, classify_unmapped,
+    DelayedOrders, HeldFrame, PendingFrames, TokenRead, UnmappedVerdict, WithheldCancel,
+    classify_unmapped, unproven_order_event,
 };
 use engine::venues::polymarket::exec::facts::POLYMARKET_FACTS;
 use proptest::prelude::*;
@@ -35,7 +41,10 @@ use crate::engine_support::{
     ONE, engine_without_warmup, exec_event, instrument_row, persist_ring, strategy_log_ring,
     ts as at,
 };
-use crate::exec_support::{SentEvents, reseat_book};
+use crate::exec_support::{
+    ASK, BID, CEILING, SentEvents, drain_commands, is_placing, make_ready, quoting_engine_with_ui,
+    reseat_book, spin_at,
+};
 use crate::venues::exec::obligations::{Session, send};
 
 const UP: InstrumentId = InstrumentId(0);
@@ -100,13 +109,18 @@ fn resting(instrument: InstrumentId, side: Side, price: Price, qty: Qty) -> Unma
     }
 }
 
-fn verdict(slots: &[Slot], resting: &UnmappedOrder) -> UnmappedVerdict {
+fn verdict(slots: &[Slot], resting: &UnmappedOrder, read: TokenRead) -> UnmappedVerdict {
     let mirror: Vec<MirroredOrder> = slots.iter().map(|slot| slot.order).collect();
-    classify_unmapped(&mirror, resting, |client_id| {
-        slots
-            .iter()
-            .any(|slot| slot.order.client_id == client_id && slot.has_venue_id)
-    })
+    classify_unmapped(
+        &mirror,
+        resting,
+        |client_id| {
+            slots
+                .iter()
+                .any(|slot| slot.order.client_id == client_id && slot.has_venue_id)
+        },
+        read,
+    )
 }
 
 /// The rule in its own words. A placement of this run in flight on the side defers, because its
@@ -278,7 +292,7 @@ fn numbered(index: usize, drawn: DrawnSlot) -> Slot {
 fn order_with_no_exact_match_is_never_adopted() {
     for case in named_cases() {
         assert_eq!(
-            verdict(&case.slots, &case.resting),
+            verdict(&case.slots, &case.resting, TokenRead::Quoted),
             case.expected,
             "case: {}",
             case.name
@@ -297,8 +311,14 @@ fn order_with_no_exact_match_is_never_adopted() {
             UnmappedVerdict::Adopt(_) => adopted.set(adopted.get() + 1),
             UnmappedVerdict::Defer => deferred.set(deferred.get() + 1),
             UnmappedVerdict::LeaveAlone => left_alone.set(left_alone.get() + 1),
+            UnmappedVerdict::Unproven => unreachable!("the rule in its own words proves no order"),
         }
-        prop_assert_eq!(verdict(&slots, &resting), wanted, "slots {:?}", slots);
+        prop_assert_eq!(
+            verdict(&slots, &resting, TokenRead::Quoted),
+            wanted,
+            "slots {:?}",
+            slots
+        );
         Ok(())
     });
     if let Err(failure) = outcome {
@@ -775,9 +795,12 @@ fn fill_frame_before_place_answer_folds_once() {
         (&*resting.venue_order_id, resting.filled),
         (VENUE_ORDER, four)
     );
-    let verdict = classify_unmapped(frame_only.session.core.mirror(), resting, |client_id| {
-        frame_only.orders.venue_order_id(client_id).is_some()
-    });
+    let verdict = classify_unmapped(
+        frame_only.session.core.mirror(),
+        resting,
+        |client_id| frame_only.orders.venue_order_id(client_id).is_some(),
+        TokenRead::Quoted,
+    );
     assert_eq!(
         verdict,
         UnmappedVerdict::Adopt(OURS),
@@ -972,5 +995,329 @@ fn a_maker_fill_of_polymarket_books_no_fee_gap() {
         (report.cumulative_qty, report.last_qty),
         (shares(4), shares(2)),
         "after a placement that took liquidity, an UPDATE states only its own step"
+    );
+}
+
+/// An order that the first read of the token of UP finds, and one on a token that no binding names.
+/// Neither is an order whose venue id this run recorded.
+const PERSON: &str = "0xperson";
+const OTHER: &str = "0xother";
+const OTHER_TOKEN: &str = "a-token-of-another-market";
+
+/// The account as the first read of the token of UP reads it.
+fn first_read_of_up() -> String {
+    format!(
+        r#"{{"data":[{{"id":"{PERSON}","asset_id":"{UP_TOKEN}","side":"BUY","price":"0.45","original_size":"10","size_matched":"0","status":"LIVE","created_at":1}},{{"id":"{OTHER}","asset_id":"{OTHER_TOKEN}","side":"SELL","price":"0.62","original_size":"5","size_matched":"0","status":"LIVE","created_at":1}}]}}"#
+    )
+}
+
+/// The halt that the last execution frame of the workstation shows, if one shows a halt.
+fn shown_halt(ui_events: &mut rtrb::Consumer<UiEvent>) -> Option<UiEvent> {
+    std::iter::from_fn(|| ui_events.pop().ok())
+        .filter(|event| matches!(event, UiEvent::Execution { .. }))
+        .last()
+        .filter(|event| {
+            matches!(
+                event,
+                UiEvent::Execution {
+                    halt: UiHalt::Halted { .. },
+                    ..
+                }
+            )
+        })
+}
+
+/// A workstation frame as a peer reads it from the link.
+fn over_the_link(event: UiEvent) -> UiEvent {
+    let token_hash = LinkHash::of_name("fitness-run-token");
+    let strategy_hash = LinkHash::of_name("strat-micro-recorder");
+    let identity = LinkIdentity {
+        token_hash,
+        strategy_hash,
+        sender_te_hash: LinkHash::of_name("te-polymarket-btc-updown-5m"),
+        boot_ts_us: VenueTs::from_micros(1_786_046_800_000_000),
+    };
+    let datagram = LinkDatagram {
+        envelope: Envelope::new(identity, TopicId::EVENTS, 1),
+        body: LinkBody::Event(event),
+    };
+    let mut buffer = [0; LINK_MAX_DATAGRAM];
+    let len = datagram.encode(&mut buffer);
+    let guard = FrameGuard {
+        token_hash,
+        strategy_hash,
+        schema_hash: LinkHash::of_fields(&[]),
+    };
+    match LinkDatagram::decode(&buffer[..len], &guard).expect("the frame decodes") {
+        LinkDatagram {
+            body: LinkBody::Event(event),
+            ..
+        } => event,
+        other => panic!("an event frame decodes to an event, got {other:?}"),
+    }
+}
+
+/// CONTRACT: Polymarket echoes no client id, so an open order whose venue id this run never recorded
+/// can be an order of an earlier run of this engine, or a person's, placed at the website with the
+/// same credentials. The engine never touches an order that it did not place, so it cancels
+/// neither. At the first read of a token, before this run quotes there, such an order on a bound
+/// token is unproven: the fold could book none of its fills, so quoting halts at that one message
+/// and a person decides. A later read of a token already quoted leaves the order alone, and an
+/// order on a token that no binding names halts nothing.
+#[test]
+fn a_cold_start_read_naming_an_unknown_order_sends_no_cancel() {
+    let mut tokens = TokenTable::with_retired_capacity(4);
+    tokens.bind(TokenBinding {
+        instrument: UP,
+        token_id: UP_TOKEN.into(),
+        tick: cents(1),
+        is_neg_risk: false,
+    });
+    let orders = OrderIndex::with_capacity(16);
+    let context = DecodeContext {
+        tokens: &tokens,
+        orders: &orders,
+        api_key: API_KEY,
+        received_ts_us: at(5),
+    };
+    let page = first_read_of_up();
+    let read = OrdersRead {
+        instrument: UP,
+        recon_seq: 0,
+    };
+    let VenueAnswer::Answered(decoded) = decode_orders_page(
+        HttpAnswer {
+            status: 200,
+            body: &page,
+        },
+        read,
+        &context,
+    )
+    .expect("the page decodes") else {
+        panic!("a page of open orders is answered, not refused as venue state");
+    };
+    let unmapped: Vec<&str> = decoded
+        .unmapped
+        .iter()
+        .map(|order| &*order.venue_order_id)
+        .collect();
+    let unattributable: Vec<&str> = decoded
+        .unattributable
+        .iter()
+        .map(|order| &*order.venue_order_id)
+        .collect();
+    assert_eq!(
+        (unmapped, unattributable),
+        (vec![PERSON], vec![OTHER]),
+        "step 1: the order on the bound token is unmapped, and the other is unattributable"
+    );
+    let person = &decoded.unmapped[0];
+
+    assert_eq!(
+        verdict(&[], person, TokenRead::First),
+        UnmappedVerdict::Unproven,
+        "step 2: at the first read of its token no placement of this run explains the order"
+    );
+    assert_eq!(
+        verdict(&[], person, TokenRead::Quoted),
+        UnmappedVerdict::LeaveAlone,
+        "a read of a token already quoted leaves the order alone"
+    );
+    let rules_before = [
+        (
+            in_flight(0xa1, Side::Buy, cents(44), shares(3)),
+            UnmappedVerdict::Defer,
+        ),
+        (
+            lost(0xa1, Side::Buy, cents(45), shares(10)),
+            UnmappedVerdict::Adopt(ClientOrderId(0xa1)),
+        ),
+        (
+            answered(0xa1, Side::Buy, cents(45), shares(10)),
+            UnmappedVerdict::Unproven,
+        ),
+    ];
+    for (slot, expected) in rules_before {
+        assert_eq!(
+            verdict(&[slot], person, TokenRead::First),
+            expected,
+            "a placement in flight defers and one equal lost slot adopts, at a first read too: \
+             {slot:?}"
+        );
+    }
+
+    let event = unproven_order_event(person, at(5));
+    assert_eq!(
+        (
+            event.kind,
+            event.instrument,
+            event.side,
+            event.price,
+            event.qty,
+            event.venue_order_id,
+            event.client_id,
+            event.provenance,
+        ),
+        (
+            ExecKind::UnprovenOrder,
+            Some(UP),
+            Side::Buy,
+            cents(45),
+            shares(10),
+            Some(venue_order_id_digest(PERSON)),
+            ClientOrderId(0),
+            Provenance::Foreign,
+        ),
+        "step 3: the edge names the order by its venue id, side, price, and size, and by no client \
+         id of this run"
+    );
+    let mut session = ExecSession::new(SessionSetup {
+        venue: "polymarket",
+        core: ExecCore::with_limits(8, 32),
+        instruments: vec![UP],
+        events: SentEvents::default(),
+        inflight_timeout: INFLIGHT_TIMEOUT,
+    });
+    let mut outgoing = Vec::new();
+    session
+        .fold(&event, 0, &mut outgoing)
+        .expect("the event reveals no order to retain");
+    assert!(
+        outgoing.is_empty(),
+        "step 3: the edge sends no request for the order, so no cancel: {outgoing:?}"
+    );
+    assert!(
+        session.core.mirror().is_empty(),
+        "step 3: nothing is mirrored, so no sweep of this engine can reach the order"
+    );
+    assert_eq!(
+        session.core.foreign_orders(),
+        1,
+        "step 3: the order is counted with the orders that this engine cannot claim"
+    );
+
+    let unproven = InboundMessage::new(at(5), MessageBody::Exec(event));
+    let cold_start = |with_unproven: bool| {
+        let (mut engine, mut commands, mut ui_events) = quoting_engine_with_ui(CEILING, &[]);
+        let mut digests = Vec::new();
+        for message in reseat_book(BID, ASK, 1) {
+            engine.dispatch(&message);
+            digests.push(engine.state_digest());
+        }
+        spin_at(&mut engine, 0, 2);
+        assert_eq!(
+            shown_halt(&mut ui_events),
+            None,
+            "nothing halts before the read"
+        );
+        if with_unproven {
+            engine.dispatch(&unproven);
+            digests.push(engine.state_digest());
+        }
+        make_ready(&mut engine, 6);
+        spin_at(&mut engine, 1, 7);
+        digests.push(engine.state_digest());
+        (
+            drain_commands(&mut commands),
+            shown_halt(&mut ui_events),
+            digests,
+        )
+    };
+    let (commands, _, _) = cold_start(false);
+    assert!(
+        is_placing(&commands, Side::Buy) && is_placing(&commands, Side::Sell),
+        "with no unproven order the ready engine quotes, so the halt below is what stops it"
+    );
+    let (commands, halt, digests) = cold_start(true);
+    let halt = halt.expect("step 4: an unproven order halts quoting");
+    assert!(
+        matches!(
+            halt,
+            UiEvent::Execution {
+                halt: UiHalt::Halted {
+                    reason: HaltReason::UnprovenOrderResting,
+                    halted_ts_us,
+                },
+                ..
+            } if halted_ts_us == at(5).to_peer()
+        ),
+        "step 4: quoting halts at the message of the unproven order: {halt:?}"
+    );
+    assert_eq!(
+        commands,
+        [ExecCommand::CancelOurs {
+            instrument: UP,
+            reason: CancelReason::Halt,
+        }],
+        "step 4: the strategy places nothing, and the halt sweeps only the orders of this run, of \
+         which the event made none"
+    );
+    assert_eq!(
+        cold_start(true).2,
+        digests,
+        "a replay of the same messages gives the same state after each, so it halts at the same \
+         message"
+    );
+    assert_eq!(
+        over_the_link(halt),
+        halt,
+        "the reason reaches a workstation over the link"
+    );
+
+    let (mut engine, mut commands, mut ui_events) = quoting_engine_with_ui(CEILING, &[]);
+    for message in reseat_book(BID, ASK, 1) {
+        engine.dispatch(&message);
+    }
+    make_ready(&mut engine, 2);
+    spin_at(&mut engine, 0, 3);
+    let quoted = drain_commands(&mut commands);
+    assert!(is_placing(&quoted, Side::Buy) && is_placing(&quoted, Side::Sell));
+    let ours: Vec<Slot> = quoted
+        .iter()
+        .filter_map(|command| match *command {
+            ExecCommand::Place {
+                client_id,
+                side,
+                price,
+                qty,
+                ..
+            } => Some(answered(client_id.0, side, price, qty)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        verdict(&ours, person, TokenRead::First),
+        UnmappedVerdict::Unproven,
+        "step 5: the first read of a newly bound token gives the same verdict"
+    );
+    engine.dispatch(&InboundMessage::new(
+        at(9),
+        MessageBody::Exec(unproven_order_event(person, at(9))),
+    ));
+    spin_at(&mut engine, 1, 10);
+    let halt = shown_halt(&mut ui_events).expect("step 5: the same halt");
+    assert!(
+        matches!(
+            halt,
+            UiEvent::Execution {
+                halt: UiHalt::Halted {
+                    reason: HaltReason::UnprovenOrderResting,
+                    halted_ts_us,
+                },
+                ..
+            } if halted_ts_us == at(9).to_peer()
+        ),
+        "step 5: quoting halts at the message of the unproven order: {halt:?}"
+    );
+    let swept = drain_commands(&mut commands);
+    assert!(
+        !is_placing(&swept, Side::Buy) && !is_placing(&swept, Side::Sell),
+        "step 5: the strategy places nothing more: {swept:?}"
+    );
+    assert!(
+        swept
+            .iter()
+            .any(|command| matches!(command, ExecCommand::CancelOurs { instrument, .. } if *instrument == UP)),
+        "step 5: the halt sweeps the orders of this run: {swept:?}"
     );
 }

@@ -95,6 +95,10 @@ pub enum ExecKind {
     /// The account stream dropped; every order is stale until a reconciliation pass lands.
     StreamReset,
     StreamReady,
+    /// The first read of a token, before this run quotes on it, found an open order there that the
+    /// edge cannot prove its own: the venue echoes no client id, so it may be a person's. It names
+    /// no client id, and quoting halts.
+    UnprovenOrder,
 }
 
 crate::log::fieldless_log_value!(ExecKind {
@@ -114,6 +118,7 @@ crate::log::fieldless_log_value!(ExecKind {
     SnapshotEnd,
     StreamReset,
     StreamReady,
+    UnprovenOrder,
 });
 
 labelled_enum! {

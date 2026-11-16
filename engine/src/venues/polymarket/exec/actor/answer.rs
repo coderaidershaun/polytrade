@@ -61,11 +61,6 @@ impl Actor {
                 self.on_balance(asset, resync_seq, answer);
                 None
             }
-            RestPurpose::PriorRunCancel { venue_order_id } => {
-                let is_answered = read_body("prior-run cancel", &answer).is_some();
-                self.on_prior_run_cancelled(&venue_order_id, is_answered);
-                None
-            }
             RestPurpose::Trades { resync_seq, page } => {
                 self.on_trades_page(resync_seq, page, answer);
                 None

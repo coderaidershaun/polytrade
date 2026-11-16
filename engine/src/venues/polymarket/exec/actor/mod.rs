@@ -107,9 +107,6 @@ pub(super) struct Actor {
     is_balance_sweep_readable: bool,
     /// A fill arrived mid-sweep; the account table needs a sweep issued after it.
     is_restatement_due: bool,
-    /// Cancels sent for a previous run's orders. Readiness waits on them: quoting must not open
-    /// over an order this run cannot name and did not choose.
-    prior_run_cancels: usize,
     seen_trades: Vec<Box<str>>,
     /// How far this run has watched its own fills settle. Every balance chunk it forwards is
     /// stamped with this: the venue publishes no account clock, and its balance answers lag a fill,
@@ -185,7 +182,6 @@ impl Actor {
             balances_outstanding: 0,
             is_balance_sweep_readable: true,
             is_restatement_due: false,
-            prior_run_cancels: 0,
             seen_trades: Vec::with_capacity(RECENT_TRADES),
             settled_through: SettlementWatermark::NONE,
             counts: DriverCounts::default(),

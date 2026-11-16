@@ -69,10 +69,6 @@ pub(super) enum RestPurpose {
         resync_seq: Option<u64>,
         page: u32,
     },
-    /// A previous run's order, addressed by venue id because this run can mint no client id for it.
-    PriorRunCancel {
-        venue_order_id: Box<str>,
-    },
     /// Rotation binding: tick and minimum size for the whole market.
     Market {
         condition_id: Arc<str>,
