@@ -44,8 +44,7 @@ pub struct HeartbeatSchedule {
     /// When the last beat that the venue accepted went out, or the first beat before any was
     /// accepted. The venue limit runs from here.
     alive_since: Option<LocalTs>,
-    /// When the next beat is due. `None` is at once: the first beat, and each beat after one that
-    /// failed, so tries come before the deadline.
+    /// When the next beat is due. `None` is at once: the first beat.
     next_due: Option<LocalTs>,
     has_reset_mirror: bool,
     has_read_after_cancel: bool,
@@ -87,7 +86,9 @@ impl HeartbeatSchedule {
 
     /// The venue names the id of the next beat in a refusal as in a success, so either answer
     /// continues the chain. Only an accepted beat keeps the book alive, and it counts from when it
-    /// went out, because the venue heard it before it answered.
+    /// went out, because the venue heard it before it answered. A beat that failed is tried again
+    /// after the retry interval, not at the next tick, so a venue that refuses each beat is not sent
+    /// one at each tick.
     pub fn on_answer(&mut self, answer: &Result<ClobResponse, TransportError>) -> BeatAnswer {
         let sent_at = self.in_flight_since.take();
         let verdict = self.read_answer(answer);
@@ -98,7 +99,7 @@ impl HeartbeatSchedule {
                 self.has_reset_mirror = false;
                 self.has_read_after_cancel = false;
             }
-            _ => self.next_due = None,
+            _ => self.next_due = sent_at.map(|sent_at| sent_at + POLYMARKET_FACTS.heartbeat_retry),
         }
         verdict
     }

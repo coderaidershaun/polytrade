@@ -260,12 +260,13 @@ fn allowance_warmth_and_refresh_claims_are_tracked_per_token() {
     );
 }
 
-/// At boot the token table is empty until the first rotation lands, so a prior run's order rests on
-/// a token this run cannot map. Dropped, it would fill behind an armed engine spending real balance
-/// the ledger never sees. The codec must SURFACE it — id and side, which is all a cancel needs — so
-/// the boot branch can sweep it by venue id instead of never seeing it.
+/// At boot the token table is empty until the first rotation lands, so an open order of the account
+/// can rest on a token that this run cannot map. The codec must SURFACE it, with its venue id and
+/// side, so that the edge counts it with the orders that this engine cannot claim and names it in
+/// its log, rather than never seeing it. The edge never cancels it: nothing proves it this
+/// engine's own.
 #[test]
-fn an_order_on_an_unbound_token_is_surfaced_for_the_boot_sweep_not_dropped() {
+fn an_order_on_an_unbound_token_is_surfaced_to_be_counted_not_dropped() {
     let tokens = TokenTable::with_retired_capacity(4);
     let orders = OrderIndex::with_capacity(16);
     let context = DecodeContext {

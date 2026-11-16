@@ -44,11 +44,10 @@ fn page_after(cursor: &str) -> Option<Box<str>> {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct DecodedOrders {
     pub events: Vec<ExecEvent>,
-    /// Known token, unknown order id. At boot these are prior-run orders to be swept; mid-run they
-    /// belong to a placement whose answer hasn't landed, and sweeping is not the same decision as
-    /// cancelling.
+    /// Known token, unknown order id: an order whose placement answer has not landed, an order of an
+    /// earlier run, or a person's. The edge gives each one verdict and cancels none.
     pub unmapped: Vec<UnmappedOrder>,
-    /// Unknown token. Keep the venue id so boot sweep can reach prior-run orders by id alone.
+    /// Unknown token: an order of a market that no binding names. The venue id names it in the log.
     pub unattributable: Vec<UnattributableOrder>,
     pub next_cursor: Option<Box<str>>,
 }

@@ -49,11 +49,6 @@ pub(super) struct CancelOrderBody<'a> {
 }
 
 #[derive(Serialize)]
-pub(super) struct CancelMarketOrdersBody<'a> {
-    pub asset_id: &'a str,
-}
-
-#[derive(Serialize)]
 pub(super) struct HeartbeatBody<'a> {
     pub heartbeat_id: &'a str,
 }

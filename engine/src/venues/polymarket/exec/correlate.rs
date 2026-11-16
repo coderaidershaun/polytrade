@@ -4,9 +4,9 @@
 use crate::msg::exec::{ExecEvent, ExecKind, Provenance};
 use crate::msg::ids::ClientOrderId;
 use crate::msg::time::LocalTs;
-use crate::venues::exec::{ExecEffect, ExecRequest, MirroredOrder, RequestId};
+use crate::venues::exec::{ExecEffect, ExecRequest, MirroredOrder, RequestId, blank};
 
-use super::codec::UnmappedOrder;
+use super::codec::{UnmappedOrder, venue_order_id_digest};
 use super::facts::POLYMARKET_FACTS;
 
 /// A user-stream frame whose order this run cannot yet name.
@@ -200,7 +200,18 @@ pub fn restates_balances(event: &ExecEvent) -> bool {
     }
 }
 
-/// What to do with an open order resting under an id this run never recorded.
+/// Which read of its token named the order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenRead {
+    /// The first read of the token in this run, before quoting opens on it: the first pass of a
+    /// run, or the read of a token that a rotation has just bound.
+    First,
+    /// A later read of a token that this run quotes.
+    Quoted,
+}
+
+/// What to do with an open order resting under an id this run never recorded. On this venue the
+/// same credentials reach the website's own order entry, so no verdict cancels the order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnmappedVerdict {
     /// This run placed it and lost the answer: exactly one lost slot equals it in instrument, side,
@@ -210,13 +221,18 @@ pub enum UnmappedVerdict {
     /// apart from a person's own order on the same side. Neither is classified until the place
     /// answers or times out — the resync pass re-reads and decides then.
     Defer,
-    /// No lost slot equals it, or more than one does. On this venue the same credentials reach the
-    /// website's own order entry, and cancelling a person's order is not a recovery. A lost slot
-    /// stays ambiguous, and its status probes settle it.
+    /// A read of a token already quoted, and no lost slot equals the order, or more than one does.
+    /// A lost slot stays ambiguous, and its status probes settle it.
     LeaveAlone,
+    /// The first read of its token, and no placement of this run explains the order. It may be an
+    /// order of an earlier run of this engine, whose fills the fold could not book, or a person's.
+    /// Quoting halts, and a person decides.
+    Unproven,
 }
 
-/// Classify an order resting under an id this run never recorded.
+/// Classify an order resting under an id this run never recorded. The rules apply in order: a
+/// placement in flight on the side defers, one equal lost slot adopts, and any other order is
+/// unproven at the first read of its token and left alone at a later one.
 ///
 /// The deferral is the whole point. A placement whose POST is still outstanding has a mirror entry
 /// that is [`Provenance::Mine`], carries no venue id yet, and is NOT ambiguous — its answer is still
@@ -230,6 +246,7 @@ pub fn classify_unmapped(
     mirror: &[MirroredOrder],
     unmapped: &UnmappedOrder,
     has_venue_id: impl Fn(ClientOrderId) -> bool,
+    read: TokenRead,
 ) -> UnmappedVerdict {
     let place_in_flight = mirror.iter().any(|order| {
         order.instrument == unmapped.instrument
@@ -241,9 +258,29 @@ pub fn classify_unmapped(
     if place_in_flight {
         return UnmappedVerdict::Defer;
     }
-    match adoption_candidate(mirror, unmapped, has_venue_id) {
-        Some(client_id) => UnmappedVerdict::Adopt(client_id),
-        None => UnmappedVerdict::LeaveAlone,
+    match (adoption_candidate(mirror, unmapped, has_venue_id), read) {
+        (Some(client_id), _) => UnmappedVerdict::Adopt(client_id),
+        (None, TokenRead::First) => UnmappedVerdict::Unproven,
+        (None, TokenRead::Quoted) => UnmappedVerdict::LeaveAlone,
+    }
+}
+
+/// The message that halts quoting for an unproven order. It names the order by its venue id, side,
+/// price, and size, and by no client id, since this run minted none for it.
+pub fn unproven_order_event(unmapped: &UnmappedOrder, received_ts_us: LocalTs) -> ExecEvent {
+    ExecEvent {
+        venue_order_id: Some(venue_order_id_digest(&unmapped.venue_order_id)),
+        provenance: Provenance::Foreign,
+        side: unmapped.side,
+        price: unmapped.price,
+        qty: unmapped.qty,
+        cumulative_qty: unmapped.filled,
+        ..blank(
+            ExecKind::UnprovenOrder,
+            Some(unmapped.instrument),
+            ClientOrderId(0),
+            received_ts_us,
+        )
     }
 }
 

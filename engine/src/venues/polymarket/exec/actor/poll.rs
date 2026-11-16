@@ -11,9 +11,7 @@ use crate::venues::polymarket::rotation::WindowAssignment;
 use crate::{info, warn};
 
 use super::super::binding::{BindingStep, EnrichmentRead, TokenOfInstrument};
-use super::super::codec::{
-    cancel_market_orders, clob_market_request, heartbeat, neg_risk_request, trades_page,
-};
+use super::super::codec::{clob_market_request, heartbeat, neg_risk_request, trades_page};
 use super::super::heartbeat::{HeartbeatSchedule, HeartbeatStep};
 use super::super::lanes::{Lane, RestJob};
 use super::rest::RestPurpose;
@@ -135,7 +133,7 @@ impl Actor {
         }
     }
 
-    /// A backstop that cancels resting orders on windows closing within CLOSE_MARGIN.
+    /// A backstop that cancels this run's resting orders on windows closing within CLOSE_MARGIN.
     #[expect(
         clippy::disallowed_methods,
         reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
@@ -148,11 +146,7 @@ impl Actor {
             return None;
         }
         let mut ended = None;
-        for TokenOfInstrument {
-            instrument,
-            token_id,
-        } in expiring
-        {
+        for TokenOfInstrument { instrument, .. } in expiring {
             // In the normal case, the hot engine has already withdrawn on its own margin;
             // this check avoids sweeping an instrument that has nothing left resting.
             let is_resting = self
@@ -164,19 +158,14 @@ impl Actor {
             if !is_resting {
                 continue;
             }
-            if let Ok(request) = cancel_market_orders(&token_id) {
-                warn!(
-                    "polymarket execution sweeping instrument {} — its window closes within {}ms and {} order(s) are still mirrored",
-                    instrument.0,
-                    CLOSE_MARGIN.micros() / 1_000,
-                    self.session.core.mirror().len()
-                );
-                // The per-order sweep below reaches the same orders, so a dropped bulk cancel costs
-                // the shortcut, not the sweep.
-                let purpose = RestPurpose::MarketCancel { instrument };
-                let _dropped = self.submit(Lane::Control, RestJob::signed(purpose, request));
-            }
-            // The mirror must also learn the orders are gone, so both sides are swept.
+            warn!(
+                "polymarket execution sweeping instrument {} — its window closes within {}ms and {} order(s) are still mirrored",
+                instrument.0,
+                CLOSE_MARGIN.micros() / 1_000,
+                self.session.core.mirror().len()
+            );
+            // Each order of this run by its own id. A cancel of the whole token would also cancel
+            // a person's order on it.
             let outgoing = self.session.sweep(CancelReason::Halt, Some(instrument));
             ended = ended.or(self.dispatch(outgoing, Some(writer)).await);
         }

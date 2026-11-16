@@ -25,11 +25,14 @@ each command to the venue's transport and from there to `ExecCore::on_command`):
 `ReconcileOpenOrders`, `CancelOurs`, `CancelPriorRun`, `ResubscribeStream`. These are intents, not
 venue methods.
 There is deliberately no cancel-all: the engine cannot distinguish foreign orders, so it
-never asks for something it could not account for.
+never asks for something it could not account for. No edge sends a bulk cancel of its venue
+either, such as a cancel of each order on a token: the backstop at the close of a window cancels
+the orders of this run one at a time, each by its own id.
 
 **Events out** (an `InboundMessage` with body `MessageBody::Exec(ExecEvent)` or
-`MessageBody::Account(AccountChunk)`, through `EventFunnel`): sixteen `ExecKind`s covering acks,
-reports, refusals, snapshots and stream lifecycle, plus balance chunks. Everything is a fixed-size
+`MessageBody::Account(AccountChunk)`, through `EventFunnel`): seventeen `ExecKind`s covering acks,
+reports, refusals, snapshots, stream lifecycle, and an open order that the edge cannot prove its
+own (`UnprovenOrder`), plus balance chunks. Everything is a fixed-size
 POD of integer newtypes — prices and quantities are i64 mantissas, identity is packed integers,
 and no string crosses inward. `EventFunnel` stamps the venue of its edge on each event and each
 balance chunk, so an adapter never sets it, and the fold reads the venue from the message.
@@ -135,7 +138,9 @@ engine branches solely on the normalised enums.
 Connect → subscribe the user stream → resync pass (the venue's own read set: account plus
 open orders, paginated or per-instrument as the venue demands) → fold every open order into
 the mirror, classifying provenance → cancel prior-run orders and wait for them to drain →
-arm readiness → Quoting. On disconnect: mark every in-flight request ambiguous, emit
+arm readiness → Quoting. Only a venue that echoes the client id proves an order of a prior run,
+so only there is one cancelled; a venue that mints the ids cancels no order at a start
+(venue-minted ids, below). On disconnect: mark every in-flight request ambiguous, emit
 `StreamReset` (which invalidates each hot slot of this venue's instruments to Unknown and
 disarms this venue's readiness; each other venue of the engine keeps its slots and readiness),
 reconnect with backoff, resync again. On exit: plan a cancel sweep, retry it paced until
@@ -149,11 +154,13 @@ the exit is not graceful.
 
 A venue with a heartbeat (Polymarket): once it has started, the venue cancels each order of the
 account when it hears no beat for its limit, and the edge learns that only from reports. So a beat
-that fails is due again at the next poll. When no beat is answered for the limit less a margin, the
-edge drops its connection, so the order mirror is rebuilt by the path of a lost connection, and
-quoting does not open until a beat is answered again. When the limit itself passes, the venue has
-cancelled the book, and a new resync pass reads the open orders again. The limit, the margin and
-the period come from the facts of the venue.
+that fails is due again one retry interval after it went out: the limit less a margin leaves three
+tries, and a venue that refuses each beat hears one a second, never one at each housekeeping tick.
+When no beat is answered for the limit less a margin, the edge drops its connection, so the order
+mirror is rebuilt by the path of a lost connection, and quoting does not open until a beat is
+answered again. When the limit itself passes, the venue has cancelled the book, and a new resync
+pass reads the open orders again. The limit, the margin, the period, and the retry interval come
+from the facts of the venue.
 
 A new subscription: when a read of open orders shows a change that the order stream never
 reported, the hot side sends `ResubscribeStream`. The core turns it into the same
@@ -186,8 +193,14 @@ Two identity patterns exist, chosen by whether the venue echoes a client id:
   alone: a near match can be a person's order, and a pick between two equal slots binds the
   fills of one order to another. An order left alone is counted with the orders this engine
   did not place, and is never mirrored and never cancelled; the lost slot stays ambiguous
-  until its status probes end it. An order is unattributable between send and answer — the
-  adapter carries that window, never the engine.
+  until its status probes end it. At the first read of its token (the first pass of a run, or
+  the read of a token that a rotation has just bound), an order that no placement of this run
+  explains is unproven instead: it can be an order of an earlier run of this engine, whose fills
+  the fold could not book, or a person's. The edge never cancels it: it counts it and sends one
+  `UnprovenOrder` event, and the fold halts quoting (`UnprovenOrderResting`) at that message, so
+  a person decides. An order on a token that no binding names is counted and left alone, and
+  halts nothing. An order is unattributable between send and answer — the adapter carries that
+  window, never the engine.
 
 Every venue declares a `LeaseNamespace` beside its capabilities. The execution lease locks
 one live process per engine identity per host and advances a durable run nonce per
@@ -260,11 +273,12 @@ behind the venue's real codec. A venue passes the contract when its harness runs
 A harness says whether its venue reports a change of balance and whether it has a pending
 cancel, and the queued stamps are held for each edge that writes its queue through
 `EventFunnel`; the simulator stamps its own messages, so its queued stamps are not held yet.
-Two lines of the Polymarket edge sit in its private actor, where no harness reaches: the count
-of an unmapped order that is left alone, and the halt on an open order that does not decode. The
-verdict on the unmapped order and the codec's naming of the undecodable one are held. A new
-venue's
-determinism evidence is that run, its codec goldens, and a test double driven through its
+Some lines of the Polymarket edge sit in its private actor, where no harness reaches: the count
+of an unmapped order that is left alone or has no bound token, the call that sends the event of
+an unproven order, the halt on an open order that does not decode, and the reconnect after a lost
+heartbeat. The verdict on the unmapped order, the event of an unproven order and the halt it
+gives, the codec's naming of the undecodable order, and the heartbeat schedule are held. A new
+venue's determinism evidence is that run, its codec goldens, and a test double driven through its
 real codec, delivery-permutation style (ack-first, report-first, ack-only, report-only,
 ambiguous, duplicated, reordered — the seven ways two answers to one request arrive).
 
