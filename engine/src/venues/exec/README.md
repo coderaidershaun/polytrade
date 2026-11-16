@@ -116,10 +116,13 @@ engine branches solely on the normalised enums.
      Re-sending risks two live orders, which no reconciliation can undo. An answer that says the
      outcome of an order action is unknown is ambiguous too (Binance -1006 and -1007 on a
      placement, a cancel, or an amend): the edge reads the order first, and the cancel latch
-     stays shut while that read is out. A read that fails, or that itself answers -1006 or
-     -1007, re-arms the cancel, and so does a cancel that the gateway refused (`StillLive`). So
-     a second cancel can go out while the outcome of the first is unknown; a second cancel of
-     one client order id adds no order. A probe that the edge sends on its own
+     stays shut while that read is out. Over REST, a cancel refused at HTTP 429 or 418, the
+     rate limit (-1003 or -1015), is ambiguous too: the client reads no code at those statuses.
+     A read that fails, or that itself answers -1006 or -1007, re-arms the cancel, and so does
+     a cancel that the gateway refused (`StillLive`: -1021, and -1003 and -1015 only over the
+     WebSocket API, where the codec reads each code). So a second cancel can go out while the
+     outcome of the first is unknown; a second cancel of one client order id adds no order.
+     A probe that the edge sends on its own
      answers with `recon_seq` 0: the hot side numbers its own reads, and only
      an answer that echoes one of them counts toward that read. The deadline is
      `execution.inflight_timeout_ms`, the one value that the hot slot and the in-flight table

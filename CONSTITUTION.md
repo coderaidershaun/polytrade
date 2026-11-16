@@ -1468,12 +1468,17 @@ order as its own.
   - WebSocket API: the edge sends one read of the order, and the cancel latch stays shut until the
     read answers. IF the read itself answers -1006 or -1007, THEN the read is `StillLive`, and
     the edge re-arms the cancel.
-  - REST: after a cancel of class `Ambiguous` (-2011, -1006, -1007, or no answer), the edge reads
-    the order back at once, and the cancel latch stays shut. IF that read fails, THEN the edge
-    re-arms the cancel.
-  - A cancel answered `StillLive` (-1003, -1015, -1021) re-arms the cancel. The gateway refused
-    the request before the match engine, so the cancel did not run, and a later cancel is a new
-    action.
+  - REST: after a cancel of class `Ambiguous`, the edge reads the order back at once, and the
+    cancel latch stays shut. A REST cancel is `Ambiguous` at -2011, -2013, -1006, and -1007, at
+    HTTP 429 or 418, and at a failure with no answer of the venue. IF that read fails, THEN the
+    edge re-arms the cancel.
+  - At HTTP 429 or 418 the REST client reads no code: it gives `RestError::RateLimited`, the
+    rate limit of the venue, and the edge classes it `Ambiguous`. Binance sends -1003 and -1015
+    with these statuses. Thus over REST a cancel that a rate limit refused reads the order back.
+  - A cancel answered `StillLive` re-arms the cancel: -1021 on both paths, and -1003 and -1015
+    over the WebSocket API only, where the codec reads the code of each answer. The gateway
+    refused the request before the match engine, so the cancel did not run, and a later cancel
+    is a new action.
   - Thus a second cancel can go out, from the next cancel or from the exit sweep, while the
     outcome of the first is still unknown. No money moves, because a second cancel of one client
     order id adds no order.
@@ -1483,8 +1488,15 @@ order as its own.
     shut until the read answers.", and "-1021 stays `StillLive`, and only -1021 re-arms the
     cancel." WHY: a read that fails, and a read that answers -1006 or -1007, re-arm the cancel
     too, and so does each cancel answered `StillLive` (the review of part 4, F3).
+  - Replaced 2026-11-16: "REST: after a cancel of class `Ambiguous` (-2011, -1006, -1007, or no
+    answer), the edge reads the order back at once, and the cancel latch stays shut." and "A
+    cancel answered `StillLive` (-1003, -1015, -1021) re-arms the cancel." WHY: at HTTP 429 or
+    418 the REST client reads no code, so over REST -1003 and -1015 read the order back, and
+    only the WebSocket API re-arms the cancel at them (the review of part 4, round 2, F7).
   - Pins: `an_unknown_outcome_of_a_cancel_over_the_websocket_reads_before_any_second_cancel`,
-    `an_unknown_outcome_of_a_rest_cancel_reads_before_any_second_cancel`.
+    `an_unknown_outcome_of_a_rest_cancel_reads_before_any_second_cancel`. No test drives a REST
+    cancel that a rate limit refused: the actor of the Binance edge sets its class, and that
+    actor runs only inside a live edge.
 - [ ] Amended 2026-11-16, as built: the seam suite runs for the Polymarket edge and the simulator
   edge too. WHY: one suite for each edge holds the written obligations, so a new edge cannot keep
   only some of them.
