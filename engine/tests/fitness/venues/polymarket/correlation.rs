@@ -1060,10 +1060,10 @@ fn over_the_link(event: UiEvent) -> UiEvent {
 /// CONTRACT: Polymarket echoes no client id, so an open order whose venue id this run never recorded
 /// can be an order of an earlier run of this engine, or a person's, placed at the website with the
 /// same credentials. The engine never touches an order that it did not place, so it cancels
-/// neither. At the first read of a token, before this run quotes there, such an order on a bound
-/// token is unproven: the fold could book none of its fills, so quoting halts at that one message
-/// and a person decides. A later read of a token already quoted leaves the order alone, and an
-/// order on a token that no binding names halts nothing.
+/// neither. At the first read of a token, such an order on a bound token is unproven: the fold
+/// could book none of its fills, so quoting halts at that one message and a person decides. A
+/// later read of a token already quoted leaves the order alone, and an order on a token that no
+/// binding names halts nothing.
 #[test]
 fn a_cold_start_read_naming_an_unknown_order_sends_no_cancel() {
     let mut tokens = TokenTable::with_retired_capacity(4);
