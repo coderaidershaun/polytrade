@@ -149,7 +149,7 @@ impl Actor {
         }
         let token_read = self.token_read(read);
         for unmapped in &decoded.unmapped {
-            self.on_unmapped_order(unmapped, token_read, &mut outgoing);
+            self.on_unmapped_order(unmapped, token_read, received_ts_us, &mut outgoing);
         }
         self.leave_unattributable_alone(&decoded.unattributable);
         for event in events {

@@ -14,11 +14,13 @@ use super::super::correlate::{
 use super::Actor;
 
 impl Actor {
-    /// An order resting under an id this run never recorded.
+    /// An order resting under an id this run never recorded, named by a read received at
+    /// `received_ts_us`.
     pub(super) fn on_unmapped_order(
         &mut self,
         unmapped: &UnmappedOrder,
         read: TokenRead,
+        received_ts_us: LocalTs,
         outgoing: &mut Vec<Outgoing>,
     ) {
         let verdict = classify_unmapped(
@@ -45,7 +47,9 @@ impl Actor {
                 );
                 return;
             }
-            UnmappedVerdict::Unproven => return self.on_unproven_order(unmapped, outgoing),
+            UnmappedVerdict::Unproven => {
+                return self.on_unproven_order(unmapped, received_ts_us, outgoing);
+            }
         };
         self.counts.adopted += 1;
         warn!(
@@ -74,11 +78,12 @@ impl Actor {
     }
 
     /// The session counts the order with those this engine cannot claim, and the fold halts quoting.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
-    )]
-    fn on_unproven_order(&mut self, unmapped: &UnmappedOrder, outgoing: &mut Vec<Outgoing>) {
+    fn on_unproven_order(
+        &mut self,
+        unmapped: &UnmappedOrder,
+        received_ts_us: LocalTs,
+        outgoing: &mut Vec<Outgoing>,
+    ) {
         error!(
             "polymarket execution found an order it cannot prove its own on instrument {}: {:?} {} @ {} (venue id {}) — it is not cancelled, quoting halts, and a person decides",
             unmapped.instrument.0,
@@ -87,7 +92,6 @@ impl Actor {
             unmapped.price.mantissa(),
             unmapped.venue_order_id
         );
-        let received_ts_us = self.control.clock.now();
         let event = unproven_order_event(unmapped, received_ts_us);
         if let Err(error) = self.session.fold(&event, 0, outgoing) {
             self.control.fail(error);
