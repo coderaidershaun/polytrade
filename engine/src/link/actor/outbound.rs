@@ -1,5 +1,6 @@
 //! The sending half of the link: it drains the UI rings and the latency reports to subscribers, and
-//! repeats the catalog every heartbeat, so a subscriber that joins late catches up.
+//! builds the lifecycle and catalog frames that each heartbeat repeats, so a late subscriber
+//! catches up.
 
 use std::net::SocketAddr;
 
@@ -11,7 +12,7 @@ use crate::msg::ui::channel::UiLifecycle;
 use super::super::control::{CatalogFeature, CatalogInstrument, Lifecycle, RunPhase, Subscribe};
 use super::super::envelope::{Envelope, TopicId, WireName};
 use super::super::frame::{LinkBody, LinkDatagram};
-use super::{Actor, REPORT_TICKS};
+use super::Actor;
 use crate::msg::run_state::RunState;
 
 impl Actor {
@@ -30,25 +31,8 @@ impl Actor {
         }
     }
 
-    pub(super) fn announce(&mut self, now: LocalTs) {
-        self.poll_lifecycle(now);
-        let lifecycle = LinkBody::Lifecycle(self.lifecycle());
-        self.send(TopicId::LIFECYCLE, lifecycle, now);
-        for index in 0..self.catalog_frames.len() {
-            let (topic, body) = self.catalog_frames[index];
-            self.send(topic, body, now);
-        }
-        self.check_controller(now);
-        self.push_marker_if_needed(now);
-        self.check_peer_silence(now);
-        self.announce_ticks += 1;
-        if self.announce_ticks.is_multiple_of(REPORT_TICKS) {
-            self.report_counts();
-        }
-    }
-
-    fn lifecycle(&self) -> Lifecycle {
-        let acknowledged = self.control.acknowledged().load();
+    pub(super) fn lifecycle(&self) -> Lifecycle {
+        let acknowledged = self.control.acknowledged();
         Lifecycle {
             phase: self.phase,
             run_state: acknowledged.state,
@@ -59,7 +43,7 @@ impl Actor {
         }
     }
 
-    fn poll_lifecycle(&mut self, now: LocalTs) {
+    pub(super) fn poll_lifecycle(&mut self, now: LocalTs) {
         while let Ok(message) = self.channels.lifecycle.try_recv() {
             match message {
                 UiLifecycle::Ready(catalog) => {
@@ -124,7 +108,7 @@ impl Actor {
         }
     }
 
-    fn send(&mut self, topic: TopicId, body: LinkBody, now: LocalTs) {
+    pub(super) fn send(&mut self, topic: TopicId, body: LinkBody, now: LocalTs) {
         self.recipients.clear();
         self.recipients
             .extend(self.subscribers.recipients(topic, now));

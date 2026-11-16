@@ -26,16 +26,14 @@ use std::sync::mpsc::SyncSender;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use rtrb::RingBuffer;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
-use crate::hot::dispatch::{ExposureWiring, HotEngine, HotEngineSetup, LinkWiring};
+use crate::hot::dispatch::{ExposureWiring, HotEngine, HotEngineSetup};
 use crate::hot::metrics::DriverSamples;
-use crate::hot::sink::{LinkSink, StrategyLogSink};
+use crate::hot::sink::StrategyLogSink;
 use crate::hot::spawn::{HotThreadConfig, SimTapGate, spawn_hot_thread};
 use crate::hot::strategy::Strategy;
-use crate::link::{LinkActor, LinkActorSetup, OutboundLink};
 use crate::log::{self, LaneReader, LogConfig, LogHandle};
 use crate::msg::persist::RotationRow;
 use crate::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, Stamper};
@@ -56,6 +54,7 @@ use drain::install_panic_hook;
 use error::refuse;
 use exec::{CommandLane, ExecBringUp, ExecBringUpSetup, exec_bring_up, open_command_lane};
 use hot::{HotBringUp, HotBringUpSetup, hot_bring_up};
+use link::LinkStart;
 use metrics::{
     MetricsBringUp, MetricsBringUpSetup, MetricsThread, SampleProducers, metrics_bring_up,
 };
@@ -257,11 +256,6 @@ impl Engine {
             .collect();
 
         let control = RunControlGate::new();
-        let on_controller_loss = config
-            .link
-            .as_ref()
-            .map_or_else(Default::default, |link| link.on_controller_loss);
-
         let (rotations_tx, rotations_rx) = mpsc::channel::<RotationRow>(ROTATIONS_CHANNEL_CAPACITY);
         // The rotation binding the execution edge trades against. Sized for a handful of windows:
         // one assignment every five minutes, and the edge drains it on every select pass.
@@ -309,20 +303,7 @@ impl Engine {
             edge: planned_edge,
         } = open_command_lane(execution_plan, armed, spin_interval, &stamper);
 
-        let (link_wiring, link_feed) = match &bound_link {
-            None => (None, None),
-            Some(_) => {
-                let (producer, consumer) =
-                    RingBuffer::<OutboundLink>::new(link::LINK_RING_CAPACITY);
-                (
-                    Some(LinkWiring {
-                        sink: LinkSink::new(producer),
-                        acknowledged: control.acknowledged().clone(),
-                    }),
-                    Some(consumer),
-                )
-            }
-        };
+        let (link_wiring, link_feed) = link::outbound_ring(&bound_link, &control);
 
         let instruments = registry.instruments().to_vec();
         let restored = restored_exposure.instruments().to_vec();
@@ -438,28 +419,17 @@ impl Engine {
         // The link both feeds the hot thread and drains the UI rings; it starts only once
         // the sinks it needs are live.
         let link = bound_link.map(|bound| {
-            LinkActor::spawn(
-                LinkActorSetup {
-                    socket: {
-                        let _on_edge_runtime = edge_runtime.enter();
-                        tokio::net::UdpSocket::from_std(bound.socket)
-                            .expect("a bound socket registers with the runtime that runs the link")
-                    },
-                    identity: bound.identity,
-                    guard: bound.guard,
-                    peers: bound.peers,
-                    on_controller_loss,
-                    inbound: link_producer.expect("a bound link always builds its input queue"),
-                    outbound: link_feed.expect("a bound link always builds its outbound ring"),
+            link::spawn_link_actor(
+                bound,
+                LinkStart {
+                    config: &config,
+                    inbound: link_producer,
+                    outbound: link_feed,
                     latency: latency_reports,
                     channels: ui_channels,
                     control,
                     clock: clock.clone(),
                     spin_interval,
-                    topic_count: bound.topic_count,
-                    feature_count: bound.feature_count,
-                    placement: config.senders.placement,
-                    flush_period: config.senders.link_flush(),
                 },
                 &edge_runtime,
             )

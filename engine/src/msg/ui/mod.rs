@@ -1,7 +1,7 @@
 //! What the engine tells a workstation: its lifecycle, its instrument catalog, and the live book
 //! and event feed. Nothing here names a GUI toolkit, so the engine never depends on one.
 
-pub(crate) mod channel;
+pub mod channel;
 mod latency;
 
 use crate::hot::exec::{HaltReason, OrderState, QuoteLevel, RejectOrigin};
