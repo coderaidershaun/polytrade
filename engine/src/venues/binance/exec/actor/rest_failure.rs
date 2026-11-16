@@ -125,16 +125,7 @@ impl Actor {
         error: &RestJobError,
         writer: Option<&mut Writer>,
     ) {
-        // Uses the same classifier the socket path does, so venue codes share one vocabulary.
-        let class = match error {
-            RestJobError::Rest(RestError::Status { code, message, .. })
-            | RestJobError::Rest(RestError::Unauthorized { code, message, .. }) => classify_error(
-                code.unwrap_or_default() as i32,
-                message.as_deref().unwrap_or_default(),
-                subject,
-            ),
-            _ => RejectClass::Ambiguous,
-        };
+        let class = failure_class(error, subject);
         if class != RejectClass::Gone {
             warn!(
                 "binance execution reconcile of order {:016x} answered {class:?} ({verdict:?}): {error}",
@@ -174,5 +165,25 @@ impl Actor {
         let core = &mut self.session.core;
         core.on_ambiguous(client_id, &mut Outgoing::sink(&mut outgoing, 0));
         self.dispatch(outgoing, writer).await;
+    }
+}
+
+/// The class of a failed REST call about one order. Binance gives an HTTP 5xx as an execution
+/// status unknown, so a cancel answered 5xx with no code of the venue can have run, as at -1006.
+fn failure_class(error: &RestJobError, subject: RejectSubject) -> RejectClass {
+    match error {
+        RestJobError::Rest(RestError::Status {
+            status: 500..=599,
+            code: None,
+            ..
+        }) if subject == RejectSubject::Cancellation => RejectClass::Ambiguous,
+        // Uses the same classifier the socket path does, so venue codes share one vocabulary.
+        RestJobError::Rest(RestError::Status { code, message, .. })
+        | RestJobError::Rest(RestError::Unauthorized { code, message, .. }) => classify_error(
+            code.unwrap_or_default() as i32,
+            message.as_deref().unwrap_or_default(),
+            subject,
+        ),
+        _ => RejectClass::Ambiguous,
     }
 }
