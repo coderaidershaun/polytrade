@@ -491,6 +491,13 @@ Two kinds of halt:
   and the process stays up. Only a person starts quoting again.
 - [ ] Engine halt (`FatalReason`): the fatal latch trips with a typed reason, and the first reason
   stays. The drain runs inside its deadline, and the exit code is not 0.
+- [ ] Amended 2026-11-16: the quoting halt of an unproven order, `HaltReason::UnprovenOrderResting`
+  (label "an order the engine cannot prove its own rests on its market", link code 15, appended).
+  The fold halts at one message of the kind `ExecKind::UnprovenOrder`, before it reads the
+  provenance of the event, and changes nothing else: no slot, no ledger move, no callback. Only
+  the Polymarket edge sends that kind, at the first read of a token (§8, the execution contract
+  of part 4). WHY: the fold could book none of the fills of that order, and the third Never line
+  forbids its cancel, so a person decides. A replay halts at the same message.
 - [ ] A refused start is a HALT. The start returns a typed error before an edge can send an order,
   and the exit code is not 0. Only a person starts the engine again.
 
@@ -1408,20 +1415,42 @@ order as its own.
   - An open order on a token that no binding names is left alone and counted. It halts nothing,
     and the edge never cancels it.
   - Pin: `a_cold_start_read_naming_an_unknown_order_sends_no_cancel`.
+  - Amended 2026-11-16, as built: `classify_unmapped` takes the kind of its read, `TokenRead {
+    First, Quoted }`, and gives `UnmappedVerdict::Unproven` at `First`, where it gives
+    `LeaveAlone` at `Quoted`. `unproven_order_event` builds the message of an unproven order
+    (`engine::venues::polymarket::exec::correlate`): kind `ExecKind::UnprovenOrder`, no client
+    id, the venue id digest, side, price, and size, and the received stamp of its read. The edge
+    writes one ERROR line with the venue id, side, price, and size, and the fold halts with
+    `HaltReason::UnprovenOrderResting` (§6). The edge has no request that cancels by a venue id
+    alone: the prior-run cancel and its wait of readiness are gone. WHY: a reader finds each
+    part of the rule by its name in the code.
 - [ ] Amended 2026-11-16: the heartbeat deadline. WHY: Polymarket cancels each order of the account
   when no heartbeat reaches it within its limit. An edge that kept its mirror past that limit would
   quote from orders that no longer rest.
-  - IF a heartbeat fails in transport, is refused, or names no id, THEN it is due again at the
-    next poll.
+  - IF a heartbeat fails in transport, is refused, or names no id, THEN it is due again one retry
+    interval after it went out. Thus a venue that refuses each beat hears at most one a second,
+    and three tries come before the deadline.
   - IF no heartbeat is answered for the venue limit less a margin, from the last answered one, THEN
     the edge drops its connection. The path of a lost connection rebuilds the order mirror, and
     quoting stays closed until a heartbeat is answered.
   - IF the venue limit itself passes, THEN a new resync pass reads the open orders again.
-  - The period, the limit, and the margin are facts of the venue (`PolymarketFacts`): 5 s, 10 s,
-    and 2 s at Polymarket.
+  - The period, the limit, the margin, and the retry interval are facts of the venue
+    (`PolymarketFacts`): 5 s, 10 s, 2 s, and 1 s (`heartbeat_retry`) at Polymarket.
   - Three request lanes keep a cancel and a heartbeat from waiting behind a held placement.
-  - Pins: `lost_heartbeat_past_deadline_resets_order_mirror`,
-    `cancel_and_heartbeat_finish_while_a_place_blocks`.
+  - Pins: `lost_heartbeat_past_deadline_resets_order_mirror`, which polls the schedule at each
+    20 ms tick of the edge, and `cancel_and_heartbeat_finish_while_a_place_blocks`.
+  - Replaced 2026-11-16: "THEN it is due again at the next poll." and "The period, the limit,
+    and the margin are facts of the venue (`PolymarketFacts`): 5 s, 10 s, and 2 s at
+    Polymarket." WHY: the next poll is the next tick of 20 ms, so a venue that refused each beat
+    got one signed beat at each tick, up to 50 a second (the review of part 4, F2).
+- [ ] Amended 2026-11-16, as built: the window-close sweep cancels only the orders of this run.
+  WHY: near the close of a window, the backstop of the Polymarket edge sent
+  `DELETE /cancel-market-orders` for the token. That request cancels each order of the account
+  on the token, a person's order among them (third Never line).
+  - The backstop cancels each order of this run on the closing window, one at a time, by its
+    own id (`ExecSession::sweep`).
+  - No edge sends a bulk cancel of its venue, such as a cancel of each order on a token. The
+    codec has no encoder of one: `cancel_market_orders` and its request are gone.
 - [ ] Amended 2026-11-16: the named refusal of the simulator. WHY: the simulator answered an order
   that it cannot model with a filter failure of the venue (-1013). Thus a log or a tape could not
   tell a limit of the simulator from a refusal of the venue.
@@ -1586,6 +1615,19 @@ test, sits in a module that is a concept in its own right, or has a ruling of §
     &RunArtifacts)`, `ExposureWriterSetup.artifacts` (the value form of the exposure writer seam,
     2026-11-13 ruling of §12), `OtlpPlan::check(config, &RunArtifacts)`, and `RunMeta.artifacts`,
     in place of `RunMeta.execution_mode`.
+- [ ] Amended 2026-11-16, as built: the `pub` items of correction round 1 of part 4.
+  - Concept module `engine::venues::polymarket::exec::correlate`, the one decision on an open
+    order that the edge never recorded: `TokenRead { First, Quoted }`,
+    `UnmappedVerdict::Unproven`, `unproven_order_event`, and the signature
+    `classify_unmapped(mirror, unmapped, has_venue_id, read)`.
+  - `HaltReason::UnprovenOrderResting`: the reasons cross to the link and the workstation, as
+    those of part 3.
+  - `ExecKind::UnprovenOrder`: vocabulary of `msg`, the data that crosses domains.
+  - `PolymarketFacts::heartbeat_retry`: a field of the one value of the facts of the venue.
+  - `codec::cancel_market_orders` goes: no edge sends a bulk cancel (the execution contract of
+    part 4, above).
+  - WHY: §12 (2026-07-28) forbids `pub` for a test's sake, so each item of the round names its
+    merit.
 - [ ] The integration tests of part 4 use only items that were `pub` before them. No item became
   `pub` for them.
 - [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
@@ -2217,6 +2259,18 @@ go.
     the whole table, and then the removal of the old test, would move each row for two rows.
   - This ruling permits no other changed value. A further exception needs its own ruling here:
     dated, with the test, the rows, and the WHY.
+- [ ] Ruling, 2026-11-16: one replaced test with a claim that has no successor. In module
+  `venues::polymarket::poly_exec_codec`, the test
+  `requests_encode_by_token_and_the_token_table_rebinds_correctly` went whole.
+  `requests_encode_by_token_and_the_token_table_rebinds` holds four of its five blocks, each
+  value unchanged. Its fourth block held the encoding of `DELETE /cancel-market-orders` for a
+  token, and that block has no successor.
+  - WHY: correction round 1 of part 4 removed that request on purpose, because it cancels each
+    order of the account on the token (third Never line). A claim about code that a task removes
+    on purpose has nothing left to pin. The new test says in its doc that no request cancels
+    each order on a token.
+  - This ruling covers that one block. A further claim with no successor needs its own ruling
+    here: dated, with the test, the block, and the WHY.
 - [ ] The task that deletes a test records it in the hand-off file of its job: one table row with
   the old test, the new test that pins its behavior, and the module. The hand-off file also holds
   the list of tests (`cargo test -- --list`) before and after.
