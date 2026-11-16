@@ -273,7 +273,7 @@ fn numbered(index: usize, drawn: DrawnSlot) -> Slot {
 /// to a slot of this engine, which then folds its fills and cancels it. Nothing reports that
 /// afterwards. So an order is adopted only when exactly one lost slot of this run equals it in
 /// instrument, side, price, and original size; none, or two and more, leave it alone, and a
-/// placement still in flight on the side defers, as before.
+/// placement still in flight on the side defers.
 #[test]
 fn order_with_no_exact_match_is_never_adopted() {
     for case in named_cases() {

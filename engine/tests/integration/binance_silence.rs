@@ -24,7 +24,8 @@ use crate::binance_live::{
 /// 5 s more.
 const SILENCE: Duration = Duration::from_secs(35);
 
-/// A read that answers inside this, while the stream is silent, answers U-V2 with yes.
+/// A read that answers inside this, while the stream is silent, answers the question of this test
+/// with yes.
 const READ_WAIT: Duration = Duration::from_secs(10);
 
 /// The resting buy sits this far below the best bid, so it never sits at the touch.
@@ -35,7 +36,7 @@ const BUY_SLOT: u64 = 4;
 
 /// Places one post-only buy of about 10 USDT 2 % below the best bid, waits 35 s while counting the
 /// events of the user stream, reads the open orders on the same session, cancels the buy by its
-/// client order id, and prints the answer to U-V2.
+/// client order id, and prints whether the read answered while the stream was silent.
 #[ignore = "real funds on live binance: only the live-runner role of a job runs it, by the runbook of its job and the live policy"]
 #[tokio::test]
 async fn silent_user_stream_still_answers_reads() {
