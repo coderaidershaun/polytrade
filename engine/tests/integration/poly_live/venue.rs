@@ -1,6 +1,7 @@
-//! The venue side of the signed tests of live Polymarket: the start gate, a transport that sends
-//! each request once, and the reads of the open window, its book, the orders, and the balances.
+//! The venue side of the signed tests of live Polymarket: the start gate on derived credentials
+//! only, the geoblock flag, a transport that sends each request once, and the reads of the venue.
 
+use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -10,20 +11,23 @@ use engine::msg::time::{DurationUs, EngineClock, LocalTs, VenueTs};
 use engine::runtime::config::PolySeries;
 use engine::runtime::secrets::EnvFile;
 use engine::venues::exec::ExecRequest;
+use engine::venues::polymarket::exec::POLYMARKET_CREDENTIAL_VARIABLES;
 use engine::venues::polymarket::exec::codec::{
-    EncodeContext, EncodedRequest, OrderIndex, OrderSigner, OrderSignerSetup, TokenBinding,
-    TokenTable, collateral_balance, conditional_balance, decode_neg_risk, encode_request,
-    neg_risk_request, open_orders_for_token,
+    ApiKeyPayload, EncodeContext, EncodedRequest, OrderIndex, OrderSigner, OrderSignerSetup,
+    TokenBinding, TokenTable, collateral_balance, conditional_balance, decode_neg_risk,
+    derive_api_key, encode_request, neg_risk_request, open_orders_for_token, server_time,
 };
 use engine::venues::polymarket::exec::handle::{WalletIdentity, preflight_polymarket};
 use engine::venues::polymarket::exec::lanes::{LaneSetup, RestLanes, RestOutcome, spawn_lanes};
-use engine::venues::polymarket::exec::rest::ClobHttp;
+use engine::venues::polymarket::exec::rest::{ClobHttp, GEOBLOCK_URL};
+use engine::venues::polymarket::exec::sign::key::SigningKey;
 use engine::venues::polymarket::exec::sign::l2::{RequestSigner, RequestToSign};
 use engine::venues::polymarket::rest::{PolyRest, book_url};
 use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::policy::{ONE, ORDER_SIZE_SHARES, Plan, Redactor, decimal, report_key_variables};
+use crate::binance_live::Sending;
 
 pub(crate) const SERIES: PolySeries = PolySeries::BtcUpDown5m;
 
@@ -130,14 +134,51 @@ impl std::fmt::Display for OpenOrder {
     }
 }
 
-/// The gate of the start, passed: the wallet that it proved, its clock offset, and the signers and
-/// transport of the tests. Each request goes out once.
+/// What the venue's own geoblock flag says of this host. The start gate reads the same flag and
+/// only logs it, and a test process has no log, so the test reads it again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GeoblockFlag {
+    Clear,
+    Blocked,
+    /// The answer holds no flag, so it says nothing of this host.
+    Unread,
+}
+
+impl GeoblockFlag {
+    /// Only a `blocked` that the answer holds counts: a missing flag is no clearance.
+    async fn read(http: &ClobHttp) -> Self {
+        let Ok(response) = http.send_unsigned(GEOBLOCK_URL).await else {
+            return Self::Unread;
+        };
+        let answer: Value = serde_json::from_str(&response.body).unwrap_or(Value::Null);
+        match (response.is_success(), answer["blocked"].as_bool()) {
+            (true, Some(false)) => Self::Clear,
+            (true, Some(true)) => Self::Blocked,
+            _ => Self::Unread,
+        }
+    }
+}
+
+/// The flag as a value. The answer also holds the address of this host, which is never shown.
+impl fmt::Display for GeoblockFlag {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Clear => "blocked = false",
+            Self::Blocked => "blocked = true",
+            Self::Unread => "unread",
+        })
+    }
+}
+
+/// The gate of the start, passed: the wallet that it proved, its clock offset, the geoblock flag,
+/// and the signers and transport of the tests. Each request goes out once.
 pub(crate) struct Session {
     http: ClobHttp,
     request_signer: Arc<RequestSigner>,
     order_signer: OrderSigner,
     wallet: WalletIdentity,
     venue_clock_offset: DurationUs,
+    geoblock: GeoblockFlag,
     redactor: Redactor,
 }
 
@@ -145,13 +186,26 @@ impl Session {
     /// Loads the keys from the `.env` of the working folder and runs the start gate of the engine:
     /// the wallet, the protocol version, the local clock, and the account. Each of its reads is
     /// public or signed; none is an order action.
+    ///
+    /// The gate creates L2 credentials when the venue derives none, and the live policy forbids a
+    /// change of key settings. So the test stops before the gate when the venue derives none, and
+    /// after it when its credentials are not the derived ones.
     pub(crate) async fn open() -> Self {
         report_key_variables();
         let secrets = EnvFile::load(Path::new(EnvFile::DEFAULT_PATH))
             .expect("the keys load from the environment or the .env of the working folder");
+        let http = ClobHttp::new(CONNECT_TIMEOUT, REQUEST_TIMEOUT).expect("an http client");
+        let derived = derived_api_key(&http, &secrets).await;
         let gate = preflight_polymarket(&secrets)
             .await
             .expect("the start gate passes: the wallet is proven and the account may trade");
+        assert!(
+            gate.credentials.api_key() == derived,
+            "the start gate holds l2 credentials that the venue did not derive, so it created them \
+             (POST /auth/api-key), a change of key settings: no request of the tests is sent. \
+             Stop the run and report it"
+        );
+        let geoblock = GeoblockFlag::read(&http).await;
         let api_key = gate.credentials.api_key().to_owned();
         let maker = gate.wallet.maker.to_checksum_hex();
         let signer = gate.wallet.signer.to_checksum_hex();
@@ -161,6 +215,8 @@ impl Session {
             gate.wallet.signature_type.code(),
             gate.venue_clock_offset.micros()
         );
+        println!("  l2 credentials: the derived ones");
+        println!("  geoblock of this host: {geoblock}");
         let request_signer = RequestSigner::new(&gate.credentials, gate.wallet.signer)
             .expect("the minted credentials sign");
         let order_signer = OrderSigner::new(OrderSignerSetup {
@@ -171,12 +227,31 @@ impl Session {
             api_key,
         });
         Self {
-            http: ClobHttp::new(CONNECT_TIMEOUT, REQUEST_TIMEOUT).expect("an http client"),
+            http,
             request_signer: Arc::new(request_signer),
             order_signer,
             wallet: gate.wallet,
             venue_clock_offset: gate.venue_clock_offset,
+            geoblock,
             redactor,
+        }
+    }
+
+    /// Refuses before an order is signed unless the venue's own flag clears this host: the venue
+    /// refuses an order by location, and the flag says so first. A dry run sends nothing, so it
+    /// prints where the real run stops and goes on.
+    pub(crate) fn check_may_place(&self, sending: Sending) {
+        if self.geoblock == GeoblockFlag::Clear {
+            return;
+        }
+        let refusal = format!(
+            "the geoblock flag of the venue reads {} for this host, so the venue would refuse an \
+             order by location: no order action is sent",
+            self.geoblock
+        );
+        match sending {
+            Sending::Live => panic!("{refusal}"),
+            Sending::DryRun => println!("  the real run stops here: {refusal}"),
         }
     }
 
@@ -381,6 +456,37 @@ pub(crate) fn headers_view(
             .map(|(name, value)| ((*name).to_owned(), Value::String((*value).to_owned())))
             .collect(),
     )
+}
+
+/// The api key that the venue derives for this wallet (`GET /auth/derive-api-key`), signed by the
+/// wallet key at the venue's clock, as the start gate signs it.
+async fn derived_api_key(http: &ClobHttp, secrets: &EnvFile) -> String {
+    let wallet_key = secrets
+        .resolve(POLYMARKET_CREDENTIAL_VARIABLES.api_secret_env)
+        .expect("the wallet key loads");
+    let key = SigningKey::from_secret(&wallet_key).expect("the wallet key reads");
+    let clock = http
+        .send_public(&server_time())
+        .await
+        .expect("the clock of the venue answers");
+    let venue_secs: i64 = clock
+        .body
+        .trim()
+        .parse()
+        .expect("the venue answers its clock in whole seconds");
+    let answer = http
+        .send_wallet_signed(&key, &derive_api_key(), venue_secs)
+        .await
+        .expect("the venue answers the derivation of the l2 credentials");
+    assert!(
+        answer.is_success(),
+        "the venue derives no l2 credentials for this wallet (http {}), and the start gate would \
+         create them, a change of key settings: no request of the tests is sent",
+        answer.status
+    );
+    serde_json::from_str::<ApiKeyPayload>(&answer.body)
+        .expect("the derived credentials read")
+        .api_key
 }
 
 /// The page cursor that ends a listing of the venue.
