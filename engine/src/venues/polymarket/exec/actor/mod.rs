@@ -51,7 +51,7 @@ pub(super) const USER_STREAM_URL: &str = "wss://ws-subscriptions-clob.polymarket
 
 const PING_INTERVAL: Duration = Duration::from_secs(10);
 
-// A backstop that cancels any remaining orders as the assignment window closes. The hot
+// A backstop that cancels this run's remaining orders as the assignment window closes. The hot
 // engine already withdraws quotes on its own margin before that.
 const CLOSE_MARGIN: DurationUs = DurationUs::from_micros(3_000_000);
 

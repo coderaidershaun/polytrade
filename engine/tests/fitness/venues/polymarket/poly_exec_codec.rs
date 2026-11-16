@@ -16,9 +16,9 @@ use engine::venues::polymarket::exec::codec::{
     AccountStamps, DecodeContext, EncodeContext, HttpAnswer, IgnoredReason, KnownOrder, OrderIndex,
     OrdersRead, PlaceRequestContext, PlacementStatus, RejectSubject, RejectVerdict,
     SettlementWatermark, StreamEvent, TokenBinding, TokenTable, TradeSettlement, VenueAnswer,
-    VenueAvailability, VenueFailure, WireError, account_snapshot, cancel_market_orders,
-    classify_error, decode_balance, decode_cancel, decode_clob_market, decode_orders_page,
-    decode_place, decode_single_order, decode_stream_frame, decode_trades_page, encode_request,
+    VenueAvailability, VenueFailure, WireError, account_snapshot, classify_error, decode_balance,
+    decode_cancel, decode_clob_market, decode_orders_page, decode_place, decode_single_order,
+    decode_stream_frame, decode_trades_page, encode_request,
 };
 use serde_json::Value;
 
@@ -891,10 +891,11 @@ fn a_full_pause_is_distinguishable_from_a_pause_that_still_takes_cancels() {
 }
 
 /// Encoding through the real signer: order-type/postOnly selection, cancel addressability
-/// (mapped vs never-acknowledged), and read/rotation requests scoped by token — plus the token
-/// table's own rebind policy, which every encoded request ultimately depends on.
+/// (mapped vs never-acknowledged), and the read of open orders scoped by token, plus the token
+/// table's own rebind policy, which every encoded request depends on. No request cancels every
+/// order on a token: that would cancel a person's order too.
 #[test]
-fn requests_encode_by_token_and_the_token_table_rebinds_correctly() {
+fn requests_encode_by_token_and_the_token_table_rebinds() {
     let vector = sign_vector();
     let signer = vector_signer(&vector, API_KEY);
     let table = tokens();
@@ -962,13 +963,6 @@ fn requests_encode_by_token_and_the_token_table_rebinds_correctly() {
         assert_eq!(encoded.path, "/data/orders");
         assert_eq!(encoded.query, format!("asset_id={UP_TOKEN}"));
         assert!(encoded.body.is_empty());
-    }
-
-    // The rotation sweep cancels by token.
-    {
-        let encoded = cancel_market_orders(UP_TOKEN).expect("body serialises");
-        assert_eq!(encoded.path, "/cancel-market-orders");
-        assert!(encoded.body.contains(UP_TOKEN));
     }
 
     // A retired token still routes its late fills home.

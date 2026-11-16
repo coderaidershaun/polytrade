@@ -83,8 +83,4 @@ pub(super) enum RestPurpose {
         token_id: Box<str>,
     },
     Heartbeat,
-    /// Every resting order on one token, in one call — the rotation sweep.
-    MarketCancel {
-        instrument: InstrumentId,
-    },
 }

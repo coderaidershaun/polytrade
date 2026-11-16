@@ -25,7 +25,9 @@ each command to the venue's transport and from there to `ExecCore::on_command`):
 `ReconcileOpenOrders`, `CancelOurs`, `CancelPriorRun`, `ResubscribeStream`. These are intents, not
 venue methods.
 There is deliberately no cancel-all: the engine cannot distinguish foreign orders, so it
-never asks for something it could not account for.
+never asks for something it could not account for. No edge sends a bulk cancel of its venue
+either, such as a cancel of each order on a token: the backstop at the close of a window cancels
+the orders of this run one at a time, each by its own id.
 
 **Events out** (an `InboundMessage` with body `MessageBody::Exec(ExecEvent)` or
 `MessageBody::Account(AccountChunk)`, through `EventFunnel`): seventeen `ExecKind`s covering acks,

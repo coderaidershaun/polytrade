@@ -17,8 +17,7 @@ use super::super::sign::order::{
     salt, sign_order,
 };
 use super::wire::{
-    CancelMarketOrdersBody, CancelOrderBody, HeartbeatBody, PlaceOrderBody, SignedOrderBody,
-    SubscribeAuth, SubscribeBody,
+    CancelOrderBody, HeartbeatBody, PlaceOrderBody, SignedOrderBody, SubscribeAuth, SubscribeBody,
 };
 use super::{EncodeContext, WireError};
 
@@ -283,17 +282,6 @@ pub fn cancel_venue_order(venue_order_id: &str) -> Result<EncodedRequest, WireEr
         &CancelOrderBody {
             order_id: venue_order_id,
         },
-    )
-}
-
-/// Cancels everything resting on one token. Ordinary reconciliation cancels one order at a time.
-///
-/// # Errors
-/// The body cannot be serialised.
-pub fn cancel_market_orders(token_id: &str) -> Result<EncodedRequest, WireError> {
-    EncodedRequest::new(HttpMethod::Delete, "/cancel-market-orders").with_body(
-        "cancel market orders",
-        &CancelMarketOrdersBody { asset_id: token_id },
     )
 }
 
