@@ -279,7 +279,7 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
         asset_symbols: Vec::new(),
     };
     let (rotations_tx, rotations_rx) = mpsc::channel::<RotationRow>(64);
-    let persistence = PersistWriter::spawn(
+    let persistence = PersistWriter::on_disk().spawn(
         PersistConfig {
             dir: dir_root.to_path_buf(),
             tables: RecordedTables::new(&ALL_TABLES),

@@ -118,7 +118,7 @@ async fn poly_rotation_capture_spans_two_rotations_with_zero_gap_handover() {
     let (_persist_producer, persist_consumer) =
         RingBuffer::<PersistRecord>::new(PERSIST_RING_CAPACITY);
     let (rotations_tx, rotations_rx) = mpsc::channel::<RotationRow>(ROTATIONS_CHANNEL_CAPACITY);
-    let persistence = PersistWriter::spawn(
+    let persistence = PersistWriter::on_disk().spawn(
         PersistConfig {
             dir: output_dir.path().to_path_buf(),
             tables: RecordedTables::new(&[]),

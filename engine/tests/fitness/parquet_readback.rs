@@ -1,10 +1,9 @@
-//! Parquet read-back + temp-dir helpers for the persistence fitness tests. Decodes any persisted
-//! table's files back into comparable rows through the arrow reader, exposes their footer
-//! key-values, and holds a scratch tree removed on drop — no `tempfile` dependency is worth adding
-//! just to give a test a working directory. Also holds the writer-spawn fixtures those tests share.
+//! The tape tests read files back as comparable rows and footers, and share one way to start a
+//! writer and one scratch folder, removed on drop, so that no `tempfile` dependency is needed.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -14,13 +13,14 @@ use arrow_array::{
 };
 use arrow_schema::DataType;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use rtrb::RingBuffer;
+use rtrb::{Consumer, RingBuffer};
 use tokio::sync::mpsc;
 
 use engine::msg::ids::FIXED_SCALE;
-use engine::msg::persist::PersistRecord;
+use engine::msg::persist::{PersistRecord, RotationRow};
 use engine::runtime::artifacts::RunArtifacts;
-use engine::runtime::config::{ExecutionMode, RecordedTables, RunIdentity};
+use engine::runtime::config::{ExecutionMode, RecordedTables, RunIdentity, TableKind};
+use engine::runtime::durable_file::FileSteps;
 use engine::tape::{PersistConfig, PersistError, PersistHandle, PersistWriter, RunMeta};
 
 /// `f64` is stored as bits so cells compare exactly — deterministic replay is bit-for-bit equal.
@@ -198,12 +198,11 @@ pub(crate) fn spawn_writer(
     tables: RecordedTables,
     records: Vec<PersistRecord>,
 ) -> PersistHandle {
-    let config = PersistConfig {
-        dir: dir_root.to_path_buf(),
-        tables,
-        retention: Duration::from_hours(6),
-    };
-    spawn_writer_with(config, Some(ExecutionMode::Live), records)
+    spawn_writer_with(
+        persist_config(dir_root, tables),
+        Some(ExecutionMode::Live),
+        records,
+    )
 }
 
 /// Like [`spawn_writer`], but the test chooses the persistence config and the execution mode.
@@ -212,20 +211,56 @@ pub(crate) fn spawn_writer_with(
     execution_mode: Option<ExecutionMode>,
     records: Vec<PersistRecord>,
 ) -> PersistHandle {
+    PersistWriter::on_disk().spawn(
+        config,
+        meta_for(execution_mode),
+        preloaded(records),
+        no_rotations(),
+    )
+}
+
+/// Like [`spawn_writer`] for the features table alone, but each file step goes through `steps`.
+pub(crate) fn spawn_writer_through(
+    steps: Arc<dyn FileSteps>,
+    dir_root: &Path,
+    records: Vec<PersistRecord>,
+) -> PersistHandle {
+    PersistWriter::through(steps).spawn(
+        persist_config(dir_root, RecordedTables::new(&[TableKind::Features])),
+        meta_for(Some(ExecutionMode::Live)),
+        preloaded(records),
+        no_rotations(),
+    )
+}
+
+fn persist_config(dir_root: &Path, tables: RecordedTables) -> PersistConfig {
+    PersistConfig {
+        dir: dir_root.to_path_buf(),
+        tables,
+        retention: Duration::from_hours(6),
+    }
+}
+
+fn meta_for(execution_mode: Option<ExecutionMode>) -> RunMeta {
+    RunMeta {
+        artifacts: RunArtifacts::new(execution_mode, &recorder_identity()),
+        ..run_meta()
+    }
+}
+
+fn preloaded(records: Vec<PersistRecord>) -> Consumer<PersistRecord> {
     let (mut producer, consumer) = RingBuffer::<PersistRecord>::new(records.len() + 1);
     for record in records {
         producer
             .push(record)
             .expect("persist test ring has capacity");
     }
-    // No rotation lineage in these tests: the sender drops immediately, so the side-channel stays
-    // empty.
-    let (_, rotations_rx) = mpsc::channel(1);
-    let meta = RunMeta {
-        artifacts: RunArtifacts::new(execution_mode, &recorder_identity()),
-        ..run_meta()
-    };
-    PersistWriter::spawn(config, meta, consumer, rotations_rx)
+    consumer
+}
+
+/// No rotation lineage in these tests: the sender drops at once, so the side channel stays empty.
+fn no_rotations() -> mpsc::Receiver<RotationRow> {
+    mpsc::channel(1).1
 }
 
 /// Drain exactly as the runtime does on SIGTERM.

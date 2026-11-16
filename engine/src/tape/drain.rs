@@ -1,7 +1,7 @@
 //! Writer thread: drain the record ring into one Parquet writer per table, sealing on interval, row
 //! cap, hour cross, or shutdown. Dedicated thread (encode and fsync both block).
 
-use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -14,39 +14,55 @@ use crate::msg::persist::{
 };
 use crate::msg::time::wall_clock_now;
 use crate::runtime::config::{RecordedTables, TableKind};
+use crate::runtime::durable_file::{DiskFiles, FileSteps};
 use crate::runtime::shutdown::WriterThread;
 
 use super::retention::Retention;
 use super::schema::{self, TableRow};
-use super::table::TableWriter;
+use super::table::{TableFiles, TableWriter};
 use super::{PersistConfig, PersistError, RunMeta};
 
 const SEAL_INTERVAL: Duration = Duration::from_secs(300);
 const IDLE_SLEEP: Duration = Duration::from_millis(1);
 const MAX_POP_BATCH: usize = 8_192;
 
-pub struct PersistWriter;
+/// The writer thread of the tape, before it starts. It takes each file step through its
+/// [`FileSteps`], so a test can end a write at any step.
+pub struct PersistWriter {
+    steps: Arc<dyn FileSteps>,
+}
 
 impl PersistWriter {
+    pub fn on_disk() -> Self {
+        Self::through(Arc::new(DiskFiles))
+    }
+
+    pub fn through(steps: Arc<dyn FileSteps>) -> Self {
+        Self { steps }
+    }
+
     #[expect(
         clippy::disallowed_methods,
         reason = "a writer stamps and paces its own files, which are never engine state"
     )]
     pub fn spawn(
+        self,
         cfg: PersistConfig,
         meta: RunMeta,
         records: Consumer<PersistRecord>,
         rotations: mpsc::Receiver<RotationRow>,
     ) -> PersistHandle {
         let boot_ts_us = wall_clock_now().micros();
-        let footer = schema::footer_metadata(&meta);
         let run_dir = meta.artifacts.tape_dir(&cfg.dir);
-        let retention = Retention::new(run_dir.clone(), cfg.retention);
+        let retention = Retention::new(run_dir.clone(), cfg.retention, boot_ts_us);
         let writers = TableWriterBuilder {
             tables: cfg.tables,
-            run_dir,
-            boot_ts_us,
-            footer: &footer,
+            files: TableFiles {
+                run_dir,
+                boot_ts_us,
+                footer: schema::footer_metadata(&meta),
+                steps: self.steps,
+            },
         };
         let state = WriterState {
             consumer: records,
@@ -68,14 +84,12 @@ impl PersistWriter {
     }
 }
 
-struct TableWriterBuilder<'a> {
+struct TableWriterBuilder {
     tables: RecordedTables,
-    run_dir: PathBuf,
-    boot_ts_us: i64,
-    footer: &'a [(String, String)],
+    files: TableFiles,
 }
 
-impl TableWriterBuilder<'_> {
+impl TableWriterBuilder {
     fn named<R: TableRow>(&self, table: TableKind) -> Option<TableWriter<R>> {
         self.tables.contains(table).then(|| self.writer())
     }
@@ -88,7 +102,7 @@ impl TableWriterBuilder<'_> {
     }
 
     fn writer<R: TableRow>(&self) -> TableWriter<R> {
-        TableWriter::new(&self.run_dir, self.boot_ts_us, self.footer)
+        TableWriter::new(self.files.clone())
     }
 }
 

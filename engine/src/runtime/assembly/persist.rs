@@ -49,7 +49,7 @@ pub(super) fn persist_bring_up<P>(setup: PersistBringUpSetup<'_, P>) -> PersistB
     let (producer, consumer) =
         RingBuffer::<PersistRecord>::new(setup.config.queues.persistence_capacity);
     let tables = RecordedTables::new(&setup.config.strategy.tables);
-    let handle = PersistWriter::spawn(
+    let handle = PersistWriter::on_disk().spawn(
         PersistConfig {
             dir: persist_config.dir.clone(),
             tables,

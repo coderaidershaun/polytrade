@@ -1,8 +1,8 @@
 //! The Parquet files of one table, sealed and rolled as rows arrive, so a reader never waits for
-//! shutdown. Each name carries the boot stamp and a sequence, so no file is overwritten.
+//! shutdown. A file gets its final name once its footer is synced, so each listed file opens.
 
-use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::basic::{Compression, ZstdLevel};
@@ -13,6 +13,7 @@ use arrow_schema::SchemaRef;
 
 use crate::info;
 use crate::msg::time::LocalTs;
+use crate::runtime::durable_file::{FileSteps, Staging, StepFile, WriteError};
 
 use super::PersistError;
 use super::schema::TableRow;
@@ -25,32 +26,40 @@ const US_PER_HOUR: i64 = 3_600_000_000;
 
 pub(super) const DATE_FOLDER_PREFIX: &str = "date=";
 pub(super) const FILE_EXTENSION: &str = "parquet";
+/// Added to the name of a file that has no footer yet. Each reader keeps `.parquet` names only.
+pub(super) const UNFINISHED_EXTENSION: &str = "part";
+
+/// What each table writer of one run shares: where its files go, the boot stamp in their names,
+/// their footer, and the steps that write them.
+#[derive(Clone)]
+pub(super) struct TableFiles {
+    /// `{persistence.dir}/{strategy-id}/{te-id}`.
+    pub(super) run_dir: PathBuf,
+    pub(super) boot_ts_us: i64,
+    pub(super) footer: Vec<(String, String)>,
+    pub(super) steps: Arc<dyn FileSteps>,
+}
 
 struct OpenFile {
-    writer: ArrowWriter<File>,
+    writer: ArrowWriter<Box<dyn StepFile>>,
     hour_bucket: i64,
-    path: PathBuf,
+    staging: Staging,
     rows_written: u64,
 }
 
 pub(super) struct TableWriter<R> {
-    run_dir: PathBuf,
-    boot_ts_us: i64,
+    files: TableFiles,
     schema: SchemaRef,
-    footer: Vec<(String, String)>,
     pending: Vec<R>,
     open: Option<OpenFile>,
     next_sequence: u32,
 }
 
 impl<R: TableRow> TableWriter<R> {
-    /// `run_dir` = `{persistence.dir}/{strategy-id}/{te-id}`.
-    pub(super) fn new(run_dir: &Path, boot_ts_us: i64, footer: &[(String, String)]) -> Self {
+    pub(super) fn new(files: TableFiles) -> Self {
         Self {
-            run_dir: run_dir.to_path_buf(),
-            boot_ts_us,
+            files,
             schema: R::schema(),
-            footer: footer.to_vec(),
             pending: Vec::new(),
             open: None,
             next_sequence: 0,
@@ -81,27 +90,31 @@ impl<R: TableRow> TableWriter<R> {
         Ok(())
     }
 
-    /// Write remaining rows + close file's footer. File becomes readable at this point.
+    /// Writes the remaining rows and the footer, syncs the file, and gives it its final name, at
+    /// which point a reader lists it.
     ///
     /// # Errors
-    /// Encode, write, or close failure.
+    /// Encode, write, sync, or rename failure.
     pub(super) fn seal(&mut self) -> Result<(), PersistError> {
         self.write_pending()?;
         if let Some(open) = self.open.take() {
             let OpenFile {
-                writer,
-                path,
+                mut writer,
+                staging,
                 rows_written,
                 hour_bucket: _,
             } = open;
-            writer.close().map_err(|source| PersistError::Parquet {
+            writer.finish().map_err(|source| PersistError::Parquet {
                 table: R::NAME,
                 source,
             })?;
+            staging
+                .finish(&*self.files.steps, writer.inner_mut().as_mut())
+                .map_err(not_durable)?;
             info!(
                 "persist sealed {} {} ({} rows)",
                 R::NAME,
-                path.display(),
+                staging.target.display(),
                 rows_written
             );
         }
@@ -140,26 +153,34 @@ impl<R: TableRow> TableWriter<R> {
     }
 
     fn open_file(&mut self, hour_bucket: i64) -> Result<(), PersistError> {
-        let path = self.file_path(hour_bucket, self.next_sequence);
+        let target = self.file_path(hour_bucket, self.next_sequence);
         self.next_sequence += 1;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(PersistError::io_at(parent))?;
+        if let Some(parent) = target.parent() {
+            self.files
+                .steps
+                .create_folder(parent)
+                .map_err(PersistError::io_at(parent))?;
         }
-        // SMELL: the file gets its final name here, before it has a footer, and nothing syncs it to
-        // disk, so a crash leaves a file under its final name that no reader can open. Write under
-        // a temporary name, sync, and rename once the footer is written.
-        let file = File::create(&path).map_err(PersistError::io_at(&path))?;
+        let staging = Staging {
+            temporary: unfinished_path(&target),
+            target,
+        };
+        let file = self
+            .files
+            .steps
+            .create(&staging.temporary)
+            .map_err(PersistError::io_at(&staging.temporary))?;
         let writer =
             ArrowWriter::try_new(file, self.schema.clone(), Some(self.writer_properties()))
                 .map_err(|source| PersistError::Parquet {
                     table: R::NAME,
                     source,
                 })?;
-        info!("persist open {} {}", R::NAME, path.display());
+        info!("persist open {} {}", R::NAME, staging.temporary.display());
         self.open = Some(OpenFile {
             writer,
             hour_bucket,
-            path,
+            staging,
             rows_written: 0,
         });
         Ok(())
@@ -167,6 +188,7 @@ impl<R: TableRow> TableWriter<R> {
 
     fn writer_properties(&self) -> WriterProperties {
         let metadata = self
+            .files
             .footer
             .iter()
             .map(|(key, value)| KeyValue::new(key.clone(), value.clone()))
@@ -182,7 +204,7 @@ impl<R: TableRow> TableWriter<R> {
     /// Zero-padded sequence -> path sort = seal order.
     fn file_path(&self, hour_bucket: i64, sequence: u32) -> PathBuf {
         let at = LocalTs::from_micros(hour_bucket * US_PER_HOUR).civil();
-        let mut path = self.run_dir.clone();
+        let mut path = self.files.run_dir.clone();
         path.push(R::NAME);
         path.push(format!(
             "{DATE_FOLDER_PREFIX}{:04}-{:02}-{:02}",
@@ -190,9 +212,26 @@ impl<R: TableRow> TableWriter<R> {
         ));
         path.push(format!(
             "{:02}-{}-{sequence:06}.{FILE_EXTENSION}",
-            at.hour, self.boot_ts_us
+            at.hour, self.files.boot_ts_us
         ));
         path
+    }
+}
+
+fn unfinished_path(target: &Path) -> PathBuf {
+    let mut name = target.as_os_str().to_os_string();
+    name.push(".");
+    name.push(UNFINISHED_EXTENSION);
+    PathBuf::from(name)
+}
+
+fn not_durable(error: WriteError) -> PersistError {
+    match error {
+        WriteError::NotWritten { path, source }
+        | WriteError::FolderNotSynced {
+            directory: path,
+            source,
+        } => PersistError::Io { path, source },
     }
 }
 
