@@ -2403,6 +2403,13 @@ venue to a person. Thus each run against a venue needs one owner, in one table.
     none. WHY: a cap in code stops a run that a runbook step lets through by mistake.
   - Replaced 2026-11-16: "`engine/tests/integration/poly_live.rs`" in the second of the three rows
     and "`poly_live.rs`" in the line on the dry runs. WHY: the tests sit in a folder of three files.
+  - Amended 2026-11-16, as built: each signed test of Polymarket, its dry run too, asks the venue
+    to derive the L2 credentials of its wallet before the start gate. IF the venue derives none,
+    or IF the gate then holds credentials that are not the derived ones, THEN the test stops
+    before any request of the tests. A test that places an order refuses before it signs the
+    order, unless the geoblock flag of the venue reads `blocked = false` for this host. WHY: the
+    start gate creates credentials when the venue derives none, a change of key settings that
+    the live policy forbids. The venue refuses an order by location.
 
 ## 13. Performance
 
