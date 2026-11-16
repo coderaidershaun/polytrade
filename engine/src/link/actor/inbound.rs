@@ -13,6 +13,7 @@ use super::super::control::Subscribe;
 use super::super::envelope::LinkDecodeError;
 use super::super::frame::{LinkBody, LinkDatagram, LinkFrame, LinkOrigin, LinkPayload};
 use super::super::subscribers::{LINK_MAX_SUBSCRIBERS, LINK_SUBSCRIPTION_TTL, RefreshOutcome};
+use super::control_plane::AssertionVerdict;
 use super::{Actor, PeerFeed};
 
 /// Four missed heartbeats. UDP silence indistinguishable from quiet peer (dangerous: in-process ring can't silently lose producer).
@@ -64,23 +65,13 @@ impl Actor {
         if self.subscribers.refresh(from, subscribe.topics, now) == RefreshOutcome::Rejected {
             self.on_table_full(from);
         }
-        if subscribe.desired_epoch == 0 {
-            // Epoch 0: peer subscribes without claiming control
-            return;
-        }
-        self.last_control_ts_us = Some(now);
-        self.is_controller_lost = false;
         let assertion = RunAssertion {
             state: subscribe.desired_state,
             epoch: subscribe.desired_epoch,
         };
-        if self.control.desired().accept_if_newer(assertion) {
-            info!(
-                "controller {from} asserts {:?} at epoch {}",
-                assertion.state, assertion.epoch
-            );
+        if self.control.on_assertion(from, assertion, now) != AssertionVerdict::NoClaim {
+            self.push_marker_if_needed(now);
         }
-        self.push_marker_if_needed(now);
     }
 
     fn note_peer_seen(&mut self, from: SocketAddr, now: LocalTs) {

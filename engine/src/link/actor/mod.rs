@@ -1,5 +1,5 @@
 //! The link actor: one task that owns the UDP socket, the subscriber table and the sequence gate.
-//! It pushes checked frames to the engine and sends the hot thread's UI rings.
+//! This root file wires the receive path, the send path and the control plane to one heartbeat.
 
 mod control_plane;
 mod inbound;
@@ -7,7 +7,7 @@ mod outbound;
 
 use std::io;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use rtrb::Consumer;
@@ -31,6 +31,8 @@ use super::frame::{LinkBody, OutboundLink};
 use super::subscribers::{LINK_MAX_SUBSCRIBERS, SequenceGate, SubscriberTable};
 use inbound::PeerState;
 
+pub use control_plane::{AssertionVerdict, ControlPlane};
+
 /// Catalog, lifecycle, staleness, control repair. 1s granularity for display state.
 const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -41,7 +43,7 @@ const SUBSCRIBE_INTERVAL: Duration = Duration::from_secs(2);
 const REPORT_TICKS: u64 = 60;
 
 /// One peer whose feed this engine wants.
-pub(crate) struct PeerFeed {
+pub struct PeerFeed {
     pub address: SocketAddr,
     pub topics: TopicSet,
 }
@@ -92,8 +94,11 @@ fn address_label(address: SocketAddr) -> Box<str> {
     address.to_string().into_boxed_str()
 }
 
-pub(crate) struct LinkActorSetup {
-    pub socket: UdpSocket,
+/// Everything the link actor owns. Each part is public, so a test can build an actor on loopback
+/// with no hot thread.
+pub struct LinkActorSetup {
+    /// Bound and set non-blocking. The actor registers it with the runtime that runs the actor.
+    pub socket: std::net::UdpSocket,
     pub identity: LinkIdentity,
     pub guard: FrameGuard,
     pub peers: Vec<PeerFeed>,
@@ -112,13 +117,19 @@ pub(crate) struct LinkActorSetup {
     pub placement: SenderPlacement,
     /// How often frames go out while the senders are shared. Pinned, they go out on each pass.
     pub flush_period: Duration,
+    /// Where the actor publishes its counts at each heartbeat.
+    pub counts: LinkCountsHandle,
 }
 
-pub(crate) struct LinkActor;
+pub struct LinkActor;
 
 impl LinkActor {
-    pub(crate) fn spawn(setup: LinkActorSetup, rt: &Handle) -> TaskHandle {
-        let join = rt.spawn(crate::log::tag_task("link", Actor::new(setup).run()));
+    /// The socket turns into a tokio socket inside the task, so its reactor is the runtime `rt`
+    /// that runs the actor.
+    pub fn spawn(setup: LinkActorSetup, rt: &Handle) -> TaskHandle {
+        let join = rt.spawn(crate::log::tag_task("link", async move {
+            Actor::new(setup).run().await;
+        }));
         TaskHandle::new(join, "link")
     }
 }
@@ -130,15 +141,36 @@ enum Wake {
     Refresh,
 }
 
-#[derive(Default)]
-struct RejectCounts {
-    decode_failed: u64,
-    gate_rejected: u64,
-    topic_ignored: u64,
-    send_failed: u64,
-    receive_failed: u64,
-    table_full_refused: u64,
-    peer_silenced: u64,
+/// What the link actor refused or lost since it started, one count for each cause.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LinkCounts {
+    pub decode_failed: u64,
+    pub gate_rejected: u64,
+    pub topic_ignored: u64,
+    pub send_failed: u64,
+    pub receive_failed: u64,
+    pub table_full_refused: u64,
+    pub peer_silenced: u64,
+}
+
+/// The counts of the link actor as of its last heartbeat, for a reader on another thread.
+#[derive(Debug, Clone, Default)]
+pub struct LinkCountsHandle {
+    latest: Arc<Mutex<LinkCounts>>,
+}
+
+impl LinkCountsHandle {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn load(&self) -> LinkCounts {
+        *self.latest.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn publish(&self, counts: LinkCounts) {
+        *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = counts;
+    }
 }
 
 struct Actor {
@@ -148,12 +180,11 @@ struct Actor {
     subscribers: SubscriberTable,
     gate: SequenceGate,
     peers: Vec<PeerState>,
-    on_controller_loss: ControllerLoss,
     inbound: LinkQueueProducer,
     outbound: Consumer<OutboundLink>,
     channels: UiChannels,
     latency: Consumer<LatencyReport>,
-    control: RunControlGate,
+    control: ControlPlane,
     clock: EngineClock,
     spin_interval: DurationUs,
     feature_count: u16,
@@ -166,16 +197,18 @@ struct Actor {
     outbound_seq_by_topic: Vec<u64>,
     recipients: Vec<SocketAddr>,
     buffer: Box<[u8; LINK_MAX_DATAGRAM]>,
-    last_control_ts_us: Option<LocalTs>,
-    is_controller_lost: bool,
     announce_ticks: u64,
-    counts: RejectCounts,
+    counts: LinkCounts,
+    published_counts: LinkCountsHandle,
 }
 
 impl Actor {
     fn new(setup: LinkActorSetup) -> Self {
         Self {
-            socket: Arc::new(setup.socket),
+            socket: Arc::new(
+                UdpSocket::from_std(setup.socket)
+                    .expect("a bound socket registers with the runtime that runs the link"),
+            ),
             identity: setup.identity,
             guard: setup.guard,
             subscribers: SubscriberTable::new(),
@@ -189,12 +222,11 @@ impl Actor {
                     is_silent: false,
                 })
                 .collect(),
-            on_controller_loss: setup.on_controller_loss,
             inbound: setup.inbound,
             outbound: setup.outbound,
             channels: setup.channels,
             latency: setup.latency,
-            control: setup.control,
+            control: ControlPlane::new(setup.control, setup.on_controller_loss),
             clock: setup.clock,
             spin_interval: setup.spin_interval,
             feature_count: setup.feature_count,
@@ -206,10 +238,9 @@ impl Actor {
             outbound_seq_by_topic: vec![0; setup.topic_count],
             recipients: Vec::with_capacity(LINK_MAX_SUBSCRIBERS),
             buffer: Box::new([0; LINK_MAX_DATAGRAM]),
-            last_control_ts_us: None,
-            is_controller_lost: false,
             announce_ticks: 0,
-            counts: RejectCounts::default(),
+            counts: LinkCounts::default(),
+            published_counts: setup.counts,
         }
     }
 
@@ -249,9 +280,14 @@ impl Actor {
             let (topic, body) = self.catalog_frames[index];
             self.send(topic, body, now);
         }
-        self.check_controller(now);
+        // A dead-man park goes out at once. The push after it is the one each heartbeat makes, so a
+        // marker that a full queue dropped goes out again.
+        if self.control.check_controller(now).is_some() {
+            self.push_marker_if_needed(now);
+        }
         self.push_marker_if_needed(now);
         self.check_peer_silence(now);
+        self.published_counts.publish(self.counts);
         self.announce_ticks += 1;
         if self.announce_ticks.is_multiple_of(REPORT_TICKS) {
             self.report_counts();

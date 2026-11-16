@@ -1,5 +1,6 @@
 //! The sending half of the link: it drains the UI rings and the latency reports to subscribers, and
-//! builds the lifecycle and catalog frames that each heartbeat repeats, so a late subscriber catches up.
+//! builds the lifecycle and catalog frames that each heartbeat repeats, so a late subscriber
+//! catches up.
 
 use std::net::SocketAddr;
 
@@ -31,7 +32,7 @@ impl Actor {
     }
 
     pub(super) fn lifecycle(&self) -> Lifecycle {
-        let acknowledged = self.control.acknowledged().load();
+        let acknowledged = self.control.acknowledged();
         Lifecycle {
             phase: self.phase,
             run_state: acknowledged.state,

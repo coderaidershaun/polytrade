@@ -11,8 +11,8 @@ use crate::hot::sink::LinkSink;
 use crate::hot::spawn::LinkQueueProducer;
 use crate::hot::strategy::Strategy;
 use crate::link::{
-    FrameGuard, LINK_NAME_LEN, LinkActor, LinkActorSetup, LinkHash, LinkIdentity, OutboundLink,
-    PeerFeed, TopicId, schema_hash_of_fields,
+    FrameGuard, LINK_NAME_LEN, LinkActor, LinkActorSetup, LinkCountsHandle, LinkHash, LinkIdentity,
+    OutboundLink, PeerFeed, TopicId, schema_hash_of_fields,
 };
 use crate::msg::time::{DurationUs, EngineClock, wall_clock_now};
 use crate::msg::ui::LatencyReport;
@@ -26,8 +26,8 @@ use super::StartError;
 pub(super) const LINK_RING_CAPACITY: usize = 1_024;
 
 pub(super) struct BoundLink {
-    /// A plain socket that needs no runtime, so a refused start closes it by dropping it. The start
-    /// turns it into a tokio socket on the runtime that runs the link actor.
+    /// A plain socket that needs no runtime, so a refused start closes it by dropping it. The link
+    /// actor turns it into a tokio socket on the runtime that runs it.
     pub socket: UdpSocket,
     pub identity: LinkIdentity,
     pub guard: FrameGuard,
@@ -155,11 +155,7 @@ pub(super) fn spawn_link_actor<P>(
         .map_or_else(Default::default, |link| link.on_controller_loss);
     LinkActor::spawn(
         LinkActorSetup {
-            socket: {
-                let _on_edge_runtime = edge_runtime.enter();
-                tokio::net::UdpSocket::from_std(bound.socket)
-                    .expect("a bound socket registers with the runtime that runs the link")
-            },
+            socket: bound.socket,
             identity: bound.identity,
             guard: bound.guard,
             peers: bound.peers,
@@ -179,6 +175,7 @@ pub(super) fn spawn_link_actor<P>(
             feature_count: bound.feature_count,
             placement: start.config.senders.placement,
             flush_period: start.config.senders.link_flush(),
+            counts: LinkCountsHandle::new(),
         },
         edge_runtime,
     )

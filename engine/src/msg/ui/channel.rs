@@ -16,27 +16,27 @@ const LIFECYCLE_CAPACITY: usize = 16;
 /// The engine's own rare state changes. There is no starting phase, because a workstation only ever
 /// attaches to an engine that is already running.
 #[derive(Debug, Clone)]
-pub(crate) enum UiLifecycle {
+pub enum UiLifecycle {
     Ready(UiCatalog),
     Draining,
 }
 
 /// The engine's end of the workstation feed.
-pub(crate) struct UiWiring {
+pub struct UiWiring {
     pub lifecycle: SyncSender<UiLifecycle>,
     pub books: UiBookSink,
     pub events: UiEventSink,
 }
 
 /// The link actor's end of the workstation feed.
-pub(crate) struct UiChannels {
+pub struct UiChannels {
     pub lifecycle: Receiver<UiLifecycle>,
     pub books: Consumer<UiBookSnapshot>,
     pub events: Consumer<UiEvent>,
 }
 
 /// Both rings are allocated here at startup, so the hot thread never allocates to publish.
-pub(crate) fn ui_channel() -> (UiWiring, UiChannels) {
+pub fn ui_channel() -> (UiWiring, UiChannels) {
     let (lifecycle_tx, lifecycle_rx) = sync_channel(LIFECYCLE_CAPACITY);
     let (book_producer, book_consumer) = RingBuffer::<UiBookSnapshot>::new(UI_BOOK_RING_CAPACITY);
     let (event_producer, event_consumer) = RingBuffer::<UiEvent>::new(UI_EVENT_RING_CAPACITY);

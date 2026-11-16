@@ -11,7 +11,10 @@ mod subscribers;
 mod wire;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use actor::{LinkActor, LinkActorSetup, PeerFeed};
+pub use actor::{
+    AssertionVerdict, ControlPlane, LinkActor, LinkActorSetup, LinkCounts, LinkCountsHandle,
+    PeerFeed,
+};
 
 pub use control::{
     CatalogFeature, CatalogInstrument, LINK_MAX_TOPICS, Lifecycle, RunPhase, Subscribe, TopicSet,
