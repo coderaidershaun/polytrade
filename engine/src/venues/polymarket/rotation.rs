@@ -1,13 +1,5 @@
 //! The life of one window slot as a state machine, from prefetch to teardown. Each input carries
 //! its time, so the machine never reads a clock.
-//!
-//! A slot hosts BOTH outcome instruments (up + down) of one window — the registry registers
-//! `{a,b}×{up,down}` and `MarketRotation`/`BookReset` are per-instrument (msg.rs), so every handover
-//! and teardown fans out to both legs or a sibling instrument is silently left stale.
-//!
-//! Teardown never depends on witnessing the collapse burst — a reconnect that missed it still tears
-//! down via the grace `/book` 404 probe, so a slot cannot wedge. Gamma/CLOB status
-//! flags are never consulted: only frame evidence, 404 probes and the wall clock decide.
 
 use std::sync::Arc;
 
@@ -57,8 +49,9 @@ pub struct OutcomeLeg {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WindowAssignment {
-    pub up: OutcomeLeg,
-    pub down: OutcomeLeg,
+    /// The up leg, then the down leg. A rotation and a book reset belong to one instrument, so
+    /// each subscribe and each teardown acts on both legs, or the other leg keeps an old book.
+    pub legs: [OutcomeLeg; 2],
     pub window_open_ts_us: VenueTs,
     pub window_close_ts_us: VenueTs,
     pub condition_id: Arc<str>,
@@ -66,9 +59,10 @@ pub struct WindowAssignment {
 
 impl WindowAssignment {
     pub fn tokens(&self) -> WindowTokens {
+        let [up, down] = &self.legs;
         WindowTokens {
-            up: self.up.token.clone(),
-            down: self.down.token.clone(),
+            up: up.token.clone(),
+            down: down.token.clone(),
         }
     }
 }
@@ -102,14 +96,15 @@ pub struct RotationFacts {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ForceTeardownFacts {
-    pub up_instrument: InstrumentId,
-    pub down_instrument: InstrumentId,
+    /// The instrument of the up leg, then of the down leg.
+    pub instruments: [InstrumentId; 2],
     pub window_open_ts_us: VenueTs,
     pub grace_age: DurationUs,
     pub tokens: WindowTokens,
 }
 
-/// Ordering: per-instrument `Rotation → BookReset → Snapshot`; teardown is `Unsubscribe → BookReset`.
+/// For each instrument a rotation comes first, then its book reset, then its snapshot. A teardown
+/// unsubscribes first, then resets each book.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlotAction {
     Subscribe(WindowAssignment),
@@ -190,7 +185,9 @@ enum GraceAction {
     Wait,
 }
 
-/// Deterministic: identical inputs → identical state (fitness-verified).
+/// A slot tears its window down on the evidence of frames, a 404 of its book, or the time, and never
+/// on a status flag of the venue. A reconnect that missed the collapse of a book still tears down
+/// by the 404, so a slot cannot stay stuck.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlotMachine {
     schedule: PolySchedule,
@@ -242,7 +239,7 @@ impl SlotMachine {
         });
     }
 
-    /// Frame → book alive; disproves collapse (collapse = silence).
+    /// A frame shows the book alive, which disproves a collapse.
     fn on_frame(&mut self, now: VenueTs) {
         if let Some(window) = self.phase.window_mut() {
             window.last_frame_ts_us = now;
@@ -250,7 +247,7 @@ impl SlotMachine {
         }
     }
 
-    /// Burst = resolution only in grace tail; mid-window is a blip.
+    /// A collapse counts as the end of the market only in the grace tail. Before it, it is a blip.
     fn on_collapsed(&mut self) {
         if let Phase::Grace(window) = &mut self.phase {
             window.collapse_seen = true;
@@ -302,7 +299,7 @@ impl SlotMachine {
             }
             Phase::Subscribed(window) => Phase::Active(window),
             Phase::Active(mut window) => {
-                // Rate-limit starts at nominal end to allow silence-triggered probes earlier.
+                // The cadence starts at the close, so silence can arm a probe before the probe delay.
                 window.next_probe_ts_us = window.assignment.window_close_ts_us;
                 Phase::Grace(window)
             }
@@ -331,8 +328,9 @@ impl SlotMachine {
             return;
         };
         emit(SlotAction::Unsubscribe(window.assignment.tokens()));
-        emit(SlotAction::BookReset(window.assignment.up.instrument));
-        emit(SlotAction::BookReset(window.assignment.down.instrument));
+        for leg in &window.assignment.legs {
+            emit(SlotAction::BookReset(leg.instrument));
+        }
         self.phase = Phase::TornDown;
     }
 
@@ -341,8 +339,7 @@ impl SlotMachine {
             return;
         };
         let facts = ForceTeardownFacts {
-            up_instrument: window.assignment.up.instrument,
-            down_instrument: window.assignment.down.instrument,
+            instruments: window.assignment.legs.each_ref().map(|leg| leg.instrument),
             window_open_ts_us: window.assignment.window_open_ts_us,
             grace_age: now.diff(window.assignment.window_close_ts_us),
             tokens: window.assignment.tokens(),
@@ -362,7 +359,8 @@ impl SlotMachine {
 fn emit_subscribe(assignment: &WindowAssignment, emit: &mut impl FnMut(SlotAction)) {
     let tokens = assignment.tokens();
     emit(SlotAction::Subscribe(assignment.clone()));
-    for instrument in [assignment.up.instrument, assignment.down.instrument] {
+    for leg in &assignment.legs {
+        let instrument = leg.instrument;
         emit(SlotAction::Rotation(RotationFacts {
             instrument,
             window_open_ts_us: assignment.window_open_ts_us,
@@ -379,7 +377,8 @@ fn grace_decision(window: &mut LiveWindow, now: VenueTs, schedule: PolySchedule)
     if window.collapse_seen && silent {
         return GraceAction::Teardown;
     }
-    // Probe after nominal_end+delay OR on silence; reconnect still confirms via 404.
+    // A probe arms after the close and its delay, or on silence, so a reconnect that missed the
+    // collapse still ends the window by a 404.
     let armed = now >= schedule.grace_probe_start(window.assignment.window_close_ts_us);
     if !(armed || silent) || now < window.next_probe_ts_us {
         return GraceAction::Wait;

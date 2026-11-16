@@ -8,21 +8,22 @@ use crate::venues::edge::http::TransportError;
 use crate::venues::exec::{
     ExecRequest, ExecSessionError, Outgoing, PlaceNotSentReason, SessionOutcome,
 };
-use crate::{error, info, warn};
+use crate::{error, warn};
 
 use super::super::binding::BindingStep;
 use super::super::codec::{
     DecodeContext, KnownOrder, PlaceRequestContext, PlacementStatus, VenueAnswer, WireError,
     decode_cancel, decode_neg_risk, decode_place, decode_single_order,
 };
+use super::super::lanes::RestOutcome;
 use super::super::rest::ClobResponse;
-use super::rest::{OpenOrdersRead, RestOutcome, RestPurpose};
+use super::rest::{OpenOrdersRead, OrdersWalk, RestPurpose};
 use super::{Actor, Writer};
 
 impl Actor {
     pub(super) async fn on_rest_answer(
         &mut self,
-        outcome: Option<RestOutcome>,
+        outcome: Option<RestOutcome<RestPurpose>>,
         writer: &mut Writer,
     ) -> Option<SessionOutcome> {
         let outcome = outcome?;
@@ -31,7 +32,7 @@ impl Actor {
 
     pub(super) async fn on_rest_outcome(
         &mut self,
-        outcome: RestOutcome,
+        outcome: RestOutcome<RestPurpose>,
         writer: Option<&mut Writer>,
     ) -> Option<SessionOutcome> {
         let RestOutcome { purpose, answer } = outcome;
@@ -45,9 +46,9 @@ impl Actor {
                 self.on_core_answer(request_id, request, recon_seq, place, answer, writer)
                     .await
             }
-            RestPurpose::OpenOrders { read, page, seen } => match answer {
+            RestPurpose::OpenOrders { read, walk } => match answer {
                 Ok(response) => {
-                    self.on_open_orders_answer(read, page, seen, &response, writer)
+                    self.on_open_orders_answer(read, walk, &response, writer)
                         .await
                 }
                 Err(error) => {
@@ -58,11 +59,6 @@ impl Actor {
             },
             RestPurpose::Balance { asset, resync_seq } => {
                 self.on_balance(asset, resync_seq, answer);
-                None
-            }
-            RestPurpose::PriorRunCancel { venue_order_id } => {
-                let is_answered = read_body("prior-run cancel", &answer).is_some();
-                self.on_prior_run_cancelled(&venue_order_id, is_answered);
                 None
             }
             RestPurpose::Trades { resync_seq, page } => {
@@ -101,15 +97,6 @@ impl Actor {
                 self.on_heartbeat_answer(answer);
                 None
             }
-            RestPurpose::MarketCancel { instrument } => {
-                if let Some(body) = read_body("cancel-market-orders", &answer) {
-                    info!(
-                        "polymarket execution swept instrument {} at its window close: {body}",
-                        instrument.0
-                    );
-                }
-                None
-            }
         }
     }
 
@@ -143,7 +130,7 @@ impl Actor {
                 recon_seq,
             };
             return self
-                .on_open_orders_answer(read, 0, Vec::new(), &response, writer)
+                .on_open_orders_answer(read, OrdersWalk::default(), &response, writer)
                 .await;
         }
 
@@ -285,6 +272,9 @@ impl Actor {
                     .on_delayed(placed.client_id, self.control.clock.now());
             }
             self.drain_pending(outgoing);
+        }
+        if self.first_reads.take_read_after_answer(context.instrument) {
+            self.read_token_again(context.instrument);
         }
         vec![(received_ts_us, outcome.event)]
     }

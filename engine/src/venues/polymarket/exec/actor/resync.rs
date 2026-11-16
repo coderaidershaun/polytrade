@@ -1,29 +1,20 @@
 //! The quoting admission gate, and the one place that rebuilds state after a disconnect: the stream
 //! of this venue replays nothing, so what rests is read again.
-//!
-//! The hard question this file answers is what to do with an open order the run cannot name. At
-//! BOOT every such order predates the process and is swept, which is the binance cold-start rule.
-//! MID-RUN it is not: it may be the order whose placement answer was lost in transport, in which
-//! case adopting it is the only way the engine ever regains the ability to cancel it — and if
-//! nothing was placed there, it may be a person's order in the venue's own UI, which this engine
-//! never touches.
 
 use crate::msg::exec::{ExecCommand, ExecEvent, ExecKind, Provenance};
 use crate::msg::ids::{ClientOrderId, InstrumentId};
 use crate::msg::time::LocalTs;
 use crate::venues::edge::EdgeDriver;
-use crate::venues::exec::{
-    ExecSessionError, MirroredOrder, Outgoing, ResyncPoll, SessionOutcome, blank,
-};
+use crate::venues::exec::{ExecSessionError, MirroredOrder, Outgoing, ResyncPoll, SessionOutcome};
 use crate::{error, info, warn};
 
 use super::super::codec::{
-    KnownOrder, OrdersRead, UnmappedOrder, VenueAnswer, cancel_venue_order, decode_orders_page,
+    OrdersRead, UnattributableOrder, VenueAnswer, WireError, decode_orders_page,
     open_orders_for_token, open_orders_page, trades_page, venue_order_id_digest,
 };
-use super::super::correlate::{UnmappedVerdict, classify_unmapped};
+use super::super::lanes::{Lane, RestJob};
 use super::super::rest::ClobResponse;
-use super::rest::{Lane, OpenOrdersRead, RestJob, RestPurpose};
+use super::rest::{OpenOrdersRead, OrdersWalk, RestPurpose};
 use super::{Actor, Writer};
 
 /// Open orders, fills, and the balance sweep. The sweep counts as one read however many assets it
@@ -55,8 +46,7 @@ impl Actor {
     fn request_pass_reads(&mut self, resync_seq: u64) {
         let orders = RestPurpose::OpenOrders {
             read: OpenOrdersRead::Pass { resync_seq },
-            page: 0,
-            seen: Vec::new(),
+            walk: OrdersWalk::default(),
         };
         let mut is_queued = self
             .submit(
@@ -84,8 +74,7 @@ impl Actor {
     pub(super) async fn on_open_orders_answer(
         &mut self,
         read: OpenOrdersRead,
-        page: u32,
-        mut seen: Vec<ClientOrderId>,
+        mut walk: OrdersWalk,
         response: &ClobResponse,
         writer: Option<&mut Writer>,
     ) -> Option<SessionOutcome> {
@@ -102,6 +91,21 @@ impl Actor {
             Ok(VenueAnswer::Unavailable(availability)) => {
                 self.on_unavailable(availability);
                 self.fail_orders_read(read);
+                return None;
+            }
+            // An open order that this build cannot read leaves the mirror incomplete, and quoting
+            // against an incomplete mirror is what strands somebody's order.
+            Err(WireError::UndecodableOpenOrder {
+                venue_order_id,
+                source,
+            }) => {
+                error!(
+                    "polymarket execution cannot read open order {venue_order_id} ({source}) — the engine halts"
+                );
+                let digest = venue_order_id_digest(&venue_order_id);
+                let error = self.session.undecodable_open_order(digest.0);
+                self.fail_orders_read(read);
+                self.control.fail(error);
                 return None;
             }
             Err(error) => {
@@ -126,7 +130,7 @@ impl Actor {
             if !self.session.core.has_opened_quoting() {
                 mirrored.provenance = Provenance::PriorRun;
             }
-            seen.push(mirrored.client_id);
+            walk.seen.push(mirrored.client_id);
             if let Err(error) = self.session.core.observe_venue_order(mirrored) {
                 error!(
                     "polymarket execution cannot retain venue order {:016x} in its possibly-live set ({error:?}) — quoting is disabled",
@@ -141,26 +145,22 @@ impl Actor {
             }
         }
         for unmapped in &decoded.unmapped {
-            self.on_unmapped_order(unmapped, &mut outgoing);
+            let token_read = self.first_reads.read_of(unmapped.instrument);
+            let verdict =
+                self.on_unmapped_order(unmapped, token_read, received_ts_us, &mut outgoing);
+            walk.verdicts.push(verdict);
         }
-        // At boot, an order on a token that isn't bound yet decodes to no instrument; the
-        // cold-start rule cancels it by venue id anyway. Mid-run the same order is left
-        // alone instead, since it simply belongs to a market this engine doesn't trade.
-        if !self.session.core.has_opened_quoting() {
-            for record in &decoded.unattributable {
-                self.cancel_prior_run_order(&record.venue_order_id);
-            }
-        }
+        self.leave_unattributable_alone(&decoded.unattributable);
         for event in events {
             if let Err(error) = self.session.fold(&event, recon_seq, &mut outgoing) {
                 self.control.fail(error);
             }
             self.forward_exec(received_ts_us, event);
         }
-        if self.next_orders_page(read, page, &seen, decoded.next_cursor.as_deref())
-            == PageWalk::Complete
+        if self.next_orders_page(read, &walk, decoded.next_cursor.as_deref()) == PageWalk::Complete
         {
-            self.probe_missing(&seen, read, &mut outgoing);
+            self.end_first_read(read, &walk);
+            self.probe_missing(&walk.seen, read, &mut outgoing);
             if let OpenOrdersRead::Pass { resync_seq } = read {
                 self.settle_pass_read(Some(resync_seq));
             }
@@ -178,14 +178,13 @@ impl Actor {
     fn next_orders_page(
         &mut self,
         read: OpenOrdersRead,
-        page: u32,
-        seen: &[ClientOrderId],
+        walk: &OrdersWalk,
         cursor: Option<&str>,
     ) -> PageWalk {
         let Some(cursor) = cursor else {
             return PageWalk::Complete;
         };
-        if page + 1 >= MAX_PAGES {
+        if walk.page + 1 >= MAX_PAGES {
             warn!(
                 "polymarket execution stopped walking its open orders at {MAX_PAGES} pages — the rest of the account goes unread and its own orders are probed individually"
             );
@@ -206,8 +205,7 @@ impl Actor {
         };
         let next = RestPurpose::OpenOrders {
             read,
-            page: page + 1,
-            seen: seen.to_vec(),
+            walk: walk.next_page(),
         };
         if !self
             .submit(Lane::Control, RestJob::signed(next, request))
@@ -237,116 +235,39 @@ impl Actor {
         }
     }
 
-    /// An order resting under an id this run never recorded.
-    fn on_unmapped_order(&mut self, unmapped: &UnmappedOrder, outgoing: &mut Vec<Outgoing>) {
-        if !self.session.core.has_opened_quoting() {
-            self.cancel_prior_run_order(&unmapped.venue_order_id);
+    /// Only the walk of a fresh-binding read ends the first read of its token, and only while that
+    /// token is still bound: a pass, or a read of a token since rebound, may not have named the
+    /// orders of the token that is bound now.
+    fn end_first_read(&mut self, read: OpenOrdersRead, walk: &OrdersWalk) {
+        let (OpenOrdersRead::FreshBinding { instrument }, Some(token_id)) =
+            (read, walk.fresh_token.as_deref())
+        else {
             return;
-        }
-        let verdict = classify_unmapped(self.session.core.mirror(), unmapped, |client_id| {
-            self.orders.venue_order_id(client_id).is_some()
-        });
-        let client_id = match verdict {
-            UnmappedVerdict::Adopt(client_id) => client_id,
-            // A placement on this side is still in flight. The resync re-reads once it answers, and
-            // by then our own order carries its venue id, so this one is left alone rather than
-            // adopted into our slot.
-            UnmappedVerdict::Defer => return,
-            UnmappedVerdict::LeaveAlone => {
-                self.counts.unmapped_left_alone += 1;
-                warn!(
-                    "polymarket execution left an unmapped order alone on instrument {}: {:?} {} @ {} (venue id {}) — nothing this run placed matches it",
-                    unmapped.instrument.0,
-                    unmapped.side,
-                    unmapped.qty.mantissa(),
-                    unmapped.price.mantissa(),
-                    unmapped.venue_order_id
-                );
-                return;
-            }
         };
-        self.counts.adopted += 1;
+        let is_still_bound = self
+            .tokens
+            .live_binding(instrument)
+            .is_some_and(|binding| &*binding.token_id == token_id);
+        if is_still_bound {
+            self.first_reads
+                .on_read_answered(instrument, &walk.verdicts);
+        }
+    }
+
+    /// An order on a token that no binding names belongs to a market this engine does not trade,
+    /// or to a window whose token is not bound yet; its own first read decides then.
+    fn leave_unattributable_alone(&mut self, unattributable: &[UnattributableOrder]) {
+        let Some(first) = unattributable.first() else {
+            return;
+        };
+        for _ in unattributable {
+            self.session.core.count_foreign_order();
+        }
         warn!(
-            "polymarket execution adopted venue order {} as {:016x} — its placement answer never arrived",
-            unmapped.venue_order_id, client_id.0
+            "polymarket execution left {} open order(s) alone on tokens that no binding names, venue id {} among them",
+            unattributable.len(),
+            first.venue_order_id
         );
-        if let Err(error) = self.orders.record(
-            &unmapped.venue_order_id,
-            KnownOrder {
-                client_id,
-                instrument: unmapped.instrument,
-            },
-        ) {
-            error!(
-                "polymarket execution could not record the adopted order {}: {error}",
-                unmapped.venue_order_id
-            );
-            return;
-        }
-        let (received_ts_us, event) = self.adopted_event(unmapped, client_id);
-        if let Err(error) = self.session.fold(&event, 0, outgoing) {
-            self.control.fail(error);
-        }
-        self.forward_exec(received_ts_us, event);
-        self.drain_pending(outgoing);
-    }
-
-    /// Cancels a prior run's order by its venue id, since there is no client id to mint for
-    /// it. Readiness waits for the answer, and quoting never opens over it. Keying on the
-    /// venue id rather than the instrument matters because the instrument may still be unbound.
-    fn cancel_prior_run_order(&mut self, venue_order_id: &str) {
-        let Ok(request) = cancel_venue_order(venue_order_id) else {
-            return;
-        };
-        info!("polymarket execution cancelling a prior run's order {venue_order_id}");
-        let purpose = RestPurpose::PriorRunCancel {
-            venue_order_id: venue_order_id.into(),
-        };
-        if self
-            .submit(Lane::Control, RestJob::signed(purpose, request))
-            .is_queued()
-        {
-            self.prior_run_cancels += 1;
-        }
-    }
-
-    pub(super) fn on_prior_run_cancelled(&mut self, venue_order_id: &str, is_answered: bool) {
-        self.prior_run_cancels = self.prior_run_cancels.saturating_sub(1);
-        if !is_answered {
-            warn!(
-                "polymarket execution could not cancel the prior run's order {venue_order_id} — it may still be resting"
-            );
-        }
-        self.finish_readiness_if_clean();
-    }
-
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
-    )]
-    fn adopted_event(
-        &self,
-        unmapped: &UnmappedOrder,
-        client_id: ClientOrderId,
-    ) -> (LocalTs, ExecEvent) {
-        let now = self.control.clock.now();
-        let event = ExecEvent {
-            venue_order_id: Some(venue_order_id_digest(&unmapped.venue_order_id)),
-            status: Some(unmapped.status),
-            side: unmapped.side,
-            price: unmapped.price,
-            qty: unmapped.qty,
-            cumulative_qty: unmapped.filled,
-            cumulative_quote: unmapped.price.notional(unmapped.filled),
-            amends_remaining: ExecEvent::AMENDS_EXHAUSTED,
-            ..blank(
-                ExecKind::SnapshotOrder,
-                Some(unmapped.instrument),
-                client_id,
-                now,
-            )
-        };
-        (now, event)
     }
 
     /// Absence from the read could mean fill or lag, so each mirrored order the read never named is
@@ -415,32 +336,48 @@ impl Actor {
         self.session.resync.on_failure(resync_seq, retry_at);
     }
 
-    /// Quoting opens once the pass has finished, no prior-run order is resting and every prior-run
-    /// cancel has answered. The cancels are checked first because arming moves the core's phase.
+    /// Quoting opens once the pass has finished.
     #[expect(
         clippy::disallowed_methods,
         reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
     )]
     pub(super) fn finish_readiness_if_clean(&mut self) {
-        if self.prior_run_cancels > 0 {
+        // After a heartbeat reset the venue may cancel the book at any moment, so quoting waits for
+        // a beat that the venue answers.
+        if self
+            .heartbeat
+            .as_ref()
+            .is_some_and(|schedule| schedule.is_placing_held())
+        {
             return;
         }
         if self.session.arm_readiness(self.control.clock.now()) {
-            info!("polymarket execution quoting — state re-read and nothing inherited is resting");
+            info!("polymarket execution quoting — the state of the venue was read again");
         }
     }
 
-    /// New bindings may hold orders from before a reconnect. Checked once outside the main pass.
+    /// New bindings may hold orders from before a reconnect. Checked outside the main pass.
     pub(super) fn read_bound_token(&mut self, instrument: InstrumentId, token_id: &str) {
-        // A drop here costs the one-off check; the lane's own warning names it, and the next resync
-        // pass reads the same orders account-wide.
+        // A drop here leaves the first read of the token due, and the lane's own warning names it,
+        // so the next resync pass reads the same orders account-wide as a first read.
         let purpose = RestPurpose::OpenOrders {
             read: OpenOrdersRead::FreshBinding { instrument },
-            page: 0,
-            seen: Vec::new(),
+            walk: OrdersWalk::of_fresh_token(token_id),
         };
         let request = open_orders_for_token(token_id, None);
         let _dropped = self.submit(Lane::Control, RestJob::signed(purpose, request));
+    }
+
+    /// A first read that deferred an order waits for this read, after the placement answered.
+    pub(super) fn read_token_again(&mut self, instrument: InstrumentId) {
+        let Some(token_id) = self
+            .tokens
+            .live_binding(instrument)
+            .map(|binding| binding.token_id.clone())
+        else {
+            return;
+        };
+        self.read_bound_token(instrument, &token_id);
     }
 }
 

@@ -22,14 +22,15 @@ use crate::msg::run_state::RunState;
 use crate::msg::time::{EngineClock, LocalTs};
 use crate::runtime::config::PolySeries;
 use crate::runtime::registry::{InstrumentRow, ProducerGroup};
-use crate::runtime::shutdown::{FatalReason, FatalSignal, RunStateCell, TaskHandle};
+use crate::runtime::shutdown::{FatalSignal, RunStateCell, TaskHandle};
 use crate::venues::edge::backoff::BackoffCaps;
+use crate::venues::edge::fault::MarketDataError;
 use crate::venues::edge::lane::{Flow, Lane, LaneSpec, SessionEnd, run_lane};
 use crate::venues::edge::rest_quiet::RestQuiet;
-use crate::{error, warn};
+use crate::warn;
 
 use super::discovery::{PolySchedule, Slot};
-use super::parse::{is_frameless, parse_market_frame};
+use super::parse::{ParseError, is_frameless, parse_market_frame};
 use super::rest::PolyRest;
 use super::rotation::WindowAssignment;
 use super::ws;
@@ -88,6 +89,7 @@ struct Actor {
     dropped_frames: u64,
     suppressed_rest: u64,
     divergences: u64,
+    suspects: u64,
     label: String,
 }
 
@@ -126,6 +128,7 @@ impl Actor {
             dropped_frames: 0,
             suppressed_rest: 0,
             divergences: 0,
+            suspects: 0,
             label: series.as_str().to_owned(),
         };
         (actor, results_rx)
@@ -215,42 +218,45 @@ impl Actor {
         &mut self,
         frame: Option<Result<Message, ProtocolError>>,
         writer: &mut Writer,
-    ) -> Flow {
+    ) -> Result<Flow, MarketDataError> {
         match frame {
             Some(Ok(Message::Text(text))) => {
                 let now = self.clock.now();
                 self.on_text(text.as_str(), now, writer).await
             }
-            Some(Ok(Message::Close(_))) | None => Flow::Reconnect,
-            Some(Ok(_)) => Flow::Continue,
+            Some(Ok(Message::Close(_))) | None => Ok(Flow::Reconnect),
+            Some(Ok(_)) => Ok(Flow::Continue),
             Some(Err(error)) => {
                 warn!("polymarket adapter {} stream: {error}", self.label);
-                Flow::Reconnect
+                Ok(Flow::Reconnect)
             }
         }
     }
 
-    async fn on_text(&mut self, text: &str, now: LocalTs, writer: &mut Writer) -> Flow {
+    async fn on_text(
+        &mut self,
+        text: &str,
+        now: LocalTs,
+        writer: &mut Writer,
+    ) -> Result<Flow, MarketDataError> {
         if is_frameless(text) {
-            return Flow::Continue;
+            return Ok(Flow::Continue);
         }
-        match parse_market_frame(text, now) {
-            Ok(frame) => {
-                let effects = collect_effects(|emit| self.core.on_frame(now, &frame, emit));
-                self.execute(effects, writer).await
-            }
-            Err(error) if error.is_fatal() => {
-                error!("polymarket adapter {} fatal parse: {error}", self.label);
-                self.fatal.trip(FatalReason::MarketDataUnreadable {
-                    source_id: self.producer.source_id(),
-                });
-                Flow::Reconnect
-            }
+        let frame = match parse_market_frame(text, now) {
+            Ok(frame) => frame,
             Err(error) => {
+                if let ParseError::Decode(fault) = &error
+                    && let Some(fault) =
+                        MarketDataError::of_decimal_fault(self.producer.source_id(), fault)
+                {
+                    return Err(fault);
+                }
                 self.on_parse_error(error);
-                Flow::Continue
+                return Ok(Flow::Continue);
             }
-        }
+        };
+        let effects = collect_effects(|emit| self.core.on_frame(now, &frame, emit));
+        Ok(self.execute(effects, writer).await)
     }
 
     async fn drive_tick(&mut self, now: LocalTs, writer: &mut Writer) -> Flow {
@@ -350,7 +356,10 @@ impl Lane for MarketLane {
                 return SessionEnd::Parked;
             }
             let flow = tokio::select! {
-                frame = reader.next() => actor.on_socket_message(frame, &mut writer).await,
+                frame = reader.next() => match actor.on_socket_message(frame, &mut writer).await {
+                    Ok(flow) => flow,
+                    Err(fault) => return SessionEnd::Halted(fault),
+                },
                 _ = self.ticks.tick() => {
                     let now = actor.clock.now();
                     actor.drive_tick(now, &mut writer).await

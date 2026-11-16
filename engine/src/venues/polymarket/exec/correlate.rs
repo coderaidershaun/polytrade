@@ -2,20 +2,12 @@
 //! frames for an order not yet named wait here, and an alert fires when one waits too long.
 
 use crate::msg::exec::{ExecEvent, ExecKind, Provenance};
-use crate::msg::ids::ClientOrderId;
-use crate::msg::time::{DurationUs, LocalTs};
-use crate::venues::exec::{ExecEffect, ExecRequest, MirroredOrder, RequestId};
+use crate::msg::ids::{ClientOrderId, InstrumentId};
+use crate::msg::time::LocalTs;
+use crate::venues::exec::{ExecEffect, ExecRequest, MirroredOrder, RequestId, blank};
 
-use super::codec::UnmappedOrder;
-
-// Held frames pending order id mappings. Small because the window is one HTTP round trip; excess signals a venue storm.
-pub const PENDING_CAPACITY: usize = 128;
-
-// TTL for held frames. Long enough for placement answer + recovery resync; short enough to report unmapped fills while actionable.
-pub const PENDING_TTL: DurationUs = DurationUs::from_micros(10_000_000);
-
-// Venue taker hold + wire latency. Cancels sent during this window are refused (hard reject cost).
-pub const DELAYED_HOLD: DurationUs = DurationUs::from_micros(300_000);
+use super::codec::{UnmappedOrder, venue_order_id_digest};
+use super::facts::POLYMARKET_FACTS;
 
 /// A user-stream frame whose order this run cannot yet name.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,7 +33,7 @@ impl Default for PendingFrames {
 impl PendingFrames {
     pub fn new() -> Self {
         Self {
-            frames: Vec::with_capacity(PENDING_CAPACITY),
+            frames: Vec::with_capacity(POLYMARKET_FACTS.held_frame_capacity),
             dropped: 0,
             abandoned: 0,
         }
@@ -80,7 +72,7 @@ impl PendingFrames {
     pub fn expired(&mut self, now: LocalTs) -> Vec<HeldFrame> {
         let mut expired = Vec::new();
         self.frames.retain(|frame| {
-            let is_live = now.diff(frame.held_since) < PENDING_TTL;
+            let is_live = now.diff(frame.held_since) < POLYMARKET_FACTS.held_frame_lifetime;
             if !is_live {
                 expired.push(frame.clone());
             }
@@ -91,7 +83,7 @@ impl PendingFrames {
     }
 
     pub fn re_hold(&mut self, frame: HeldFrame) {
-        if self.frames.len() >= PENDING_CAPACITY {
+        if self.frames.len() >= POLYMARKET_FACTS.held_frame_capacity {
             self.frames.remove(0);
             self.dropped += 1;
         }
@@ -140,10 +132,10 @@ impl DelayedOrders {
         self.withholds
     }
 
-    /// The venue accepted a placement it will not match for another 250 ms and will not cancel
-    /// during.
+    /// The venue accepted a placement that it will not match until its taker hold passes, and will
+    /// not cancel before then.
     pub fn on_delayed(&mut self, client_id: ClientOrderId, answered_at: LocalTs) {
-        let release_at = answered_at + DELAYED_HOLD;
+        let release_at = answered_at + POLYMARKET_FACTS.taker_hold + POLYMARKET_FACTS.wire_margin;
         match self
             .holds
             .iter_mut()
@@ -208,22 +200,102 @@ pub fn restates_balances(event: &ExecEvent) -> bool {
     }
 }
 
-/// What to do with an open order resting under an id this run never recorded.
+/// Which read of its token named the order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenRead {
+    /// A read of the token from its binding until its first read ends. Only a fresh-binding read
+    /// of the token, while it is still bound and with no order deferred, ends it ([`FirstReads`]).
+    First,
+    /// A read of the token after its first read ended.
+    Quoted,
+}
+
+/// The tokens whose first read has not ended. A first read ends only at a read of the token in
+/// which no unknown order deferred: a deferred order waits for the answer of a placement of this
+/// run, so the read after that answer is the first read that can tell it unproven.
+#[derive(Debug, Default)]
+pub struct FirstReads {
+    tokens: Vec<(InstrumentId, FirstRead)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FirstRead {
+    Due,
+    /// A first read deferred an order, so the next answer of a placement there asks for a read.
+    Deferred,
+}
+
+impl FirstReads {
+    /// A newly bound token is due its first read: orders can rest on it from before the binding.
+    pub fn on_bound(&mut self, instrument: InstrumentId) {
+        match self.state_mut(instrument) {
+            Some(state) => *state = FirstRead::Due,
+            None => self.tokens.push((instrument, FirstRead::Due)),
+        }
+    }
+
+    pub fn read_of(&self, instrument: InstrumentId) -> TokenRead {
+        match self.tokens.iter().any(|(due, _)| *due == instrument) {
+            true => TokenRead::First,
+            false => TokenRead::Quoted,
+        }
+    }
+
+    /// `verdicts` holds the verdict on each unknown order of the token that the read named.
+    pub fn on_read_answered(&mut self, instrument: InstrumentId, verdicts: &[UnmappedVerdict]) {
+        if !verdicts.contains(&UnmappedVerdict::Defer) {
+            self.tokens.retain(|(due, _)| *due != instrument);
+            return;
+        }
+        if let Some(state) = self.state_mut(instrument) {
+            *state = FirstRead::Deferred;
+        }
+    }
+
+    /// Whether the answer of a placement on this instrument asks for one more read of its token:
+    /// once after each first read that deferred an order.
+    pub fn take_read_after_answer(&mut self, instrument: InstrumentId) -> bool {
+        match self.state_mut(instrument) {
+            Some(state) if *state == FirstRead::Deferred => {
+                *state = FirstRead::Due;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn state_mut(&mut self, instrument: InstrumentId) -> Option<&mut FirstRead> {
+        self.tokens
+            .iter_mut()
+            .find(|(due, _)| *due == instrument)
+            .map(|(_, state)| state)
+    }
+}
+
+/// What to do with an open order resting under an id this run never recorded. On this venue the
+/// same credentials reach the website's own order entry, so no verdict cancels the order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnmappedVerdict {
-    /// This run placed it and lost the answer; adopt it under this client id to regain the ability
-    /// to cancel it.
+    /// This run placed it and lost the answer: exactly one lost slot equals it in instrument, side,
+    /// price, and original size. Adopt it under that client id to regain the ability to cancel it.
     Adopt(ClientOrderId),
     /// A placement on this side is still in flight, so the order its answer will name cannot be told
     /// apart from a person's own order on the same side. Neither is classified until the place
-    /// answers or times out — the resync pass re-reads and decides then.
+    /// answers or times out — the resync pass re-reads and decides then. At a first read, the
+    /// answer of the place also asks for one more read of the token, which is still a first read.
     Defer,
-    /// Nothing this run placed explains it. On this venue the same credentials reach the website's
-    /// own order entry, and cancelling a person's order is not a recovery.
+    /// A read of a token already quoted, and no lost slot equals the order, or more than one does.
+    /// A lost slot stays ambiguous, and its status probes settle it.
     LeaveAlone,
+    /// The first read of its token, and no placement of this run explains the order. It may be an
+    /// order of an earlier run of this engine, whose fills the fold could not book, or a person's.
+    /// Quoting halts, and a person decides.
+    Unproven,
 }
 
-/// Classify an order resting under an id this run never recorded.
+/// Classify an order resting under an id this run never recorded. The rules apply in order: a
+/// placement in flight on the side defers, one equal lost slot adopts, and any other order is
+/// unproven at the first read of its token and left alone at a later one.
 ///
 /// The deferral is the whole point. A placement whose POST is still outstanding has a mirror entry
 /// that is [`Provenance::Mine`], carries no venue id yet, and is NOT ambiguous — its answer is still
@@ -231,11 +303,13 @@ pub enum UnmappedVerdict {
 /// a person's order at the venue, and adopting either is wrong: adopting the person's binds a second
 /// venue id to our slot the moment our own answer lands, double-folding the position. Only once a
 /// placement's answer will never come — it timed out or the transport failed, which marks the mirror
-/// entry ambiguous — is an unmapped order on the side safe to adopt.
+/// entry ambiguous — is an unmapped order on the side safe to adopt, and then only by an exact match
+/// to one such entry.
 pub fn classify_unmapped(
     mirror: &[MirroredOrder],
     unmapped: &UnmappedOrder,
     has_venue_id: impl Fn(ClientOrderId) -> bool,
+    read: TokenRead,
 ) -> UnmappedVerdict {
     let place_in_flight = mirror.iter().any(|order| {
         order.instrument == unmapped.instrument
@@ -247,38 +321,55 @@ pub fn classify_unmapped(
     if place_in_flight {
         return UnmappedVerdict::Defer;
     }
-    match adoption_candidate(mirror, unmapped, has_venue_id) {
-        Some(client_id) => UnmappedVerdict::Adopt(client_id),
-        None => UnmappedVerdict::LeaveAlone,
+    match (adoption_candidate(mirror, unmapped, has_venue_id), read) {
+        (Some(client_id), _) => UnmappedVerdict::Adopt(client_id),
+        (None, TokenRead::First) => UnmappedVerdict::Unproven,
+        (None, TokenRead::Quoted) => UnmappedVerdict::LeaveAlone,
     }
 }
 
-/// Which of this run's orders an unmapped resting order might BE.
+/// The message that halts quoting for an unproven order. It names the order by its venue id, side,
+/// price, and size, and by no client id, since this run minted none for it.
+pub fn unproven_order_event(unmapped: &UnmappedOrder, received_ts_us: LocalTs) -> ExecEvent {
+    ExecEvent {
+        venue_order_id: Some(venue_order_id_digest(&unmapped.venue_order_id)),
+        provenance: Provenance::Foreign,
+        side: unmapped.side,
+        price: unmapped.price,
+        qty: unmapped.qty,
+        cumulative_qty: unmapped.filled,
+        ..blank(
+            ExecKind::UnprovenOrder,
+            Some(unmapped.instrument),
+            ClientOrderId(0),
+            received_ts_us,
+        )
+    }
+}
+
+/// The one lost slot of this run that an unmapped resting order IS, when exactly one can be.
 ///
-/// A candidate is one this run placed on the same instrument and side whose venue id never came
-/// back — that is exactly the order a lost placement answer leaves behind, and adopting it is the
-/// only way the engine regains the ability to cancel it. Price and size break a tie, because a
-/// ladder can hold more than one such slot.
+/// A candidate is an order this run placed whose venue id never came back, on the same instrument
+/// and side, at the same price and original size: the order that a lost placement answer leaves
+/// behind. Adopting it is the only way the engine regains the ability to cancel it.
 ///
-/// `None` means nothing this run placed explains the order. The gate above admits only slots whose
-/// answer is no longer coming, so a live in-flight placement never reaches here.
+/// `None` when no slot equals the order, or when two or more do. A near match can be a person's
+/// order, and a pick between two equal slots binds the fills of one order to the slot of another.
+/// The gate above admits only slots whose answer is no longer coming, so a live in-flight placement
+/// never reaches here.
 fn adoption_candidate(
     mirror: &[MirroredOrder],
     unmapped: &UnmappedOrder,
     has_venue_id: impl Fn(ClientOrderId) -> bool,
 ) -> Option<ClientOrderId> {
-    let candidates: Vec<&MirroredOrder> = mirror
-        .iter()
-        .filter(|order| {
-            order.instrument == unmapped.instrument
-                && order.side == unmapped.side
-                && order.provenance == Provenance::Mine
-                && !has_venue_id(order.client_id)
-        })
-        .collect();
-    candidates
-        .iter()
-        .find(|order| order.price == unmapped.price && order.qty == unmapped.qty)
-        .or_else(|| candidates.first())
-        .map(|order| order.client_id)
+    let mut equal = mirror.iter().filter(|order| {
+        order.instrument == unmapped.instrument
+            && order.side == unmapped.side
+            && order.provenance == Provenance::Mine
+            && !has_venue_id(order.client_id)
+            && order.price == unmapped.price
+            && order.qty == unmapped.qty
+    });
+    let only = equal.next()?;
+    equal.next().is_none().then_some(only.client_id)
 }

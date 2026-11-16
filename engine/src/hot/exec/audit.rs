@@ -178,7 +178,10 @@ fn transition_of(kind: ExecKind) -> Option<OrderTransition> {
         ExecKind::ReportRejected => Some(OrderTransition::ReportRejected),
         ExecKind::ReportAmended => Some(OrderTransition::ReportAmended),
         ExecKind::SnapshotOrder => Some(OrderTransition::SnapshotOrder),
-        ExecKind::SnapshotEnd | ExecKind::StreamReset | ExecKind::StreamReady => None,
+        ExecKind::SnapshotEnd
+        | ExecKind::StreamReset
+        | ExecKind::StreamReady
+        | ExecKind::UnprovenOrder => None,
     }
 }
 

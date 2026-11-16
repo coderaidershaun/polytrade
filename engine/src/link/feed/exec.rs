@@ -99,6 +99,7 @@ wire_enum! {
     (HaltReason::StreamSilent) = 12,
     (HaltReason::WriterFailed) = 13,
     (HaltReason::PriorRunFillUnbooked) = 14,
+    (HaltReason::UnprovenOrderResting) = 15,
 }
 
 const REJECT_LOCAL: u8 = 1;

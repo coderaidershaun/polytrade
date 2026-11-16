@@ -13,6 +13,10 @@ pub enum RejectSubject {
     StatusQuery,
 }
 
+/// The code of the simulator's refusal of an order style that it cannot model. Binance documents
+/// only negative codes, so no venue sends this one, and a refusal with it can only be simulated.
+pub(crate) const SIMULATOR_UNMODELLED_STYLE: i32 = 9_001;
+
 /// Classifies a Binance error code into a reject class. Public because the driver classifies
 /// transport failures (no answer at all) separately, and the two classifications must agree.
 pub fn classify_error(code: i32, message: &str, subject: RejectSubject) -> RejectClass {
@@ -20,11 +24,14 @@ pub fn classify_error(code: i32, message: &str, subject: RejectSubject) -> Rejec
         // The gateway rejected this before it reached the match engine, so the order's state
         // is unchanged; the engine's normal spin cadence will simply retry it.
         -1003 | -1021 | -1015 => RejectClass::StillLive,
-        // Binance calls this "execution status unknown" — the request may have gone through.
-        // A placement is Ambiguous under that doubt; every other request type stays StillLive.
+        // Binance calls this "execution status unknown": the request can have run, or not. A
+        // placement, a cancel, or an amend is then Ambiguous, so the edge reads the order before
+        // any second one, and never sends it again. A read changes nothing, so it stays StillLive.
         -1006 | -1007 => match subject {
-            RejectSubject::Placement => RejectClass::Ambiguous,
-            _ => RejectClass::StillLive,
+            RejectSubject::Placement | RejectSubject::Cancellation | RejectSubject::Amendment => {
+                RejectClass::Ambiguous
+            }
+            RejectSubject::StatusQuery => RejectClass::StillLive,
         },
         // The amend was refused but the order is still resting. The specific reason is read
         // from the message text by amend_budget_remaining().
@@ -34,6 +41,9 @@ pub fn classify_error(code: i32, message: &str, subject: RejectSubject) -> Rejec
         // went unnoticed.
         -1013 => RejectClass::Fatal,
         -1022 | -2015 | -2014 => RejectClass::Fatal,
+        // The simulator refused a style that it cannot model, and it would refuse the same order
+        // again, so the run halts quoting as at a code with no mapping.
+        SIMULATOR_UNMODELLED_STYLE => RejectClass::Fatal,
         -2010 => insufficient_balance_or_cross(message),
         // Binance's "unknown order sent" collides with an order that has actually FILLED.
         // Reading this as Gone would leave the ledger wrong forever, so it is probed instead.

@@ -162,9 +162,11 @@ Go ahead and select you jupyter notebook and start analysing data.
 
 ## Live Tests
 
-Live-network tests live in `engine/tests/integration/`. They are `#[ignore]`d and never run in CI. Only the `live-runner` role of a job runs a signed test or the probe, by a runbook and the live policy. An agent runs a public read only where a plan names it, by its exact name and with an empty environment.
+Live-network tests live in `engine/tests/integration/`. They are `#[ignore]`d and never run in CI. Only the `live-runner` role of a job runs a signed test or the probe, by a runbook and the live policy. It runs them at the live venue. An agent runs a public read only where a plan names it, in the role that the plan names. It starts the test binary by its path, with the exact name of the test. The run starts in an empty folder outside each checkout, and its environment is empty except `PATH`, `HOME`, and `TMPDIR`.
 
 The signed tests of `engine/tests/integration/binance_recording.rs` record a small order on live Binance spot, cancel by the client order id of the test, sell back the base above the start, and read the venue before and after. Each has a dry-run form, and a dry run is a live run too, because it loads the live keys. Their runbook sections are in `engine/tests/integration/README.md`. No README holds a command that runs them: the run commands stay in the runbook of the job that runs them.
+
+The signed tests of `engine/tests/integration/poly_live/` place one small post-only order on live Polymarket and cancel it by its own venue order id. The folder also holds the reads of the venue before and after, a kill switch that cancels only the orders of these tests, and a rollback. One test of that folder, a cancel beside a held marketable placement, stops in code at the cap of one order for each side, so it does not run under the live policy. `engine/tests/integration/binance_silence.rs` rests one small post-only order on live Binance spot, and reads it back while the order stream stays silent. Its kill switch, rollback, and reads are those of `binance_recording.rs`. Each of these tests has a dry-run form, and only the `live-runner` role runs them. The one public read of this part is the live capture of Polymarket, `poly_rotation_capture_spans_two_rotations_with_zero_gap_handover`, which the verifier of the job runs.
 
 ## Architecture
 

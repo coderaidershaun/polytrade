@@ -19,7 +19,8 @@ use super::super::codec::{
     encode_request, subscribe_user_stream,
 };
 use super::super::correlate::{WithheldCancel, restates_balances};
-use super::rest::{Lane, RestJob, RestPurpose, Submitted};
+use super::super::lanes::{Lane, RestJob, Submitted};
+use super::rest::RestPurpose;
 use super::{Actor, Writer};
 
 impl Actor {
@@ -376,6 +377,8 @@ impl Actor {
         if restates_balances(&event) {
             self.restate_balances();
         }
+        self.orders
+            .record_matched(event.client_id, event.cumulative_qty);
         self.session.events.send_exec(received_ts_us, event);
     }
 }

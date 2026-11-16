@@ -1,6 +1,7 @@
 //! One process from start to stop: the data and latches that each part of the engine shares, and
 //! the assembly that wires those parts at start and tears them down.
 
+pub mod artifacts;
 pub mod config;
 mod durable_file;
 pub mod exposure;

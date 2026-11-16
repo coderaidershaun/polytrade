@@ -1,7 +1,7 @@
 //! End-of-run simulator counters.
 
 use super::super::core::queue::QueueAhead;
-use super::super::core::{SimEmission, VenueEvent};
+use super::super::core::{RefusalReason, SimEmission, UnmatchedPrints, VenueEvent};
 use super::SimExecDriver;
 use crate::info;
 
@@ -9,6 +9,8 @@ use crate::info;
 pub(super) struct SimRunSummary {
     joins: u64,
     refusals: u64,
+    /// Placements of a style that the simulator cannot model, which the run therefore never filled.
+    refused_styles: u64,
     fills: u64,
     full_fills: u64,
     cancels: u64,
@@ -20,16 +22,17 @@ pub(super) struct SimRunSummary {
 
 impl SimExecDriver {
     pub fn log_summary(&self) {
-        self.summary.log();
+        self.summary.log(self.venue.unmatched_prints());
     }
 }
 
 impl SimRunSummary {
-    fn log(&self) {
+    fn log(&self, unmatched: UnmatchedPrints) {
         info!(
-            "sim SUMMARY joins={} refusals={} fills={} full_fills={} cancels={} amends={} resets={} filled_base={} filled_quote={}",
+            "sim SUMMARY joins={} refusals={} refused_styles={} fills={} full_fills={} cancels={} amends={} resets={} filled_base={} filled_quote={}",
             self.joins,
             self.refusals,
+            self.refused_styles,
             self.fills,
             self.full_fills,
             self.cancels,
@@ -37,6 +40,13 @@ impl SimRunSummary {
             self.resets,
             self.filled_base,
             self.filled_quote
+        );
+        info!(
+            "sim UNMATCHED PRINTS suspended={} before_last_commit={} stale_id={} epoch_seed={}",
+            unmatched.suspended,
+            unmatched.before_last_commit,
+            unmatched.stale_id,
+            unmatched.epoch_seed
         );
     }
 
@@ -70,6 +80,9 @@ impl SimRunSummary {
             }
             VenueEvent::PlaceRefused { snapshot, reason } => {
                 self.refusals += 1;
+                if matches!(reason, RefusalReason::UnmodelledStyle { .. }) {
+                    self.refused_styles += 1;
+                }
                 info!(
                     "sim REFUSE client={} side={:?} price={} reason={reason:?}",
                     snapshot.order.client_id.0,

@@ -1,20 +1,15 @@
-//! Polymarket execution edge. `sign` holds the venue's three signature schemes; `codec` is the
-//! wire boundary those signatures are composed into; `rest` is the one signed transport all of them
-//! reach the venue through; `probe` is the read-only account report that has to come back clean
-//! before any order-mutating code runs; `actor` is the driver; `handle` is the seam the engine
-//! wires — its startup gate and the actor setup behind it.
-//!
-//! `correlate` and `binding` sit beside the codec rather than inside the driver because they are
-//! the same kind of thing it is: pure state, no socket and no clock, every decision a function of
-//! stamped inputs. What an order id means on a venue that mints its own, and which token a leg is
-//! trading this window, are this venue's two hardest questions — and neither needs a driver to
-//! answer.
+//! The Polymarket execution edge: signatures, codec, signed transport, start gate, and driver.
+//! Order ids and token bindings sit beside the codec as pure state, so a test needs no driver.
 
 mod actor;
+pub mod assess;
 pub mod binding;
 pub mod codec;
 pub mod correlate;
+pub mod facts;
 pub mod handle;
+pub mod heartbeat;
+pub mod lanes;
 mod preflight;
 pub mod probe;
 pub mod rest;

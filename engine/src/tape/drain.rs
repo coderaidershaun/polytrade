@@ -1,7 +1,7 @@
 //! Writer thread: drain the record ring into one Parquet writer per table, sealing on interval, row
 //! cap, hour cross, or shutdown. Dedicated thread (encode and fsync both block).
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -13,7 +13,7 @@ use crate::msg::persist::{
     PersistRecord, RotationRow, TradeRow,
 };
 use crate::msg::time::wall_clock_now;
-use crate::runtime::config::{ExecutionMode, RecordedTables, TableKind};
+use crate::runtime::config::{RecordedTables, TableKind};
 use crate::runtime::shutdown::WriterThread;
 
 use super::retention::Retention;
@@ -40,7 +40,7 @@ impl PersistWriter {
     ) -> PersistHandle {
         let boot_ts_us = wall_clock_now().micros();
         let footer = schema::footer_metadata(&meta);
-        let run_dir = run_directory(&cfg.dir, &meta);
+        let run_dir = meta.artifacts.tape_dir(&cfg.dir);
         let retention = Retention::new(run_dir.clone(), cfg.retention);
         let writers = TableWriterBuilder {
             tables: cfg.tables,
@@ -66,17 +66,6 @@ impl PersistWriter {
         let writer = WriterThread::spawn("persist", move |drain| state.run(&drain));
         PersistHandle(writer)
     }
-}
-
-/// Nests simulated runs under `sim/` to isolate their artifacts.
-fn run_directory(dir: &Path, meta: &RunMeta) -> PathBuf {
-    let mut run_dir = dir
-        .join(meta.strategy_id.as_str())
-        .join(meta.te_id.as_str());
-    if let Some(segment) = ExecutionMode::artifact_segment(meta.execution_mode) {
-        run_dir.push(segment);
-    }
-    run_dir
 }
 
 struct TableWriterBuilder<'a> {

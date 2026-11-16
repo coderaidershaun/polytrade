@@ -5,7 +5,8 @@ use crate::hot::exec::ExecCapacity;
 use crate::hot::strategy::Strategy;
 use crate::info;
 use crate::msg::ids::VenueId;
-use crate::runtime::config::{Config, ExecutionConfig, ExecutionMode, RunIdentity, SourceSpec};
+use crate::runtime::artifacts::RunArtifacts;
+use crate::runtime::config::{Config, ExecutionConfig, RunIdentity, SourceSpec};
 use crate::runtime::exposure::{self, ExposureState};
 use crate::runtime::registry::{InstrumentRow, Registry};
 use crate::venues::edge::rest_quiet::SharedRestQuiet;
@@ -26,9 +27,10 @@ pub struct Preflight<'a, P> {
 /// What preflight proved and built, handed whole to the start. Nothing in it runs a thread.
 pub struct StartPlan {
     pub(super) identity: RunIdentity,
-    /// The caller's mode, never derived again at the start: it picks which position file this run
-    /// owns, and a second derivation could load one ledger while the writer keeps another.
-    pub(super) mode: Option<ExecutionMode>,
+    /// The names of the artifacts, made once from the caller's mode and never again at the start:
+    /// they pick the position file this run owns, and a second derivation could load one ledger
+    /// while the writer keeps another.
+    pub(super) artifacts: RunArtifacts,
     pub(super) registry: Registry,
     /// Position from previous run; empty on cold start.
     pub(super) exposure: ExposureState,
@@ -65,7 +67,7 @@ impl<P> Preflight<'_, P> {
             config,
             strategy,
         } = self;
-        let mode = config.execution_mode();
+        let artifacts = RunArtifacts::new(config.execution_mode(), identity);
         let mut registry = Registry::build(config)?;
         let armed = one_armed_source(config)?;
         if let Some((venue, ..)) = armed {
@@ -75,7 +77,7 @@ impl<P> Preflight<'_, P> {
             validate_core_id(core_id)?;
         }
         #[cfg(feature = "otlp")]
-        let otlp = crate::runtime::otlp::OtlpPlan::check(config, identity, mode)?;
+        let otlp = crate::runtime::otlp::OtlpPlan::check(config, &artifacts)?;
         if let Some((_, source, execution)) =
             armed.filter(|(.., execution)| execution.mode.needs_credentials())
         {
@@ -90,7 +92,7 @@ impl<P> Preflight<'_, P> {
                 check_execution_order_capacity(&registry, venue, execution.max_orders_per_side)?;
             }
         }
-        let exposure = exposure::load(&config.exposure.dir, identity, &registry, mode)?;
+        let exposure = exposure::load(&config.exposure.dir, identity, &registry, &artifacts)?;
         let rest_quiet = SharedRestQuiet::new();
         // One signed call that proves the key can trade, before a strategy quotes with no
         // permission.
@@ -104,13 +106,12 @@ impl<P> Preflight<'_, P> {
             venue: probed.map(|probed| probed.0),
             registry: &registry,
             identity,
-            spin_interval: config.engine.spin_interval(),
             input_capacity: config.queues.input_capacity,
             lease_dir: &config.exposure.dir,
         })?;
         Ok(StartPlan {
             identity: identity.clone(),
-            mode,
+            artifacts,
             registry,
             exposure,
             rest_quiet,

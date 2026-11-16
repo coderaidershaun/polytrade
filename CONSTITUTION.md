@@ -422,16 +422,31 @@ Failure classes:
     the class of each `SendFailure`. Each failure is REJECT, so the exporter drops its records and
     counts them. WHY: the export adds one thread, and the root of that thread is the one supervisor
     of its sends.
-  - Amended 2026-11-13, as built: three roots have no reader yet, each with its receiving part.
+  - Amended 2026-11-16, as built: two more roots read `failure_class()`. Thus six roots read it,
+    and seven with feature `otlp`.
+    - The root of both market-data feeds: `run_lane` (`engine/src/venues/edge/lane.rs`). A session
+      of a feed ends with a `MarketDataError`, and `run_lane` calls `halt_on_market_data_error`
+      (`engine/src/venues/edge/fault.rs`). Each fault is HALT (engine): a decimal that the mantissa
+      cannot hold (`FatalReason::MarketDataUnreadable`), and a connection epoch counter that is
+      spent (`FatalReason::EpochExhausted`).
+    - The root of the simulator edge: `SimActor::run` calls `halt_on_sim_error`
+      (`engine/src/venues/sim/error.rs`) for each `SimEdgeError`. A full command lane trips
+      `FatalReason::SimulatorCommandLaneFull`, and a full market inbox trips
+      `FatalReason::SimulatorInboxFull`. Each is HALT (engine).
+    - WHY: three sites of the market-data actors and one site of the simulator actor tripped the
+      fatal latch where they met the fault. A full inbox of the simulator panicked.
+  - Amended 2026-11-16, as built: two roots have no reader yet. WHY: part 5 of the plan owns the
+    tape, and the fold decides each of its halts from messages.
     - The root of the tape writer: part 5 of the plan.
-    - The market-data actors and the simulator actor: part 4. Each of their 4 sites trips the fatal
-      latch at the place of its fault.
     - The driver of the hot thread: no error enum reaches it. Each halt of the fold is a
       `HaltReason` that the fold decides from messages, and the driver stops at the fatal latch.
     - Two more sites trip by design: an engine-fed input producer at a full ring (the lane table
       below), and the panic hook (a bug has no class).
-    - WHY: the plan gives the edges of market data and the simulator to part 4, and the tape to
-      part 5.
+  - Replaced 2026-11-16: "Amended 2026-11-13, as built: three roots have no reader yet, each with
+    its receiving part.", with its line "The market-data actors and the simulator actor: part 4.
+    Each of their 4 sites trips the fatal latch at the place of its fault." and its WHY "the plan
+    gives the edges of market data and the simulator to part 4, and the tape to part 5." WHY: part 4
+    built the reader of the market-data feeds and the reader of the simulator edge.
   - Replaced 2026-11-13: "Amended 2026-11-13, as built: no supervisor reads `failure_class()` yet,
     and only fitness tests read it. Each of the 19 sites that trip the fatal latch trips it itself,
     where the error is found. The next part of the plan, part 3 (money), closes the gap. Until then
@@ -464,6 +479,11 @@ Lanes:
 - [ ] Amended 2026-11-13: the exposure lane keeps its class. Its ring carries whole snapshots from a
   pool made at start, and the reader hands each snapshot back. WHY: a snapshot at the size of the
   registry cannot cross a ring by value, and the hot thread allocates nothing.
+- [ ] Amended 2026-11-16: the market inbox of the simulated venue is no lane, so it has no row. It
+  is a capacity event. At a full inbox the venue keeps each event that it holds, evicts nothing, and
+  returns `SimEdgeError::InboxFull`. The root of the simulator edge then trips
+  `FatalReason::SimulatorInboxFull`: HALT (engine). WHY: an evicted event would change which orders
+  filled, so the run would not be valid.
 
 Two kinds of halt:
 
@@ -471,6 +491,13 @@ Two kinds of halt:
   and the process stays up. Only a person starts quoting again.
 - [ ] Engine halt (`FatalReason`): the fatal latch trips with a typed reason, and the first reason
   stays. The drain runs inside its deadline, and the exit code is not 0.
+- [ ] Amended 2026-11-16: the quoting halt of an unproven order, `HaltReason::UnprovenOrderResting`
+  (label "an order the engine cannot prove its own rests on its market", link code 15, appended).
+  The fold halts at one message of the kind `ExecKind::UnprovenOrder`, before it reads the
+  provenance of the event, and changes nothing else: no slot, no ledger move, no callback. Only
+  the Polymarket edge sends that kind, at the first read of a token (§8, the execution contract
+  of part 4). WHY: the fold could book none of the fills of that order, and the third Never line
+  forbids its cancel, so a person decides. A replay halts at the same message.
 - [ ] A refused start is a HALT. The start returns a typed error before an edge can send an order,
   and the exit code is not 0. Only a person starts the engine again.
 
@@ -537,6 +564,12 @@ differ, and no record says why.
     (`HaltReason::PriorRunFillUnbooked`), with an `OrphanFill` record of the order and its total.
     Later steps book as usual. WHY: the restored position can already hold that total, so a booking
     would count it two times.
+  - Amended 2026-11-16: a read can name an own order of this run with no slot. The fold seats the
+    order at the totals of the read, with its fee memory at that total, and books none of that
+    total. IF the total is above 0, THEN quoting halts (`HaltReason::OrphanFill`), with one
+    `OrphanFill` record that holds the total. A read with nothing filled seats the order with no
+    halt. Pin: `an_adopted_order_books_none_of_its_cumulative`. WHY: the ledger can already hold
+    part of that total from the slot that went, so a booking would count it two times.
 - [ ] The fold books a fee one time for each trade id. It never books a fee two times.
   - Amended 2026-11-14: a report of a prior-run order that does not raise its total, at or below
     the total of its seat, books no fee and leaves an `UnbookedFee` record. WHY: the earlier run can
@@ -653,6 +686,12 @@ execution-safety defect, not an observability preference.
   - exposure: `<strategy-id>-<te-id>-sim.json`
   - Parquet: below `<strategy>/<te>/sim/`, with an `execution_mode` footer
   - UI: mode badge (O6)
+- [ ] Amended 2026-11-16, as built: one value, `RunArtifacts` (`engine::runtime::artifacts`), gives
+  each artifact of a run its name, from the mode and the identity of the run. One stem names the
+  log and the OTLP service. The value also names the exposure file, the tape folder with the mode
+  of its footer, and the console log of `polysim-mcp`. Each name stays byte for byte. The mode
+  badge of the UI still reads `ExecutionMode::badge`. WHY: each writer made its own name from the
+  mode, so one writer that missed the mode could put simulated fills under a live name.
 
 ### Amended 2026-10-14: the MCP server's stdout is the wire
 
@@ -880,6 +919,8 @@ WHY: three venues implement the execution seam by convention. A fourth needs law
   - fatal on an undecodable open order
   - Amended 2026-11-13: the README writes nine obligations, and one generic seam suite pins them.
     Section on the execution contract, end of §8.
+  - Amended 2026-11-15: adoption by exact match, at a venue that mints the order ids. Section on
+    the execution contract of part 4, end of §8.
 - [ ] The README = prose half of the adapter contract. Changes to it are seam changes, not doc
   edits.
 
@@ -1224,11 +1265,20 @@ Binance sent an order action again after a lost answer.
   - Amended 2026-11-14: this holds after any failure, the venue codes -1006 and -1007 ("execution
     status unknown") among them. Pin: `an_order_action_whose_outcome_is_unknown_is_sent_once`. WHY:
     an answer of "status unknown" leaves the order action perhaps done, as a lost answer does.
-  - Amended 2026-11-14, as built: after a failed REST cancel, the edge reads the order back at once
-    only at 429 and at a transport failure. At -1006, -1007, and -1021 it re-arms the cancel. The
-    read then comes from the in-flight timeout of the hot slot, and an exit sweep can send the same
-    cancel again. Part 4 takes this behavior, with question Q1 of the review. WHY: no money moves,
-    because a second cancel of one client order id adds no order.
+  - Amended 2026-11-16, as built: -1006 and -1007 answering a cancel or an amend are
+    `Ambiguous` on both paths, so the edge reads the order first. A read that fails, or that
+    answers -1006 or -1007, re-arms the cancel. Section on the execution contract of part 4, end
+    of §8.
+  - Replaced 2026-11-16: "so the edge reads the order before any second cancel or amend", and the
+    words "and only -1021 re-arms the cancel" in the WHY of the record below. WHY: a read that
+    fails, or that answers -1006 or -1007, re-arms the cancel too (the review of part 4, F3).
+  - Replaced 2026-11-16: "Amended 2026-11-14, as built: after a failed REST cancel, the edge reads
+    the order back at once only at 429 and at a transport failure. At -1006, -1007, and -1021 it
+    re-arms the cancel. The read then comes from the in-flight timeout of the hot slot, and an exit
+    sweep can send the same cancel again. Part 4 takes this behavior, with question Q1 of the
+    review. WHY: no money moves, because a second cancel of one client order id adds no order."
+    WHY: part 4 took the behavior. -1006 and -1007 leave the cancel perhaps done, so the edge now
+    reads the order first.
   - Replaced 2026-11-14: "A REST cancel that fails, at -1021 or 429 too, then reads the order
     back." WHY: the edge does not act so (the review of part 3, round 2).
 - [ ] Probe cap. A slot counts its status probes. At `execution.max_status_probes` the instrument
@@ -1249,7 +1299,12 @@ Binance sent an order action again after a lost answer.
 - [ ] Incident records: §6 (2026-11-13 section on money).
 - [ ] One generic seam suite pins the nine obligations of `engine/src/venues/exec/README.md`: the
   macro `venue_edge_keeps_each_written_obligation!` gives one test for each obligation. Each venue
-  edge runs it. Binance runs it today, and part 4 adds the other venues.
+  edge runs it.
+  - Amended 2026-11-16, as built: three edges run the suite: Binance, Polymarket, and the simulator
+    (`venues::binance::obligations`, `venues::polymarket::obligations`, `venues::sim::obligations`).
+    Section on the execution contract of part 4, end of §8.
+  - Replaced 2026-11-16: "Binance runs it today, and part 4 adds the other venues." WHY: part 4
+    added them.
 
 ### Amended 2026-11-13: the `pub` items of part 3, each with its merit
 
@@ -1317,6 +1372,305 @@ WHY: §12 (2026-07-28) forbids `pub` for a test's sake, so each new item names i
 - [ ] The copy lane of the log and the sink parameter of the metrics thread stay crate-private.
 - [ ] Package `engine` has feature `otlp` beside `mcp` and `web` (2026-11-12 section on two lib
   crates). It is native only, and `--all-features` of the gate builds it.
+- [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
+
+### Amended 2026-11-15: the execution contract of part 4
+
+WHY: the Polymarket edge adopted an unknown open order that matched no own order exactly. It bound
+that order to the first lost slot of its side. That order can belong to a person. A cancel of the
+slot then touches an order that this engine did not place. The fold also books the fills of that
+order as its own.
+
+- [ ] Adoption by exact match. A venue can mint the id of each order, as Polymarket does. Then a
+  read can show an open order with an id that the edge never recorded. The edge gives that order
+  one verdict (`classify_unmapped`, `engine::venues::polymarket::exec::correlate`):
+  - IF a placement of this run on its instrument and side still waits for its answer, THEN
+    `Defer`. That answer can still name the order.
+  - ELSE IF exactly one lost slot equals the order in instrument, side, price, and original size,
+    THEN `Adopt`. That slot takes the venue id of the order.
+  - ELSE `LeaveAlone`, also when two or more lost slots equal the order. The edge never mirrors and
+    never cancels it. It counts one foreign order (`ExecCore::foreign_orders`), and the chassis
+    writes the count when the session stops.
+- [ ] Lost slot: an order that this run placed, with no venue id. Its placement timed out, or its
+  transport failed, so no place answer will come. A lost slot that no adoption binds stays
+  ambiguous. The probe cap ends it (2026-11-13 section on the execution contract of part 3).
+- [ ] Pin: `order_with_no_exact_match_is_never_adopted`.
+  - Amended 2026-11-16, as built: the resync of the Polymarket edge counts each `LeaveAlone`
+    order with `ExecCore::count_foreign_order`. No test reaches that call, because the actor runs
+    only inside a live edge. The verdict has its pin above, and the count of the core has the pin
+    `foreign_order_is_never_mirrored_or_cancelled`. WHY: the count is the one trace of an order
+    that this engine did not place.
+- [ ] Amended 2026-11-16: the first read of a token. The edge never cancels an open order that it
+  cannot prove its own. WHY: Polymarket echoes no client id, so at a start the edge cannot tell
+  its own order of an earlier run from the order of a person, which the website places with the
+  same credentials. A cancel can touch an order that this engine did not place (third Never
+  line). Quoting beside it risks fills that the fold cannot book, and exposure outside the caps
+  (§6, money).
+  - First read of a token: each read of the open orders of the token, from its binding at a start
+    or at a rotation, until its first read ends. The first read ends only at a fresh-binding read
+    of that token, while the token is still bound, in which no unknown order got `Defer`.
+  - A `Defer` keeps the first read open: the order waits for the answer of a placement of this
+    run. The answer of the venue to a placement on that instrument, accepted or refused, asks for
+    one more read of the token, and that read is still a first read.
+  - IF a first read names an open order on the token, and neither `Defer` nor `Adopt` applies,
+    THEN the order is unproven. The edge counts it and never cancels it, and quoting halts with
+    the halt reason of an unproven order. A person decides.
+  - A read of a token that is already quoted keeps the verdicts above.
+  - An open order on a token that no binding names is left alone and counted. It halts nothing,
+    and the edge never cancels it.
+  - Pin: `a_cold_start_read_naming_an_unknown_order_sends_no_cancel`.
+  - Amended 2026-11-16, as built: `classify_unmapped` takes the kind of its read, `TokenRead {
+    First, Quoted }`, and gives `UnmappedVerdict::Unproven` at `First`, where it gives
+    `LeaveAlone` at `Quoted`. `unproven_order_event` builds the message of an unproven order
+    (`engine::venues::polymarket::exec::correlate`): kind `ExecKind::UnprovenOrder`, no client
+    id, the venue id digest, side, price, and size, and the received stamp of its read. The edge
+    writes one ERROR line with the venue id, side, price, and size, and the fold halts with
+    `HaltReason::UnprovenOrderResting` (§6). The edge has no request that cancels by a venue id
+    alone: the prior-run cancel and its wait of readiness are gone. WHY: a reader finds each
+    part of the rule by its name in the code.
+  - Amended 2026-11-16, as built: `FirstReads` (`engine::venues::polymarket::exec::correlate`)
+    holds the tokens whose first read has not ended. `on_bound` makes it due at a binding,
+    `read_of` gives the `TokenRead` of each unknown order, `on_read_answered` ends it at a
+    fresh-binding read with no `Defer`, and `take_read_after_answer` asks for the one more read
+    at a placement answer. A fresh-binding read that its lane drops leaves the first read due, so
+    each later read of the token is a first read too, until its next binding: an error toward a
+    halt. Pin: `a_first_read_that_defers_stays_first_until_the_placement_answers`. The calls of
+    the actor have no pin, because the actor runs only inside a live edge: the binding, the read
+    kind of each unknown order, the check that the token is still bound, and the read after the
+    answer. WHY: a pass, or a read of a token since rebound, can miss the orders of the token that
+    is bound now, so only the fresh-binding read of that token can end its first read.
+  - Replaced 2026-11-16: "First read of a token: the first pass of a run, and the first read of
+    each token that a rotation binds." WHY: a first read that deferred an order ended at that
+    read, and no later read of the token was a first read. So the edge left the order alone and
+    quoted beside it, at the binding of a token, where an order of an earlier run of this engine
+    rests (the review of part 4, round 2, F6).
+- [ ] Amended 2026-11-16: the heartbeat deadline. WHY: Polymarket cancels each order of the account
+  when no heartbeat reaches it within its limit. An edge that kept its mirror past that limit would
+  quote from orders that no longer rest.
+  - IF a heartbeat fails in transport, is refused, or names no id, THEN it is due again one retry
+    interval after it went out. Thus a venue that refuses each beat hears at most one a second,
+    and three tries come before the deadline.
+  - IF no heartbeat is answered for the venue limit less a margin, from the last answered one, THEN
+    the edge drops its connection. The path of a lost connection rebuilds the order mirror, and
+    quoting stays closed until a heartbeat is answered.
+  - IF the venue limit itself passes, THEN a new resync pass reads the open orders again.
+  - The period, the limit, the margin, and the retry interval are facts of the venue
+    (`PolymarketFacts`): 5 s, 10 s, 2 s, and 1 s (`heartbeat_retry`) at Polymarket.
+  - Three request lanes keep a cancel and a heartbeat from waiting behind a held placement.
+  - Pins: `lost_heartbeat_past_deadline_resets_order_mirror`, which polls the schedule at each
+    20 ms tick of the edge, and `cancel_and_heartbeat_finish_while_a_place_blocks`.
+  - Replaced 2026-11-16: "THEN it is due again at the next poll." and "The period, the limit,
+    and the margin are facts of the venue (`PolymarketFacts`): 5 s, 10 s, and 2 s at
+    Polymarket." WHY: the next poll is the next tick of 20 ms, so a venue that refused each beat
+    got one signed beat at each tick, up to 50 a second (the review of part 4, F2).
+- [ ] Amended 2026-11-16, as built: the window-close sweep cancels only the orders of this run.
+  WHY: near the close of a window, the backstop of the Polymarket edge sent
+  `DELETE /cancel-market-orders` for the token. That request cancels each order of the account
+  on the token, a person's order among them (third Never line).
+  - The backstop cancels each order of this run on the closing window, one at a time, by its
+    own id (`ExecSession::sweep`).
+  - No edge sends a bulk cancel of its venue, such as a cancel of each order on a token. The
+    codec has no encoder of one: `cancel_market_orders` and its request are gone.
+- [ ] Amended 2026-11-16: the named refusal of the simulator. WHY: the simulator answered an order
+  that it cannot model with a filter failure of the venue (-1013). Thus a log or a tape could not
+  tell a limit of the simulator from a refusal of the venue.
+  - The simulator refuses each order of a style that it cannot model, an `Immediate` order today,
+    with code 9,001 and a message that names the style. No venue sends that code.
+  - The codec of Binance gives code 9,001 its own arm, class `Fatal`. Thus quoting halts with
+    `HaltReason::FatalReject` at the first refusal, as at -1013.
+  - The run summary of the simulator counts the refused styles.
+  - Pin: `unmodelled_style_gets_a_named_simulator_refusal`.
+- [ ] Amended 2026-11-16, as built: the unknown outcome of a Binance cancel or amend. WHY: an
+  answer of "execution status unknown" leaves the cancel or the amend perhaps done. A second action
+  before a read can act on a state that the edge does not know.
+  - The codec gives -1006 and -1007 the class `Ambiguous` on a placement, a cancel, and an amend.
+    A status query stays `StillLive`, because a read changes nothing.
+  - WebSocket API: the edge sends one read of the order, and the cancel latch stays shut until the
+    read answers. IF the read itself answers -1006 or -1007, THEN the read is `StillLive`, and
+    the edge re-arms the cancel.
+  - REST: after a cancel of class `Ambiguous`, the edge reads the order back at once, and the
+    cancel latch stays shut. A REST cancel is `Ambiguous` at -2011, -2013, -1006, and -1007, at
+    HTTP 429 or 418, at an HTTP 5xx with no code of the venue, and at a failure with no answer
+    of the venue. IF that read fails, THEN the edge re-arms the cancel.
+  - Binance gives an HTTP 5xx as an execution status unknown. Thus a REST cancel answered 5xx
+    with no code can have run, as at -1006. A 5xx with a code keeps the class of that code.
+  - At HTTP 429 or 418 the REST client reads no code: it gives `RestError::RateLimited`, the
+    rate limit of the venue, and the edge classes it `Ambiguous`. Binance sends -1003 and -1015
+    with these statuses. Thus over REST a cancel that a rate limit refused reads the order back.
+  - A cancel answered `StillLive` re-arms the cancel: -1021 on both paths, and -1003 and -1015
+    over the WebSocket API only, where the codec reads the code of each answer. The gateway
+    refused the request before the match engine, so the cancel did not run, and a later cancel
+    is a new action.
+  - Thus a second cancel can go out, from the next cancel or from the exit sweep, while the
+    outcome of the first is still unknown. No money moves, because a second cancel of one client
+    order id adds no order.
+  - Replaced 2026-11-16: "WebSocket API: the edge sends one read of the order. No second cancel
+    or amend goes out before that read answers.", "REST: after a failed cancel, the edge reads
+    the order back at once at -1006, -1007, 429, and a transport failure. The cancel latch stays
+    shut until the read answers.", and "-1021 stays `StillLive`, and only -1021 re-arms the
+    cancel." WHY: a read that fails, and a read that answers -1006 or -1007, re-arm the cancel
+    too, and so does each cancel answered `StillLive` (the review of part 4, F3).
+  - Replaced 2026-11-16: "REST: after a cancel of class `Ambiguous` (-2011, -1006, -1007, or no
+    answer), the edge reads the order back at once, and the cancel latch stays shut." and "A
+    cancel answered `StillLive` (-1003, -1015, -1021) re-arms the cancel." WHY: at HTTP 429 or
+    418 the REST client reads no code, so over REST -1003 and -1015 read the order back, and
+    only the WebSocket API re-arms the cancel at them (the review of part 4, round 2, F7).
+  - Pins: `an_unknown_outcome_of_a_cancel_over_the_websocket_reads_before_any_second_cancel`,
+    `an_unknown_outcome_of_a_rest_cancel_reads_before_any_second_cancel`, and
+    `a_rest_cancel_answered_5xx_with_no_code_reads_before_any_second_cancel`.
+  - The class of a failed REST cancel is set in the private actor of the Binance edge, which runs
+    only inside a live edge. The REST pins hold the client and the core on each side of that
+    step, and no test drives a REST cancel that a rate limit refused.
+- [ ] Amended 2026-11-16, as built: the seam suite runs for the Polymarket edge and the simulator
+  edge too. WHY: one suite for each edge holds the written obligations, so a new edge cannot keep
+  only some of them.
+  - A venue that sends no balance delta asserts only the absolute chunks, and a venue with no
+    pending cancel asserts only the finality of the cancel answer.
+  - The Polymarket edge halts at a page of open orders that it cannot decode, as Binance does
+    (`ExecSessionError::UndecodableOpenOrder`).
+  - The events of the Binance and Polymarket stand-ins pass through an `EventFunnel` in front of a
+    real ring. The simulator stamps its own queued times, so for it that half stays a named gap.
+
+### Amended 2026-11-15: the interface of the simulated venue is `pub` on merit
+
+WHY: §12 (2026-07-28) forbids `pub` for a test's sake. The simulated venue is a concept in its own
+right. Its orders and its wallet were `pub`, and the venue that moves them was not.
+
+- [ ] `SimVenue` (`engine::venues::sim::core`) is `pub`, with `new`, `on_request`,
+  `on_market_batch`, `advance_to_watermark`, `restore_matching`, `suspend_matching`, `wallet_mut`,
+  and `unmatched_prints`. Each type that this interface names is `pub` with it: `SimVenueSetup`,
+  `SimEmission`, `VenueEvent`, `OrderSnapshot`, `OrderPhase`, `ClosedReason`, `RefusalReason`,
+  `InstrumentLimits`, `QueueAhead`, `ResetReason`, `LatencyBudget`, `UnmatchedPrints`, and
+  `SimEdgeError`.
+  - Merit: `engine::venues::sim::core` is `pub` by an earlier decision. It is the matching model
+    that the tests of the live Binance codec use as their corpus (`engine/src/venues/sim/mod.rs`).
+    `SimVenue` is that model. Its modules `orders` and `wallet` are `pub` on the same merit.
+  - `SimVenue::market` and `SimVenue::force_exit_open_orders` stay `pub(crate)`. Only the actor and
+    the driver of the simulator call them.
+- [ ] `SimHorizon` with `unseeded`, `observe`, `has_all_watermarks`, and `safe_venue_horizon`, and
+  `SimLane` (`engine::venues::sim::lanes`) are `pub`. Merit: the horizon is the half of the
+  interface that decides when the venue can advance. `LaneBuffer` and `LaneBufferFull` stay
+  crate-private. They are the command lane of the actor, and `SimEdgeError::CommandLaneFull`
+  carries its capacity.
+- [ ] The properties of the simulator go through this interface:
+  - the fill model: `own_fill_never_exceeds_print_and_never_jumps_the_queue`,
+    `trade_id_gap_suspends_matching_until_snapshot`, `unmatched_prints_are_counted_by_reason`
+  - the order of the lanes: `lane_arrival_order_never_changes_fills`,
+    `nothing_is_applied_past_the_horizon`
+  - the full inbox: `full_simulator_inbox_halts_the_run_and_evicts_nothing`
+  - the seam suite for the simulator edge (2026-11-13 section on the execution contract of part 3)
+- [ ] Rejected: tests inside the crate. §12 (2026-07-28) forbids a `#[cfg(test)]` block outside
+  `<package>/tests/`.
+- [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
+
+### Amended 2026-11-16: the simulator of part 4
+
+WHY: the simulator checked its config a second time at start with `expect`, a full market inbox
+panicked, and it dropped prints with no count. Each one hid a fault of a simulated run until the
+run met it.
+
+- [ ] Proofs from config. Config validation proves each fact that a simulated run needs, one time,
+  and keeps each proof in the validated config:
+  - `SimSupport`: the source can be simulated.
+  - `SimLatencyBudget`: the worst round trip of the simulator is below
+    `execution.inflight_timeout_ms`.
+  - the maker fee as a `FeeBps`, through its one conversion, `FeeBps::from_bps`.
+- [ ] Preflight hands the proofs to the plan of the simulator. The plan finds the trades queue and
+  the depth queues of the source. IF one is missing, THEN preflight refuses the start with
+  `SimVenueError::LaneMissing`, before the lease. The start of the simulated venue takes the
+  proofs, so a start with no proof does not compile.
+  - Pins: `sim_mode_on_source_with_no_simulator_is_refused_by_name`,
+    `round_trip_at_or_above_timeout_refuses_start`, `maker_fee_of_10_bps_charges_known_amount`.
+- [ ] A full market inbox is the typed error `SimEdgeError::InboxFull { capacity }`. The venue
+  evicts nothing, and the run halts (§6, 2026-11-16). Pin:
+  `full_simulator_inbox_halts_the_run_and_evicts_nothing`.
+- [ ] The simulated venue counts each print that it does not match, by its reason
+  (`UnmatchedPrints`):
+  - matching is suspended
+  - the print is at or before the last depth commit
+  - its ids are ones that its stream epoch has passed
+  - it is the first print of an epoch
+- [ ] These counts and the prints that the venue walks sum to the prints.
+  `SimVenue::unmatched_prints` gives them, and the run summary prints them beside the count of
+  refused styles. Pin: `unmatched_prints_are_counted_by_reason`.
+
+### Amended 2026-11-16: the `pub` items of part 4, each with its merit
+
+WHY: §12 (2026-07-28) forbids `pub` for a test's sake. Each item below has a caller that is not a
+test, sits in a module that is a concept in its own right, or has a ruling of §12.
+
+- [ ] By the rulings of §12 (2026-11-15):
+  - the fault seam of the market-data feeds: `engine::venues::edge::fault`, with `MarketDataError`
+    and `halt_on_market_data_error`
+  - the fault seam of the simulator edge: `halt_on_sim_error`
+  - the request lanes of Polymarket (`engine::venues::polymarket::exec::lanes`) and
+    `ClobHttp::on_loopback`
+  - the pure gate of the Polymarket start (`engine::venues::polymarket::exec::assess`)
+  - the event funnel: `EventFunnel` with `new` (`engine::venues::edge`)
+- [ ] By the 2026-11-15 section on the interface of the simulated venue: the interface of
+  `SimVenue`, re-exported from `engine::venues::sim::core`, with `SimEdgeError`, and `SimHorizon`
+  and `SimLane` (`engine::venues::sim::lanes`).
+- [ ] Concept module `engine::venues::polymarket::exec`:
+  - `facts`: `PolymarketFacts` and `POLYMARKET_FACTS`, the one value of the facts of the venue. It
+    holds the taker hold, the wire margin, the capacity and the lifetime of held frames, and the
+    period, the limit, and the margin of the heartbeat. It takes the place of `PENDING_CAPACITY`,
+    `PENDING_TTL`, and `DELAYED_HOLD` of `correlate`, which go.
+  - `heartbeat`: `HeartbeatSchedule` with `new`, `on_poll`, `on_sent`, `on_answer`, and
+    `is_placing_held`, with `HeartbeatStep` and `BeatAnswer`. Pure state with time passed in, as
+    `correlate` and `binding` beside it.
+  - `assess::ProvenSignatureType` with `code`: the `pub` fields `OrderSignerSetup.signature_type`
+    and `WalletIdentity.signature_type` hold it, and only `assess` makes one.
+  - `codec::OrderIndex::record_matched`: the codec is the convention surface of the venue, and
+    `OrderIndex` is `pub`.
+  - `codec::WireError::UndecodableOpenOrder { venue_order_id, source }`: a variant of the `pub`
+    error of the codec. It names the first order of a page that the codec cannot decode.
+  - `PolymarketPreflightError::LocalClockInvalid { seen }`: a variant of a `pub` error.
+    `preflight_polymarket` takes the secrets from its caller (`&EnvFile`).
+- [ ] Module `engine::venues::polymarket::rotation`, `pub` by an earlier decision:
+  `WindowAssignment.legs` and `ForceTeardownFacts.instruments` take the place of `up`, `down`,
+  `up_instrument`, and `down_instrument`.
+- [ ] New variants of `pub` enums of `engine::venues::polymarket`:
+  `BookFrameOutcome::Suspect { streak }` (`shadow`) and `DriverEffect::Suspect { instrument,
+  streak }` (`actor`). The shell of the actor counts the second one.
+- [ ] Concept module `engine::venues::sim::wire`, `pub` by an earlier decision: `VenueWire::refusal`
+  and the re-export of `Rejection`. Merit: the same as `would_match_error` and
+  `unknown_order_error`, the payloads that the live codec must keep reading.
+- [ ] `engine::venues::sim`: `SimVenueError::LaneMissing { lane }`, a variant of a `pub` error.
+  `SimVenueError::Latency` goes. `RefusalReason::UnmodelledStyle { style }` takes the place of
+  `StyleNotPermitted`.
+- [ ] `FatalReason::SimulatorInboxFull { capacity }`: `FatalReason` is `pub` (2026-11-13 section on
+  the fold, start, and exit seams).
+- [ ] Vocabulary of `engine::runtime::config`, which the binaries load: `FeeBps` with `from_bps`,
+  the one conversion of a fee. Its old path `engine::venues::sim::core::wallet::FeeBps` stays, by a
+  re-export. `FeeBps::new` goes.
+- [ ] Concept module `engine::runtime::artifacts`: `RunArtifacts` with `new`, `mode`, `stem`,
+  `exposure_path`, `tape_dir`, `footer_mode`, and `console_log_path`. It is the one source of the
+  name of each artifact of a run (§7, 2026-11-16 line). `ExecutionMode::artifact_stem`,
+  `ExecutionMode::artifact_segment`, and `exposure::file_path` go.
+  - Four `pub` items take it in place of the mode: `exposure::load(dir, identity, registry,
+    &RunArtifacts)`, `ExposureWriterSetup.artifacts` (the value form of the exposure writer seam,
+    2026-11-13 ruling of §12), `OtlpPlan::check(config, &RunArtifacts)`, and `RunMeta.artifacts`,
+    in place of `RunMeta.execution_mode`.
+- [ ] Amended 2026-11-16, as built: the `pub` items of correction round 1 of part 4.
+  - Concept module `engine::venues::polymarket::exec::correlate`, the one decision on an open
+    order that the edge never recorded: `TokenRead { First, Quoted }`,
+    `UnmappedVerdict::Unproven`, `unproven_order_event`, and the signature
+    `classify_unmapped(mirror, unmapped, has_venue_id, read)`.
+  - `HaltReason::UnprovenOrderResting`: the reasons cross to the link and the workstation, as
+    those of part 3.
+  - `ExecKind::UnprovenOrder`: vocabulary of `msg`, the data that crosses domains.
+  - `PolymarketFacts::heartbeat_retry`: a field of the one value of the facts of the venue.
+  - `codec::cancel_market_orders` goes: no edge sends a bulk cancel (the execution contract of
+    part 4, above).
+  - WHY: §12 (2026-07-28) forbids `pub` for a test's sake, so each item of the round names its
+    merit.
+- [ ] Amended 2026-11-16, as built: the `pub` item of correction round 2 of part 4. `FirstReads`
+  with `on_bound`, `read_of`, `on_read_answered`, and `take_read_after_answer`: merit, the concept
+  module `engine::venues::polymarket::exec::correlate`, where it is pure state beside
+  `PendingFrames` and `DelayedOrders`. The class of a failed REST cancel of Binance stays
+  private. WHY: §12 (2026-07-28) forbids `pub` for a test's sake.
+- [ ] The integration tests of part 4 use only items that were `pub` before them. No item became
+  `pub` for them.
 - [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
 
 ## 9. Naming & API Ergonomics
@@ -1779,6 +2133,12 @@ engine links all three.
     section of §12.
   - Amended 2026-11-13: the table of what an agent runs against a venue. Date, WHY, and the
     table: the 2026-11-13 section of that name, after the section on seams that change.
+  - Amended 2026-11-15: only the role that the plan names runs a public read. It starts the binary
+    of target `integration` by its path, with the exact name of the test. The run starts in an
+    empty folder outside each checkout. Its environment is empty except `PATH`, `HOME`, and
+    `TMPDIR`. WHY: no agent starts an ignored test in a checkout (`AGENTS.md`). `cargo test` starts
+    each test in the folder of its package. A public read can write below the temporary folder, so
+    the environment keeps `TMPDIR`.
   - Replaced 2026-11-12: the agent ran each live-network test deliberately.
     - Amended 2026-07-18. WHY: user directive. Agent runs ALL tests, live-network included. Network
       reach to venue endpoints is verified. Human is not required.
@@ -1928,6 +2288,30 @@ go.
   replaced mechanism to reach its subject.
 - [ ] An old test that stays changes only where a changed interface forces it: the form of a call,
   never an asserted value.
+- [ ] Ruling, 2026-11-16: one named exception to the line above. In
+  `venues::binance::exec_codec::every_code_maps_to_the_class_the_engine_may_act_on`, the rows of
+  -1006 and -1007 on a `Cancellation` assert `RejectClass::Ambiguous`, where they asserted
+  `RejectClass::StillLive`. The comment of the test gives the new reason. Ruling D18 of part 4
+  made the exception. The new class has its own pins:
+  `an_unknown_outcome_of_a_cancel_over_the_websocket_reads_before_any_second_cancel` and
+  `an_unknown_outcome_of_a_rest_cancel_reads_before_any_second_cancel`.
+  - WHY: the change of class is a behavior change on purpose (the execution contract of part 4,
+    end of §8). The test holds the class of each code of the venue in one table. A new test of
+    the whole table, and then the removal of the old test, would move each row for two rows.
+  - This ruling permits no other changed value. A further exception needs its own ruling here:
+    dated, with the test, the rows, and the WHY.
+- [ ] Ruling, 2026-11-16: one replaced test with a claim that has no successor. In module
+  `venues::polymarket::poly_exec_codec`, the test
+  `requests_encode_by_token_and_the_token_table_rebinds_correctly` went whole.
+  `requests_encode_by_token_and_the_token_table_rebinds` holds four of its five blocks, each
+  value unchanged. Its fourth block held the encoding of `DELETE /cancel-market-orders` for a
+  token, and that block has no successor.
+  - WHY: correction round 1 of part 4 removed that request on purpose, because it cancels each
+    order of the account on the token (third Never line). A claim about code that a task removes
+    on purpose has nothing left to pin. The new test says in its doc that no request cancels
+    each order on a token.
+  - This ruling covers that one block. A further claim with no successor needs its own ruling
+    here: dated, with the test, the block, and the WHY.
 - [ ] The task that deletes a test records it in the hand-off file of its job: one table row with
   the old test, the new test that pins its behavior, and the module. The hand-off file also holds
   the list of tests (`cargo test -- --list`) before and after.
@@ -2017,6 +2401,95 @@ drives both. A seam that a change reshapes and that no test drives can break wit
   - `ExposureSink::lane` also has a caller that is not a test: the timing harness.
 - [ ] This ruling makes no other item `pub`. The ban of 2026-07-28 on `pub(crate) -> pub` for a
   test holds for each other item.
+- [ ] Ruling, 2026-11-15: the fault seam of the market-data feeds has no caller outside the tests,
+  and it is `pub` by this ruling. It is `MarketDataError` with its variants `Unreadable` and
+  `EpochExhausted`, its methods `failure_class` and `fatal_reason`, and `of_decimal_fault`.
+  `of_decimal_fault` gives `Unreadable` for a decimal that the mantissa cannot hold, and nothing for
+  another fault. The seam also holds
+  `halt_on_market_data_error(feed: &str, &MarketDataError, &FatalSignal)`
+  (`engine::venues::edge::fault`). It reads `failure_class()`, writes one ERROR line with the
+  feed and the values, and trips the latch with the typed reason. Tests:
+  `market_data_faults_halt_the_engine_with_their_reason`,
+  `an_overflowing_decimal_ends_the_feed_with_a_market_data_fault`.
+  - WHY: the seam changes. The market-data actors tripped the fatal latch at three sites, each at
+    the place of its fault. Now one reader of the class trips it: `run_lane`, the root of both
+    feeds (§6, 2026-11-13). The actors run only on the socket of a live venue, so a test cannot
+    start one.
+  - `run_lane` and `SessionEnd` stay `pub(crate)`.
+  - Amended 2026-11-16, as built: the first parameter of the function names the feed in the
+    ERROR line, and the typed reason does not change. WHY: two feeds share the one root, so the
+    line must say which feed stopped.
+  - Replaced 2026-11-16: "`halt_on_market_data_error(&MarketDataError, &FatalSignal)`". WHY: the
+    function has its feed parameter as built.
+- [ ] Ruling, 2026-11-15: the fault seam of the simulator edge has no caller outside the tests, and
+  it is `pub` by this ruling. It is `halt_on_sim_error(&SimEdgeError, &FatalSignal)`
+  (`engine::venues::sim`). It reads `failure_class()`, writes one ERROR line with the values, and
+  trips the latch with the typed reason. Tests:
+  `full_simulator_inbox_halts_the_run_and_evicts_nothing`,
+  `a_full_command_lane_halts_the_simulated_run`.
+  - WHY: the seam changes. The actor of the simulator tripped the latch itself at a full command
+    lane, and a full inbox panicked. Now one reader of the class trips it: `SimActor::run`, the
+    root of the actor. The actor runs only inside a start of the engine. So a test drives the seam
+    with each value of `SimEdgeError`.
+  - `SimEdgeError` is `pub` by §8 (2026-11-15 section on the interface of the simulated venue).
+    `SimActor` stays crate-private.
+- [ ] Ruling, 2026-11-15: the request lanes of the Polymarket edge and the loopback constructor of
+  its CLOB client have no caller outside the tests, and they are `pub` by this ruling.
+  - The module `engine::venues::polymarket::exec::lanes`: `RestLanes<P>` with `submit`,
+    `spawn_lanes`, `LaneSetup`, `Lane`, `RestJob<P>` with `signed` and `public`, `Submitted`, and
+    `RestOutcome<P>`. `RestLanes::abort`, `LANE_CAPACITY`, `RestPurpose`, and `OpenOrdersRead` stay
+    crate-private.
+  - `ClobHttp::on_loopback(port, connect, request)` (`engine::venues::polymarket::exec::rest`). It
+    takes no host: each request goes to `http://127.0.0.1:<port>`. Thus it reaches no other host.
+    The engine never builds one, and production keeps `ClobHttp::new`.
+  - Tests: `cancel_and_heartbeat_finish_while_a_place_blocks`,
+    `lost_heartbeat_past_deadline_resets_order_mirror`.
+  - WHY: the seam changes. The lanes leave the private actor and become generic over the purpose of
+    a job. Three lanes keep a cancel and a heartbeat from waiting behind a held placement. The lanes
+    run only inside the actor of a live edge. A test reaches the network only through a stand-in,
+    as with `SignedRestClient::on_loopback` (2026-11-13).
+  - Amended 2026-11-16, as built: the ruling also makes `pub` `Submitted::is_queued`, the fields
+    `purpose` and `request` of `RestJob<P>`, the fields `purpose` and `answer` of
+    `RestOutcome<P>`, and the fields of `LaneSetup`. The client takes its base address from a field:
+    the host of the venue in production, `http://127.0.0.1:<port>` from `on_loopback`. WHY: a test
+    reads the outcome of each job, and builds the lanes from their setup.
+- [ ] Ruling, 2026-11-15: the pure gate of the Polymarket start has no caller outside the tests,
+  and it is `pub` by this ruling. It is `assess`, `ProbeFacts`, `WalletConfig`, `AdmittedWallet`
+  with `assess_account`, and `AccountStanding` (`engine::venues::polymarket::exec::assess`).
+  - `assess` takes the facts of the probe, the wallet config, and the local time. It refuses a
+    wallet type that is not proven and a protocol version that is not 2. It also refuses a local
+    clock that is not valid. It reports the geoblock flag. `preflight_polymarket` calls it before
+    its first signed request.
+  - `assess_account` refuses a closed-only account, after the signed reads. It takes an
+    `AccountStanding` (`Open` or `ClosedOnly`), not a `bool` (§9). `AccountStanding` is `pub` only
+    because `assess_account` takes it.
+  - `PolymarketPreflightError` and `preflight_polymarket` are `pub` already. The error gains
+    `LocalClockInvalid { seen }`, and `preflight_polymarket` takes the secrets from its caller.
+  - Tests: `preflight_gates_run_in_order_over_recorded_answers`,
+    `invalid_local_clock_refuses_the_arm`. `each_order_vector_equals_sdk_body` builds its signer
+    through `assess`. The signed test `venue_accepts_one_signed_order` runs `assess` over the facts
+    of the live venue.
+  - WHY: the gate is a seam that changes. A local clock that is not valid now refuses the arm before
+    any signed request. The real start path loads `.env`, so a test must not drive it.
+  - Amended 2026-11-16, as built: the ruling also makes `pub` the fields of `ProbeFacts`
+    (`protocol_version`, `server_ts_us`, `geoblock`) and of `WalletConfig` (`signer`,
+    `configured_signer`, `maker`, `signature_type`). `assess_account` takes the `AdmittedWallet` by
+    value and gives the `WalletIdentity` of the start. `preflight_polymarket` takes `&EnvFile`.
+    `ProvenSignatureType` has its merit in §8 (2026-11-16 section on the `pub` items of part 4).
+    WHY: a test builds the facts and the wallet of a start by hand, from recorded answers.
+- [ ] Ruling, 2026-11-15: the event funnel of a venue edge has no caller outside the tests, and it
+  is `pub` by this ruling. It is `EventFunnel` with `new` (`engine::venues::edge`), the one writer
+  of the input queue of a venue. It stamps each message with its venue and its queued time. A test
+  sends events through `EventSink`, which is `pub` already. Test:
+  `one_input_queue_with_monotone_queued_stamps`, which each venue edge runs through
+  `venue_edge_keeps_each_written_obligation!`.
+  - WHY: an edge must stamp each event that it queues with a time that never goes back. The seam
+    suite pinned only the received stamps, and part 3 handed on the queued stamps. A test reaches
+    them only with the funnel in front of a real ring.
+  - The simulator edge stamps its messages itself, not through the funnel. Its queued stamp stays a
+    named gap.
+- [ ] This ruling makes no other item `pub`. The ban of 2026-07-28 on `pub(crate) -> pub` for a
+  test holds for each other item.
 
 ### Amended 2026-11-13: what an agent runs against a venue
 
@@ -2031,6 +2504,9 @@ venue to a person. Thus each run against a venue needs one owner, in one table.
 | A signed test, its dry-run form, its kill switch, and its rollback | only `live-runner` | by the runbook of its job and the live policy |
 | Each other live run: the probe, an engine with execution `live` | only `live-runner` | by the live policy |
 | A run that a plan or a skill gives to a person | no lane of a person | the live policy decides (below) |
+| Amended 2026-11-15: the live capture of Polymarket, `poly_rotation::poly_rotation_capture_spans_two_rotations_with_zero_gap_handover`: a public read | only the verifier of the job whose plan names it | by its exact name, from an empty folder outside each checkout (top of §12). Its environment is empty except `PATH`, `HOME`, and `TMPDIR`. It loads no key, sends no signed request, and writes only below `TMPDIR` |
+| Amended 2026-11-15: the signed tests of Polymarket in `engine/tests/integration/poly_live/`: one signed order (`venue_accepts_one_signed_order`), a cancel beside a held placement (`cancel_finishes_while_a_marketable_place_is_held`), the kill switch, the rollback, and the reads, each with its dry-run form | only `live-runner` | by the runbook of its job and the live policy, at the live venue. No testnet, and no lane of a person (below) |
+| Amended 2026-11-15: the silent stream of Binance spot, `binance_silence::silent_user_stream_still_answers_reads`, with its dry-run form | only `live-runner` | by the runbook of its job and the live policy, at the live venue. No testnet, and no lane of a person. The tests of `binance_recording.rs` are its kill switch, its rollback, and its reads |
 
 - [ ] A live run = a process that sends a signed request to a venue (2026-11-12).
 - [ ] The run command of a signed test stands only in the runbook of the job that runs it. A
@@ -2045,6 +2521,33 @@ venue to a person. Thus each run against a venue needs one owner, in one table.
   and the reads of the venue, each with its dry-run form. Each dry run loads the live keys, so it is
   a live run too. Only `live-runner` runs it, and the ledger of the live policy gets a row for it.
   WHY: a dry run that loads a live key can lose that key as a live run can.
+- [ ] Amended 2026-11-15: the tests of part 4 against a venue, the last three rows of the table.
+  WHY: the plan of part 4 gives its signed tests to a person, and one of them to a testnet. The live
+  policy gives each one to `live-runner`, at the live venue.
+  - Each dry run of `poly_live/` and `binance_silence.rs` loads the live keys. The line above on
+    the dry runs of `binance_recording.rs` binds it.
+  - The kill switch of Polymarket cancels only the venue order ids that the placement answers of its
+    tests gave. A test writes each id to the id file of its run folder before its next step. No
+    cancel names the account, the market, or the token alone (2026-11-12 CAUTION on the kill
+    switch).
+  - The job of part 4 runs neither `cancel_finishes_while_a_marketable_place_is_held` nor its
+    rollback `sells_back_the_shares_of_the_held_placement`. Both stay in the code, each with its
+    dry-run form and its runbook section. The live policy permits one signed order test at
+    Polymarket and one order for each side. `venue_accepts_one_signed_order` is that test.
+  - Amended 2026-11-16, as built: the signed tests of Polymarket sit in the folder
+    `engine/tests/integration/poly_live/`. `cancel_finishes_while_a_marketable_place_is_held`
+    refuses in code under the caps of the live policy: its live form stops at the cap of one order
+    for each side, before any order action. Its dry run builds and prints its requests and sends
+    none. WHY: a cap in code stops a run that a runbook step lets through by mistake.
+  - Replaced 2026-11-16: "`engine/tests/integration/poly_live.rs`" in the second of the three rows
+    and "`poly_live.rs`" in the line on the dry runs. WHY: the tests sit in a folder of three files.
+  - Amended 2026-11-16, as built: each signed test of Polymarket, its dry run too, asks the venue
+    to derive the L2 credentials of its wallet before the start gate. IF the venue derives none,
+    or IF the gate then holds credentials that are not the derived ones, THEN the test stops
+    before any request of the tests. A test that places an order refuses before it signs the
+    order, unless the geoblock flag of the venue reads `blocked = false` for this host. WHY: the
+    start gate creates credentials when the venue derives none, a change of key settings that
+    the live policy forbids. The venue refuses an order by location.
 
 ## 13. Performance
 

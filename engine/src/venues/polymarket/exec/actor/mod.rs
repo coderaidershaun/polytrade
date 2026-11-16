@@ -8,6 +8,7 @@ mod poll;
 mod reads;
 mod rest;
 mod resync;
+mod unmapped;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,23 +37,21 @@ use crate::{info, warn};
 use super::ORDER_REQUEST_TIMEOUT;
 use super::codec::{OrderIndex, OrderSigner, SettlementWatermark, TokenTable, VenueAvailability};
 use super::handle::PolymarketExecAdapterSetup;
+use super::heartbeat::HeartbeatSchedule;
 use super::rest::ClobHttp;
 use super::sign::l2::{ApiCredentials, RequestSigner};
 use super::sign::order::SignatureType;
 
 use super::binding::{Bindings, RETIRED_BINDINGS};
-use super::correlate::{DelayedOrders, PendingFrames};
-use rest::{Lane, LaneSetup, RestLanes, RestOutcome, Submitted, spawn_lanes};
+use super::correlate::{DelayedOrders, FirstReads, PendingFrames};
+use super::lanes::{Lane, LaneSetup, RestJob, RestLanes, RestOutcome, Submitted, spawn_lanes};
+use rest::RestPurpose;
 
 pub(super) const USER_STREAM_URL: &str = "wss://ws-subscriptions-clob.polymarket.com/ws/user";
 
 const PING_INTERVAL: Duration = Duration::from_secs(10);
 
-// The venue cancels the book after 10s of silence, so a heartbeat goes out every 5s — this
-// is the published cadence, not slack.
-const HEARTBEAT_PERIOD: DurationUs = DurationUs::from_micros(5_000_000);
-
-// A backstop that cancels any remaining orders as the assignment window closes. The hot
+// A backstop that cancels this run's remaining orders as the assignment window closes. The hot
 // engine already withdraws quotes on its own margin before that.
 const CLOSE_MARGIN: DurationUs = DurationUs::from_micros(3_000_000);
 
@@ -74,31 +73,10 @@ struct DriverCounts {
     dropped_frames: u64,
     untracked_events: u64,
     unmatched_answers: u64,
-    unmapped_left_alone: u64,
     adopted: u64,
     availability_refusals: u64,
     settlement_failures: u64,
     foreign_settlement_failures: u64,
-}
-
-// Once started, heartbeats commit forever: if they stop, the venue cancels this account's
-// book as a crash-safety measure. The first one goes out as late as possible — just before
-// the first order placement — and never stops after that.
-#[derive(Debug)]
-struct Heartbeat {
-    id: Option<Box<str>>,
-    is_started: bool,
-    sent_at: LocalTs,
-}
-
-impl Heartbeat {
-    fn new() -> Self {
-        Self {
-            id: None,
-            is_started: false,
-            sent_at: LocalTs::from_micros(0),
-        }
-    }
 }
 
 pub(super) struct Actor {
@@ -112,12 +90,16 @@ pub(super) struct Actor {
     // The user stream uses this credential; no other channel does.
     credentials: ApiCredentials,
     control: EdgeControl,
-    lanes: RestLanes,
-    outcomes: mpsc::Receiver<RestOutcome>,
+    lanes: RestLanes<RestPurpose>,
+    outcomes: mpsc::Receiver<RestOutcome<RestPurpose>>,
     assignments: mpsc::Receiver<WindowAssignment>,
     pending: PendingFrames,
     delayed: DelayedOrders,
-    heartbeat: Heartbeat,
+    first_reads: FirstReads,
+    /// Once started, heartbeats commit forever: if they stop, the venue cancels this account's book
+    /// as a crash-safety measure. The first one goes out as late as possible, just before the first
+    /// order placement, and it never stops after that.
+    heartbeat: Option<HeartbeatSchedule>,
     parked: Option<Parked>,
     /// Balances arrive one asset per call; the sweep is assembled here so only the last chunk arms
     /// the readiness gate.
@@ -126,9 +108,6 @@ pub(super) struct Actor {
     is_balance_sweep_readable: bool,
     /// A fill arrived mid-sweep; the account table needs a sweep issued after it.
     is_restatement_due: bool,
-    /// Cancels sent for a previous run's orders. Readiness waits on them: quoting must not open
-    /// over an order this run cannot name and did not choose.
-    prior_run_cancels: usize,
     seen_trades: Vec<Box<str>>,
     /// How far this run has watched its own fills settle. Every balance chunk it forwards is
     /// stamped with this: the venue publishes no account clock, and its balance answers lag a fill,
@@ -189,7 +168,7 @@ impl Actor {
             orders: OrderIndex::with_capacity(ORDER_INDEX_CAPACITY),
             bindings: Bindings::default(),
             instruments,
-            signature_type: wallet.signature_type,
+            signature_type: wallet.signature_type.into(),
             signer,
             credentials,
             control: EdgeControl::new(&edge, stop),
@@ -198,13 +177,13 @@ impl Actor {
             assignments,
             pending: PendingFrames::new(),
             delayed: DelayedOrders::default(),
-            heartbeat: Heartbeat::new(),
+            first_reads: FirstReads::default(),
+            heartbeat: None,
             parked: None,
             balances: Vec::new(),
             balances_outstanding: 0,
             is_balance_sweep_readable: true,
             is_restatement_due: false,
-            prior_run_cancels: 0,
             seen_trades: Vec::with_capacity(RECENT_TRADES),
             settled_through: SettlementWatermark::NONE,
             counts: DriverCounts::default(),
@@ -226,7 +205,7 @@ impl Actor {
             .map_or(AssetId::UNKNOWN, |row| row.quote_asset)
     }
 
-    fn submit(&self, lane: Lane, job: rest::RestJob) -> Submitted {
+    fn submit(&self, lane: Lane, job: RestJob<RestPurpose>) -> Submitted {
         self.lanes.submit(lane, job)
     }
 
@@ -416,7 +395,6 @@ impl EdgeDriver for Actor {
         }
         let counts = &self.counts;
         let is_notable = counts.adopted > 0
-            || counts.unmapped_left_alone > 0
             || counts.dropped_frames > 0
             || counts.untracked_events > 0
             || counts.unmatched_answers > 0
@@ -426,9 +404,8 @@ impl EdgeDriver for Actor {
             || self.bindings.refused() > 0;
         if is_notable {
             info!(
-                "polymarket execution correlation summary: {} orders adopted, {} unmapped left alone, {} cancels withheld for the taker hold, {} placements refused on venue state, {} bindings displaced before they completed, {} stream frames dropped, {} untracked-token events, {} answers matched no request, {} of this run's fills failed to settle, {} other accounts' did",
+                "polymarket execution correlation summary: {} orders adopted, {} cancels withheld for the taker hold, {} placements refused on venue state, {} bindings displaced before they completed, {} stream frames dropped, {} untracked-token events, {} answers matched no request, {} of this run's fills failed to settle, {} other accounts' did",
                 counts.adopted,
-                counts.unmapped_left_alone,
                 self.delayed.withholds(),
                 counts.availability_refusals,
                 self.bindings.refused(),

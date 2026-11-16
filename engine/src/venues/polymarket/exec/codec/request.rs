@@ -1,16 +1,12 @@
-//! Turns an engine request into an HTTP call. The hot side names WHAT it wants; this picks the
-//! endpoint, builds the body and signs the order inside it.
-//!
-//! Two rules bind every function here. The body string that comes back is the exact byte sequence
-//! the socket must send, because the L2 HMAC covers it and re-serialising invalidates the header.
-//! And the L2 preimage takes `path` WITHOUT `query` — signing `/data/orders?asset_id=x` where the
-//! venue signs `/data/orders` fails auth with no clue as to why.
+//! Turns an engine request into an HTTP call: the hot side names what it wants, and this picks
+//! the endpoint, builds the body, and signs the order inside it.
 
 use crate::msg::exec::OrderStyle;
 use crate::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 use crate::runtime::secrets::Secret;
 use crate::venues::exec::ExecRequest;
 
+use super::super::assess::ProvenSignatureType;
 use super::super::sign::address::Address;
 use super::super::sign::amount::{AmountRequest, order_amounts};
 use super::super::sign::eip712::ZERO_WORD;
@@ -21,8 +17,7 @@ use super::super::sign::order::{
     salt, sign_order,
 };
 use super::wire::{
-    CancelMarketOrdersBody, CancelOrderBody, HeartbeatBody, PlaceOrderBody, SignedOrderBody,
-    SubscribeAuth, SubscribeBody,
+    CancelOrderBody, HeartbeatBody, PlaceOrderBody, SignedOrderBody, SubscribeAuth, SubscribeBody,
 };
 use super::{EncodeContext, WireError};
 
@@ -32,12 +27,15 @@ const ZERO_WORD_HEX: &str = "0x0000000000000000000000000000000000000000000000000
 /// plus a three-minute floor rules GTD out of a five-minute market entirely.
 const NO_EXPIRATION: &str = "0";
 
-/// The path is what gets signed. The query is appended to the URL after signing.
+/// The path is what gets signed, and the query is appended to the URL after signing: signing
+/// `/data/orders?asset_id=x` where the venue signs `/data/orders` fails auth with no clue why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncodedRequest {
     pub method: HttpMethod,
     pub path: String,
     pub query: String,
+    /// The exact bytes that the socket must send: the L2 HMAC covers them, so a second
+    /// serialisation invalidates the header.
     pub body: String,
 }
 
@@ -81,7 +79,7 @@ pub struct OrderSignerSetup {
     /// Account wallet. The CLOB validates it against the api key's account.
     pub maker: Address,
     pub signer: Address,
-    pub signature_type: SignatureType,
+    pub signature_type: ProvenSignatureType,
     pub api_key: String,
 }
 
@@ -230,7 +228,7 @@ fn place(request: &PlaceRequest, context: &EncodeContext<'_>) -> Result<EncodedR
         maker_amount: amounts.maker,
         taker_amount: amounts.taker,
         side,
-        signature_type: signer.setup.signature_type,
+        signature_type: signer.setup.signature_type.into(),
         timestamp_millis,
         metadata: ZERO_WORD,
         builder: ZERO_WORD,
@@ -284,17 +282,6 @@ pub fn cancel_venue_order(venue_order_id: &str) -> Result<EncodedRequest, WireEr
         &CancelOrderBody {
             order_id: venue_order_id,
         },
-    )
-}
-
-/// Cancels everything resting on one token. Ordinary reconciliation cancels one order at a time.
-///
-/// # Errors
-/// The body cannot be serialised.
-pub fn cancel_market_orders(token_id: &str) -> Result<EncodedRequest, WireError> {
-    EncodedRequest::new(HttpMethod::Delete, "/cancel-market-orders").with_body(
-        "cancel market orders",
-        &CancelMarketOrdersBody { asset_id: token_id },
     )
 }
 

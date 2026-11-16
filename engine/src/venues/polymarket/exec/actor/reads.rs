@@ -13,12 +13,14 @@ use crate::{info, warn};
 use super::super::binding::BindingStep;
 use super::super::codec::{
     AccountStamps, account_snapshot, collateral_balance, conditional_balance, decode_balance,
-    decode_clob_market, decode_heartbeat, decode_trades_page, trades_page,
+    decode_clob_market, decode_trades_page, trades_page,
 };
+use super::super::heartbeat::BeatAnswer;
+use super::super::lanes::{Lane, RestJob, Submitted};
 use super::super::rest::ClobResponse;
 use super::Actor;
 use super::answer::read_body;
-use super::rest::{Lane, RestJob, RestPurpose, Submitted};
+use super::rest::RestPurpose;
 use super::resync::{MAX_PAGES, PageWalk};
 
 /// A balance sweep that belongs to no resync pass: a post-fill restatement answers the account
@@ -269,20 +271,25 @@ impl Actor {
         }
     }
 
-    /// The venue answers with the id the next heartbeat must echo, whether this one was
-    /// refused or succeeded.
     pub(super) fn on_heartbeat_answer(&mut self, answer: Result<ClobResponse, TransportError>) {
-        let Ok(response) = answer else {
-            warn!(
-                "polymarket execution heartbeat request failed in transport — the venue cancels this book after ten seconds of silence"
-            );
+        let Some(schedule) = self.heartbeat.as_mut() else {
             return;
         };
-        match decode_heartbeat(&response.body) {
-            Ok(id) => self.heartbeat.id = Some(id),
-            Err(error) => warn!(
-                "polymarket execution heartbeat answer unreadable ({error}) — the venue cancels this book after ten seconds of silence"
+        let was_placing_held = schedule.is_placing_held();
+        match (schedule.on_answer(&answer), &answer) {
+            (BeatAnswer::Accepted, _) => {}
+            (BeatAnswer::Refused, Ok(response)) | (BeatAnswer::Lost, Ok(response)) => warn!(
+                "polymarket execution heartbeat answered http {}: {} — the venue cancels this book after ten seconds with no beat answered",
+                response.status,
+                response.excerpt()
             ),
+            (_, Err(error)) => warn!(
+                "polymarket execution heartbeat request failed in transport ({error}) — the venue cancels this book after ten seconds with no beat answered"
+            ),
+        }
+        if was_placing_held && !schedule.is_placing_held() {
+            info!("polymarket execution heartbeat answered again — placing can resume");
+            self.finish_readiness_if_clean();
         }
     }
 
@@ -307,6 +314,7 @@ impl Actor {
             });
             // Both of these are per-token reads, and both are needed before trading begins:
             // any resting orders on the token, and a warm allowance cache.
+            self.first_reads.on_bound(entry.instrument);
             self.read_bound_token(entry.instrument, &entry.token_id);
             self.warm_allowance(&entry.token_id);
         }

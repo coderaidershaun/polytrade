@@ -1,26 +1,17 @@
-//! Polymarket execution POLICY: the decisions the driver makes that no wire format dictates.
-//!
-//! Every one of these exists because the venue mints the only order id there is, and mints it in
-//! the answer to the placement. That single fact produces a held-frame buffer, an adopt-or-leave
-//! rule for orders nobody can name, a cancel that has to wait out the venue's own hold, and a token
-//! binding that is only tradeable once three separate reads agree. Socket behaviour stays out;
-//! what is pinned here is what the driver DECIDES.
+//! Decisions of the Polymarket edge that no wire format dictates, chiefly when the tokens of a window
+//! are bound and tradeable. What the driver decides is pinned here; socket behaviour stays out.
 
-use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, Provenance, VenueOrderStatus};
+use engine::msg::exec::{ExecEvent, ExecKind};
 use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::time::DurationUs;
-use engine::venues::exec::{ExecCore, ExecEffect, ExecRequest, MirroredOrder, RequestId};
 use engine::venues::polymarket::exec::binding::{
     BindingStep, Bindings, ENRICHMENT_RETRY, EnrichmentRead, MAX_ENRICHMENT_ATTEMPTS,
 };
 use engine::venues::polymarket::exec::codec::{
-    DecodeContext, HttpAnswer, OrderIndex, OrdersRead, TokenTable, UnmappedOrder, VenueAnswer,
-    decode_heartbeat, decode_neg_risk, decode_orders_page,
+    DecodeContext, HttpAnswer, OrderIndex, OrdersRead, TokenTable, VenueAnswer, decode_neg_risk,
+    decode_orders_page,
 };
-use engine::venues::polymarket::exec::correlate::{
-    DELAYED_HOLD, DelayedOrders, PENDING_CAPACITY, PENDING_TTL, PendingFrames, UnmappedVerdict,
-    WithheldCancel, classify_unmapped, restates_balances,
-};
+use engine::venues::polymarket::exec::correlate::restates_balances;
 use engine::venues::polymarket::rotation::{OutcomeLeg, TokenId, WindowAssignment};
 
 use crate::engine_support::{exec_event, ts as at, venue_ts};
@@ -33,14 +24,16 @@ const DOWN_TOKEN: &str = "222";
 
 fn assignment(open: i64, close: i64) -> WindowAssignment {
     WindowAssignment {
-        up: OutcomeLeg {
-            instrument: UP,
-            token: TokenId::from(UP_TOKEN),
-        },
-        down: OutcomeLeg {
-            instrument: DOWN,
-            token: TokenId::from(DOWN_TOKEN),
-        },
+        legs: [
+            OutcomeLeg {
+                instrument: UP,
+                token: TokenId::from(UP_TOKEN),
+            },
+            OutcomeLeg {
+                instrument: DOWN,
+                token: TokenId::from(DOWN_TOKEN),
+            },
+        ],
         window_open_ts_us: venue_ts(open),
         window_close_ts_us: venue_ts(close),
         condition_id: std::sync::Arc::from(CONDITION),
@@ -267,289 +260,13 @@ fn allowance_warmth_and_refresh_claims_are_tracked_per_token() {
     );
 }
 
-fn held(frames: &mut PendingFrames, text: &str, now: i64) {
-    frames.hold(text.to_owned(), at(now));
-}
-
-/// The window between a placement's bytes leaving and its answer landing is one in which the venue
-/// can already be reporting fills on it. Dropping those frames loses a fill, so a frame naming an
-/// order nobody can map is held and handed back intact. The buffer is bounded by design: the oldest
-/// goes because a newer frame describes a more recent state. And a frame no mapping ever explains
-/// describes a fill the ledger has not seen — it leaves on a deadline so the driver can force a
-/// re-read instead of waiting forever. Both losses are counted rather than silent.
+/// At boot the token table is empty until the first rotation lands, so an open order of the account
+/// can rest on a token that this run cannot map. The codec must SURFACE it, with its venue id and
+/// side, so that the edge counts it with the orders that this engine cannot claim and names it in
+/// its log, rather than never seeing it. The edge never cancels it: nothing proves it this
+/// engine's own.
 #[test]
-fn a_held_frame_is_handed_back_intact_dropped_oldest_first_and_expired_on_its_deadline() {
-    let mut frames = PendingFrames::new();
-    held(&mut frames, "{\"event_type\":\"order\"}", 0);
-    assert_eq!(frames.len(), 1);
-
-    let drained = frames.drain();
-    assert_eq!(drained.len(), 1);
-    assert_eq!(drained[0].text, "{\"event_type\":\"order\"}");
-    assert_eq!(
-        frames.len(),
-        0,
-        "a drain empties the buffer for the re-read"
-    );
-
-    // Still unattributable: the caller hands it back rather than losing it.
-    frames.re_hold(drained[0].clone());
-    assert_eq!(frames.len(), 1);
-
-    let mut frames = PendingFrames::new();
-    for index in 0..PENDING_CAPACITY {
-        held(&mut frames, &format!("frame-{index}"), index as i64);
-    }
-    assert_eq!(frames.dropped(), 0);
-
-    held(&mut frames, "frame-overflow", PENDING_CAPACITY as i64);
-    assert_eq!(
-        frames.len(),
-        PENDING_CAPACITY,
-        "capacity is a cap, not a hint"
-    );
-    assert_eq!(frames.dropped(), 1);
-    let remaining = frames.drain();
-    assert_eq!(
-        remaining.first().map(|frame| frame.text.as_str()),
-        Some("frame-1"),
-        "the oldest frame is the one that left"
-    );
-    assert_eq!(
-        remaining.last().map(|frame| frame.text.as_str()),
-        Some("frame-overflow")
-    );
-
-    let mut frames = PendingFrames::new();
-    held(&mut frames, "early", 0);
-    held(&mut frames, "late", 5_000_000);
-
-    assert!(
-        frames.expired(at(PENDING_TTL.micros() - 1)).is_empty(),
-        "nothing expires before the ttl"
-    );
-    let expired = frames.expired(at(PENDING_TTL.micros() + 1));
-    assert_eq!(expired.len(), 1);
-    assert_eq!(expired[0].text, "early");
-    assert_eq!(frames.abandoned(), 1);
-    assert_eq!(frames.len(), 1, "the younger frame keeps waiting");
-}
-
-fn cancel_request(client_id: ClientOrderId) -> ExecRequest {
-    ExecRequest::Cancel {
-        instrument: UP,
-        client_id,
-    }
-}
-
-/// Request ids are the core's to mint, so the one under test is a real one: the identity that must
-/// survive the wait is the identity the core issued, not a number the test invented.
-fn minted_cancel(client_id: ClientOrderId) -> (RequestId, ExecRequest) {
-    let mut core = ExecCore::with_limits(4, 16);
-    // Cancels are admitted from any connected phase; a core still Down would refuse this one.
-    core.on_connected(&mut |_| {});
-    let mut minted = None;
-    core.on_command(
-        ExecCommand::Cancel {
-            instrument: UP,
-            client_id,
-        },
-        &mut |effect| {
-            if let ExecEffect::Send {
-                request_id,
-                request,
-            } = effect
-            {
-                minted = Some((request_id, request));
-            }
-        },
-    );
-    minted.expect("a cancel for an unmirrored order is sent straight through")
-}
-
-/// A marketable order is held 250 ms at the venue and CANNOT be cancelled during it. Sending the
-/// cancel anyway earns a refusal that counts against the hard-reject streak, so it waits. The hold
-/// belongs to the order, not to the run: once the order is gone the stamp must go with it or a later
-/// id reusing the slot inherits a wait it never earned.
-#[test]
-fn a_cancel_inside_the_taker_hold_is_withheld_and_released_once() {
-    let client_id = ClientOrderId(0x5150);
-    let mut delayed = DelayedOrders::default();
-    delayed.on_delayed(client_id, at(1_000_000));
-
-    let release_at = delayed
-        .held_until(client_id, at(1_000_000))
-        .expect("an order inside its hold reports when it leaves it");
-    assert_eq!(release_at, at(1_000_000) + DELAYED_HOLD);
-    assert!(
-        delayed
-            .held_until(client_id, at(1_000_000) + DELAYED_HOLD)
-            .is_none(),
-        "the hold ends at the stamp, it does not linger"
-    );
-
-    let (minted_id, minted_request) = minted_cancel(client_id);
-    delayed.withhold(WithheldCancel {
-        request_id: minted_id,
-        request: minted_request,
-        recon_seq: 3,
-        release_at,
-    });
-    assert!(
-        delayed.released(at(1_100_000)).is_empty(),
-        "the hold is still running"
-    );
-
-    let released = delayed.released(release_at);
-    assert_eq!(released.len(), 1);
-    assert_eq!(released[0].recon_seq, 3);
-    assert!(
-        delayed.released(at(9_999_999)).is_empty(),
-        "a released cancel is sent ONCE — never-retry survives the delay"
-    );
-
-    // The identity the core minted rides through the wait: re-deciding would mint a second request
-    // id for an order the core already believes has one cancel outstanding.
-    let ExecEffect::Send {
-        request_id,
-        request,
-    } = released[0].into_effect()
-    else {
-        panic!("a released cancel is a send");
-    };
-    assert_eq!(request_id, minted_id);
-    assert_eq!(request, cancel_request(client_id));
-
-    let mut delayed = DelayedOrders::default();
-    delayed.on_delayed(client_id, at(1_000_000));
-    delayed.forget(client_id);
-    assert!(delayed.held_until(client_id, at(1_000_000)).is_none());
-}
-
-/// A placement whose POST is still outstanding: it is ours, has no venue id and is not yet
-/// ambiguous.
-fn mine(client_id: u64, side: Side, price: i64, qty: i64) -> MirroredOrder {
-    MirroredOrder {
-        instrument: UP,
-        client_id: ClientOrderId(client_id),
-        side,
-        price: Price::from_mantissa(price),
-        qty: Qty::from_mantissa(qty),
-        provenance: Provenance::Mine,
-        has_sent_cancel: false,
-        is_ambiguous: false,
-    }
-}
-
-/// A placement whose answer will never come — it timed out or its transport failed, which marks the
-/// mirror entry ambiguous. Only such a slot is adoptable; a live in-flight one is deferred.
-fn lost(client_id: u64, side: Side, price: i64, qty: i64) -> MirroredOrder {
-    MirroredOrder {
-        is_ambiguous: true,
-        ..mine(client_id, side, price, qty)
-    }
-}
-
-fn resting(side: Side, price: i64, qty: i64) -> UnmappedOrder {
-    UnmappedOrder {
-        instrument: UP,
-        venue_order_id: "0xvenue".into(),
-        side,
-        price: Price::from_mantissa(price),
-        qty: Qty::from_mantissa(qty),
-        filled: Qty::from_mantissa(0),
-        status: VenueOrderStatus::New,
-    }
-}
-
-/// `classify_unmapped` decides what an order the venue reports but this run cannot name means,
-/// keyed on whether a placement for that (instrument, side) is still in flight. Adopting a resting
-/// order while our own placement on the side has no venue id yet would bind a SECOND venue id to our
-/// slot the moment our own answer lands, double-folding the position — so it defers instead. Once a
-/// placement is lost (ambiguous, no venue id ever coming) it becomes the only explanation for such
-/// an order and is adopted; a prior run's order carries no client id this run could mint, so it can
-/// never be an adoption — the boot sweep cancels it by venue id instead.
-#[test]
-fn classify_unmapped_decides_by_placement_state_and_match() {
-    struct Case {
-        name: &'static str,
-        mirror: Vec<MirroredOrder>,
-        resting: UnmappedOrder,
-        venue_id_landed: bool,
-        expected: UnmappedVerdict,
-    }
-
-    let cases = [
-        Case {
-            name: "a lost placement's answer is adopted by the order it lost",
-            mirror: vec![lost(0xa1, Side::Buy, 45_000_000, 500_000_000)],
-            resting: resting(Side::Buy, 45_000_000, 500_000_000),
-            venue_id_landed: false,
-            expected: UnmappedVerdict::Adopt(ClientOrderId(0xa1)),
-        },
-        Case {
-            name: "an exact price and size match still defers — the answer decides, not a guess",
-            mirror: vec![mine(0xa1, Side::Buy, 45_000_000, 500_000_000)],
-            resting: resting(Side::Buy, 45_000_000, 500_000_000),
-            venue_id_landed: false,
-            expected: UnmappedVerdict::Defer,
-        },
-        Case {
-            name: "deferral is keyed on the side, not on a match: a different order on it still waits",
-            mirror: vec![mine(0xa1, Side::Buy, 45_000_000, 500_000_000)],
-            resting: resting(Side::Buy, 44_000_000, 700_000_000),
-            venue_id_landed: false,
-            expected: UnmappedVerdict::Defer,
-        },
-        Case {
-            name: "the OTHER side has no placement in flight, so an order there is not deferred",
-            mirror: vec![mine(0xa1, Side::Buy, 45_000_000, 500_000_000)],
-            resting: resting(Side::Sell, 45_000_000, 500_000_000),
-            venue_id_landed: false,
-            expected: UnmappedVerdict::LeaveAlone,
-        },
-        Case {
-            name: "once our own placement's venue id has arrived it blocks nothing, and the resting \
-                   order is then unexplained — left alone, never adopted",
-            mirror: vec![mine(0xa1, Side::Buy, 45_000_000, 500_000_000)],
-            resting: resting(Side::Buy, 45_000_000, 500_000_000),
-            venue_id_landed: true,
-            expected: UnmappedVerdict::LeaveAlone,
-        },
-        Case {
-            name: "a ladder can leave more than one unanswered slot; price and size pick between them",
-            mirror: vec![
-                lost(0xa1, Side::Buy, 45_000_000, 500_000_000),
-                lost(0xa2, Side::Buy, 44_000_000, 700_000_000),
-            ],
-            resting: resting(Side::Buy, 44_000_000, 700_000_000),
-            venue_id_landed: false,
-            expected: UnmappedVerdict::Adopt(ClientOrderId(0xa2)),
-        },
-        Case {
-            name: "a prior run's order carries no client id this run could mint, so it is never adopted",
-            mirror: vec![MirroredOrder {
-                provenance: Provenance::PriorRun,
-                ..lost(0xa1, Side::Buy, 45_000_000, 500_000_000)
-            }],
-            resting: resting(Side::Buy, 45_000_000, 500_000_000),
-            venue_id_landed: false,
-            expected: UnmappedVerdict::LeaveAlone,
-        },
-    ];
-
-    for case in cases {
-        let got = classify_unmapped(&case.mirror, &case.resting, |_| case.venue_id_landed);
-        assert_eq!(got, case.expected, "case: {}", case.name);
-    }
-}
-
-/// At boot the token table is empty until the first rotation lands, so a prior run's order rests on
-/// a token this run cannot map. Dropped, it would fill behind an armed engine spending real balance
-/// the ledger never sees. The codec must SURFACE it — id and side, which is all a cancel needs — so
-/// the boot branch can sweep it by venue id instead of never seeing it.
-#[test]
-fn an_order_on_an_unbound_token_is_surfaced_for_the_boot_sweep_not_dropped() {
+fn an_order_on_an_unbound_token_is_surfaced_to_be_counted_not_dropped() {
     let tokens = TokenTable::with_retired_capacity(4);
     let orders = OrderIndex::with_capacity(16);
     let context = DecodeContext {
@@ -672,26 +389,6 @@ fn restates_balances_classifies_every_exec_kind() {
             "{quiet:?} moves nothing"
         );
     }
-}
-
-/// The dead man's switch chains: each call echoes the id the last answer carried. A stale id is
-/// refused WITH the expected id in the body, so the refusal is itself the recovery — one reader
-/// serves both, or a single stale id ends the chain and the venue cancels the book.
-#[test]
-fn the_heartbeat_id_is_read_from_a_refusal_as_readily_as_from_a_success() {
-    assert_eq!(
-        &*decode_heartbeat(r#"{"heartbeat_id":"1a2b"}"#).expect("a success carries the next id"),
-        "1a2b"
-    );
-    assert_eq!(
-        &*decode_heartbeat(r#"{"error_msg":"Invalid Heartbeat ID","heartbeat_id":"3c4d"}"#)
-            .expect("a stale-id refusal carries the id the venue expected"),
-        "3c4d"
-    );
-    assert!(
-        decode_heartbeat(r#"{"error_msg":"Unauthorized"}"#).is_err(),
-        "an answer with no id at all cannot continue the chain"
-    );
 }
 
 /// `/clob-markets` does not publish this flag; it has its own endpoint, and the answer picks which

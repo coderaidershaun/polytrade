@@ -25,11 +25,14 @@ each command to the venue's transport and from there to `ExecCore::on_command`):
 `ReconcileOpenOrders`, `CancelOurs`, `CancelPriorRun`, `ResubscribeStream`. These are intents, not
 venue methods.
 There is deliberately no cancel-all: the engine cannot distinguish foreign orders, so it
-never asks for something it could not account for.
+never asks for something it could not account for. No edge sends a bulk cancel of its venue
+either, such as a cancel of each order on a token: the backstop at the close of a window cancels
+the orders of this run one at a time, each by its own id.
 
 **Events out** (an `InboundMessage` with body `MessageBody::Exec(ExecEvent)` or
-`MessageBody::Account(AccountChunk)`, through `EventFunnel`): sixteen `ExecKind`s covering acks,
-reports, refusals, snapshots and stream lifecycle, plus balance chunks. Everything is a fixed-size
+`MessageBody::Account(AccountChunk)`, through `EventFunnel`): seventeen `ExecKind`s covering acks,
+reports, refusals, snapshots, stream lifecycle, and an open order that the edge cannot prove its
+own (`UnprovenOrder`), plus balance chunks. Everything is a fixed-size
 POD of integer newtypes — prices and quantities are i64 mantissas, identity is packed integers,
 and no string crosses inward. `EventFunnel` stamps the venue of its edge on each event and each
 balance chunk, so an adapter never sets it, and the fold reads the venue from the message.
@@ -110,8 +113,17 @@ engine branches solely on the normalised enums.
      `venue_update_ts_ms` that advances only when money moved. A delta stream is converted
      to snapshots at the edge; a lagging balance read is never presented as fresh.
    - Timeouts and ambiguity reconcile — a status probe resolves them; nothing is re-sent.
-     Re-sending risks two live orders, which no reconciliation can undo. A probe that the edge
-     sends on its own answers with `recon_seq` 0: the hot side numbers its own reads, and only
+     Re-sending risks two live orders, which no reconciliation can undo. An answer that says the
+     outcome of an order action is unknown is ambiguous too (Binance -1006 and -1007 on a
+     placement, a cancel, or an amend, and an HTTP 5xx with no code on a REST cancel): the edge
+     reads the order first, and the cancel latch stays shut while that read is out. Over REST, a
+     cancel refused at HTTP 429 or 418, the rate limit (-1003 or -1015), is ambiguous too: the
+     client reads no code at those statuses. A read that fails, or that itself answers -1006 or
+     -1007, re-arms the cancel, and so does a cancel that the gateway refused (`StillLive`:
+     -1021, and -1003 and -1015 only over the WebSocket API, where the codec reads each code).
+     So a second cancel can go out while the outcome of the first is unknown; a second cancel
+     of one client order id adds no order. A probe that the edge sends on its own
+     answers with `recon_seq` 0: the hot side numbers its own reads, and only
      an answer that echoes one of them counts toward that read. The deadline is
      `execution.inflight_timeout_ms`, the one value that the hot slot and the in-flight table
      both read (`SessionSetup.inflight_timeout`). A venue's order client gives its HTTP verdict
@@ -132,7 +144,9 @@ engine branches solely on the normalised enums.
 Connect → subscribe the user stream → resync pass (the venue's own read set: account plus
 open orders, paginated or per-instrument as the venue demands) → fold every open order into
 the mirror, classifying provenance → cancel prior-run orders and wait for them to drain →
-arm readiness → Quoting. On disconnect: mark every in-flight request ambiguous, emit
+arm readiness → Quoting. Only a venue that echoes the client id proves an order of a prior run,
+so only there is one cancelled; a venue that mints the ids cancels no order at a start
+(venue-minted ids, below). On disconnect: mark every in-flight request ambiguous, emit
 `StreamReset` (which invalidates each hot slot of this venue's instruments to Unknown and
 disarms this venue's readiness; each other venue of the engine keeps its slots and readiness),
 reconnect with backoff, resync again. On exit: plan a cancel sweep, retry it paced until
@@ -143,6 +157,16 @@ that stays, and one ERROR line names them too. A final exit whose sweep was neve
 because the socket stayed down or nothing answered in time, ends the same way with no ids.
 The edge settles its latch with that failure, and the drain counts it as a failed step, so
 the exit is not graceful.
+
+A venue with a heartbeat (Polymarket): once it has started, the venue cancels each order of the
+account when it hears no beat for its limit, and the edge learns that only from reports. So a beat
+that fails is due again one retry interval after it went out: the limit less a margin leaves three
+tries, and a venue that refuses each beat hears one a second, never one at each housekeeping tick.
+When no beat is answered for the limit less a margin, the edge drops its connection, so the order
+mirror is rebuilt by the path of a lost connection, and quoting does not open until a beat is
+answered again. When the limit itself passes, the venue has cancelled the book, and a new resync
+pass reads the open orders again. The limit, the margin, the period, and the retry interval come
+from the facts of the venue.
 
 A new subscription: when a read of open orders shows a change that the order stream never
 reported, the hot side sends `ResubscribeStream`. The core turns it into the same
@@ -167,9 +191,24 @@ Two identity patterns exist, chosen by whether the venue echoes a client id:
   order id format and recovers ownership by parsing what the venue echoes, through
   `OrderOwnership::of`. Stateless and restart-safe.
 - **Venue-minted ids** (Polymarket shape): the venue names the order in its placement
-  answer. The adapter keeps a fixed-capacity id index, holds stream frames that name
-  unknown orders until the mapping lands, and decides adopt / defer / leave-alone by
-  policy. An order is unattributable between send and answer — the adapter carries that
+  answer. The adapter keeps a fixed-capacity id index, and holds stream frames that name
+  unknown orders until the mapping lands. An open order with an unknown id defers while a
+  placement of this run is in flight on its side. Otherwise it is adopted only when exactly
+  one lost slot of this run (a placement whose answer will never come) equals it in
+  instrument, side, price, and original size. No match, and two or more matches, leave it
+  alone: a near match can be a person's order, and a pick between two equal slots binds the
+  fills of one order to another. An order left alone is counted with the orders this engine
+  did not place, and is never mirrored and never cancelled; the lost slot stays ambiguous
+  until its status probes end it. At the first read of its token, an order that no placement of
+  this run explains is unproven instead: it can be an order of an earlier run of this engine,
+  whose fills the fold could not book, or a person's. A binding of a token makes its first read
+  due (`FirstReads`). The first read ends only at a fresh-binding read of that token, while it is
+  still bound, in which no unknown order deferred: an order that defers waits for a placement of
+  this run, whose answer asks for one more read of the token, and that read is still a first
+  read. The edge never cancels an unproven order: it counts it and sends one
+  `UnprovenOrder` event, and the fold halts quoting (`UnprovenOrderResting`) at that message, so
+  a person decides. An order on a token that no binding names is counted and left alone, and
+  halts nothing. An order is unattributable between send and answer — the adapter carries that
   window, never the engine.
 
 Every venue declares a `LeaseNamespace` beside its capabilities. The execution lease locks
@@ -239,10 +278,25 @@ variant there, and a dependency-allowlist amendment if signing needs a new crate
 Each venue gets a simulator behind the same contract. The seam suite of the fitness target
 holds one test body for each written obligation above, over a harness: a venue stand-in
 behind the venue's real codec. A venue passes the contract when its harness runs every body
-(`venue_edge_keeps_each_written_obligation!`); Binance runs it today. A new venue's
-determinism evidence is that run, its codec goldens, and a test double driven through its
-real codec, delivery-permutation style (ack-first, report-first, ack-only, report-only,
-ambiguous, duplicated, reordered — the seven ways two answers to one request arrive).
+(`venue_edge_keeps_each_written_obligation!`). Binance, Polymarket, and the simulator run it.
+A harness says whether its venue reports a change of balance and whether it has a pending
+cancel, and the queued stamps are held for each edge that writes its queue through
+`EventFunnel`; the simulator stamps its own messages, so its queued stamps are not held yet.
+Some lines of the Polymarket edge sit in its private actor, where no harness reaches: the count
+of an unmapped order that is left alone or has no bound token, the call that sends the event of
+an unproven order, the calls of `FirstReads` and the read that a placement answer asks for, the
+halt on an open order that does not decode, and the reconnect after a lost heartbeat. The verdict
+on the unmapped order, the state of the first reads, the event of an unproven order and the halt
+it gives, the codec's naming of the undecodable order, and the heartbeat schedule are held. The
+Binance edge sets the class of a failed REST cancel in its private actor too; the client and the
+core on each side of that step are held. A new venue's determinism evidence is that run, its
+codec goldens, and a test double driven through its real codec, delivery-permutation style
+(ack-first, report-first, ack-only, report-only, ambiguous, duplicated, reordered — the seven
+ways two answers to one request arrive).
+
+A simulator answers in its venue's own wire, with one exception: it refuses an order of a style
+that it cannot model with code 9001, which no venue sends, so that refusal never reads as an
+answer of the venue. The codec classifies it `Fatal`, and the run summary counts it.
 
 ## What not to do
 

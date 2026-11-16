@@ -283,6 +283,9 @@ impl OrderTable {
         Ok((index, client_id))
     }
 
+    /// A read names an order of this run that no slot holds: a pass that lagged closed it, and the
+    /// reap freed its slot. The seat takes the totals that the read shows, so the ledger books none
+    /// of them again, and only what later reports add is a step.
     pub fn adopt(&mut self, event: &ExecEvent, now: LocalTs) -> Option<usize> {
         let index = ClientIdLayout::slot_of(event.client_id);
         let slot = self.slots.get_mut(index)?;
@@ -298,12 +301,14 @@ impl OrderTable {
             instrument: event.instrument?,
             price: event.price,
             qty: event.qty,
+            filled_base: event.cumulative_qty,
+            filled_quote: event.cumulative_quote,
             generation: ClientIdLayout::generation_of(event.client_id),
             last_event_ts_us: now,
             placed_recon_seq: event.recon_seq,
             ..OrderSlot::EMPTY
         };
-        self.fees[index] = FeeMemory::EMPTY;
+        self.fees[index] = FeeMemory::seated_at(event.cumulative_qty);
         self.in_use.insert(index);
         Some(index)
     }

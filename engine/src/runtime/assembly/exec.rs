@@ -77,7 +77,6 @@ pub(super) struct ExecCheck<'a> {
     pub(super) venue: Option<ExecutionVenue>,
     pub(super) registry: &'a Registry,
     pub(super) identity: &'a RunIdentity,
-    pub(super) spin_interval: DurationUs,
     pub(super) input_capacity: usize,
     pub(super) lease_dir: &'a Path,
 }
@@ -103,7 +102,12 @@ pub(super) fn check_execution(check: ExecCheck<'_>) -> Result<Option<ExecPlan>, 
     // Each venue's physics come from the venue's own module. Read here, where the venue is known,
     // and carried into `settings` — the hot engine stays venue-neutral and never names one.
     let venue = match execution.mode {
-        ExecutionMode::Sim => ExecutionVenue::Simulated,
+        ExecutionMode::Sim => ExecutionVenue::Simulated(*execution.sim_proofs().ok_or(
+            StartError::ExecutionNotWired {
+                mode,
+                detail: "the execution block holds no proofs of config validation",
+            },
+        )?),
         ExecutionMode::Live => check.venue.ok_or(StartError::ExecutionNotWired {
             mode,
             detail: "the startup permission probe was never run",
@@ -115,7 +119,6 @@ pub(super) fn check_execution(check: ExecCheck<'_>) -> Result<Option<ExecPlan>, 
     let venue = venue.check(EdgeCheck {
         registry: check.registry,
         execution,
-        spin_interval: check.spin_interval,
         input_capacity: check.input_capacity,
     })?;
     let te_tag = TeTag::of(check.identity);

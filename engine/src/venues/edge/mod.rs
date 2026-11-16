@@ -12,6 +12,7 @@
 pub mod backoff;
 pub(crate) mod chunk;
 pub mod decode;
+pub mod fault;
 mod funnel;
 pub mod http;
 pub(crate) mod lane;
@@ -46,7 +47,8 @@ use crate::venues::exec::{
 };
 use crate::{info, warn};
 
-pub(crate) use funnel::{EventFunnel, stamp_venue};
+pub use funnel::EventFunnel;
+pub(crate) use funnel::stamp_venue;
 
 // Checks the exit latches and deadlines often enough that a stop is acted on within milliseconds.
 pub(crate) const HOUSEKEEPING: Duration = Duration::from_millis(20);
@@ -80,7 +82,6 @@ pub(crate) struct EdgeSettings {
 pub(crate) struct EdgeCheck<'a> {
     pub(crate) registry: &'a Registry,
     pub(crate) execution: &'a ExecutionConfig,
-    pub(crate) spin_interval: DurationUs,
     pub(crate) input_capacity: usize,
 }
 

@@ -604,14 +604,16 @@ fn publisher_tape() -> Vec<InboundMessage> {
     core.on_window_resolved(
         ts(POLYMARKET_START_US - 1_000),
         WindowAssignment {
-            up: OutcomeLeg {
-                instrument: InstrumentId(0),
-                token: TokenId::from(&**up),
-            },
-            down: OutcomeLeg {
-                instrument: InstrumentId(1),
-                token: TokenId::from(&**down),
-            },
+            legs: [
+                OutcomeLeg {
+                    instrument: InstrumentId(0),
+                    token: TokenId::from(&**up),
+                },
+                OutcomeLeg {
+                    instrument: InstrumentId(1),
+                    token: TokenId::from(&**down),
+                },
+            ],
             window_open_ts_us: venue_ts(POLYMARKET_WINDOW_OPEN_US),
             window_close_ts_us: venue_ts(POLYMARKET_WINDOW_OPEN_US + POLYMARKET_WINDOW_US),
             condition_id: "fitness-condition".into(),

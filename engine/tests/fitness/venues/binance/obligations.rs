@@ -22,7 +22,7 @@ pub(crate) struct BinanceEdge {
 }
 
 /// An answer that the codec of this build knows no code for.
-const UNMAPPED_REFUSAL: &str = r#"{"id":"0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0","status":400,
+pub(crate) const UNMAPPED_REFUSAL: &str = r#"{"id":"0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0","status":400,
     "error":{"code":-9999,"msg":"A refusal this build has never seen."}}"#;
 
 fn order_record(client_order_id: &str, price: &str, status: &str) -> OrderRecord {
@@ -48,6 +48,8 @@ impl EdgeHarness for BinanceEdge {
     const RUN_NONCE: u32 = RUN_NONCE;
     const RESTING_BID: Price = Price::from_mantissa(117_000 * FIXED_SCALE);
     const QTY: Qty = Qty::from_mantissa(10_000);
+    const SENDS_BALANCE_DELTAS: bool = true;
+    const QUEUES_THROUGH_FUNNEL: bool = true;
 
     fn new() -> Self {
         Self {
@@ -114,16 +116,17 @@ impl EdgeHarness for BinanceEdge {
         &mut self,
         client_id: engine::msg::ids::ClientOrderId,
         at: LocalTs,
-    ) -> ExecEvent {
+    ) -> Option<ExecEvent> {
         let text = format_client_order_id(self.venue.identity().te_tag, client_id);
-        decode_order_record(
+        let pending = decode_order_record(
             &order_record(&text, "117000.00000000", "PENDING_CANCEL"),
             ExecKind::SnapshotOrder,
             0,
             &self.venue.decode_context(at),
         )
         .expect("the record decodes")
-        .expect("the symbol is tracked")
+        .expect("the symbol is tracked");
+        Some(pending)
     }
 
     fn undecodable_open_order(

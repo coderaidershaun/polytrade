@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::runtime::artifacts::RunArtifacts;
 use crate::runtime::config::{ExecutionMode, RunIdentity};
 
 use super::error::FleetError;
@@ -15,7 +16,6 @@ use super::error::FleetError;
 const STRATEGIES_DIR: &str = "strategies";
 const ENGINE_DIR_PREFIX: &str = "te-";
 const CONFIG_FILE: &str = "config.yaml";
-const LOGS_DIR: &str = "logs";
 const MODE_KEY: &str = "mode:";
 const TAIL_LINES: usize = 20;
 
@@ -67,8 +67,7 @@ impl Engine {
 
     /// A sim run gets its own file, so simulated fills never sit in the log a live run writes.
     pub(super) fn console_log_path(&self, root: &Path, mode: Option<ExecutionMode>) -> PathBuf {
-        let stem = ExecutionMode::artifact_stem(mode, &self.identity);
-        root.join(LOGS_DIR).join(format!("{stem}-console.log"))
+        RunArtifacts::new(mode, &self.identity).console_log_path(root)
     }
 
     /// Writes only when the edited text reads back as `mode` through the same parse the listing

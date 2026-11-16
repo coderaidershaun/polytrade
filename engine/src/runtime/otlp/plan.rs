@@ -4,8 +4,9 @@
 use std::net::SocketAddr;
 
 use crate::msg::failure::{FailureClass, Halt};
+use crate::runtime::artifacts::RunArtifacts;
 use crate::runtime::assembly::SWEEP_SHARE_OF_DRAIN;
-use crate::runtime::config::{Config, ExecutionMode, RunIdentity};
+use crate::runtime::config::Config;
 
 use super::STOP_LIMIT_MS;
 
@@ -27,8 +28,7 @@ impl OtlpPlan {
     /// together do not fit in the part of `engine.drain_deadline_ms` that the exit sweep leaves.
     pub fn check<P>(
         config: &Config<P>,
-        identity: &RunIdentity,
-        mode: Option<ExecutionMode>,
+        artifacts: &RunArtifacts,
     ) -> Result<Option<OtlpPlan>, OtlpError> {
         let Some(otlp) = &config.otlp else {
             return Ok(None);
@@ -53,7 +53,7 @@ impl OtlpPlan {
         }
         Ok(Some(OtlpPlan {
             collector,
-            service: ExecutionMode::artifact_stem(mode, identity).into_boxed_str(),
+            service: artifacts.stem().into(),
         }))
     }
 }

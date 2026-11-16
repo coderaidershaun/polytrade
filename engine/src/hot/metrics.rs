@@ -139,5 +139,6 @@ fn is_venue_stamped(kind: ExecKind) -> bool {
             | ExecKind::SnapshotEnd
             | ExecKind::StreamReset
             | ExecKind::StreamReady
+            | ExecKind::UnprovenOrder
     )
 }

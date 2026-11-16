@@ -19,7 +19,8 @@ use tokio::sync::mpsc;
 
 use engine::msg::ids::FIXED_SCALE;
 use engine::msg::persist::PersistRecord;
-use engine::runtime::config::{ExecutionMode, RecordedTables, StrategyId, TradingEngineId};
+use engine::runtime::artifacts::RunArtifacts;
+use engine::runtime::config::{ExecutionMode, RecordedTables, RunIdentity};
 use engine::tape::{PersistConfig, PersistError, PersistHandle, PersistWriter, RunMeta};
 
 /// `f64` is stored as bits so cells compare exactly — deterministic replay is bit-for-bit equal.
@@ -170,10 +171,11 @@ pub(crate) fn run_dir(dir_root: &Path) -> PathBuf {
 
 /// Footer metadata for a writer these tests spawn; its feature dictionary is not asserted on.
 pub(crate) fn run_meta() -> RunMeta {
+    let identity = recorder_identity();
     RunMeta {
-        strategy_id: StrategyId::new("recorder").expect("valid strategy id"),
-        te_id: TradingEngineId::new("te-recorder").expect("valid trading engine id"),
-        execution_mode: Some(ExecutionMode::Live),
+        artifacts: RunArtifacts::new(Some(ExecutionMode::Live), &identity),
+        strategy_id: identity.strategy_id,
+        te_id: identity.te_id,
         fixed_scale: FIXED_SCALE,
         engine_version: "test".into(),
         feature_names: vec!["ewma_vol".into()],
@@ -183,6 +185,10 @@ pub(crate) fn run_meta() -> RunMeta {
             ("binance".into(), "usdt".into()),
         ],
     }
+}
+
+fn recorder_identity() -> RunIdentity {
+    RunIdentity::new("recorder", "te-recorder").expect("valid identity")
 }
 
 /// Preloads the ring so the actor sees a producer that has already quiesced — the records are all
@@ -216,7 +222,7 @@ pub(crate) fn spawn_writer_with(
     // empty.
     let (_, rotations_rx) = mpsc::channel(1);
     let meta = RunMeta {
-        execution_mode,
+        artifacts: RunArtifacts::new(execution_mode, &recorder_identity()),
         ..run_meta()
     };
     PersistWriter::spawn(config, meta, consumer, rotations_rx)

@@ -500,7 +500,7 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 115] = [
         &["engine::msg::time::EngineClock::now"],
     ),
     (
-        "engine/src/venues/binance/exec/actor/reconcile.rs",
+        "engine/src/venues/binance/exec/actor/rest_failure.rs",
         "on_order_read_failure",
         &["engine::msg::time::EngineClock::now"],
     ),
@@ -724,24 +724,24 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 115] = [
         &["engine::msg::time::EngineClock::now"],
     ),
     (
-        "engine/src/venues/polymarket/exec/actor/rest.rs",
-        "venue_seconds",
-        &["engine::msg::time::EngineClock::now"],
-    ),
-    (
-        "engine/src/venues/polymarket/exec/actor/resync.rs",
-        "adopted_event",
-        &["engine::msg::time::EngineClock::now"],
-    ),
-    (
         "engine/src/venues/polymarket/exec/actor/resync.rs",
         "finish_readiness_if_clean",
         &["engine::msg::time::EngineClock::now"],
     ),
     (
+        "engine/src/venues/polymarket/exec/actor/unmapped.rs",
+        "adopted_event",
+        &["engine::msg::time::EngineClock::now"],
+    ),
+    (
+        "engine/src/venues/polymarket/exec/lanes.rs",
+        "venue_seconds",
+        &["engine::msg::time::EngineClock::now"],
+    ),
+    (
         "engine/src/venues/polymarket/exec/preflight.rs",
-        "local_unix_secs",
-        &["std::time::SystemTime::now"],
+        "preflight_polymarket",
+        &["engine::msg::time::wall_clock_now"],
     ),
     (
         "engine/src/venues/polymarket/exec/probe/mod.rs",

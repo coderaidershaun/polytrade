@@ -10,14 +10,14 @@ use crate::venues::exec::EventSink;
 
 /// The one path from a venue edge to the hot thread. Every message is stamped as it is queued,
 /// because the hot side measures its own lateness against that stamp and cannot take it later.
-pub(crate) struct EventFunnel {
+pub struct EventFunnel {
     producer: QueueProducer,
     clock: EngineClock,
     venue: VenueId,
 }
 
 impl EventFunnel {
-    pub(crate) fn new(producer: QueueProducer, clock: EngineClock, venue: VenueId) -> Self {
+    pub fn new(producer: QueueProducer, clock: EngineClock, venue: VenueId) -> Self {
         Self {
             producer,
             clock,

@@ -15,8 +15,9 @@ use engine::hot::strategy::StrategyConfig;
 use engine::msg::ids::{FIXED_SCALE, QueueId, SourceId};
 use engine::msg::inbound::InboundMessage;
 use engine::msg::persist::RotationRow;
+use engine::runtime::artifacts::RunArtifacts;
 use engine::runtime::config::{
-    ExecutionMode, RecordedTables, StrategyId, TableKind, TradingEngineId,
+    ExecutionMode, RecordedTables, RunIdentity, StrategyId, TableKind, TradingEngineId,
 };
 use engine::runtime::pin_to_core;
 use engine::runtime::shutdown::{DrainSignal, FatalSignal};
@@ -264,7 +265,10 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
     let meta = RunMeta {
         strategy_id: StrategyId::new("recorder").expect("valid strategy id"),
         te_id: TradingEngineId::new("te-recorder").expect("valid trading engine id"),
-        execution_mode: Some(ExecutionMode::Live),
+        artifacts: RunArtifacts::new(
+            Some(ExecutionMode::Live),
+            &RunIdentity::new("recorder", "te-recorder").expect("valid identity"),
+        ),
         fixed_scale: FIXED_SCALE,
         engine_version: env!("CARGO_PKG_VERSION").into(),
         feature_names,

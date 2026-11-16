@@ -20,9 +20,10 @@ use engine::msg::ids::FIXED_SCALE;
 use engine::msg::inbound::InboundMessage;
 use engine::msg::persist::{PersistRecord, RotationRow};
 use engine::msg::time::EngineClock;
+use engine::runtime::artifacts::RunArtifacts;
 use engine::runtime::config::PolySeries;
 use engine::runtime::config::{
-    Config, ExecutionMode, RecordedTables, StrategyId, TradingEngineId, VenueMarket,
+    Config, ExecutionMode, RecordedTables, RunIdentity, StrategyId, TradingEngineId, VenueMarket,
 };
 use engine::runtime::pin_to_core;
 use engine::runtime::registry::Registry;
@@ -226,7 +227,10 @@ fn run_meta(registry: &Registry) -> RunMeta {
     RunMeta {
         strategy_id: StrategyId::new(STRATEGY_ID).expect("valid strategy id"),
         te_id: TradingEngineId::new(TE_ID).expect("valid trading engine id"),
-        execution_mode: Some(ExecutionMode::Live),
+        artifacts: RunArtifacts::new(
+            Some(ExecutionMode::Live),
+            &RunIdentity::new(STRATEGY_ID, TE_ID).expect("valid identity"),
+        ),
         fixed_scale: FIXED_SCALE,
         engine_version: env!("CARGO_PKG_VERSION").into(),
         feature_names: Vec::new(),

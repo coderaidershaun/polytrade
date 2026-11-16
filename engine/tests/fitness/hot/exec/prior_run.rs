@@ -1,6 +1,5 @@
-//! The orders that an earlier run left resting: each fill after their first report reaches the
-//! ledger once, none takes a slot of this run, a full table halts quoting, and a cancel the bank
-//! refused is asked again.
+//! The orders that a read names with no slot of this run to hold them: those an earlier run left
+//! resting, and those whose slot was reaped. Each fill after the seat reaches the ledger once.
 
 use std::sync::{Arc, Mutex};
 
@@ -13,7 +12,7 @@ use engine::hot::strategy::{Strategy, StrategyCtx};
 use engine::msg::exec::{
     ExecCommand, ExecEvent, ExecKind, ExecLaneItem, Provenance, VenueOrderStatus,
 };
-use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side, TradeId};
+use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, TradeId};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
 use engine::msg::persist::{IncidentKind, IncidentRow, PersistRecord};
 use engine::msg::time::Stamper;
@@ -987,5 +986,133 @@ fn prior_run_cancel_refused_by_a_full_bank_is_sent_later() {
         reading.position_base,
         Qty::from_mantissa(2 * ONE),
         "the ledger moved once for each step of the inherited order"
+    );
+}
+
+/// A read of order `client_id` of this run, with `cumulative` filled of 1.0 at 100.
+fn own_order_read(client_id: ClientOrderId, cumulative: i64, when: i64) -> InboundMessage {
+    let status = match cumulative {
+        0 => VenueOrderStatus::New,
+        _ => VenueOrderStatus::PartiallyFilled,
+    };
+    InboundMessage::new(
+        ts(when),
+        MessageBody::Exec(ExecEvent {
+            kind: ExecKind::SnapshotOrder,
+            status: Some(status),
+            qty: Qty::from_mantissa(ONE),
+            cumulative_qty: Qty::from_mantissa(cumulative),
+            cumulative_quote: Price::from_mantissa(100 * ONE)
+                .notional(Qty::from_mantissa(cumulative)),
+            ..exec_event(INSTRUMENT, client_id, Side::Buy, 100 * ONE, when)
+        }),
+    )
+}
+
+/// A report of a trade of order `client_id` that raises its total to `cumulative`.
+fn own_order_trade(
+    client_id: ClientOrderId,
+    last: i64,
+    cumulative: i64,
+    when: i64,
+) -> InboundMessage {
+    let MessageBody::Exec(read) = own_order_read(client_id, cumulative, when).body else {
+        unreachable!("a read of an order is an execution message");
+    };
+    InboundMessage::new(
+        ts(when),
+        MessageBody::Exec(ExecEvent {
+            kind: ExecKind::ReportTrade,
+            trade_id: Some(TradeId(when)),
+            last_price: Price::from_mantissa(100 * ONE),
+            last_qty: Qty::from_mantissa(last),
+            ..read
+        }),
+    )
+}
+
+/// FITNESS: a read that lagged closes an order of this run as gone, the reap frees its slot, and a
+/// later read names the order again with fills that the ledger booked while the slot held it. The
+/// seat takes the venue's total and books none of it: the fold cannot tell whether it booked that
+/// total before, and a second booking would double a position with nothing on the tape to show it.
+/// So quoting halts, a record keeps the total for a person, and later reports book only their step.
+#[test]
+fn an_adopted_order_books_none_of_its_cumulative() {
+    let mut fixture = fixture();
+    let ours = ClientIdLayout { run_nonce: 0 }.encode(side_base(INSTRUMENT, Side::Buy), 1);
+    fixture.engine.dispatch(&own_order_read(ours, 0, 10));
+    assert_eq!(
+        halt_reason(&mut fixture.ui_events),
+        None,
+        "case 2: a read with nothing filled seats the order with no halt"
+    );
+    fixture
+        .engine
+        .dispatch(&own_order_trade(ours, 4 * TENTH, 4 * TENTH, 20));
+    assert_eq!(
+        read(&mut fixture, 0, 30).position_base,
+        Qty::from_mantissa(4 * TENTH)
+    );
+
+    let lagging_pass = ExecEvent {
+        recon_seq: 1,
+        ..open_orders_snapshot_end(INSTRUMENT, ts(40))
+    };
+    fixture.engine.dispatch(&InboundMessage::new(
+        ts(40),
+        MessageBody::Exec(lagging_pass),
+    ));
+    let swept = read(&mut fixture, 1, 50);
+    assert!(
+        !swept.resting_buy,
+        "step 1: the pass closed the order it did not name"
+    );
+    read(&mut fixture, 2, 60);
+    drain_commands(&mut fixture.commands);
+    incidents(&mut fixture.records);
+
+    fixture
+        .engine
+        .dispatch(&own_order_read(ours, 4 * TENTH, 70));
+    let adopted = read(&mut fixture, 3, 80);
+    assert_eq!(
+        adopted.position_base,
+        Qty::from_mantissa(4 * TENTH),
+        "step 4: the seat books none of the total that the ledger already holds"
+    );
+    assert_eq!(
+        halt_reason(&mut fixture.ui_events),
+        Some(HaltReason::OrphanFill),
+        "step 5: quoting halts"
+    );
+    assert_eq!(
+        incidents(&mut fixture.records),
+        [IncidentRow {
+            kind: IncidentKind::OrphanFill,
+            instrument: INSTRUMENT,
+            client_id: Some(ours),
+            trade_id: None,
+            qty: Qty::from_mantissa(4 * TENTH),
+            amount: 0,
+            window_close_ts_us: None,
+            exchange_ts_us: venue_ts(70),
+            received_ts_us: ts(70),
+        }],
+        "step 5: one record keeps the total that the ledger did not book"
+    );
+    assert!(
+        drain_commands(&mut fixture.commands)
+            .iter()
+            .any(|command| matches!(command, ExecCommand::CancelOurs { .. })),
+        "step 5: the sweep of the halt cancels the order"
+    );
+
+    fixture
+        .engine
+        .dispatch(&own_order_trade(ours, 2 * TENTH, 6 * TENTH, 90));
+    assert_eq!(
+        read(&mut fixture, 4, 100).position_base,
+        Qty::from_mantissa(6 * TENTH),
+        "step 6: a later report books its step, so the ledger holds the venue's own total"
     );
 }

@@ -12,10 +12,10 @@ use crate::venues::exec::EdgeHandle;
 use crate::venues::polymarket::rotation::WindowAssignment;
 
 use super::actor::Actor;
+use super::assess::ProvenSignatureType;
 use super::sign::address::Address;
 use super::sign::key::SigningKey;
 use super::sign::l2::ApiCredentials;
-use super::sign::order::SignatureType;
 
 pub use super::preflight::{PolymarketPreflight, PolymarketPreflightError, preflight_polymarket};
 
@@ -25,7 +25,7 @@ pub use super::preflight::{PolymarketPreflight, PolymarketPreflightError, prefli
 pub struct WalletIdentity {
     pub maker: Address,
     pub signer: Address,
-    pub signature_type: SignatureType,
+    pub signature_type: ProvenSignatureType,
 }
 
 pub(super) struct PolymarketExecAdapterSetup {

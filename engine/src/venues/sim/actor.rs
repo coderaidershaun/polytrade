@@ -12,16 +12,17 @@ use crate::msg::inbound::InboundMessage;
 use crate::msg::run_state::RunState;
 use crate::msg::time::{EngineClock, LocalTs};
 use crate::runtime::registry::AssetDictionary;
-use crate::runtime::shutdown::{FatalReason, FatalSignal, RunStateCell};
+use crate::runtime::shutdown::{FatalSignal, RunStateCell};
 use crate::venues::IDLE_POLL;
 use crate::venues::binance::exec::{DecodeContext, SymbolTable};
 use crate::venues::edge::stamp_venue;
 use crate::venues::exec::{EdgeHandle, EngineIdentity, ExecStop};
-use crate::{error, info, warn};
+use crate::{info, warn};
 
 use super::core::latency::{LatencyBudget, rewound, shifted};
 use super::core::market::ResetReason;
 use super::driver::SimExecDriver;
+use super::error::{SimEdgeError, halt_on_sim_error};
 use super::lanes::{LaneBuffer, SimHorizon, SimLane};
 use super::readiness::{ReadinessProof, SimReadiness};
 use super::tap::MarketTapLane;
@@ -60,7 +61,9 @@ impl SimActor {
     async fn run(mut self) {
         while !self.is_stopping() {
             self.follow_run_state();
-            self.poll_lanes();
+            if let Err(error) = self.poll_lanes() {
+                halt_on_sim_error(&error, &self.fatal);
+            }
             self.open_venue();
             self.advance();
             self.arm_readiness();
@@ -221,7 +224,9 @@ impl SimActor {
     }
 
     fn shut_down(&mut self) {
-        self.poll_lanes();
+        if let Err(error) = self.poll_lanes() {
+            halt_on_sim_error(&error, &self.fatal);
+        }
         self.advance();
         if let Some(final_ts_us) = self.drain_final_commands() {
             let through_ts_us = self
@@ -241,6 +246,9 @@ impl SimActor {
             }
         };
         self.driver.log_summary();
+        if let Some(reason) = self.fatal.reason() {
+            warn!("sim SUMMARY the run is not valid: the engine halted, {reason}");
+        }
         match is_settled {
             true => self.stop.settle(None),
             false => warn!(
@@ -284,26 +292,21 @@ impl SimActor {
 
 // Polling and buffering for simulator input lanes.
 impl SimActor {
-    fn poll_lanes(&mut self) {
-        self.intake_commands();
-        self.intake_market();
+    fn poll_lanes(&mut self) -> Result<(), SimEdgeError> {
+        self.intake_commands()?;
+        self.intake_market()
     }
 
-    fn intake_commands(&mut self) {
+    fn intake_commands(&mut self) -> Result<(), SimEdgeError> {
         while let Ok(item) = self.commands.pop() {
             match item {
                 ExecLaneItem::Command(stamped) => {
                     self.horizon.observe(SimLane::Command, stamped.issued_ts_us);
-                    if let Err(error) = self
-                        .commands_due
+                    self.commands_due
                         .try_push(self.latency.arrival(stamped.issued_ts_us), stamped)
-                    {
-                        error!("exchange simulator: {error}");
-                        self.fatal.trip(FatalReason::SimulatorCommandLaneFull {
-                            capacity: error.capacity,
-                        });
-                        return;
-                    }
+                        .map_err(|full| SimEdgeError::CommandLaneFull {
+                            capacity: full.capacity,
+                        })?;
                 }
                 ExecLaneItem::Watermark(at_ts_us) => {
                     self.horizon.observe(SimLane::Command, at_ts_us)
@@ -312,9 +315,10 @@ impl SimActor {
         }
         let watermark = self.horizon.watermark(SimLane::Command);
         self.readiness.observe_lane(SimLane::Command, watermark);
+        Ok(())
     }
 
-    fn intake_market(&mut self) {
+    fn intake_market(&mut self) -> Result<(), SimEdgeError> {
         let Self {
             trades,
             depth,
@@ -326,13 +330,16 @@ impl SimActor {
         } = self;
         let latency = *latency;
         for (lane, tap) in [(SimLane::Trade, trades), (SimLane::Depth, depth)] {
-            tap.drain(|batch| driver.venue_mut().on_market_batch(batch, latency));
+            let mut intake = Ok(());
+            tap.drain(|batch| intake = driver.venue_mut().on_market_batch(batch, latency));
+            intake?;
             let Some(watermark) = tap.proven_watermark_ts_us() else {
                 continue;
             };
             horizon.observe(lane, watermark);
             readiness.observe_lane(lane, watermark);
         }
+        Ok(())
     }
 
     #[cold]

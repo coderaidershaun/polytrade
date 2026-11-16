@@ -1,8 +1,9 @@
 //! Tests of one engine process from start to stop: clocks, config, the lease, exposure, metrics,
 //! the OTLP export, pins, the exit, and the timing harness's refusal of a live engine.
 
+mod artifacts;
 mod clock;
-mod config_guards;
+pub(crate) mod config_guards;
 mod exit;
 mod exposure;
 mod exposure_state;

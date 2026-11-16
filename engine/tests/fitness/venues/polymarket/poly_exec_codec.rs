@@ -1,17 +1,5 @@
 //! Polymarket order messages, decoded from recorded venue payloads. With no test network, these
 //! tests are the only check of that decoding before real money moves through it.
-//!
-//! Four judgements are checked, because each fails silently and costs money when wrong: which
-//! payload may be folded as a fill, the message text to a [`RejectClass`], the split between an
-//! order rejection and an outage of the whole venue, and the exact bytes of a place body, whose
-//! signature is checked against a vector from the official SDK, not against our own output.
-//!
-//! A fifth is the startup gate's protocol-version read, which must accept the real venue's JSON
-//! shape and fail closed on anything else, because nothing else stands between it and a live run.
-//!
-//! A sixth is the settlement reading, which decides two things money depends on: when a reservation
-//! may be released, and whether a failed settlement stops the run. Both are asked long after the
-//! order behind the trade stopped being nameable, so both rest on what the payload itself says.
 
 use std::collections::BTreeSet;
 
@@ -26,19 +14,15 @@ use engine::venues::edge::decode::DecimalFault;
 use engine::venues::exec::ExecRequest;
 use engine::venues::polymarket::exec::codec::{
     AccountStamps, DecodeContext, EncodeContext, HttpAnswer, IgnoredReason, KnownOrder, OrderIndex,
-    OrderSigner, OrderSignerSetup, OrdersRead, PROTOCOL_VERSION, PlaceRequestContext,
-    PlacementStatus, RejectSubject, RejectVerdict, SettlementWatermark, StreamEvent, TokenBinding,
-    TokenTable, TradeSettlement, VenueAnswer, VenueAvailability, VenueFailure, WireError,
-    account_snapshot, cancel_market_orders, classify_error, decode_balance, decode_cancel,
-    decode_clob_market, decode_closed_only, decode_orders_page, decode_place,
-    decode_protocol_version, decode_single_order, decode_stream_frame, decode_trades_page,
-    encode_request,
+    OrdersRead, PlaceRequestContext, PlacementStatus, RejectSubject, RejectVerdict,
+    SettlementWatermark, StreamEvent, TokenBinding, TokenTable, TradeSettlement, VenueAnswer,
+    VenueAvailability, VenueFailure, WireError, account_snapshot, classify_error, decode_balance,
+    decode_cancel, decode_clob_market, decode_orders_page, decode_place, decode_single_order,
+    decode_stream_frame, decode_trades_page, encode_request,
 };
-use engine::venues::polymarket::exec::sign::address::Address;
-use engine::venues::polymarket::exec::sign::order::SignatureType;
 use serde_json::Value;
 
-use crate::venues::polymarket::poly_sign::{text, wallet_key};
+use super::signing::{sign_vector, vector_signer};
 
 macro_rules! fixture {
     ($name:literal) => {
@@ -49,8 +33,6 @@ macro_rules! fixture {
         ))
     };
 }
-
-const SIGN_VECTORS: &str = include_str!("../../../../fixtures/polymarket/sign_vectors.json");
 
 const NOW: LocalTs = LocalTs::from_micros(1_786_046_870_000_000);
 
@@ -64,7 +46,7 @@ const ORDER_A: &str = "0x3f1c9b4a72e5d08a1c6b3fd2094e7a5b81c02d6e9fa473b5c8e10d9
 const ORDER_B: &str = "0x7d2e8a015c93b64fe0a17d3b28c95f4610ed7b3a92c4085fd61b73e2a908c54d";
 const ORDER_FOREIGN: &str = "0xc4a90b7e13d582f6a08b4c17e29d360f5ba81c7d049e3b62f18a05c937de4b21";
 
-const API_KEY: &str = "b1f2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+pub(super) const API_KEY: &str = "b1f2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
 
 const UP: InstrumentId = InstrumentId(3);
 const DOWN: InstrumentId = InstrumentId(4);
@@ -765,36 +747,6 @@ fn account_snapshot_chunks_arm_readiness_and_stamp_from_settlement() {
     }
 }
 
-/// The startup gate's own reads, both of which must FAIL CLOSED. The protocol version is read as a
-/// number: a comparison of the raw body to `"2"` never matches the live venue's `{"version":2}`, so
-/// the engine would refuse to arm on the real venue every time. The closed-only flag is read
-/// strictly: a defaulted `bool` would read an error envelope or `{}` as "may trade" and arm a
-/// closed-only account into quoting one side straight into rejection.
-#[test]
-fn the_startup_gates_read_fail_closed() {
-    // The protocol version is read as a number from both shapes.
-    {
-        let live = decode_protocol_version(fixture!("version"));
-        assert_eq!(live, Some(2));
-        assert_eq!(live, Some(PROTOCOL_VERSION));
-        assert_eq!(decode_protocol_version("2"), Some(PROTOCOL_VERSION));
-    }
-
-    // A body carrying no closed-only flag refuses the arm. Absent field, error envelope, empty
-    // object, non-json — every one is "cannot prove it".
-    {
-        assert_eq!(decode_closed_only(r#"{"closed_only":true}"#), Some(true));
-        assert_eq!(decode_closed_only(r#"{"closed_only":false}"#), Some(false));
-        assert_eq!(decode_closed_only("{}"), None);
-        assert_eq!(decode_closed_only(r#"{"error":"unauthorized"}"#), None);
-        assert_eq!(
-            decode_closed_only("<html>500 Internal Server Error</html>"),
-            None
-        );
-        assert_eq!(decode_closed_only(""), None);
-    }
-}
-
 fn expected_verdicts() -> Vec<(&'static str, RejectVerdict)> {
     use RejectClass::{Ambiguous, Fatal, Gone, Refused, StillLive};
     let order = RejectVerdict::Order;
@@ -938,114 +890,14 @@ fn a_full_pause_is_distinguishable_from_a_pause_that_still_takes_cancels() {
     }
 }
 
-fn sign_vector() -> Value {
-    let vectors: Value =
-        serde_json::from_str(SIGN_VECTORS).expect("sign vector fixture is valid json");
-    vectors["orders"]
-        .as_array()
-        .expect("order vectors")
-        .iter()
-        .find(|vector| vector["signature_type"] == 2)
-        .cloned()
-        .expect("a gnosis safe order vector")
-}
-
-fn vector_signature_type(vector: &Value) -> u8 {
-    vector["signature_type"]
-        .as_u64()
-        .expect("vector signature type") as u8
-}
-
-fn vector_signer(vector: &Value) -> OrderSigner {
-    OrderSigner::new(OrderSignerSetup {
-        key: wallet_key(vector),
-        maker: Address::parse(text(vector, "maker")).expect("vector maker parses"),
-        signer: Address::parse(text(vector, "signer")).expect("vector signer parses"),
-        signature_type: SignatureType::from_code(vector_signature_type(vector))
-            .expect("vector names a wallet type this engine knows"),
-        api_key: API_KEY.to_owned(),
-    })
-}
-
-#[test]
-fn the_place_body_is_byte_exact_against_the_sdk_signature() {
-    let vector = sign_vector();
-    let signature = text(&vector, "expected_signature");
-    let token = text(&vector, "token_id");
-    let salt: u64 = text(&vector, "salt").parse().expect("vector salt");
-    let timestamp_millis: i64 = text(&vector, "timestamp_millis")
-        .parse()
-        .expect("vector timestamp");
-    let signer = vector_signer(&vector);
-
-    let mut table = TokenTable::with_retired_capacity(2);
-    table.bind(TokenBinding {
-        instrument: UP,
-        token_id: token.into(),
-        tick: TICK,
-        is_neg_risk: vector["neg_risk"].as_bool().expect("vector neg_risk"),
-    });
-    let orders = OrderIndex::with_capacity(4);
-    let sent_ts_us = LocalTs::from_micros(timestamp_millis * 1_000);
-    let context = EncodeContext {
-        tokens: &table,
-        orders: &orders,
-        signer: &signer,
-        sent_ts_us,
-    };
-
-    // The salt is derived from the send stamp and the client id rather than drawn at random, so a
-    // client id exists that lands on the vector's salt exactly. Solving for it is what lets an
-    // SDK-minted signature be reproduced here at all.
-    let client_id = ClientOrderId(sent_ts_us.micros() as u64 ^ salt);
-
-    let encoded = encode_request(
-        ExecRequest::Place {
-            instrument: UP,
-            client_id,
-            side: Side::Buy,
-            price: PRICE,
-            qty: SIZE,
-            style: OrderStyle::PostOnly,
-        },
-        &context,
-    )
-    .expect("the binding, price and size are all on the venue's grid");
-
-    let expected = format!(
-        concat!(
-            r#"{{"order":{{"salt":{salt},"maker":"{maker}","signer":"{signer}","#,
-            r#""tokenId":"{token}","makerAmount":"{maker_amount}","takerAmount":"{taker_amount}","#,
-            r#""side":"BUY","expiration":"0","timestamp":"{timestamp}","#,
-            r#""signatureType":{signature_type},"#,
-            r#""signature":"{signature}","#,
-            r#""metadata":"0x0000000000000000000000000000000000000000000000000000000000000000","#,
-            r#""builder":"0x0000000000000000000000000000000000000000000000000000000000000000"}},"#,
-            r#""owner":"{api_key}","orderType":"GTC","deferExec":false,"postOnly":true}}"#
-        ),
-        salt = salt,
-        maker = text(&vector, "maker"),
-        signer = text(&vector, "signer"),
-        token = token,
-        maker_amount = text(&vector, "maker_amount"),
-        taker_amount = text(&vector, "taker_amount"),
-        timestamp = timestamp_millis,
-        signature_type = vector_signature_type(&vector),
-        signature = signature,
-        api_key = API_KEY,
-    );
-    assert_eq!(encoded.body, expected);
-    assert_eq!(encoded.path, "/order");
-    assert!(encoded.query.is_empty());
-}
-
 /// Encoding through the real signer: order-type/postOnly selection, cancel addressability
-/// (mapped vs never-acknowledged), and read/rotation requests scoped by token — plus the token
-/// table's own rebind policy, which every encoded request ultimately depends on.
+/// (mapped vs never-acknowledged), and the read of open orders scoped by token, plus the token
+/// table's own rebind policy, which every encoded request depends on. No request cancels every
+/// order on a token: that would cancel a person's order too.
 #[test]
-fn requests_encode_by_token_and_the_token_table_rebinds_correctly() {
+fn requests_encode_by_token_and_the_token_table_rebinds() {
     let vector = sign_vector();
-    let signer = vector_signer(&vector);
+    let signer = vector_signer(&vector, API_KEY);
     let table = tokens();
     let orders = index();
     let context = EncodeContext {
@@ -1111,13 +963,6 @@ fn requests_encode_by_token_and_the_token_table_rebinds_correctly() {
         assert_eq!(encoded.path, "/data/orders");
         assert_eq!(encoded.query, format!("asset_id={UP_TOKEN}"));
         assert!(encoded.body.is_empty());
-    }
-
-    // The rotation sweep cancels by token.
-    {
-        let encoded = cancel_market_orders(UP_TOKEN).expect("body serialises");
-        assert_eq!(encoded.path, "/cancel-market-orders");
-        assert!(encoded.body.contains(UP_TOKEN));
     }
 
     // A retired token still routes its late fills home.

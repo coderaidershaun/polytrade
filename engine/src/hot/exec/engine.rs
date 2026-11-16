@@ -318,6 +318,11 @@ impl ExecEngine {
                 return ExecCallback::None;
             }
             ExecKind::SnapshotEnd => return self.on_snapshot_end(event, stamps, bank),
+            // The venue names no client id for it, so the fold could book none of its fills.
+            ExecKind::UnprovenOrder => {
+                self.halt(HaltReason::UnprovenOrderResting, now);
+                return ExecCallback::None;
+            }
             _ => {}
         }
         match event.provenance {
@@ -404,6 +409,9 @@ impl ExecEngine {
         if event.kind == ExecKind::SnapshotOrder
             && let Some(index) = self.orders.adopt(event, stamps.fold)
         {
+            if event.cumulative_qty.mantissa() > 0 {
+                self.on_unbooked_adopted_total(event, stamps, bank);
+            }
             return Some(index);
         }
         self.on_orphan(event, stamps, bank);

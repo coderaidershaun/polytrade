@@ -11,8 +11,8 @@ use serde::Deserialize;
 use crate::msg::ids::fixed_mantissa;
 use crate::msg::labelled_enum::labelled_enum;
 
-use super::simulated::SimConfig;
-use super::{ConfigError, MAX_OPERATIONAL_DURATION_MS, RunIdentity};
+use super::simulated::{CheckedSimBlock, SimConfig, SimProofs};
+use super::{ConfigError, MAX_OPERATIONAL_DURATION_MS};
 
 /// The declarative ladder is fixed-size so quote publication, reconciliation and the UI all share
 /// one compile-time bound. Configuration chooses how much of it is active, never its allocation.
@@ -69,18 +69,6 @@ impl ExecutionMode {
             Some(ExecutionMode::Sim) => "SIM",
             Some(ExecutionMode::Live) => "LIVE",
         }
-    }
-
-    /// Separates simulated artifacts while preserving existing live paths.
-    pub fn artifact_stem(mode: Option<Self>, identity: &RunIdentity) -> String {
-        match mode {
-            Some(ExecutionMode::Sim) => format!("{identity}-sim"),
-            _ => identity.to_string(),
-        }
-    }
-
-    pub fn artifact_segment(mode: Option<Self>) -> Option<&'static str> {
-        matches!(mode, Some(ExecutionMode::Sim)).then_some("sim")
     }
 }
 
@@ -151,12 +139,30 @@ pub struct ExecutionConfig {
     /// Required when `mode` is `sim`. Under `off` or `live` it is still validated but unused, so
     /// switching modes is a one-line edit.
     pub sim: Option<SimConfig>,
+    /// What validation proved about a run in mode `sim`. Only `Config::from_yaml` sets it, so a
+    /// config that skipped validation holds none.
+    #[serde(skip)]
+    sim_proofs: Option<SimProofs>,
 }
 
 impl ExecutionConfig {
+    /// The proofs of config validation for a run in mode `sim`, and `None` in each other mode.
+    pub(crate) fn sim_proofs(&self) -> Option<&SimProofs> {
+        self.sim_proofs.as_ref()
+    }
+
+    pub(super) fn keep_sim_proofs(&mut self, proofs: SimProofs) {
+        self.sim_proofs = Some(proofs);
+    }
+
+    /// The checked `sim:` block when one is present, in any mode.
+    ///
     /// # Errors
     /// [`ConfigError::Invalid`] when limits or the simulated venue configuration are invalid.
-    pub(super) fn validate(&self, spin_interval_us: u64) -> Result<(), ConfigError> {
+    pub(super) fn validate(
+        &self,
+        spin_interval_us: u64,
+    ) -> Result<Option<CheckedSimBlock>, ConfigError> {
         check_positive_milliseconds("execution.max_book_age_ms", self.max_book_age_ms)?;
         check_positive_milliseconds("execution.inflight_timeout_ms", self.inflight_timeout_ms)?;
         check_positive_seconds("execution.order_reap_secs", self.order_reap_secs)?;
@@ -165,7 +171,7 @@ impl ExecutionConfig {
             self.disconnect_sweep_secs,
         )?;
         check_bounded_milliseconds("execution.max_clock_skew_ms", self.max_clock_skew_ms)?;
-        self.validate_sim(spin_interval_us)?;
+        let checked = self.validate_sim(spin_interval_us)?;
         // Zero, unlike the quote floor: this reserves the asset being SOLD, and where the base
         // asset IS the position (outcome shares) every positive value subtracts from each exit —
         // a full-position offer reads Underfunded, and a flatten rounds below the venue's minimum
@@ -230,10 +236,10 @@ impl ExecutionConfig {
                 expected: "0.0..1.0, a fraction of the traded notional",
             });
         }
-        Ok(())
+        Ok(checked)
     }
 
-    fn validate_sim(&self, spin_interval_us: u64) -> Result<(), ConfigError> {
+    fn validate_sim(&self, spin_interval_us: u64) -> Result<Option<CheckedSimBlock>, ConfigError> {
         let sim = match (self.mode, self.sim.as_ref()) {
             (_, Some(sim)) => sim,
             (ExecutionMode::Sim, None) => {
@@ -243,9 +249,9 @@ impl ExecutionConfig {
                     expected: "a sim block, because mode is sim and its assumptions have no safe default",
                 });
             }
-            (_, None) => return Ok(()),
+            (_, None) => return Ok(None),
         };
-        sim.validate(spin_interval_us, self.inflight_timeout_ms)?;
+        let checked = sim.validate(spin_interval_us, self.inflight_timeout_ms)?;
         let verdict_retention_us = u128::from(self.order_reap_secs) * 1_000_000
             + u128::from(self.inflight_timeout_ms) * 1_000;
         if verdict_retention_us > MAX_EXECUTION_DURATION_US {
@@ -255,7 +261,7 @@ impl ExecutionConfig {
                 expected: "order reap plus in-flight timeout no greater than 24 hours",
             });
         }
-        Ok(())
+        Ok(Some(checked))
     }
 }
 

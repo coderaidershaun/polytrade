@@ -12,13 +12,14 @@ use crate::msg::failure::FailureClass;
 use crate::msg::ids::{AssetId, FIXED_SCALE, InstrumentId};
 use crate::msg::inbound::{FileWriter, InboundMessage, MessageBody, WriterFailure};
 use crate::msg::time::{EngineClock, wall_clock_now};
-use crate::runtime::config::{ExecutionMode, RunIdentity};
+use crate::runtime::artifacts::RunArtifacts;
+use crate::runtime::config::RunIdentity;
 use crate::runtime::registry::Registry;
 use crate::runtime::shutdown::WriterThread;
 use crate::{error, info};
 
 use super::file::{self, AssetEntry, ExposureDocument, FORMAT_VERSION, InstrumentEntry};
-use super::{ExposureError, ExposureSnapshot, ExposureState, add_amount, asset_amounts, file_path};
+use super::{ExposureError, ExposureSnapshot, ExposureState, add_amount, asset_amounts};
 
 /// Ring capacity: absorb burst between polls (absolute state, sink keeps newest).
 const RING_CAPACITY: usize = 16;
@@ -32,7 +33,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 pub struct ExposureWriterSetup<'a> {
     pub dir: PathBuf,
     pub identity: RunIdentity,
-    pub mode: Option<ExecutionMode>,
+    pub artifacts: RunArtifacts,
     pub registry: &'a Registry,
     /// `None` with execution off, where no quote can halt: the writer then only logs each failure.
     pub status: Option<WriterStatus>,
@@ -65,11 +66,10 @@ impl WriterStatus {
     }
 }
 
-/// Writer config (owned outright, thread borrows nothing).
+/// What the writer thread owns outright, so it borrows nothing from the start.
 struct ExposureWriterConfig {
-    dir: PathBuf,
+    path: PathBuf,
     identity: RunIdentity,
-    mode: Option<ExecutionMode>,
     instruments: Vec<InstrumentFacts>,
     asset_names: Vec<Box<str>>,
     /// Taken when the writer reports, so it reports once in a run.
@@ -78,16 +78,14 @@ struct ExposureWriterConfig {
 
 impl ExposureWriterConfig {
     fn new(
-        dir: PathBuf,
+        path: PathBuf,
         identity: RunIdentity,
-        mode: Option<ExecutionMode>,
         registry: &Registry,
         status: Option<WriterStatus>,
     ) -> Self {
         ExposureWriterConfig {
-            dir,
+            path,
             identity,
-            mode,
             instruments: registry
                 .instruments()
                 .iter()
@@ -132,7 +130,7 @@ impl ExposureWriter {
         let ExposureWriterSetup {
             dir,
             identity,
-            mode,
+            artifacts,
             registry,
             status,
             restored,
@@ -141,7 +139,12 @@ impl ExposureWriter {
         let mut latest = ExposureSnapshot::for_instruments(registry.instruments().len());
         latest.set_rows(restored.instruments().iter().copied());
         let state = WriterState {
-            config: ExposureWriterConfig::new(dir, identity, mode, registry, status),
+            config: ExposureWriterConfig::new(
+                artifacts.exposure_path(&dir),
+                identity,
+                registry,
+                status,
+            ),
             lane,
             latest,
             // Sequence 0 is the state already on disk. Every snapshot the hot side emits starts at
@@ -230,8 +233,8 @@ impl WriterState {
         if self.written_seq == Some(self.latest.seq) {
             return Ok(());
         }
-        let path = file_path(&self.config.dir, &self.config.identity, self.config.mode);
-        file::write_atomically(&path, &self.document())?;
+        let path = &self.config.path;
+        file::write_atomically(path, &self.document())?;
         self.failed_writes = 0;
         let is_first = self.written_seq.is_none();
         self.written_seq = Some(self.latest.seq);

@@ -31,6 +31,21 @@ impl ExecEngine {
         self.halt(HaltReason::OrphanFill, stamps.fold);
     }
 
+    /// An order of this run that a read names after its slot was reaped. Its total can hold fills that
+    /// the ledger booked while the slot held it, and the fold cannot tell which part, so the ledger
+    /// books none of it, a record keeps it, and quoting halts.
+    #[cold]
+    pub(super) fn on_unbooked_adopted_total(
+        &mut self,
+        event: &ExecEvent,
+        stamps: FoldStamps,
+        bank: &mut Actions,
+    ) {
+        unbooked_adopted_total_error(event);
+        self.record_orphan_fill(event, stamps.received, bank);
+        self.halt(HaltReason::OrphanFill, stamps.fold);
+    }
+
     /// A fill of an own order that the ledger does not book, as the venue's running total. A record
     /// needs an instrument, so a fill that names none keeps only its count.
     #[cold]
@@ -166,6 +181,15 @@ fn orphan_warning(event: &ExecEvent) {
 fn orphan_fill_error(event: &ExecEvent) {
     hot_error!(
         "order {:x} filled {} and no slot holds it — reaped too early, or a slot leaked; the ledger does not book the fill, and quoting halts",
+        event.client_id.0,
+        event.cumulative_qty.mantissa()
+    );
+}
+
+#[cold]
+fn unbooked_adopted_total_error(event: &ExecEvent) {
+    hot_error!(
+        "order {:x} of this run shows {} filled in a read after its slot was reaped — the slot takes that total, the ledger books none of it, a record keeps it, and quoting halts",
         event.client_id.0,
         event.cumulative_qty.mantissa()
     );

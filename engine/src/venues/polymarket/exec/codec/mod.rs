@@ -27,11 +27,11 @@ pub use read::{
 };
 pub use reject::{RejectSubject, RejectVerdict, VenueAvailability, VenueFailure, classify_error};
 pub use request::{
-    EncodedRequest, OrderSigner, OrderSignerSetup, cancel_market_orders, cancel_venue_order,
-    clob_market_request, closed_only_status, collateral_balance, conditional_allowance_refresh,
-    conditional_balance, create_api_key, derive_api_key, encode_request, heartbeat,
-    neg_risk_request, open_orders_for_token, open_orders_page, protocol_version, server_time,
-    subscribe_user_stream, trades_page,
+    EncodedRequest, OrderSigner, OrderSignerSetup, cancel_venue_order, clob_market_request,
+    closed_only_status, collateral_balance, conditional_allowance_refresh, conditional_balance,
+    create_api_key, derive_api_key, encode_request, heartbeat, neg_risk_request,
+    open_orders_for_token, open_orders_page, protocol_version, server_time, subscribe_user_stream,
+    trades_page,
 };
 pub use response::{
     PlaceOutcome, PlaceRequestContext, PlacedOrder, PlacementStatus, decode_cancel, decode_place,
@@ -199,6 +199,14 @@ pub enum WireError {
     Signing(#[from] super::sign::order::OrderSignError),
     #[error(transparent)]
     Amount(#[from] super::sign::amount::AmountError),
+    /// One order of a page of open orders does not decode. The error names the order, so the edge
+    /// halts on it rather than reading the whole page as failed.
+    #[error("open order {venue_order_id} does not decode: {source}")]
+    UndecodableOpenOrder {
+        venue_order_id: Box<str>,
+        #[source]
+        source: Box<WireError>,
+    },
 }
 
 impl WireError {
