@@ -203,10 +203,10 @@ pub fn restates_balances(event: &ExecEvent) -> bool {
 /// Which read of its token named the order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenRead {
-    /// The first read of the token in this run, before quoting opens on it: the first pass of a
-    /// run, or the read of a token that a rotation has just bound.
+    /// A read of the token from its binding until its first read ends. Only a fresh-binding read
+    /// of the token, while it is still bound and with no order deferred, ends it ([`FirstReads`]).
     First,
-    /// A later read of a token that this run quotes.
+    /// A read of the token after its first read ended.
     Quoted,
 }
 
@@ -226,7 +226,7 @@ enum FirstRead {
 }
 
 impl FirstReads {
-    /// A newly bound token is due its first read, before this run quotes on it.
+    /// A newly bound token is due its first read: orders can rest on it from before the binding.
     pub fn on_bound(&mut self, instrument: InstrumentId) {
         match self.state_mut(instrument) {
             Some(state) => *state = FirstRead::Due,
@@ -281,7 +281,8 @@ pub enum UnmappedVerdict {
     Adopt(ClientOrderId),
     /// A placement on this side is still in flight, so the order its answer will name cannot be told
     /// apart from a person's own order on the same side. Neither is classified until the place
-    /// answers or times out — the resync pass re-reads and decides then.
+    /// answers or times out — the resync pass re-reads and decides then. At a first read, the
+    /// answer of the place also asks for one more read of the token, which is still a first read.
     Defer,
     /// A read of a token already quoted, and no lost slot equals the order, or more than one does.
     /// A lost slot stays ambiguous, and its status probes settle it.
