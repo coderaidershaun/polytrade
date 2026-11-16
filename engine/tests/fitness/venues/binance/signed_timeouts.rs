@@ -400,3 +400,72 @@ fn an_unknown_outcome_of_a_rest_cancel_reads_before_any_second_cancel() {
         );
     }
 }
+
+/// A 5xx of the venue with a body that holds no Binance code, as a gateway in front of it answers.
+/// Binance gives a 5xx as an execution status unknown.
+const UNKNOWN_WITH_NO_CODE: &str = "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/html\r\nContent-Length: 58\r\nConnection: close\r\n\r\n<html><body><h1>503 Service Unavailable</h1></body></html>";
+
+/// CONTRACT: the signed client of the Binance edge and the venue meet at the network. A REST cancel
+/// answered with a 5xx and no Binance code can have run, so the client sends it once and gives the
+/// status back with no code, the edge classes it as ambiguous, and the order is read before any
+/// second cancel. Each request is signed with a key that is no key, and reaches only a stand-in on
+/// this host.
+#[test]
+fn a_rest_cancel_answered_5xx_with_no_code_reads_before_any_second_cancel() {
+    let instrument = InstrumentId(0);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("the test builds a runtime");
+    let venue = StandInVenue::answering(UNKNOWN_WITH_NO_CODE);
+    let cancelled = runtime.block_on(async {
+        let mut cancelling = client(&venue);
+        cancelling.cancel_order("BTCUSDT", ORDER).await
+    });
+    let cancelled = cancelled.expect_err("an unknown outcome is no cancel");
+    assert_eq!(
+        targets(&venue.requests()),
+        ["DELETE /api/v3/order"],
+        "the cancel goes out once"
+    );
+    assert!(
+        matches!(
+            cancelled,
+            RestError::Status {
+                status: 503,
+                code: None,
+                ..
+            }
+        ),
+        "the answer is the 5xx, with no code: {cancelled:?}"
+    );
+
+    // The edge classes this answer to a cancel as ambiguous, so it settles the cancel with one
+    // read of the order, and the latch of the cancel stays shut until the read answers.
+    let mut session = quoting_session::<BinanceEdge>();
+    send(&mut session, place::<BinanceEdge>(ORDER_ID), NOW);
+    let cancel = ExecCommand::Cancel {
+        instrument,
+        client_id: ORDER_ID,
+    };
+    assert_eq!(send(&mut session, cancel, NOW).len(), 1);
+    let mut reads = Vec::new();
+    session.core.on_ambiguous(ORDER_ID, &mut |effect| {
+        if let ExecEffect::Send { request, .. } = effect {
+            reads.push(request);
+        }
+    });
+    assert_eq!(
+        reads,
+        [ExecRequest::OrderStatus {
+            instrument,
+            client_id: ORDER_ID,
+        }],
+        "one read of the order"
+    );
+    assert_eq!(
+        send(&mut session, cancel, NOW),
+        [],
+        "a second cancel before the read answers"
+    );
+}
