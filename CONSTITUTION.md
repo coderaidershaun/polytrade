@@ -1259,15 +1259,19 @@ Binance sent an order action again after a lost answer.
     status unknown") among them. Pin: `an_order_action_whose_outcome_is_unknown_is_sent_once`. WHY:
     an answer of "status unknown" leaves the order action perhaps done, as a lost answer does.
   - Amended 2026-11-16, as built: -1006 and -1007 answering a cancel or an amend are
-    `Ambiguous` on both paths, so the edge reads the order before any second cancel or amend.
-    Section on the execution contract of part 4, end of §8.
+    `Ambiguous` on both paths, so the edge reads the order first. A read that fails, or that
+    answers -1006 or -1007, re-arms the cancel. Section on the execution contract of part 4, end
+    of §8.
+  - Replaced 2026-11-16: "so the edge reads the order before any second cancel or amend", and the
+    words "and only -1021 re-arms the cancel" in the WHY of the record below. WHY: a read that
+    fails, or that answers -1006 or -1007, re-arms the cancel too (the review of part 4, F3).
   - Replaced 2026-11-16: "Amended 2026-11-14, as built: after a failed REST cancel, the edge reads
     the order back at once only at 429 and at a transport failure. At -1006, -1007, and -1021 it
     re-arms the cancel. The read then comes from the in-flight timeout of the hot slot, and an exit
     sweep can send the same cancel again. Part 4 takes this behavior, with question Q1 of the
     review. WHY: no money moves, because a second cancel of one client order id adds no order."
     WHY: part 4 took the behavior. -1006 and -1007 leave the cancel perhaps done, so the edge now
-    reads the order first, and only -1021 re-arms the cancel.
+    reads the order first.
   - Replaced 2026-11-14: "A REST cancel that fails, at -1021 or 429 too, then reads the order
     back." WHY: the edge does not act so (the review of part 3, round 2).
 - [ ] Probe cap. A slot counts its status probes. At `execution.max_status_probes` the instrument
@@ -1389,6 +1393,21 @@ order as its own.
     only inside a live edge. The verdict has its pin above, and the count of the core has the pin
     `foreign_order_is_never_mirrored_or_cancelled`. WHY: the count is the one trace of an order
     that this engine did not place.
+- [ ] Amended 2026-11-16: the first read of a token. The edge never cancels an open order that it
+  cannot prove its own. WHY: Polymarket echoes no client id, so at a start the edge cannot tell
+  its own order of an earlier run from the order of a person, which the website places with the
+  same credentials. A cancel can touch an order that this engine did not place (third Never
+  line). Quoting beside it risks fills that the fold cannot book, and exposure outside the caps
+  (§6, money).
+  - First read of a token: the first pass of a run, and the first read of each token that a
+    rotation binds.
+  - IF a first read names an open order on the token, and neither `Defer` nor `Adopt` applies,
+    THEN the order is unproven. The edge counts it and never cancels it, and quoting halts with
+    the halt reason of an unproven order. A person decides.
+  - A read of a token that is already quoted keeps the verdicts above.
+  - An open order on a token that no binding names is left alone and counted. It halts nothing,
+    and the edge never cancels it.
+  - Pin: `a_cold_start_read_naming_an_unknown_order_sends_no_cancel`.
 - [ ] Amended 2026-11-16: the heartbeat deadline. WHY: Polymarket cancels each order of the account
   when no heartbeat reaches it within its limit. An edge that kept its mirror past that limit would
   quote from orders that no longer rest.
@@ -1417,12 +1436,24 @@ order as its own.
   before a read can act on a state that the edge does not know.
   - The codec gives -1006 and -1007 the class `Ambiguous` on a placement, a cancel, and an amend.
     A status query stays `StillLive`, because a read changes nothing.
-  - WebSocket API: the edge sends one read of the order. No second cancel or amend goes out before
-    that read answers.
-  - REST: after a failed cancel, the edge reads the order back at once at -1006, -1007, 429, and a
-    transport failure. The cancel latch stays shut until the read answers.
-  - -1021 stays `StillLive`, and only -1021 re-arms the cancel. The gateway refused the request
-    before the match engine, so the cancel did not run, and a later cancel is a new action.
+  - WebSocket API: the edge sends one read of the order, and the cancel latch stays shut until the
+    read answers. IF the read itself answers -1006 or -1007, THEN the read is `StillLive`, and
+    the edge re-arms the cancel.
+  - REST: after a cancel of class `Ambiguous` (-2011, -1006, -1007, or no answer), the edge reads
+    the order back at once, and the cancel latch stays shut. IF that read fails, THEN the edge
+    re-arms the cancel.
+  - A cancel answered `StillLive` (-1003, -1015, -1021) re-arms the cancel. The gateway refused
+    the request before the match engine, so the cancel did not run, and a later cancel is a new
+    action.
+  - Thus a second cancel can go out, from the next cancel or from the exit sweep, while the
+    outcome of the first is still unknown. No money moves, because a second cancel of one client
+    order id adds no order.
+  - Replaced 2026-11-16: "WebSocket API: the edge sends one read of the order. No second cancel
+    or amend goes out before that read answers.", "REST: after a failed cancel, the edge reads
+    the order back at once at -1006, -1007, 429, and a transport failure. The cancel latch stays
+    shut until the read answers.", and "-1021 stays `StillLive`, and only -1021 re-arms the
+    cancel." WHY: a read that fails, and a read that answers -1006 or -1007, re-arm the cancel
+    too, and so does each cancel answered `StillLive` (the review of part 4, F3).
   - Pins: `an_unknown_outcome_of_a_cancel_over_the_websocket_reads_before_any_second_cancel`,
     `an_unknown_outcome_of_a_rest_cancel_reads_before_any_second_cancel`.
 - [ ] Amended 2026-11-16, as built: the seam suite runs for the Polymarket edge and the simulator
@@ -2174,6 +2205,18 @@ go.
   replaced mechanism to reach its subject.
 - [ ] An old test that stays changes only where a changed interface forces it: the form of a call,
   never an asserted value.
+- [ ] Ruling, 2026-11-16: one named exception to the line above. In
+  `venues::binance::exec_codec::every_code_maps_to_the_class_the_engine_may_act_on`, the rows of
+  -1006 and -1007 on a `Cancellation` assert `RejectClass::Ambiguous`, where they asserted
+  `RejectClass::StillLive`. The comment of the test gives the new reason. Ruling D18 of part 4
+  made the exception. The new class has its own pins:
+  `an_unknown_outcome_of_a_cancel_over_the_websocket_reads_before_any_second_cancel` and
+  `an_unknown_outcome_of_a_rest_cancel_reads_before_any_second_cancel`.
+  - WHY: the change of class is a behavior change on purpose (the execution contract of part 4,
+    end of §8). The test holds the class of each code of the venue in one table. A new test of
+    the whole table, and then the removal of the old test, would move each row for two rows.
+  - This ruling permits no other changed value. A further exception needs its own ruling here:
+    dated, with the test, the rows, and the WHY.
 - [ ] The task that deletes a test records it in the hand-off file of its job: one table row with
   the old test, the new test that pins its behavior, and the module. The hand-off file also holds
   the list of tests (`cargo test -- --list`) before and after.
