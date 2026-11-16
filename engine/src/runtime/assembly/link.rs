@@ -3,13 +3,23 @@
 
 use std::net::UdpSocket;
 
+use rtrb::{Consumer, RingBuffer};
+use tokio::runtime::Handle;
+
+use crate::hot::dispatch::LinkWiring;
+use crate::hot::sink::LinkSink;
+use crate::hot::spawn::LinkQueueProducer;
 use crate::hot::strategy::Strategy;
 use crate::link::{
-    FrameGuard, LINK_NAME_LEN, LinkHash, LinkIdentity, PeerFeed, TopicId, schema_hash_of_fields,
+    FrameGuard, LINK_NAME_LEN, LinkActor, LinkActorSetup, LinkHash, LinkIdentity, OutboundLink,
+    PeerFeed, TopicId, schema_hash_of_fields,
 };
-use crate::msg::time::wall_clock_now;
+use crate::msg::time::{DurationUs, EngineClock, wall_clock_now};
+use crate::msg::ui::LatencyReport;
+use crate::msg::ui::channel::UiChannels;
 use crate::runtime::config::{Config, RunIdentity};
 use crate::runtime::registry::Registry;
+use crate::runtime::shutdown::{RunControlGate, TaskHandle};
 
 use super::StartError;
 
@@ -98,4 +108,78 @@ pub(super) fn link_bring_up<P>(
         topic_count: TopicId::space_len(topics.len()),
         feature_count,
     }))
+}
+
+/// What the link actor needs beside its bound socket. The start makes each part.
+pub(super) struct LinkStart<'a, P> {
+    pub config: &'a Config<P>,
+    pub inbound: Option<LinkQueueProducer>,
+    pub outbound: Option<Consumer<OutboundLink>>,
+    pub latency: Consumer<LatencyReport>,
+    pub channels: UiChannels,
+    pub control: RunControlGate,
+    pub clock: EngineClock,
+    pub spin_interval: DurationUs,
+}
+
+/// The ring that the hot thread fills for the link actor, beside the acknowledged cell that it
+/// writes. Both are absent when the config has no `link:` block.
+pub(super) fn outbound_ring(
+    bound_link: &Option<BoundLink>,
+    control: &RunControlGate,
+) -> (Option<LinkWiring>, Option<Consumer<OutboundLink>>) {
+    match bound_link {
+        None => (None, None),
+        Some(_) => {
+            let (producer, consumer) = RingBuffer::<OutboundLink>::new(LINK_RING_CAPACITY);
+            (
+                Some(LinkWiring {
+                    sink: LinkSink::new(producer),
+                    acknowledged: control.acknowledged().clone(),
+                }),
+                Some(consumer),
+            )
+        }
+    }
+}
+
+pub(super) fn spawn_link_actor<P>(
+    bound: BoundLink,
+    start: LinkStart<'_, P>,
+    edge_runtime: &Handle,
+) -> TaskHandle {
+    let on_controller_loss = start
+        .config
+        .link
+        .as_ref()
+        .map_or_else(Default::default, |link| link.on_controller_loss);
+    LinkActor::spawn(
+        LinkActorSetup {
+            socket: {
+                let _on_edge_runtime = edge_runtime.enter();
+                tokio::net::UdpSocket::from_std(bound.socket)
+                    .expect("a bound socket registers with the runtime that runs the link")
+            },
+            identity: bound.identity,
+            guard: bound.guard,
+            peers: bound.peers,
+            on_controller_loss,
+            inbound: start
+                .inbound
+                .expect("a bound link always builds its input queue"),
+            outbound: start
+                .outbound
+                .expect("a bound link always builds its outbound ring"),
+            latency: start.latency,
+            channels: start.channels,
+            control: start.control,
+            clock: start.clock,
+            spin_interval: start.spin_interval,
+            topic_count: bound.topic_count,
+            feature_count: bound.feature_count,
+            placement: start.config.senders.placement,
+            flush_period: start.config.senders.link_flush(),
+        },
+        edge_runtime,
+    )
 }
