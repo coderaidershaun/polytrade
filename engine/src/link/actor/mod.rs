@@ -1,6 +1,7 @@
 //! The link actor: one task that owns the UDP socket, the subscriber table and the sequence gate.
 //! It pushes checked frames to the engine and sends the hot thread's UI rings.
 
+mod control_plane;
 mod inbound;
 mod outbound;
 
@@ -14,8 +15,7 @@ use tokio::net::UdpSocket;
 use tokio::runtime::Handle;
 
 use crate::hot::spawn::LinkQueueProducer;
-use crate::msg::inbound::{InboundMessage, MessageBody, RunControl};
-use crate::msg::run_state::RunAssertion;
+use crate::info;
 use crate::msg::time::{DurationUs, EngineClock, LocalTs};
 use crate::msg::ui::LatencyReport;
 use crate::msg::ui::channel::UiChannels;
@@ -24,14 +24,12 @@ use crate::runtime::config::{
 };
 use crate::runtime::shutdown::{RunControlGate, TaskHandle};
 use crate::venues::edge::sender::SendWait;
-use crate::{info, warn};
 
 use super::control::{LINK_MAX_TOPICS, RunPhase, TopicSet};
 use super::envelope::{FrameGuard, LINK_MAX_DATAGRAM, LinkIdentity, TopicId};
 use super::frame::{LinkBody, OutboundLink};
 use super::subscribers::{LINK_MAX_SUBSCRIBERS, SequenceGate, SubscriberTable};
-use crate::msg::run_state::RunState;
-use inbound::{PEER_SILENCE_LIMIT, PeerState};
+use inbound::PeerState;
 
 /// Catalog, lifecycle, staleness, control repair. 1s granularity for display state.
 const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(1);
@@ -239,47 +237,6 @@ impl Actor {
                 Wake::Flush => self.flush_feeds(now),
                 Wake::Announce => self.announce(now),
                 Wake::Refresh => self.refresh_subscriptions(),
-            }
-        }
-    }
-
-    /// Level-triggered: drop+count queue means edge-triggered push alone leaves adapters down on full slot. Dups harmless (dedup on epoch).
-    fn push_marker_if_needed(&mut self, now: LocalTs) {
-        let Some(desired) = self.control.pending() else {
-            return;
-        };
-        self.inbound.push(InboundMessage::new(
-            now,
-            MessageBody::RunControl(RunControl { desired }),
-        ));
-    }
-
-    /// Dead controller must not decide fate; holding default, dead-man opt-in.
-    fn check_controller(&mut self, now: LocalTs) {
-        let Some(last) = self.last_control_ts_us else {
-            return;
-        };
-        if now.diff(last) < PEER_SILENCE_LIMIT || self.is_controller_lost {
-            return;
-        }
-        self.is_controller_lost = true;
-        match self.on_controller_loss {
-            ControllerLoss::Hold => warn!(
-                "no controller assertion for {}s — holding run state {:?}",
-                PEER_SILENCE_LIMIT.to_secs(),
-                self.control.desired().state()
-            ),
-            ControllerLoss::Idle => {
-                let epoch = self.control.desired().load().epoch + 1;
-                warn!(
-                    "no controller assertion for {}s — dead-man parking the engine at epoch {epoch}",
-                    PEER_SILENCE_LIMIT.to_secs()
-                );
-                self.control.desired().accept_if_newer(RunAssertion {
-                    state: RunState::Idle,
-                    epoch,
-                });
-                self.push_marker_if_needed(now);
             }
         }
     }
