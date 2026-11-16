@@ -241,6 +241,23 @@ impl Actor {
         }
     }
 
+    fn announce(&mut self, now: LocalTs) {
+        self.poll_lifecycle(now);
+        let lifecycle = LinkBody::Lifecycle(self.lifecycle());
+        self.send(TopicId::LIFECYCLE, lifecycle, now);
+        for index in 0..self.catalog_frames.len() {
+            let (topic, body) = self.catalog_frames[index];
+            self.send(topic, body, now);
+        }
+        self.check_controller(now);
+        self.push_marker_if_needed(now);
+        self.check_peer_silence(now);
+        self.announce_ticks += 1;
+        if self.announce_ticks.is_multiple_of(REPORT_TICKS) {
+            self.report_counts();
+        }
+    }
+
     #[cold]
     fn report_counts(&self) {
         let counts = &self.counts;
