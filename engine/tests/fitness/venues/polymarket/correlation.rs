@@ -28,8 +28,8 @@ use engine::venues::polymarket::exec::codec::{
     decode_orders_page, decode_place, decode_stream_frame, venue_order_id_digest,
 };
 use engine::venues::polymarket::exec::correlate::{
-    DelayedOrders, HeldFrame, PendingFrames, TokenRead, UnmappedVerdict, WithheldCancel,
-    classify_unmapped, unproven_order_event,
+    DelayedOrders, FirstReads, HeldFrame, PendingFrames, TokenRead, UnmappedVerdict,
+    WithheldCancel, classify_unmapped, unproven_order_event,
 };
 use engine::venues::polymarket::exec::facts::POLYMARKET_FACTS;
 use proptest::prelude::*;
@@ -1319,5 +1319,162 @@ fn a_cold_start_read_naming_an_unknown_order_sends_no_cancel() {
             .iter()
             .any(|command| matches!(command, ExecCommand::CancelOurs { instrument, .. } if *instrument == UP)),
         "step 5: the halt sweeps the orders of this run: {swept:?}"
+    );
+}
+
+impl Edge {
+    /// The open orders of [`first_read_of_up`] as this edge decodes them: the unknown order on UP.
+    fn read_up(&self, at: LocalTs) -> UnmappedOrder {
+        let page = first_read_of_up();
+        let read = OrdersRead {
+            instrument: UP,
+            recon_seq: 0,
+        };
+        let answer = HttpAnswer {
+            status: 200,
+            body: &page,
+        };
+        let VenueAnswer::Answered(decoded) =
+            decode_orders_page(answer, read, &self.context(at)).expect("the page decodes")
+        else {
+            panic!("a page of open orders is answered, not refused as venue state");
+        };
+        let [unknown] = decoded.unmapped.as_slice() else {
+            panic!(
+                "the read names one unknown order on UP: {:?}",
+                decoded.unmapped
+            );
+        };
+        unknown.clone()
+    }
+
+    /// The verdict of the edge on an unknown order, at the read kind that `first_reads` gives.
+    fn verdict_on(&self, unknown: &UnmappedOrder, first_reads: &FirstReads) -> UnmappedVerdict {
+        classify_unmapped(
+            self.session.core.mirror(),
+            unknown,
+            |client_id| self.orders.venue_order_id(client_id).is_some(),
+            first_reads.read_of(unknown.instrument),
+        )
+    }
+}
+
+/// CONTRACT: the first read of a token can find an unknown order on a side where a placement of
+/// this run waits for its answer. The order defers, since that answer can still name it. A first
+/// read that deferred does not end, so the token is read again when the placement answers, and
+/// that read is still a first read: an order that the answer did not name is unproven, and quoting
+/// halts at its one message. Ending the first read at the read that deferred would leave such an
+/// order alone, and quote beside it, at the binding of a token, where an order of an earlier run of
+/// this engine rests.
+#[test]
+fn a_first_read_that_defers_stays_first_until_the_placement_answers() {
+    let mut first_reads = FirstReads::default();
+    assert_eq!(first_reads.read_of(UP), TokenRead::Quoted);
+    first_reads.on_bound(UP);
+    assert_eq!(
+        first_reads.read_of(UP),
+        TokenRead::First,
+        "a token that a binding names is due its first read"
+    );
+
+    let (mut engine, mut commands, mut ui_events) = quoting_engine_with_ui(CEILING, &[]);
+    for message in reseat_book(BID, ASK, 1) {
+        engine.dispatch(&message);
+    }
+    make_ready(&mut engine, 2);
+    spin_at(&mut engine, 0, 3);
+    drain_commands(&mut commands);
+
+    let mut edge = Edge::with_placement_sent();
+    let unknown = edge.read_up(after(100));
+    assert_eq!(&*unknown.venue_order_id, PERSON);
+    assert_eq!(
+        edge.verdict_on(&unknown, &first_reads),
+        UnmappedVerdict::Defer,
+        "step 1: a placement of this run is in flight on the side, so its answer can still name \
+         the order"
+    );
+    first_reads.on_read_answered(UP, &[UnmappedVerdict::Defer]);
+    spin_at(&mut engine, 1, 4);
+    assert_eq!(
+        shown_halt(&mut ui_events),
+        None,
+        "step 1: a deferred order sends the fold nothing, so nothing halts"
+    );
+    assert_eq!(
+        first_reads.read_of(UP),
+        TokenRead::First,
+        "step 1: a first read that deferred does not end"
+    );
+    assert!(
+        !first_reads.take_read_after_answer(DOWN),
+        "an answer on another instrument asks for no read"
+    );
+
+    edge.on_place_answer(after(200));
+    assert_eq!(
+        edge.orders.venue_order_id(OURS),
+        Some(VENUE_ORDER),
+        "step 2: the placement answers with another venue id"
+    );
+    assert!(
+        first_reads.take_read_after_answer(UP),
+        "step 3: the answer asks for one more read of the token"
+    );
+    assert!(
+        !first_reads.take_read_after_answer(UP),
+        "step 3: one read for each read that deferred"
+    );
+
+    let unknown = edge.read_up(after(300));
+    assert_eq!(
+        first_reads.read_of(UP),
+        TokenRead::First,
+        "step 4: the next read of the token is still a first read"
+    );
+    let verdict = edge.verdict_on(&unknown, &first_reads);
+    assert_eq!(
+        verdict,
+        UnmappedVerdict::Unproven,
+        "step 5: the answer named an order of this run, and the order that it did not name is \
+         unproven"
+    );
+    let event = unproven_order_event(&unknown, after(300));
+    let mut outgoing = Vec::new();
+    edge.session
+        .fold(&event, 0, &mut outgoing)
+        .expect("the event reveals no order to retain");
+    assert!(
+        outgoing.is_empty(),
+        "step 6: the edge sends no request for the unknown venue id, so no cancel: {outgoing:?}"
+    );
+    first_reads.on_read_answered(UP, &[verdict]);
+    assert_eq!(
+        first_reads.read_of(UP),
+        TokenRead::Quoted,
+        "a first read in which no order deferred ends"
+    );
+    assert!(!first_reads.take_read_after_answer(UP));
+
+    engine.dispatch(&InboundMessage::new(at(5), MessageBody::Exec(event)));
+    spin_at(&mut engine, 2, 6);
+    let halt = shown_halt(&mut ui_events).expect("step 5: an unproven order halts quoting");
+    assert!(
+        matches!(
+            halt,
+            UiEvent::Execution {
+                halt: UiHalt::Halted {
+                    reason: HaltReason::UnprovenOrderResting,
+                    halted_ts_us,
+                },
+                ..
+            } if halted_ts_us == at(5).to_peer()
+        ),
+        "step 5: quoting halts at the message of the unproven order: {halt:?}"
+    );
+    let swept = drain_commands(&mut commands);
+    assert!(
+        !is_placing(&swept, Side::Buy) && !is_placing(&swept, Side::Sell),
+        "step 5: the strategy places nothing more: {swept:?}"
     );
 }

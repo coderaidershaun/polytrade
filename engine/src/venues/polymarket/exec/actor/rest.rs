@@ -6,6 +6,7 @@ use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId};
 use crate::venues::exec::{ExecRequest, RequestId};
 
 use super::super::codec::PlaceRequestContext;
+use super::super::correlate::UnmappedVerdict;
 
 /// Who asked for an open-orders page, and so whether its answer settles a resync read.
 ///
@@ -38,6 +39,37 @@ impl OpenOrdersRead {
     }
 }
 
+/// What a walk of open-orders pages carries from one page to the next. A resync walk can be in
+/// flight beside a hot-side one, so what each walk gathers rides the walk rather than sitting on the
+/// driver, where the two would mix.
+#[derive(Debug, Clone, Default)]
+pub(super) struct OrdersWalk {
+    pub(super) page: u32,
+    /// Orders the earlier pages of this walk already named. Absence from the whole read is what
+    /// makes an order missing.
+    pub(super) seen: Vec<ClientOrderId>,
+    /// The verdict on each unknown order that the walk named.
+    pub(super) verdicts: Vec<UnmappedVerdict>,
+    /// The token that a fresh-binding read walks.
+    pub(super) fresh_token: Option<Box<str>>,
+}
+
+impl OrdersWalk {
+    pub(super) fn of_fresh_token(token_id: &str) -> Self {
+        Self {
+            fresh_token: Some(token_id.into()),
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn next_page(&self) -> Self {
+        Self {
+            page: self.page + 1,
+            ..self.clone()
+        }
+    }
+}
+
 /// Why the call was made, and everything needed to read its answer.
 #[derive(Debug, Clone)]
 pub(super) enum RestPurpose {
@@ -49,14 +81,10 @@ pub(super) enum RestPurpose {
         recon_seq: u64,
         place: Option<PlaceRequestContext>,
     },
-    /// One page of open orders, and how far into the page walk it is.
+    /// One page of open orders, and what the walk has gathered so far.
     OpenOrders {
         read: OpenOrdersRead,
-        page: u32,
-        /// Orders the earlier pages of THIS walk already named. Absence from the whole read is what
-        /// makes an order missing, and a resync walk can be in flight beside a hot-side one, so the
-        /// accumulation rides the walk rather than sitting on the driver where they would mix.
-        seen: Vec<ClientOrderId>,
+        walk: OrdersWalk,
     },
     /// One asset's balance. The venue has no multi-asset read, so a sweep is N of these.
     Balance {

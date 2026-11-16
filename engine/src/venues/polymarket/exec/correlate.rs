@@ -2,7 +2,7 @@
 //! frames for an order not yet named wait here, and an alert fires when one waits too long.
 
 use crate::msg::exec::{ExecEvent, ExecKind, Provenance};
-use crate::msg::ids::ClientOrderId;
+use crate::msg::ids::{ClientOrderId, InstrumentId};
 use crate::msg::time::LocalTs;
 use crate::venues::exec::{ExecEffect, ExecRequest, MirroredOrder, RequestId, blank};
 
@@ -208,6 +208,68 @@ pub enum TokenRead {
     First,
     /// A later read of a token that this run quotes.
     Quoted,
+}
+
+/// The tokens whose first read has not ended. A first read ends only at a read of the token in
+/// which no unknown order deferred: a deferred order waits for the answer of a placement of this
+/// run, so the read after that answer is the first read that can tell it unproven.
+#[derive(Debug, Default)]
+pub struct FirstReads {
+    tokens: Vec<(InstrumentId, FirstRead)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FirstRead {
+    Due,
+    /// A first read deferred an order, so the next answer of a placement there asks for a read.
+    Deferred,
+}
+
+impl FirstReads {
+    /// A newly bound token is due its first read, before this run quotes on it.
+    pub fn on_bound(&mut self, instrument: InstrumentId) {
+        match self.state_mut(instrument) {
+            Some(state) => *state = FirstRead::Due,
+            None => self.tokens.push((instrument, FirstRead::Due)),
+        }
+    }
+
+    pub fn read_of(&self, instrument: InstrumentId) -> TokenRead {
+        match self.tokens.iter().any(|(due, _)| *due == instrument) {
+            true => TokenRead::First,
+            false => TokenRead::Quoted,
+        }
+    }
+
+    /// `verdicts` holds the verdict on each unknown order of the token that the read named.
+    pub fn on_read_answered(&mut self, instrument: InstrumentId, verdicts: &[UnmappedVerdict]) {
+        if !verdicts.contains(&UnmappedVerdict::Defer) {
+            self.tokens.retain(|(due, _)| *due != instrument);
+            return;
+        }
+        if let Some(state) = self.state_mut(instrument) {
+            *state = FirstRead::Deferred;
+        }
+    }
+
+    /// Whether the answer of a placement on this instrument asks for one more read of its token:
+    /// once after each first read that deferred an order.
+    pub fn take_read_after_answer(&mut self, instrument: InstrumentId) -> bool {
+        match self.state_mut(instrument) {
+            Some(state) if *state == FirstRead::Deferred => {
+                *state = FirstRead::Due;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn state_mut(&mut self, instrument: InstrumentId) -> Option<&mut FirstRead> {
+        self.tokens
+            .iter_mut()
+            .find(|(due, _)| *due == instrument)
+            .map(|(_, state)| state)
+    }
 }
 
 /// What to do with an open order resting under an id this run never recorded. On this venue the
