@@ -149,11 +149,13 @@ the exit is not graceful.
 
 A venue with a heartbeat (Polymarket): once it has started, the venue cancels each order of the
 account when it hears no beat for its limit, and the edge learns that only from reports. So a beat
-that fails is due again at the next poll. When no beat is answered for the limit less a margin, the
-edge drops its connection, so the order mirror is rebuilt by the path of a lost connection, and
-quoting does not open until a beat is answered again. When the limit itself passes, the venue has
-cancelled the book, and a new resync pass reads the open orders again. The limit, the margin and
-the period come from the facts of the venue.
+that fails is due again one retry interval after it went out: the limit less a margin leaves three
+tries, and a venue that refuses each beat hears one a second, never one at each housekeeping tick.
+When no beat is answered for the limit less a margin, the edge drops its connection, so the order
+mirror is rebuilt by the path of a lost connection, and quoting does not open until a beat is
+answered again. When the limit itself passes, the venue has cancelled the book, and a new resync
+pass reads the open orders again. The limit, the margin, the period, and the retry interval come
+from the facts of the venue.
 
 A new subscription: when a read of open orders shows a change that the order stream never
 reported, the hot side sends `ResubscribeStream`. The core turns it into the same

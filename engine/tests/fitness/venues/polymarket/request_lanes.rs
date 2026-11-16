@@ -473,8 +473,22 @@ enum Polled {
     },
 }
 
-/// The heartbeat of the edge, with the real lanes, client, and codec, driven as the actor drives
-/// it, at the times the test passes in.
+/// The housekeeping tick of the edge: the actor polls its heartbeat at each one.
+const TICK: i64 = 20_000;
+
+/// The ticks of one stretch of time: each poll that did something, at its time, and how many polls
+/// left placing held.
+#[derive(Debug, Default)]
+struct Ticks {
+    acted: Vec<(i64, Polled)>,
+    polls: usize,
+    held: usize,
+}
+
+/// The heartbeat of the edge, with the real schedule, lanes, client, and codec, polled at the times
+/// that the test passes in. Past the deadline the actor drops its connection, and the reconnect
+/// reads the open orders; here a read stands in for that reconnect, which runs only inside a live
+/// edge.
 struct BeatingEdge {
     schedule: HeartbeatSchedule,
     lanes: RestLanes<Asked>,
@@ -489,6 +503,20 @@ impl BeatingEdge {
             lanes,
             outcomes,
         }
+    }
+
+    /// One poll of the schedule at each tick from `from` to `to`, both included.
+    async fn tick(&mut self, from: i64, to: i64) -> Ticks {
+        let mut ticks = Ticks::default();
+        for now in (from..=to).step_by(TICK as usize) {
+            let polled = self.poll(at(now)).await;
+            if polled != Polled::Waited {
+                ticks.acted.push((now, polled));
+            }
+            ticks.polls += 1;
+            ticks.held += usize::from(self.schedule.is_placing_held());
+        }
+        ticks
     }
 
     async fn poll(&mut self, now: LocalTs) -> Polled {
@@ -544,8 +572,9 @@ impl BeatingEdge {
 }
 
 /// CONTRACT: the venue cancels each order of the account when it hears no heartbeat for its limit,
-/// and the edge learns that only from reports. So a beat that fails is due again at the next poll,
-/// which gives several tries before the deadline, the venue limit less a margin. Past the deadline
+/// and the edge learns that only from reports. So a beat that fails is due again one retry interval
+/// after it went out: three tries come before the deadline, the venue limit less a margin, and a
+/// venue that refuses each beat hears one a second, not one at each 20 ms tick. Past the deadline
 /// the edge rebuilds its order mirror from a read and holds placing; past the venue limit it reads
 /// again, because the venue has cancelled the book; a beat answered again lets placing resume. The
 /// id of the next beat comes from a refusal as from a success, and an answer with no id keeps the
@@ -553,86 +582,93 @@ impl BeatingEdge {
 #[test]
 fn lost_heartbeat_past_deadline_resets_order_mirror() {
     let facts = POLYMARKET_FACTS;
+    let retry = facts.heartbeat_retry.micros();
     assert_eq!(
         (
             facts.heartbeat_period.micros(),
             facts.heartbeat_limit.micros(),
-            facts.heartbeat_margin.micros()
+            facts.heartbeat_margin.micros(),
+            retry,
         ),
-        (5 * SECOND, 10 * SECOND, 2 * SECOND),
+        (5 * SECOND, 10 * SECOND, 2 * SECOND, SECOND),
         "the facts of the venue keep their values, so the deadline is 8 s after the last good beat"
     );
     let (venue, script) = scripted_venue();
     let runtime = runtime();
     runtime.block_on(async {
         let mut edge = BeatingEdge::start(&venue);
-        assert_eq!(edge.poll(at(0)).await, Polled::Beat(BeatAnswer::Accepted));
-        for second in 1..5 {
-            assert_eq!(edge.poll(at(second * SECOND)).await, Polled::Waited);
-        }
+        let ticks = edge.tick(0, 5 * SECOND - TICK).await;
+        assert_eq!(ticks.acted, [(0, Polled::Beat(BeatAnswer::Accepted))]);
         script.lock().expect("the script is free").are_beats_lost = true;
 
-        let mut failed = 0;
-        for (second, step) in [(5, "step 1"), (6, "step 2"), (7, "step 2")] {
-            assert_eq!(
-                edge.poll(at(second * SECOND)).await,
-                Polled::Beat(BeatAnswer::Lost),
-                "{step}: a beat goes out at {second} s, and the one after a failure is due at once"
-            );
-            failed += 1;
-            assert!(
-                !edge.schedule.is_placing_held(),
-                "before the deadline placing goes on"
-            );
-        }
-        assert_eq!(failed, 3);
+        let ticks = edge.tick(5 * SECOND, 8 * SECOND - TICK).await;
+        assert_eq!(
+            ticks.acted,
+            [
+                (5 * SECOND, Polled::Beat(BeatAnswer::Lost)),
+                (5 * SECOND + retry, Polled::Beat(BeatAnswer::Lost)),
+                (5 * SECOND + 2 * retry, Polled::Beat(BeatAnswer::Lost)),
+            ],
+            "steps 1 and 2: a beat goes out at 5 s, and each one after a failure is due one retry \
+             interval after it went out, so the deadline leaves three tries"
+        );
+        assert_eq!(ticks.held, 0, "before the deadline placing goes on");
 
+        let ticks = edge.tick(8 * SECOND, 10 * SECOND - TICK).await;
         assert_eq!(
-            edge.poll(at(8 * SECOND)).await,
-            Polled::MirrorReset { venue_holds: 2 },
-            "step 3: the deadline passed, so the mirror is read again from the venue"
+            ticks.acted,
+            [
+                (8 * SECOND, Polled::MirrorReset { venue_holds: 2 }),
+                (8 * SECOND + TICK, Polled::Beat(BeatAnswer::Lost)),
+                (8 * SECOND + TICK + retry, Polled::Beat(BeatAnswer::Lost)),
+            ],
+            "step 3: the deadline passed, so the mirror is read again from the venue, and the beats \
+             keep their interval"
         );
-        assert!(edge.schedule.is_placing_held(), "step 3: placing stops");
-        assert_eq!(
-            edge.poll(at(9 * SECOND)).await,
-            Polled::Beat(BeatAnswer::Lost)
-        );
-        assert!(edge.schedule.is_placing_held());
+        assert_eq!(ticks.held, ticks.polls, "step 3: placing stops");
 
         script
             .lock()
             .expect("the script is free")
             .has_cancelled_book = true;
+        let ticks = edge.tick(10 * SECOND, 11 * SECOND - TICK).await;
         assert_eq!(
-            edge.poll(at(10 * SECOND)).await,
-            Polled::ReadAfterVenueCancel { venue_holds: 0 },
-            "step 4: past the venue limit the venue cancelled the book, and a second read shows it"
+            ticks.acted,
+            [
+                (10 * SECOND, Polled::ReadAfterVenueCancel { venue_holds: 0 }),
+                (10 * SECOND + TICK, Polled::Beat(BeatAnswer::Lost)),
+            ],
+            "step 4: past the venue limit the venue cancelled the book, a second read shows it, and \
+             that read comes once"
         );
         assert_eq!(
-            edge.poll(at(10 * SECOND + SECOND / 2)).await,
-            Polled::Beat(BeatAnswer::Lost),
-            "the read after the venue limit comes once"
-        );
-        assert!(
-            edge.schedule.is_placing_held(),
+            ticks.held, ticks.polls,
             "no placement before a beat is answered"
         );
 
         script.lock().expect("the script is free").are_beats_lost = false;
+        let ticks = edge.tick(11 * SECOND, 12 * SECOND - TICK).await;
         assert_eq!(
-            edge.poll(at(11 * SECOND)).await,
-            Polled::Beat(BeatAnswer::Accepted),
+            ticks.acted,
+            [(
+                10 * SECOND + TICK + retry,
+                Polled::Beat(BeatAnswer::Accepted)
+            )],
             "step 5: the venue answers the next beat"
         );
-        assert!(!edge.schedule.is_placing_held(), "step 5: placing goes on");
+        assert_eq!(
+            ticks.held, 1,
+            "step 5: placing goes on once the beat is answered"
+        );
+        assert!(!edge.schedule.is_placing_held());
     });
     assert_eq!(
         (
             venue.count("POST", "/v1/heartbeats"),
             venue.count("GET", "/data/orders")
         ),
-        (7, 2),
-        "a beat at 0, 5, 6, 7, 9, 10.5, and 11 s, and the two reads"
+        (8, 2),
+        "a beat at 0, 5, 6, 7, 8.02, 9.02, 10.02, and 11.02 s, and the two reads"
     );
 
     let (venue, script) = scripted_venue();
@@ -642,6 +678,8 @@ fn lost_heartbeat_past_deadline_resets_order_mirror() {
         .beat_answers
         .extend([
             (401, r#"{"error_msg":"Unauthorized"}"#),
+            (429, r#"{"error":"Too Many Requests"}"#),
+            (503, ""),
             (
                 400,
                 r#"{"error_msg":"Invalid Heartbeat ID","heartbeat_id":"3c4d"}"#,
@@ -650,21 +688,19 @@ fn lost_heartbeat_past_deadline_resets_order_mirror() {
         ]);
     runtime.block_on(async {
         let mut edge = BeatingEdge::start(&venue);
-        let answers = [
-            edge.poll(at(0)).await,
-            edge.poll(at(SECOND)).await,
-            edge.poll(at(2 * SECOND)).await,
-            edge.poll(at(7 * SECOND)).await,
-        ];
+        let ticks = edge.tick(0, 10 * SECOND).await;
         assert_eq!(
-            answers,
+            ticks.acted,
             [
-                Polled::Beat(BeatAnswer::Lost),
-                Polled::Beat(BeatAnswer::Refused),
-                Polled::Beat(BeatAnswer::Accepted),
-                Polled::Beat(BeatAnswer::Accepted),
+                (0, Polled::Beat(BeatAnswer::Lost)),
+                (retry, Polled::Beat(BeatAnswer::Lost)),
+                (2 * retry, Polled::Beat(BeatAnswer::Lost)),
+                (3 * retry, Polled::Beat(BeatAnswer::Refused)),
+                (4 * retry, Polled::Beat(BeatAnswer::Accepted)),
+                (4 * retry + 5 * SECOND, Polled::Beat(BeatAnswer::Accepted)),
             ],
-            "an answer with no id and a refusal are each tried again at once"
+            "an answer with no id, a 429, a 503, and a refusal are each tried again one retry \
+             interval after each went out, and an accepted beat waits one period"
         );
     });
     let bodies: Vec<String> = venue
@@ -676,6 +712,8 @@ fn lost_heartbeat_past_deadline_resets_order_mirror() {
     assert_eq!(
         bodies,
         [
+            r#"{"heartbeat_id":""}"#,
+            r#"{"heartbeat_id":""}"#,
             r#"{"heartbeat_id":""}"#,
             r#"{"heartbeat_id":""}"#,
             r#"{"heartbeat_id":"3c4d"}"#,

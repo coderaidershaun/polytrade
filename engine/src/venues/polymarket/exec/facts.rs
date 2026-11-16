@@ -25,6 +25,9 @@ pub struct PolymarketFacts {
     /// The edge resets its order mirror this long before the venue limit, so that it reads the venue
     /// before the venue cancels the book.
     pub heartbeat_margin: DurationUs,
+    /// A beat that the venue did not accept is due again this long after it went out. A venue that
+    /// refuses each beat then hears one a second, and the deadline leaves three tries.
+    pub heartbeat_retry: DurationUs,
 }
 
 pub const POLYMARKET_FACTS: PolymarketFacts = PolymarketFacts {
@@ -35,4 +38,5 @@ pub const POLYMARKET_FACTS: PolymarketFacts = PolymarketFacts {
     heartbeat_period: DurationUs::from_secs(5),
     heartbeat_limit: DurationUs::from_secs(10),
     heartbeat_margin: DurationUs::from_secs(2),
+    heartbeat_retry: DurationUs::from_secs(1),
 };
