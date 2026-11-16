@@ -145,6 +145,7 @@ async fn place_and_cancel_one_order(sending: Sending) {
         style: OrderStyle::PostOnly,
     };
     plan.check_inside_caps(session.collateral().await, 0);
+    session.check_may_place(sending);
     let place = session.order(&token, window.tick, &plan).await;
     if sending == Sending::DryRun {
         session.send_once(&place, false).await;
@@ -231,6 +232,7 @@ async fn cancel_beside_a_held_place(sending: Sending) {
     let collateral = session.collateral().await;
     resting.check_inside_caps(collateral, 0);
     marketable.check_inside_caps(collateral, resting.cost());
+    session.check_may_place(sending);
     let resting_body = session.order(&token, window.tick, &resting).await;
     let marketable_body = session.order(&token, window.tick, &marketable).await;
     if sending == Sending::DryRun {
@@ -360,6 +362,7 @@ async fn sell_back_the_shares(sending: Sending) {
         style: OrderStyle::Immediate,
     };
     plan.check_inside_caps(session.collateral().await, 0);
+    session.check_may_place(sending);
     let sell = session.order(&token, window.tick, &plan).await;
     if sending == Sending::DryRun {
         session.send_once(&sell, false).await;
