@@ -12,10 +12,9 @@ use super::super::codec::{
     OrdersRead, UnattributableOrder, VenueAnswer, WireError, decode_orders_page,
     open_orders_for_token, open_orders_page, trades_page, venue_order_id_digest,
 };
-use super::super::correlate::TokenRead;
 use super::super::lanes::{Lane, RestJob};
 use super::super::rest::ClobResponse;
-use super::rest::{OpenOrdersRead, RestPurpose};
+use super::rest::{OpenOrdersRead, OrdersWalk, RestPurpose};
 use super::{Actor, Writer};
 
 /// Open orders, fills, and the balance sweep. The sweep counts as one read however many assets it
@@ -47,8 +46,7 @@ impl Actor {
     fn request_pass_reads(&mut self, resync_seq: u64) {
         let orders = RestPurpose::OpenOrders {
             read: OpenOrdersRead::Pass { resync_seq },
-            page: 0,
-            seen: Vec::new(),
+            walk: OrdersWalk::default(),
         };
         let mut is_queued = self
             .submit(
@@ -76,8 +74,7 @@ impl Actor {
     pub(super) async fn on_open_orders_answer(
         &mut self,
         read: OpenOrdersRead,
-        page: u32,
-        mut seen: Vec<ClientOrderId>,
+        mut walk: OrdersWalk,
         response: &ClobResponse,
         writer: Option<&mut Writer>,
     ) -> Option<SessionOutcome> {
@@ -133,7 +130,7 @@ impl Actor {
             if !self.session.core.has_opened_quoting() {
                 mirrored.provenance = Provenance::PriorRun;
             }
-            seen.push(mirrored.client_id);
+            walk.seen.push(mirrored.client_id);
             if let Err(error) = self.session.core.observe_venue_order(mirrored) {
                 error!(
                     "polymarket execution cannot retain venue order {:016x} in its possibly-live set ({error:?}) — quoting is disabled",
@@ -147,9 +144,11 @@ impl Actor {
                 return None;
             }
         }
-        let token_read = self.token_read(read);
         for unmapped in &decoded.unmapped {
-            self.on_unmapped_order(unmapped, token_read, received_ts_us, &mut outgoing);
+            let token_read = self.first_reads.read_of(unmapped.instrument);
+            let verdict =
+                self.on_unmapped_order(unmapped, token_read, received_ts_us, &mut outgoing);
+            walk.verdicts.push(verdict);
         }
         self.leave_unattributable_alone(&decoded.unattributable);
         for event in events {
@@ -158,10 +157,10 @@ impl Actor {
             }
             self.forward_exec(received_ts_us, event);
         }
-        if self.next_orders_page(read, page, &seen, decoded.next_cursor.as_deref())
-            == PageWalk::Complete
+        if self.next_orders_page(read, &walk, decoded.next_cursor.as_deref()) == PageWalk::Complete
         {
-            self.probe_missing(&seen, read, &mut outgoing);
+            self.end_first_read(read, &walk);
+            self.probe_missing(&walk.seen, read, &mut outgoing);
             if let OpenOrdersRead::Pass { resync_seq } = read {
                 self.settle_pass_read(Some(resync_seq));
             }
@@ -179,14 +178,13 @@ impl Actor {
     fn next_orders_page(
         &mut self,
         read: OpenOrdersRead,
-        page: u32,
-        seen: &[ClientOrderId],
+        walk: &OrdersWalk,
         cursor: Option<&str>,
     ) -> PageWalk {
         let Some(cursor) = cursor else {
             return PageWalk::Complete;
         };
-        if page + 1 >= MAX_PAGES {
+        if walk.page + 1 >= MAX_PAGES {
             warn!(
                 "polymarket execution stopped walking its open orders at {MAX_PAGES} pages — the rest of the account goes unread and its own orders are probed individually"
             );
@@ -207,8 +205,7 @@ impl Actor {
         };
         let next = RestPurpose::OpenOrders {
             read,
-            page: page + 1,
-            seen: seen.to_vec(),
+            walk: walk.next_page(),
         };
         if !self
             .submit(Lane::Control, RestJob::signed(next, request))
@@ -238,12 +235,22 @@ impl Actor {
         }
     }
 
-    /// Before quoting first opens, each read is the first of its tokens. Later, only the read of a
-    /// token that a rotation has just bound is.
-    fn token_read(&self, read: OpenOrdersRead) -> TokenRead {
-        match (read, self.session.core.has_opened_quoting()) {
-            (OpenOrdersRead::FreshBinding { .. }, _) | (_, false) => TokenRead::First,
-            (_, true) => TokenRead::Quoted,
+    /// Only the walk of a fresh-binding read ends the first read of its token, and only while that
+    /// token is still bound: a pass, or a read of a token since rebound, may not have named the
+    /// orders of the token that is bound now.
+    fn end_first_read(&mut self, read: OpenOrdersRead, walk: &OrdersWalk) {
+        let (OpenOrdersRead::FreshBinding { instrument }, Some(token_id)) =
+            (read, walk.fresh_token.as_deref())
+        else {
+            return;
+        };
+        let is_still_bound = self
+            .tokens
+            .live_binding(instrument)
+            .is_some_and(|binding| &*binding.token_id == token_id);
+        if is_still_bound {
+            self.first_reads
+                .on_read_answered(instrument, &walk.verdicts);
         }
     }
 
@@ -349,17 +356,28 @@ impl Actor {
         }
     }
 
-    /// New bindings may hold orders from before a reconnect. Checked once outside the main pass.
+    /// New bindings may hold orders from before a reconnect. Checked outside the main pass.
     pub(super) fn read_bound_token(&mut self, instrument: InstrumentId, token_id: &str) {
-        // A drop here costs the one-off check; the lane's own warning names it, and the next resync
-        // pass reads the same orders account-wide.
+        // A drop here leaves the first read of the token due, and the lane's own warning names it,
+        // so the next resync pass reads the same orders account-wide as a first read.
         let purpose = RestPurpose::OpenOrders {
             read: OpenOrdersRead::FreshBinding { instrument },
-            page: 0,
-            seen: Vec::new(),
+            walk: OrdersWalk::of_fresh_token(token_id),
         };
         let request = open_orders_for_token(token_id, None);
         let _dropped = self.submit(Lane::Control, RestJob::signed(purpose, request));
+    }
+
+    /// A first read that deferred an order waits for this read, after the placement answered.
+    pub(super) fn read_token_again(&mut self, instrument: InstrumentId) {
+        let Some(token_id) = self
+            .tokens
+            .live_binding(instrument)
+            .map(|binding| binding.token_id.clone())
+        else {
+            return;
+        };
+        self.read_bound_token(instrument, &token_id);
     }
 }
 

@@ -17,7 +17,7 @@ use super::super::codec::{
 };
 use super::super::lanes::RestOutcome;
 use super::super::rest::ClobResponse;
-use super::rest::{OpenOrdersRead, RestPurpose};
+use super::rest::{OpenOrdersRead, OrdersWalk, RestPurpose};
 use super::{Actor, Writer};
 
 impl Actor {
@@ -46,9 +46,9 @@ impl Actor {
                 self.on_core_answer(request_id, request, recon_seq, place, answer, writer)
                     .await
             }
-            RestPurpose::OpenOrders { read, page, seen } => match answer {
+            RestPurpose::OpenOrders { read, walk } => match answer {
                 Ok(response) => {
-                    self.on_open_orders_answer(read, page, seen, &response, writer)
+                    self.on_open_orders_answer(read, walk, &response, writer)
                         .await
                 }
                 Err(error) => {
@@ -130,7 +130,7 @@ impl Actor {
                 recon_seq,
             };
             return self
-                .on_open_orders_answer(read, 0, Vec::new(), &response, writer)
+                .on_open_orders_answer(read, OrdersWalk::default(), &response, writer)
                 .await;
         }
 
@@ -272,6 +272,9 @@ impl Actor {
                     .on_delayed(placed.client_id, self.control.clock.now());
             }
             self.drain_pending(outgoing);
+        }
+        if self.first_reads.take_read_after_answer(context.instrument) {
+            self.read_token_again(context.instrument);
         }
         vec![(received_ts_us, outcome.event)]
     }
