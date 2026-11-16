@@ -1,5 +1,5 @@
-//! An open order that this run cannot name. Mid-run it may be the order whose placement answer was
-//! lost, or a person's order from the venue's own UI, which this engine never touches.
+//! An open order that this run cannot name: the order whose placement answer was lost, an order of
+//! an earlier run, or a person's order from the venue's own UI. The engine cancels none of them.
 
 use crate::msg::exec::{ExecEvent, ExecKind};
 use crate::msg::ids::ClientOrderId;
@@ -8,24 +8,27 @@ use crate::venues::exec::{Outgoing, blank};
 use crate::{error, warn};
 
 use super::super::codec::{KnownOrder, UnmappedOrder, venue_order_id_digest};
-use super::super::correlate::{UnmappedVerdict, classify_unmapped};
+use super::super::correlate::{
+    TokenRead, UnmappedVerdict, classify_unmapped, unproven_order_event,
+};
 use super::Actor;
 
 impl Actor {
-    /// An order resting under an id this run never recorded. Before quoting opens, each such order
-    /// predates this process, so it is cancelled by its venue id, as at a cold start.
+    /// An order resting under an id this run never recorded, named by a read received at
+    /// `received_ts_us`.
     pub(super) fn on_unmapped_order(
         &mut self,
         unmapped: &UnmappedOrder,
+        read: TokenRead,
+        received_ts_us: LocalTs,
         outgoing: &mut Vec<Outgoing>,
     ) {
-        if !self.session.core.has_opened_quoting() {
-            self.cancel_prior_run_order(&unmapped.venue_order_id);
-            return;
-        }
-        let verdict = classify_unmapped(self.session.core.mirror(), unmapped, |client_id| {
-            self.orders.venue_order_id(client_id).is_some()
-        });
+        let verdict = classify_unmapped(
+            self.session.core.mirror(),
+            unmapped,
+            |client_id| self.orders.venue_order_id(client_id).is_some(),
+            read,
+        );
         let client_id = match verdict {
             UnmappedVerdict::Adopt(client_id) => client_id,
             // A placement on this side is still in flight. The resync re-reads once it answers, and
@@ -43,6 +46,9 @@ impl Actor {
                     unmapped.venue_order_id
                 );
                 return;
+            }
+            UnmappedVerdict::Unproven => {
+                return self.on_unproven_order(unmapped, received_ts_us, outgoing);
             }
         };
         self.counts.adopted += 1;
@@ -69,6 +75,28 @@ impl Actor {
         }
         self.forward_exec(received_ts_us, event);
         self.drain_pending(outgoing);
+    }
+
+    /// The session counts the order with those this engine cannot claim, and the fold halts quoting.
+    fn on_unproven_order(
+        &mut self,
+        unmapped: &UnmappedOrder,
+        received_ts_us: LocalTs,
+        outgoing: &mut Vec<Outgoing>,
+    ) {
+        error!(
+            "polymarket execution found an order it cannot prove its own on instrument {}: {:?} {} @ {} (venue id {}) — it is not cancelled, quoting halts, and a person decides",
+            unmapped.instrument.0,
+            unmapped.side,
+            unmapped.qty.mantissa(),
+            unmapped.price.mantissa(),
+            unmapped.venue_order_id
+        );
+        let event = unproven_order_event(unmapped, received_ts_us);
+        if let Err(error) = self.session.fold(&event, 0, outgoing) {
+            self.control.fail(error);
+        }
+        self.forward_exec(received_ts_us, event);
     }
 
     #[expect(

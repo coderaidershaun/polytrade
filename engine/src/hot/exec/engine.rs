@@ -318,6 +318,11 @@ impl ExecEngine {
                 return ExecCallback::None;
             }
             ExecKind::SnapshotEnd => return self.on_snapshot_end(event, stamps, bank),
+            // The venue names no client id for it, so the fold could book none of its fills.
+            ExecKind::UnprovenOrder => {
+                self.halt(HaltReason::UnprovenOrderResting, now);
+                return ExecCallback::None;
+            }
             _ => {}
         }
         match event.provenance {

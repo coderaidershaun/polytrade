@@ -103,7 +103,10 @@ pub(super) fn apply_exec_event(
 
         ExecKind::SnapshotOrder => snapshot_state(previous_state, event, &mut is_resurrection),
 
-        ExecKind::SnapshotEnd | ExecKind::StreamReset | ExecKind::StreamReady => previous_state,
+        ExecKind::SnapshotEnd
+        | ExecKind::StreamReset
+        | ExecKind::StreamReady
+        | ExecKind::UnprovenOrder => previous_state,
     };
     slot.state = next;
     // The status probes count the timeouts of one episode that the venue leaves unanswered. The two

@@ -9,9 +9,10 @@ use crate::venues::exec::{ExecSessionError, MirroredOrder, Outgoing, ResyncPoll,
 use crate::{error, info, warn};
 
 use super::super::codec::{
-    OrdersRead, VenueAnswer, WireError, cancel_venue_order, decode_orders_page,
+    OrdersRead, UnattributableOrder, VenueAnswer, WireError, decode_orders_page,
     open_orders_for_token, open_orders_page, trades_page, venue_order_id_digest,
 };
+use super::super::correlate::TokenRead;
 use super::super::lanes::{Lane, RestJob};
 use super::super::rest::ClobResponse;
 use super::rest::{OpenOrdersRead, RestPurpose};
@@ -146,17 +147,11 @@ impl Actor {
                 return None;
             }
         }
+        let token_read = self.token_read(read);
         for unmapped in &decoded.unmapped {
-            self.on_unmapped_order(unmapped, &mut outgoing);
+            self.on_unmapped_order(unmapped, token_read, received_ts_us, &mut outgoing);
         }
-        // At boot, an order on a token that isn't bound yet decodes to no instrument; the
-        // cold-start rule cancels it by venue id anyway. Mid-run the same order is left
-        // alone instead, since it simply belongs to a market this engine doesn't trade.
-        if !self.session.core.has_opened_quoting() {
-            for record in &decoded.unattributable {
-                self.cancel_prior_run_order(&record.venue_order_id);
-            }
-        }
+        self.leave_unattributable_alone(&decoded.unattributable);
         for event in events {
             if let Err(error) = self.session.fold(&event, recon_seq, &mut outgoing) {
                 self.control.fail(error);
@@ -243,33 +238,29 @@ impl Actor {
         }
     }
 
-    /// Cancels a prior run's order by its venue id, since there is no client id to mint for
-    /// it. Readiness waits for the answer, and quoting never opens over it. Keying on the
-    /// venue id rather than the instrument matters because the instrument may still be unbound.
-    pub(super) fn cancel_prior_run_order(&mut self, venue_order_id: &str) {
-        let Ok(request) = cancel_venue_order(venue_order_id) else {
-            return;
-        };
-        info!("polymarket execution cancelling a prior run's order {venue_order_id}");
-        let purpose = RestPurpose::PriorRunCancel {
-            venue_order_id: venue_order_id.into(),
-        };
-        if self
-            .submit(Lane::Control, RestJob::signed(purpose, request))
-            .is_queued()
-        {
-            self.prior_run_cancels += 1;
+    /// Before quoting first opens, each read is the first of its tokens. Later, only the read of a
+    /// token that a rotation has just bound is.
+    fn token_read(&self, read: OpenOrdersRead) -> TokenRead {
+        match (read, self.session.core.has_opened_quoting()) {
+            (OpenOrdersRead::FreshBinding { .. }, _) | (_, false) => TokenRead::First,
+            (_, true) => TokenRead::Quoted,
         }
     }
 
-    pub(super) fn on_prior_run_cancelled(&mut self, venue_order_id: &str, is_answered: bool) {
-        self.prior_run_cancels = self.prior_run_cancels.saturating_sub(1);
-        if !is_answered {
-            warn!(
-                "polymarket execution could not cancel the prior run's order {venue_order_id} — it may still be resting"
-            );
+    /// An order on a token that no binding names belongs to a market this engine does not trade,
+    /// or to a window whose token is not bound yet; its own first read decides then.
+    fn leave_unattributable_alone(&mut self, unattributable: &[UnattributableOrder]) {
+        let Some(first) = unattributable.first() else {
+            return;
+        };
+        for _ in unattributable {
+            self.session.core.count_foreign_order();
         }
-        self.finish_readiness_if_clean();
+        warn!(
+            "polymarket execution left {} open order(s) alone on tokens that no binding names, venue id {} among them",
+            unattributable.len(),
+            first.venue_order_id
+        );
     }
 
     /// Absence from the read could mean fill or lag, so each mirrored order the read never named is
@@ -338,16 +329,12 @@ impl Actor {
         self.session.resync.on_failure(resync_seq, retry_at);
     }
 
-    /// Quoting opens once the pass has finished, no prior-run order is resting and every prior-run
-    /// cancel has answered. The cancels are checked first because arming moves the core's phase.
+    /// Quoting opens once the pass has finished.
     #[expect(
         clippy::disallowed_methods,
         reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
     )]
     pub(super) fn finish_readiness_if_clean(&mut self) {
-        if self.prior_run_cancels > 0 {
-            return;
-        }
         // After a heartbeat reset the venue may cancel the book at any moment, so quoting waits for
         // a beat that the venue answers.
         if self
@@ -358,7 +345,7 @@ impl Actor {
             return;
         }
         if self.session.arm_readiness(self.control.clock.now()) {
-            info!("polymarket execution quoting — state re-read and nothing inherited is resting");
+            info!("polymarket execution quoting — the state of the venue was read again");
         }
     }
 

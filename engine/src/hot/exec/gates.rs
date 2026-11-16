@@ -31,6 +31,7 @@ labelled_enum! {
         StreamSilent = "order stream silent",
         WriterFailed = "file writer failed",
         PriorRunFillUnbooked = "prior-run fill not booked",
+        UnprovenOrderResting = "an order the engine cannot prove its own rests on its market",
     }
     /// Operator words for the halt banner: a halted engine's reason is read under pressure, and the
     /// table sits beside the variants so a new reason cannot ship as a bare Rust identifier.
