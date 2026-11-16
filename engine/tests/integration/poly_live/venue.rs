@@ -145,7 +145,7 @@ pub(crate) enum GeoblockFlag {
 }
 
 impl GeoblockFlag {
-    /// Only a `blocked` that the answer holds counts: a missing flag is no clearance.
+    /// Only a `blocked` value in the answer counts, so a missing flag gives no clearance.
     async fn read(http: &ClobHttp) -> Self {
         let Ok(response) = http.send_unsigned(GEOBLOCK_URL).await else {
             return Self::Unread;

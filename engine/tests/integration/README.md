@@ -124,6 +124,11 @@ CAUTION: Do not start the engine again after a refused start. A start again can 
 
 The signed tests of `poly_live/` use real funds on live Polymarket, on the series `btc-updown-5m`. Only the role `live-runner` runs one, by the runbook of its job and the live policy. Each dry run of these tests loads the live keys and runs the start gate of the engine, which makes signed reads. So each dry run is a live run, and each gets its own row in the ledger. A dry run sends no order action.
 
+Two checks of each test, its dry run too:
+
+- **Derived credentials only:** before the start gate, the test asks the venue to derive the L2 credentials of the wallet. IF the venue derives none, THEN the test stops before the gate, because the gate would then create credentials, a change of key settings that the live policy forbids. After the gate, IF the gate holds credentials that are not the derived ones, THEN the gate created them, and the test stops before any request of the tests. Report each stop. The test prints `l2 credentials: the derived ones`, and never a key.
+- **Geoblock flag:** after the gate, the test reads the geoblock flag of the venue for this host and prints `blocked = false`, `blocked = true`, or `unread`. It never prints the address, the country, or the region of the answer. A test that places an order refuses before it signs the order unless the flag reads `blocked = false`. Its dry run prints where the real run stops and goes on, because it sends nothing. The reads and the kill switch print the flag and go on.
+
 - **Token of the tests:** the Up token of the window that is open when `writes_the_polymarket_reads` reads `before`. Each later test of the run uses this token only.
 - **Id file:** `poly-order-ids.txt` in the run folder. Its first line names the token of the tests. Each placement of a test writes a `pending` line before it is sent. Then the venue order id of its answer takes the place of that line.
 - **Order of the tests:** an open order whose venue order id is in the id file. The venue accepts no client order id, so this is the only way to know an order of the tests.
@@ -168,9 +173,9 @@ Only `live-runner` runs this test, by the runbook of its job.
 
 - **Dry run first:** `venue_accepts_one_signed_order_dry_run`. It runs the start gate and reads the venue. Then it builds the buy and its cancel, and prints each request with `signature`, `owner`, `maker` and `signer` as `<redacted>`. It sends no order action and writes nothing.
 - **What it does:**
-  1. It runs the start gate of the engine: the wallet, the protocol version, the local clock, and the account. It prints the wallet type and the clock offset.
+  1. It derives the L2 credentials of the wallet, then runs the start gate of the engine: the wallet, the protocol version, the local clock, and the account. It makes sure that the gate holds the derived credentials, and reads the geoblock flag. It prints the wallet type, the clock offset, and the flag.
   2. It reads the book of the token. IF the best bid is 0.02 or less, THEN it refuses, because a buy at 0.01 would sit at the touch.
-  3. It writes a `pending` line to the id file. Then it sends one post-only buy of 5 shares at 0.01, signed by the encoder and the signer of the engine.
+  3. IF the geoblock flag does not read `blocked = false`, THEN it refuses here, before it signs the buy. ELSE it writes a `pending` line to the id file. Then it sends one post-only buy of 5 shares at 0.01, signed by the encoder and the signer of the engine.
   4. The venue answers with a venue order id. The test writes that id to the id file in place of the `pending` line.
   5. It reads the open orders of the token: the buy rests.
   6. It sends one cancel of that venue order id. Then it reads the open orders again, and prints each order that it left.
@@ -181,6 +186,8 @@ Only `live-runner` runs this test, by the runbook of its job.
 
 The test refuses each of these in code, before it sends an order:
 
+- [ ] credentials that the venue did not derive, before and after the start gate
+- [ ] a geoblock flag that does not read `blocked = false`
 - [ ] a token other than the token of the tests, or a window with 90 seconds or less left
 - [ ] a minimum size of the venue above 5 shares
 - [ ] an order above 5 shares, or above the ceiling of 6 USD
@@ -219,7 +226,7 @@ Only `live-runner` runs this test, by the runbook of its job.
 - **Check at the venue:** the order history shows one sell of the tests.
 - **Kill switch:** `cancels_only_the_orders_of_the_polymarket_tests`.
 
-The test refuses each of these in code: a sell above 5 shares or above the ceiling of 6 USD, and a sell of the tests that already rests on the token.
+The test refuses each of these in code: credentials that the venue did not derive, a geoblock flag that does not read `blocked = false`, a sell above 5 shares or above the ceiling of 6 USD, and a sell of the tests that already rests on the token.
 
 ## `silent_user_stream_still_answers_reads`
 
