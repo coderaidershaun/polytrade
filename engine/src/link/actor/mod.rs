@@ -1,6 +1,7 @@
 //! The link actor: one task that owns the UDP socket, the subscriber table and the sequence gate.
 //! It pushes checked frames to the engine and sends the hot thread's UI rings.
 
+mod inbound;
 mod outbound;
 
 use std::io;
@@ -13,7 +14,7 @@ use tokio::net::UdpSocket;
 use tokio::runtime::Handle;
 
 use crate::hot::spawn::LinkQueueProducer;
-use crate::msg::inbound::{InboundMessage, MessageBody, MessageHeader, RunControl};
+use crate::msg::inbound::{InboundMessage, MessageBody, RunControl};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{DurationUs, EngineClock, LocalTs};
 use crate::msg::ui::LatencyReport;
@@ -23,24 +24,20 @@ use crate::runtime::config::{
 };
 use crate::runtime::shutdown::{RunControlGate, TaskHandle};
 use crate::venues::edge::sender::SendWait;
-use crate::{info, warn, warn_repeating};
+use crate::{info, warn};
 
-use super::control::{LINK_MAX_TOPICS, RunPhase, Subscribe, TopicSet};
-use super::envelope::{FrameGuard, LINK_MAX_DATAGRAM, LinkDecodeError, LinkIdentity, TopicId};
-use super::frame::{LinkBody, LinkDatagram, LinkFrame, LinkOrigin, LinkPayload, OutboundLink};
-use super::subscribers::{
-    LINK_MAX_SUBSCRIBERS, LINK_SUBSCRIPTION_TTL, RefreshOutcome, SequenceGate, SubscriberTable,
-};
+use super::control::{LINK_MAX_TOPICS, RunPhase, TopicSet};
+use super::envelope::{FrameGuard, LINK_MAX_DATAGRAM, LinkIdentity, TopicId};
+use super::frame::{LinkBody, OutboundLink};
+use super::subscribers::{LINK_MAX_SUBSCRIBERS, SequenceGate, SubscriberTable};
 use crate::msg::run_state::RunState;
+use inbound::{PEER_SILENCE_LIMIT, PeerState};
 
 /// Catalog, lifecycle, staleness, control repair. 1s granularity for display state.
 const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Inside LINK_SUBSCRIPTION_TTL so 2 lost datagrams don't drop us.
 const SUBSCRIBE_INTERVAL: Duration = Duration::from_secs(2);
-
-/// Four missed heartbeats. UDP silence indistinguishable from quiet peer (dangerous: in-process ring can't silently lose producer).
-const PEER_SILENCE_LIMIT: DurationUs = LINK_SUBSCRIPTION_TTL;
 
 /// Healthy run silent; nonzero rollup only.
 const REPORT_TICKS: u64 = 60;
@@ -133,12 +130,6 @@ enum Wake {
     Flush,
     Announce,
     Refresh,
-}
-
-struct PeerState {
-    feed: PeerFeed,
-    last_seen_ts_us: Option<LocalTs>,
-    is_silent: bool,
 }
 
 #[derive(Default)]
@@ -252,64 +243,6 @@ impl Actor {
         }
     }
 
-    fn on_datagram(&mut self, bytes: &[u8], from: SocketAddr, now: LocalTs) {
-        let datagram = match LinkDatagram::decode(bytes, &self.guard) {
-            Ok(datagram) => datagram,
-            Err(error) => return self.on_decode_error(&error),
-        };
-        if !self.gate.admit(&datagram.envelope, now).is_accepted() {
-            self.counts.gate_rejected += 1;
-            return;
-        }
-        self.note_peer_seen(from, now);
-        match datagram.body {
-            LinkBody::Subscribe(subscribe) => self.on_subscribe(from, subscribe, now),
-            LinkBody::Payload(payload) => {
-                self.on_payload(LinkOrigin::from(&datagram.envelope), payload, now)
-            }
-            // Engine serves engine topics (never consumes peer's); delivery still proves peer alive
-            _ => self.counts.topic_ignored += 1,
-        }
-    }
-
-    /// Peer frame -> hot path: stamped engine's clock, not sender's (cross-region skew -> reordering).
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the link actor stamps each peer frame and marker with message time before the tape records it"
-    )]
-    fn on_payload(&mut self, origin: LinkOrigin, payload: LinkPayload, received_ts_us: LocalTs) {
-        self.inbound.push(InboundMessage {
-            header: MessageHeader {
-                received_ts_us,
-                queued_ts_us: self.clock.now(),
-            },
-            body: MessageBody::Link(LinkFrame { origin, payload }),
-        });
-    }
-
-    fn on_subscribe(&mut self, from: SocketAddr, subscribe: Subscribe, now: LocalTs) {
-        if self.subscribers.refresh(from, subscribe.topics, now) == RefreshOutcome::Rejected {
-            self.on_table_full(from);
-        }
-        if subscribe.desired_epoch == 0 {
-            // Epoch 0: peer subscribes without claiming control
-            return;
-        }
-        self.last_control_ts_us = Some(now);
-        self.is_controller_lost = false;
-        let assertion = RunAssertion {
-            state: subscribe.desired_state,
-            epoch: subscribe.desired_epoch,
-        };
-        if self.control.desired().accept_if_newer(assertion) {
-            info!(
-                "controller {from} asserts {:?} at epoch {}",
-                assertion.state, assertion.epoch
-            );
-        }
-        self.push_marker_if_needed(now);
-    }
-
     /// Level-triggered: drop+count queue means edge-triggered push alone leaves adapters down on full slot. Dups harmless (dedup on epoch).
     fn push_marker_if_needed(&mut self, now: LocalTs) {
         let Some(desired) = self.control.pending() else {
@@ -319,37 +252,6 @@ impl Actor {
             now,
             MessageBody::RunControl(RunControl { desired }),
         ));
-    }
-
-    fn note_peer_seen(&mut self, from: SocketAddr, now: LocalTs) {
-        let Some(peer) = self.peers.iter_mut().find(|peer| peer.feed.address == from) else {
-            return;
-        };
-        peer.last_seen_ts_us = Some(now);
-        if peer.is_silent {
-            peer.is_silent = false;
-            info!("link peer {from} is live again");
-        }
-    }
-
-    // SMELL: a silent peer only gets a warning line and a count, and the strategy is never told, so
-    // it keeps acting on the last frame of that peer. Reconnects of a venue edge also have no cap.
-    fn check_peer_silence(&mut self, now: LocalTs) {
-        for peer in &mut self.peers {
-            let is_silent = peer
-                .last_seen_ts_us
-                .is_none_or(|seen| now.diff(seen) >= PEER_SILENCE_LIMIT);
-            if !is_silent || peer.is_silent {
-                continue;
-            }
-            let address = peer.feed.address;
-            peer.is_silent = true;
-            self.counts.peer_silenced += 1;
-            warn!(
-                "link peer {address} silent for {}s — its feed is stale, not merely quiet",
-                PEER_SILENCE_LIMIT.to_secs()
-            );
-        }
     }
 
     /// Dead controller must not decide fate; holding default, dead-man opt-in.
@@ -405,33 +307,6 @@ impl Actor {
             counts.table_full_refused,
             counts.peer_silenced,
             self.gate.counts()
-        );
-    }
-
-    #[cold]
-    fn on_decode_error(&mut self, error: &LinkDecodeError) {
-        warn_repeating!(
-            self.counts.decode_failed,
-            "link rejected {} datagrams (latest: {error})",
-            self.counts.decode_failed
-        );
-    }
-
-    #[cold]
-    fn on_receive_error(&mut self, error: &io::Error) {
-        warn_repeating!(
-            self.counts.receive_failed,
-            "link socket receive failed {} times (latest: {error})",
-            self.counts.receive_failed
-        );
-    }
-
-    #[cold]
-    fn on_table_full(&mut self, from: SocketAddr) {
-        warn_repeating!(
-            self.counts.table_full_refused,
-            "link subscriber table full at {LINK_MAX_SUBSCRIBERS} — refused {} subscriptions (latest {from})",
-            self.counts.table_full_refused
         );
     }
 }

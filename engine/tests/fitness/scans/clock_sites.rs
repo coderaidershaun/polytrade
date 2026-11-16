@@ -162,7 +162,7 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 115] = [
         &["engine::msg::time::EngineClock::now"],
     ),
     (
-        "engine/src/link/actor/mod.rs",
+        "engine/src/link/actor/inbound.rs",
         "on_payload",
         &["engine::msg::time::EngineClock::now"],
     ),
