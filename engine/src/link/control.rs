@@ -7,25 +7,11 @@ use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, VenueTs};
 use crate::runtime::config::ExecutionMode;
 
-use super::envelope::{
-    ByteReader, ByteWriter, ENVELOPE_LEN, LINK_MAX_DATAGRAM, LinkDecodeError, NAME_LEN, TopicId,
-    WireName,
-};
-use super::wire::{OPTIONAL_MANTISSA_LEN, WireField, wire_enum, wire_struct};
+use super::envelope::{ByteReader, ByteWriter, LinkDecodeError, TopicId, WireName};
+use super::wire::{LayoutDigest, WireField, wire_enum, wire_struct};
 
 /// Topics ONE subscription can name (not total topics that exist).
 pub const LINK_MAX_TOPICS: usize = 16;
-
-pub(super) const SUBSCRIBE_BODY_LEN: usize = 1 + 2 * LINK_MAX_TOPICS + 1 + 8;
-pub(super) const CATALOG_INSTRUMENT_BODY_LEN: usize =
-    8 + 2 + 2 + NAME_LEN + 2 * OPTIONAL_MANTISSA_LEN + 8 + 2 + 2 + 2 * NAME_LEN;
-pub(super) const CATALOG_FEATURE_BODY_LEN: usize = 8 + 2 + 2 + NAME_LEN;
-pub(super) const LIFECYCLE_BODY_LEN: usize = 1 + 1 + 1 + 8 + 8 + 2;
-
-const _: () = assert!(ENVELOPE_LEN + SUBSCRIBE_BODY_LEN <= LINK_MAX_DATAGRAM);
-const _: () = assert!(ENVELOPE_LEN + CATALOG_INSTRUMENT_BODY_LEN <= LINK_MAX_DATAGRAM);
-const _: () = assert!(ENVELOPE_LEN + CATALOG_FEATURE_BODY_LEN <= LINK_MAX_DATAGRAM);
-const _: () = assert!(ENVELOPE_LEN + LIFECYCLE_BODY_LEN <= LINK_MAX_DATAGRAM);
 
 /// Topics subscriber wants. Empty = all topics (matches absent `topics:` in config).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -114,6 +100,21 @@ pub struct Subscribe {
 /// The named topics ride a fixed-width slot array, so the count is a claim about the prefix rather
 /// than the frame length — hence the one bespoke pair in this module.
 impl WireField for Subscribe {
+    const WIDTH: usize =
+        u8::WIDTH + TopicId::WIDTH * LINK_MAX_TOPICS + RunState::WIDTH + u64::WIDTH;
+    const DIGEST: u64 = LayoutDigest::START
+        .text("subscribe")
+        .text("count")
+        .part(u8::WIDTH, u8::DIGEST)
+        .text("topics")
+        .number(LINK_MAX_TOPICS as u64)
+        .part(TopicId::WIDTH, TopicId::DIGEST)
+        .text("desired_state")
+        .part(RunState::WIDTH, RunState::DIGEST)
+        .text("desired_epoch")
+        .part(u64::WIDTH, u64::DIGEST)
+        .finish();
+
     fn write(&self, writer: &mut ByteWriter<'_>) {
         let wanted = self.topics.topics();
         self.topics.len.write(writer);

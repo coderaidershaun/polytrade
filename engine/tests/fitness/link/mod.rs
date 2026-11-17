@@ -5,3 +5,5 @@ mod control_plane;
 mod link_ingress;
 mod link_wire;
 mod marker_queue;
+mod wire_digest;
+mod wire_frames;

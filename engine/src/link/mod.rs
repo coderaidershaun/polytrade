@@ -1,5 +1,5 @@
-//! The UDP link between engines and workstations. Every frame shares one envelope, so either end
-//! refuses a frame from a mismatched build before it reads the body.
+//! The UDP link between engines and workstations. Every frame shares one envelope that carries the
+//! digest of the wire layout, so either end refuses a frame of another layout before it reads the body.
 
 #[cfg(not(target_arch = "wasm32"))]
 mod actor;
@@ -21,11 +21,12 @@ pub use control::{
     TopicSetError,
 };
 pub use envelope::{
-    Envelope, FrameGuard, LINK_MAGIC, LINK_MAX_DATAGRAM, LINK_NAME_LEN, LINK_VERSION,
-    LinkDecodeError, LinkHash, LinkIdentity, TopicId, WireName,
+    Envelope, FrameGuard, LINK_MAGIC, LINK_MAX_DATAGRAM, LINK_NAME_LEN, LinkDecodeError, LinkHash,
+    LinkIdentity, TopicId, WireName,
 };
 pub use frame::{
-    LINK_MAX_FIELDS, LinkBody, LinkDatagram, LinkFrame, LinkOrigin, LinkPayload, OutboundLink,
+    LINK_LAYOUT, LINK_MAX_FIELDS, LinkBody, LinkDatagram, LinkFrame, LinkOrigin, LinkPayload,
+    OutboundLink,
 };
 pub use subscribers::{
     GateCounts, GateVerdict, LINK_MAX_GATE_KEYS, LINK_MAX_SUBSCRIBERS, LINK_SUBSCRIPTION_TTL,
