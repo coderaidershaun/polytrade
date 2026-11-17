@@ -1,15 +1,25 @@
-//! Each strategy's recorded columns and link schema stay what its `schema.lock` says, because a file
-//! on disk names a column by its position and a renamed or moved column relabels data with no error.
+//! A recorded column is its name: each strategy's columns and link schema stay what its
+//! `schema.lock` says, and a file decodes by its own footer whatever order its build declared.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use engine::hot::strategy::{FeatureId, Strategy, StrategyConfig};
+use engine::hot::strategy::{FeatureId, Registration, Strategy, StrategyConfig, StrategyCtx};
 use engine::link::schema_hash_of_fields;
+use engine::msg::ids::InstrumentId;
+use engine::msg::inbound::SpinTick;
+use engine::msg::persist::PersistRecord;
 
-use crate::engine_support::{NOMINAL_SPIN, engine_view, recorder_spec};
+use crate::engine_support::{
+    NOMINAL_SPIN, engine_view, engine_without_warmup, instrument_row, persist_ring, recorder_spec,
+    spin, strategy_log_ring, tracker_spec_all,
+};
 use crate::micro_strategy::MicroRecorder;
 use crate::micro_strategy::features::{Features, QuoteSide};
+use crate::parquet_readback::{
+    Cell, TempDir, drain_blocking, named_feature_rows, parquet_files, read_parquet_file,
+    spawn_feature_writer,
+};
 use crate::poly_strategy::PolyUpPublisher;
 
 const LOCK_FILE: &str = "schema.lock";
@@ -276,4 +286,148 @@ fn schema_lock_of_each_strategy_holds() {
             own_claims(columns, strategy.link_fields(), &lock);
         }
     }
+}
+
+engine::features! {
+    struct FirstOrder {
+        alpha,
+        beta,
+        gamma,
+    }
+    const FIRST_ORDER;
+}
+
+engine::features! {
+    struct SecondOrder {
+        gamma,
+        alpha,
+        beta,
+    }
+    const SECOND_ORDER;
+}
+
+/// The three columns of either declaration, named by field, so each build emits a value under the
+/// name it means whatever id that name received.
+#[derive(Clone, Copy)]
+struct Columns {
+    alpha: FeatureId,
+    beta: FeatureId,
+    gamma: FeatureId,
+}
+
+fn first_order(ids: &[FeatureId]) -> Columns {
+    let declared = FirstOrder::from_ids(ids);
+    Columns {
+        alpha: declared.alpha,
+        beta: declared.beta,
+        gamma: declared.gamma,
+    }
+}
+
+fn second_order(ids: &[FeatureId]) -> Columns {
+    let declared = SecondOrder::from_ids(ids);
+    Columns {
+        alpha: declared.alpha,
+        beta: declared.beta,
+        gamma: declared.gamma,
+    }
+}
+
+/// A strategy that records the same three values each spin, under one of the two declarations.
+struct OrderProbe {
+    declared: &'static [&'static str],
+    resolve: fn(&[FeatureId]) -> Columns,
+    columns: Option<Columns>,
+}
+
+impl Strategy for OrderProbe {
+    fn features(&self) -> &'static [&'static str] {
+        self.declared
+    }
+
+    fn register(&mut self, registration: Registration<'_>) {
+        self.columns = Some((self.resolve)(registration.features));
+    }
+
+    fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
+        let columns = self.columns.expect("registered before the first callback");
+        ctx.emit(columns.alpha, InstrumentId(0), 1.5);
+        ctx.emit(columns.beta, InstrumentId(0), -2.25);
+        ctx.emit(columns.gamma, InstrumentId(0), 4096.0);
+    }
+}
+
+/// Runs one build of the probe for three spins and writes its rows through the real tape writer.
+fn record_a_run(
+    tape: &Path,
+    declared: &'static [&'static str],
+    resolve: fn(&[FeatureId]) -> Columns,
+) {
+    let (persistence, mut consumer) = persist_ring(64);
+    let (log_sink, _log_consumer) = strategy_log_ring(16);
+    let probe = OrderProbe {
+        declared,
+        resolve,
+        columns: None,
+    };
+    let mut engine = engine_without_warmup(
+        &[instrument_row(0, tracker_spec_all(1), 8)],
+        Box::new(probe),
+        persistence,
+        log_sink,
+    );
+    for seq in 1..=3 {
+        engine.dispatch(&spin(
+            seq,
+            1_000_000 * i64::try_from(seq).expect("a small seq"),
+        ));
+    }
+    let mut records = Vec::new();
+    while let Ok(record) = consumer.pop() {
+        if matches!(record, PersistRecord::Feature(_)) {
+            records.push(record);
+        }
+    }
+    assert_eq!(records.len(), 9, "three spins of three columns");
+    let names = engine.feature_names().to_vec();
+    drain_blocking(spawn_feature_writer(tape, &names, records)).expect("the tape drains clean");
+}
+
+fn feature_ids(path: &Path) -> Vec<Cell> {
+    let file = read_parquet_file(path);
+    let column = file
+        .field_names
+        .iter()
+        .position(|field| field == "feature_id")
+        .expect("a features file has a feature_id column");
+    file.rows.iter().map(|row| row[column].clone()).collect()
+}
+
+/// Fitness: a column is its name. Two builds that declare the same columns in two orders give the
+/// same name two ids, and a reader that names one file's ids through another file's footer puts
+/// every value under the wrong heading with no error.
+#[test]
+fn permuted_declaration_decodes_to_equal_tables() {
+    let tape = TempDir::new("permuted-declaration");
+    record_a_run(tape.path(), FIRST_ORDER, first_order);
+    record_a_run(tape.path(), SECOND_ORDER, second_order);
+    let files = parquet_files(tape.path());
+    assert_eq!(files.len(), 2, "one features file for each run: {files:?}");
+    assert_ne!(
+        feature_ids(&files[0]),
+        feature_ids(&files[1]),
+        "the two declarations give each name another id"
+    );
+    let tables: Vec<Vec<_>> = files
+        .iter()
+        .map(|path| {
+            let mut rows = named_feature_rows(path);
+            rows.sort();
+            rows
+        })
+        .collect();
+    assert_eq!(
+        tables[0], tables[1],
+        "each file, named through its own footer, holds the same table"
+    );
 }
