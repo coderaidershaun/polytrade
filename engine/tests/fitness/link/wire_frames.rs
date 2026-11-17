@@ -541,13 +541,18 @@ pub(super) fn arb_catalog_instrument() -> impl Strategy<Value = LinkBody> {
         )
 }
 
+/// A controller epoch. Epochs of 2^63 and above are refused on the wire, so none is drawn.
+fn arb_epoch() -> impl Strategy<Value = u64> {
+    0..1_u64 << 63
+}
+
 pub(super) fn arb_datagram() -> impl Strategy<Value = LinkDatagram> {
     prop_oneof![
         (
             arb_envelope(TopicId::SUBSCRIBE),
             arb_topic_set(),
             arb_run_state(),
-            any::<u64>()
+            arb_epoch()
         )
             .prop_map(
                 |(envelope, topics, desired_state, desired_epoch)| LinkDatagram {
@@ -601,7 +606,7 @@ pub(super) fn arb_datagram() -> impl Strategy<Value = LinkDatagram> {
                 Just(Some(ExecutionMode::Sim)),
                 Just(Some(ExecutionMode::Live))
             ],
-            any::<u64>(),
+            arb_epoch(),
             any::<i64>(),
             any::<u16>()
         )

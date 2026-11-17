@@ -1,22 +1,92 @@
-//! One declaration for each wire record generates its writer and its reader, so the two halves
-//! cannot learn different layouts. Rustfmt skips these macro bodies, so they are formatted by hand.
+//! One declaration for each wire record generates its writer, its reader, its width and the digest
+//! of its layout, so the halves cannot learn different layouts and a change of layout changes the
+//! digest. Rustfmt skips these macro bodies, so they are formatted by hand.
 
 use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty};
 use crate::msg::persist::FeatureId;
 use crate::msg::time::{DurationUs, LocalTs, VenueTs};
 
-use super::envelope::{ByteReader, ByteWriter, LinkDecodeError, LinkHash, TopicId};
+use super::envelope::{ByteReader, ByteWriter, LinkDecodeError, LinkHash, TopicId, fnv_fold};
 
 /// Reading is fallible for every type so one declaration form serves plain fields and tagged ones
 /// alike; the plain cases return `Ok` unconditionally.
+///
+/// `WIDTH` and `DIGEST` have no default, so a type cannot reach the wire without stating its layout.
+/// The compiler checks only that a hand-written impl states them: the round trip of each frame kind
+/// and the golden file catch a wrong claim.
 pub(super) trait WireField: Sized {
+    /// The bytes this type takes on the wire, the same for each value.
+    const WIDTH: usize;
+    /// A digest of the field names, widths and tags of this layout.
+    const DIGEST: u64;
     fn write(&self, writer: &mut ByteWriter<'_>);
     fn read(reader: &mut ByteReader<'_>) -> Result<Self, LinkDecodeError>;
+}
+
+/// Folds the parts of a layout into one digest at compile time.
+#[derive(Clone, Copy)]
+pub(super) struct LayoutDigest(u64);
+
+impl LayoutDigest {
+    pub(super) const START: Self = Self(super::envelope::FNV_OFFSET_BASIS);
+
+    /// ASCII whitespace is skipped, so the spacing that `stringify!` gives cannot move the digest. A
+    /// zero byte ends each text, so two names cannot run into one.
+    pub(super) const fn text(self, text: &str) -> Self {
+        let bytes = text.as_bytes();
+        let mut hash = self.0;
+        let mut index = 0;
+        while index < bytes.len() {
+            if !bytes[index].is_ascii_whitespace() {
+                hash = fnv_fold(hash, &[bytes[index]]);
+            }
+            index += 1;
+        }
+        Self(fnv_fold(hash, &[0]))
+    }
+
+    pub(super) const fn number(self, value: u64) -> Self {
+        Self(fnv_fold(self.0, &value.to_le_bytes()))
+    }
+
+    /// One part of the layout: its width and its own digest.
+    pub(super) const fn part(self, width: usize, digest: u64) -> Self {
+        self.number(width as u64).number(digest)
+    }
+
+    pub(super) const fn finish(self) -> u64 {
+        self.0
+    }
+}
+
+/// The width of a field that a macro names without its type. The function is never called: the
+/// compiler infers the field type from it.
+pub(super) const fn width_of<S, T: WireField>(_field: fn(&S) -> &T) -> usize {
+    T::WIDTH
+}
+
+pub(super) const fn digest_of<S, T: WireField>(_field: fn(&S) -> &T) -> u64 {
+    T::DIGEST
+}
+
+pub(super) const fn widest(widths: &[usize]) -> usize {
+    let mut widest = 0;
+    let mut index = 0;
+    while index < widths.len() {
+        if widths[index] > widest {
+            widest = widths[index];
+        }
+        index += 1;
+    }
+    widest
 }
 
 macro_rules! wire_primitive {
     ($($ty:ty),+ $(,)?) => {
         $(impl WireField for $ty {
+            const WIDTH: usize = size_of::<$ty>();
+            const DIGEST: u64 = LayoutDigest::START.text(stringify!($ty)).finish();
+
             #[inline]
             fn write(&self, writer: &mut ByteWriter<'_>) {
                 writer.write_bytes(&self.to_le_bytes());
@@ -33,6 +103,9 @@ macro_rules! wire_primitive {
 macro_rules! wire_micros {
     ($($ty:ident),+ $(,)?) => {
         $(impl WireField for $ty {
+            const WIDTH: usize = i64::WIDTH;
+            const DIGEST: u64 = i64::DIGEST;
+
             #[inline]
             fn write(&self, writer: &mut ByteWriter<'_>) {
                 self.micros().write(writer);
@@ -49,6 +122,9 @@ macro_rules! wire_micros {
 macro_rules! wire_newtype {
     ($($ty:ident => $inner:ty),+ $(,)?) => {
         $(impl WireField for $ty {
+            const WIDTH: usize = <$inner as WireField>::WIDTH;
+            const DIGEST: u64 = <$inner as WireField>::DIGEST;
+
             #[inline]
             fn write(&self, writer: &mut ByteWriter<'_>) {
                 self.0.write(writer);
@@ -65,6 +141,9 @@ macro_rules! wire_newtype {
 macro_rules! wire_mantissa {
     ($($ty:ident),+ $(,)?) => {
         $(impl WireField for $ty {
+            const WIDTH: usize = i64::WIDTH;
+            const DIGEST: u64 = i64::DIGEST;
+
             #[inline]
             fn write(&self, writer: &mut ByteWriter<'_>) {
                 self.mantissa().write(writer);
@@ -83,6 +162,14 @@ macro_rules! wire_mantissa {
 macro_rules! wire_optional {
     ($($ty:ty, $label:literal);+ $(;)?) => {
         $(impl WireField for Option<$ty> {
+            const WIDTH: usize = u8::WIDTH + <$ty as WireField>::WIDTH;
+            const DIGEST: u64 = LayoutDigest::START
+                .text("optional")
+                .number(ABSENT as u64)
+                .number(PRESENT as u64)
+                .part(<$ty as WireField>::WIDTH, <$ty as WireField>::DIGEST)
+                .finish();
+
             fn write(&self, writer: &mut ByteWriter<'_>) {
                 let tag = if self.is_some() { PRESENT } else { ABSENT };
                 tag.write(writer);
@@ -105,6 +192,9 @@ macro_rules! wire_optional {
 macro_rules! wire_optional_mantissa {
     ($($ty:ident),+ $(,)?) => {
         $(impl WireField for Option<$ty> {
+            const WIDTH: usize = Option::<i64>::WIDTH;
+            const DIGEST: u64 = Option::<i64>::DIGEST;
+
             fn write(&self, writer: &mut ByteWriter<'_>) {
                 self.map(|value| value.mantissa()).write(writer);
             }
@@ -122,6 +212,13 @@ macro_rules! wire_optional_mantissa {
 macro_rules! wire_enum {
     ($ty:ty, $label:literal; $( ($($value:tt)+) = $tag:literal ),+ $(,)?) => {
         impl WireField for $ty {
+            const WIDTH: usize = u8::WIDTH;
+            const DIGEST: u64 = $crate::link::wire::LayoutDigest::START
+                .text("enum")
+                .text($label)
+                $( .text(stringify!($($value)+)).number($tag) )+
+                .finish();
+
             fn write(&self, writer: &mut ByteWriter<'_>) {
                 let tag: u8 = match *self {
                     $( $($value)+ => $tag, )+
@@ -145,6 +242,18 @@ macro_rules! wire_enum {
 macro_rules! wire_struct {
     ($ty:ident { $($field:ident $(after $checked:expr)?),+ $(,)? }) => {
         impl WireField for $ty {
+            const WIDTH: usize = 0 $( + $crate::link::wire::width_of(|record: &$ty| &record.$field) )+;
+            const DIGEST: u64 = $crate::link::wire::LayoutDigest::START
+                .text("struct")
+                $(
+                    .text(stringify!($field))
+                    .part(
+                        $crate::link::wire::width_of(|record: &$ty| &record.$field),
+                        $crate::link::wire::digest_of(|record: &$ty| &record.$field),
+                    )
+                )+
+                .finish();
+
             fn write(&self, writer: &mut ByteWriter<'_>) {
                 $( self.$field.write(writer); )+
             }
@@ -165,6 +274,13 @@ macro_rules! wire_struct {
 macro_rules! wire_array {
     ($($ty:ty; $len:expr; $empty:expr),+ $(,)?) => {
         $(impl WireField for [$ty; $len] {
+            const WIDTH: usize = <$ty as WireField>::WIDTH * $len;
+            const DIGEST: u64 = $crate::link::wire::LayoutDigest::START
+                .text("array")
+                .number($len as u64)
+                .part(<$ty as WireField>::WIDTH, <$ty as WireField>::DIGEST)
+                .finish();
+
             fn write(&self, writer: &mut ByteWriter<'_>) {
                 for item in self {
                     item.write(writer);
@@ -199,10 +315,6 @@ wire_newtype! {
 
 wire_mantissa!(Price, Qty);
 
-pub(super) const OPTIONAL_MANTISSA_LEN: usize = 1 + 8;
-pub(super) const OPTIONAL_F64_LEN: usize = 1 + 8;
-pub(super) const OPTIONAL_LEVEL_LEN: usize = OPTIONAL_MANTISSA_LEN + 8;
-
 const ABSENT: u8 = 0;
 const PRESENT: u8 = 1;
 
@@ -215,6 +327,15 @@ wire_optional_mantissa!(Price, Qty);
 
 /// The quantity rides even when the price is absent, so every level is one width.
 impl WireField for Option<(Price, Qty)> {
+    const WIDTH: usize = Option::<Price>::WIDTH + Qty::WIDTH;
+    const DIGEST: u64 = LayoutDigest::START
+        .text("price level")
+        .text("price")
+        .part(Option::<Price>::WIDTH, Option::<Price>::DIGEST)
+        .text("qty")
+        .part(Qty::WIDTH, Qty::DIGEST)
+        .finish();
+
     fn write(&self, writer: &mut ByteWriter<'_>) {
         self.map(|(price, _)| price).write(writer);
         self.map_or(Qty::from_mantissa(0), |(_, qty)| qty)

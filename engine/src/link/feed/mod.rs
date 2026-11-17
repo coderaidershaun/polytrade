@@ -13,40 +13,10 @@ use crate::msg::ui::{
     UI_QUOTE_LEVELS, UiBookSnapshot, UiBookState, UiEvent, UiWorkingOrder,
 };
 
-use super::envelope::{ByteReader, ByteWriter, ENVELOPE_LEN, LINK_MAX_DATAGRAM, LinkDecodeError};
-use super::wire::{OPTIONAL_LEVEL_LEN, WireField, wire_array, wire_enum, wire_struct};
-use exec::{HALT_LEN, REJECT_ORIGIN_LEN};
-pub(super) use latency::REPORT_BODY_LEN;
-
-const LEVEL_LEN: usize = 16;
-
-pub(super) const BOOK_BODY_LEN: usize = 2 + 8 + 8 + 1 + 2 + 2 + 2 * UI_BOOK_LEVELS * LEVEL_LEN;
-pub(super) const EVENT_BODY_LEN: usize = 1 + 8 + 8 + EVENT_TAIL_LEN;
-
-const QUOTE_LEN: usize = 2 + 2 * UI_QUOTE_LEVELS * OPTIONAL_LEVEL_LEN;
-const ORDER_UPDATE_LEN: usize = 2 + 8 + 1 + 1 + 1 + 8 + 8 + 8;
-const ORDER_SNAPSHOT_CELL_LEN: usize = 8 + 1 + 1 + 8 + 8 + 8;
-const ORDER_SNAPSHOT_LEN: usize =
-    2 + 1 + 1 + 2 + UI_ORDER_SNAPSHOT_CAPACITY * ORDER_SNAPSHOT_CELL_LEN;
-const EVENT_TAIL_LEN: usize = ORDER_SNAPSHOT_LEN;
-const FILL_LEN: usize = 2 + 1 + 1 + 8 + 8 + 8 + 2 + 1;
-const BALANCE_LEN: usize = 2 + 8 + 8;
-const REJECT_LEN: usize = 2 + 1 + REJECT_ORIGIN_LEN;
-const EXECUTION_LEN: usize = HALT_LEN;
-const POSITION_LEN: usize = 2 + 8 + 8;
-
-// UI_BOOK_LEVELS bump -> compiles fail (not runtime fragmentation). Atomic snapshot width; new field -> tail overrun fails.
-const _: () = assert!(ENVELOPE_LEN + BOOK_BODY_LEN <= LINK_MAX_DATAGRAM);
-const _: () = assert!(ENVELOPE_LEN + EVENT_BODY_LEN <= LINK_MAX_DATAGRAM);
-const _: () = assert!(ENVELOPE_LEN + REPORT_BODY_LEN <= LINK_MAX_DATAGRAM);
-const _: () = assert!(QUOTE_LEN <= EVENT_TAIL_LEN);
-const _: () = assert!(ORDER_UPDATE_LEN <= EVENT_TAIL_LEN);
-const _: () = assert!(ORDER_SNAPSHOT_LEN <= EVENT_TAIL_LEN);
-const _: () = assert!(FILL_LEN <= EVENT_TAIL_LEN);
-const _: () = assert!(BALANCE_LEN <= EVENT_TAIL_LEN);
-const _: () = assert!(REJECT_LEN <= EVENT_TAIL_LEN);
-const _: () = assert!(EXECUTION_LEN <= EVENT_TAIL_LEN);
-const _: () = assert!(POSITION_LEN <= EVENT_TAIL_LEN);
+use super::envelope::{ByteReader, ByteWriter, LinkDecodeError};
+use super::wire::{
+    LayoutDigest, WireField, digest_of, widest, width_of, wire_array, wire_enum, wire_struct,
+};
 
 // Discriminants 1-based: all-zero invalid.
 wire_enum! {
@@ -64,6 +34,12 @@ wire_enum! {
 const NO_QUOTE_LEVEL: u8 = u8::MAX;
 
 impl WireField for Option<QuoteLevel> {
+    const WIDTH: usize = u8::WIDTH;
+    const DIGEST: u64 = LayoutDigest::START
+        .text("quote level")
+        .number(NO_QUOTE_LEVEL as u64)
+        .finish();
+
     fn write(&self, writer: &mut ByteWriter<'_>) {
         self.map_or(NO_QUOTE_LEVEL, QuoteLevel::get).write(writer);
     }
@@ -129,14 +105,47 @@ fn validate_book_len(count: u16) -> Result<(), LinkDecodeError> {
     })
 }
 
-/// Every kind shares the `seq`/`event_ts_us` head and pads to one width, so a reader can seek the
-/// next frame without knowing the kind. Listing a variant's fields once is what stops the writer and
-/// the reader disagreeing about which byte is the side and which is the state.
+/// Every kind shares the `seq`/`event_ts_us` head and pads to the widest kind, so a reader can seek
+/// the next frame without knowing the kind. Listing a variant's fields once is what stops the writer
+/// and the reader disagreeing about which byte is the side and which is the state. Each probe
+/// closure only names a field for its type and is never called.
 macro_rules! ui_events {
     ( $( $variant:ident = $tag:literal { $($field:ident $(after $checked:expr)?),* $(,)? } ),+ $(,)? ) => {
         impl WireField for UiEvent {
+            const WIDTH: usize = u8::WIDTH + u64::WIDTH + VenueTs::WIDTH + widest(&[
+                $( 0 $( + width_of(|event: &UiEvent| match event {
+                    UiEvent::$variant { $field, .. } => $field,
+                    _ => unreachable!("a width probe is never called"),
+                }) )* ),+
+            ]);
+            const DIGEST: u64 = LayoutDigest::START
+                .text("event")
+                .number(Self::WIDTH as u64)
+                .text("seq")
+                .part(u64::WIDTH, u64::DIGEST)
+                .text("event_ts_us")
+                .part(VenueTs::WIDTH, VenueTs::DIGEST)
+                $(
+                    .text(stringify!($variant))
+                    .number($tag)
+                    $(
+                        .text(stringify!($field))
+                        .part(
+                            width_of(|event: &UiEvent| match event {
+                                UiEvent::$variant { $field, .. } => $field,
+                                _ => unreachable!("a width probe is never called"),
+                            }),
+                            digest_of(|event: &UiEvent| match event {
+                                UiEvent::$variant { $field, .. } => $field,
+                                _ => unreachable!("a digest probe is never called"),
+                            }),
+                        )
+                    )*
+                )+
+                .finish();
+
             fn write(&self, writer: &mut ByteWriter<'_>) {
-                let end = writer.written() + EVENT_BODY_LEN;
+                let end = writer.written() + Self::WIDTH;
                 match self {
                     $( UiEvent::$variant { seq, event_ts_us, $($field),* } => {
                         let kind: u8 = $tag;

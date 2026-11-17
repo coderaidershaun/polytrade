@@ -4,4 +4,5 @@
 mod control_plane;
 mod link_ingress;
 mod link_wire;
+mod wire_digest;
 mod wire_frames;

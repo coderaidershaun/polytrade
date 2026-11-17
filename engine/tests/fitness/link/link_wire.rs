@@ -5,10 +5,9 @@ use std::net::SocketAddr;
 
 use engine::hot::exec::{CloseReason, OrderState, QuoteLevel, ReadinessGap, RejectReason};
 use engine::link::{
-    GateVerdict, LINK_MAGIC, LINK_MAX_DATAGRAM, LINK_MAX_FIELDS, LINK_MAX_GATE_KEYS,
-    LINK_MAX_SUBSCRIBERS, LINK_SUBSCRIPTION_TTL, LINK_VERSION, LinkBody, LinkDatagram,
-    LinkDecodeError, LinkHash, LinkPayload, RefreshOutcome, SequenceGate, SubscriberTable, TopicId,
-    TopicSet,
+    GateVerdict, LINK_LAYOUT, LINK_MAGIC, LINK_MAX_DATAGRAM, LINK_MAX_FIELDS, LINK_MAX_GATE_KEYS,
+    LINK_MAX_SUBSCRIBERS, LINK_SUBSCRIPTION_TTL, LinkBody, LinkDatagram, LinkDecodeError, LinkHash,
+    LinkPayload, RefreshOutcome, SequenceGate, SubscriberTable, TopicId, TopicSet,
 };
 use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::persist::FeatureId;
@@ -25,15 +24,15 @@ use super::wire_frames::{
     from_hex, golden_frames, order_snapshot, payload_datagram, round_trip, to_hex, working_order,
 };
 
-/// The topic field sits at bytes 6..8 of the envelope. Patching the wire is the only way to build a
+/// The topic field sits at bytes 12..14 of the envelope. Patching the wire is the only way to build a
 /// datagram this build cannot construct through its own types — which is exactly what a peer on a
 /// newer wire does.
-const TOPIC_OFFSET: usize = 6;
-/// `count` follows the 80-byte envelope, the 8-byte schema hash and the 8-byte event stamp.
-const PAYLOAD_COUNT_OFFSET: usize = 96;
-/// `bid_len` follows the 80-byte envelope, the 2-byte instrument, the 8-byte sequence, the 8-byte
+const TOPIC_OFFSET: usize = 12;
+/// `count` follows the 86-byte envelope, the 8-byte schema hash and the 8-byte event stamp.
+const PAYLOAD_COUNT_OFFSET: usize = 102;
+/// `bid_len` follows the 86-byte envelope, the 2-byte instrument, the 8-byte sequence, the 8-byte
 /// event stamp and the 1-byte book state; `ask_len` is the two bytes after it.
-const BOOK_BID_LEN_OFFSET: usize = 99;
+const BOOK_BID_LEN_OFFSET: usize = 105;
 
 /// The slot each refusal claims in [`REJECT_REASONS`], which is what stops that list rotting into a
 /// subset of the enum. A new `RejectReason` lands here as a missing arm, and the arm it needs
@@ -199,14 +198,15 @@ fn rejects_frames_with_distinct_causes() {
             },
         ),
         (
-            "version mismatch",
+            "layout mismatch",
             {
                 let mut datagram = book_datagram();
-                datagram.envelope.version = LINK_VERSION + 1;
+                datagram.envelope.layout = LinkHash(LINK_LAYOUT.0 + 1);
                 encode(&datagram)
             },
-            LinkDecodeError::VersionMismatch {
-                found: LINK_VERSION + 1,
+            LinkDecodeError::LayoutMismatch {
+                found: LinkHash(LINK_LAYOUT.0 + 1),
+                expected: LINK_LAYOUT,
             },
         ),
         (
@@ -433,11 +433,11 @@ fn full_quote_ladder() -> UiEvent {
 /// FITNESS: every `OrderState`, and every body that fills its fixed capacity, survives the tail on
 /// every run.
 ///
-/// `OrderUpdate` is the widest event kind and its tail is EXACTLY the budget — `ORDER_UPDATE_LEN`
-/// and `EVENT_TAIL_LEN` are both 36, so there is no slack to absorb a mistake. The room exists
-/// because the wire flattens `Closed(_)` into the same byte as the open states, which turns five
-/// close reasons into five wire discriminants in one eleven-state table — and a table of eleven
-/// near-identical tags is where a copy-pasted tag hides.
+/// Each event kind pads to the widest kind, the order snapshot, so a field written narrower than it
+/// is read is hidden by the padding unless its value is saturated. The wire flattens `Closed(_)`
+/// into the same byte as the open states, which turns five close reasons into five wire
+/// discriminants in one eleven-state table — and a table of eleven near-identical tags is where a
+/// copy-pasted tag hides.
 ///
 /// [`round_trips_every_frame_kind`] generates these states too, so this is deliberately NOT a second
 /// round-trip: it is the DETERMINISM the generator cannot give. One state sits behind four nested
@@ -541,6 +541,7 @@ fn every_frame_kind_encodes_to_checked_in_bytes() {
 
     let checked_in: Vec<(&str, Vec<u8>)> = FRAMES
         .lines()
+        .filter(|line| !line.starts_with("layout "))
         .map(|line| {
             let (kind, hex) = line
                 .split_once(' ')

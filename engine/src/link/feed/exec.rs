@@ -9,10 +9,7 @@ use crate::msg::time::VenueTs;
 use crate::msg::ui::UiHalt;
 
 use super::super::envelope::{ByteReader, ByteWriter, LinkDecodeError};
-use super::super::wire::{WireField, wire_enum};
-
-pub(super) const REJECT_ORIGIN_LEN: usize = 1 + 1 + 4;
-pub(super) const HALT_LEN: usize = 1 + 1 + 8;
+use super::super::wire::{LayoutDigest, WireField, wire_enum};
 
 // Closed states are flattened in alongside the open ones rather than carried in a separate
 // reason byte, which fills the tail exactly. Discriminants start at 1, so an all-zero byte
@@ -107,8 +104,26 @@ const REJECT_VENUE: u8 = 2;
 const HALT_ARMED: u8 = 1;
 const HALT_HALTED: u8 = 2;
 
+// Both arms take the same bytes, so the reason and the class must be one width.
+const _: () = assert!(RejectReason::WIDTH == RejectClass::WIDTH);
+
 /// The local arm pads out the venue arm's code field; the reader simply skips over it.
 impl WireField for RejectOrigin {
+    const WIDTH: usize = u8::WIDTH + RejectClass::WIDTH + i32::WIDTH;
+    const DIGEST: u64 = LayoutDigest::START
+        .text("reject origin")
+        .text("local")
+        .number(REJECT_LOCAL as u64)
+        .part(RejectReason::WIDTH, RejectReason::DIGEST)
+        .text("padding")
+        .part(i32::WIDTH, i32::DIGEST)
+        .text("venue")
+        .number(REJECT_VENUE as u64)
+        .part(RejectClass::WIDTH, RejectClass::DIGEST)
+        .text("code")
+        .part(i32::WIDTH, i32::DIGEST)
+        .finish();
+
     fn write(&self, writer: &mut ByteWriter<'_>) {
         match *self {
             RejectOrigin::Local(reason) => {
@@ -141,7 +156,20 @@ impl WireField for RejectOrigin {
     }
 }
 
+/// The armed arm pads out the reason and the stamp of the halted arm.
 impl WireField for UiHalt {
+    const WIDTH: usize = u8::WIDTH + HaltReason::WIDTH + VenueTs::WIDTH;
+    const DIGEST: u64 = LayoutDigest::START
+        .text("halt")
+        .text("armed")
+        .number(HALT_ARMED as u64)
+        .text("halted")
+        .number(HALT_HALTED as u64)
+        .part(HaltReason::WIDTH, HaltReason::DIGEST)
+        .text("halted_ts_us")
+        .part(VenueTs::WIDTH, VenueTs::DIGEST)
+        .finish();
+
     fn write(&self, writer: &mut ByteWriter<'_>) {
         match *self {
             UiHalt::Armed => {
