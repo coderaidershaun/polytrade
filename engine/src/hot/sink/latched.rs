@@ -60,9 +60,14 @@ impl PersistSink {
         }
     }
 
-    /// Closes and rolls every open file, ordered after any records already banked this spin.
+    /// Closes and rolls every open file, ordered after any records already banked this spin. A
+    /// seal that waits already closes every file once it goes, so a second request keeps its count
+    /// of tries, and a writer that takes no seal still reaches the cap.
     #[cold]
     pub(crate) fn request_seal(&mut self) {
+        if self.is_seal_pending() {
+            return;
+        }
         self.seal = Seal::Waiting { tries: 0 };
         self.try_seal();
     }

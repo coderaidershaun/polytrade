@@ -324,6 +324,11 @@ fn the_shipped_configs_run_their_strategies_and_ship_disarmed() {
         spin_interval: DurationUs::from_micros(micro.engine.spin_interval_us as i64),
     };
     let _ = MicroRecorder::from_spec(&micro.strategy, micro_engine);
+    assert_eq!(
+        micro.seal_interval_spins().get(),
+        300,
+        "an omitted seal interval seals the tape each five minutes of one-second spins"
+    );
 
     let publisher = load::<PolyUpParams>(
         "../strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/config.yaml",
@@ -337,6 +342,11 @@ fn the_shipped_configs_run_their_strategies_and_ship_disarmed() {
         publisher.persistence.is_some(),
         "the rotations lineage still needs the writer thread: it is the only map from the \
          role-keyed poly_* features back to a condition id and window"
+    );
+    assert_eq!(
+        publisher.seal_interval_spins().get(),
+        3_000,
+        "an omitted seal interval seals the tape each five minutes of 100 ms spins"
     );
     let publisher_execution = publisher.sources[0]
         .execution

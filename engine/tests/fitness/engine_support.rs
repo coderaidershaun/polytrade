@@ -1,7 +1,7 @@
 //! Builders that many tests share, so that each builds its messages, its instrument row, and its
 //! persistence ring wired to a `PersistSink` the same way.
 
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 
 use engine::hot::dispatch::{
     ExecWiring, ExposureWiring, HotEngine, HotEngineSetup, LinkWiring, PersistWiring,
@@ -519,7 +519,8 @@ pub fn running_at(epoch: u64) -> RunAssertion {
 }
 
 /// Persistence on with every table recorded, so a test asserting on an emit lane sees it land.
-/// [`persist_ring_for`] drives the gate itself.
+/// [`persist_ring_for`] drives the gate itself. Neither seals on a spin: a seal record in the ring
+/// would change what each test reads there.
 pub fn persist_ring(capacity: usize) -> (PersistWiring, Consumer<PersistRecord>) {
     persist_ring_for(capacity, RecordedTables::new(&ALL_TABLES))
 }
@@ -539,6 +540,7 @@ pub fn persist_ring_for(
     let wiring = PersistWiring {
         sink: PersistSink::new(producer, NonZeroU32::MAX),
         tables,
+        seal_interval_spins: NonZeroU64::MAX,
     };
     (wiring, consumer)
 }

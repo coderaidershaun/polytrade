@@ -1,9 +1,9 @@
-//! Writer thread: drain the record ring into one Parquet writer per table, sealing on interval, row
-//! cap, hour cross, or shutdown. Dedicated thread (encode and fsync both block).
+//! Writer thread: drain the record ring into one Parquet writer per table, sealing at each seal
+//! record of the fold, row cap, hour cross, or shutdown. Dedicated thread (encode and fsync block).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rtrb::Consumer;
 use tokio::sync::mpsc;
@@ -22,7 +22,6 @@ use super::schema::{self, TableRow};
 use super::table::{TableFiles, TableWriter};
 use super::{PersistConfig, PersistError, RunMeta};
 
-const SEAL_INTERVAL: Duration = Duration::from_secs(300);
 const IDLE_SLEEP: Duration = Duration::from_millis(1);
 const MAX_POP_BATCH: usize = 8_192;
 
@@ -158,20 +157,10 @@ impl WriterState {
         outcome
     }
 
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "a writer stamps and paces its own files, which are never engine state"
-    )]
     fn pump(&mut self, drain: &AtomicBool) -> Result<(), PersistError> {
         self.retention.prune();
-        let mut last_seal = Instant::now();
         loop {
             let drained_any = self.consume_batch()?;
-            if last_seal.elapsed() >= SEAL_INTERVAL {
-                self.seal_all()?;
-                self.retention.prune();
-                last_seal = Instant::now();
-            }
             if drain.load(Ordering::Acquire) {
                 self.consume_all()?;
                 return Ok(());
@@ -220,8 +209,14 @@ impl WriterState {
             PersistRecord::Order(row) => push_row(&mut self.orders, row)?,
             PersistRecord::Fill(row) => push_row(&mut self.fills, row)?,
             PersistRecord::Incident(row) => self.incidents.push(row).map(|()| true)?,
-            // It comes through the ring, so each record banked before it is already here.
-            PersistRecord::SealAll => return self.seal_all(),
+            // It comes through the ring, so each record banked before it is already here. The fold
+            // sends one at each seal border of message time and at each park, and the prune of old
+            // files follows each one.
+            PersistRecord::SealAll => {
+                self.seal_all()?;
+                self.retention.prune();
+                return Ok(());
+            }
         };
         if let (false, Some(table)) = (landed, record.table()) {
             self.count_unnamed_table_row(table);

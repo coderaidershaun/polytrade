@@ -2,6 +2,8 @@
 //! wiring resolves to before the first message. Separate from the loop body so a new optional
 //! subsystem lands here rather than lengthening the constructor.
 
+use std::num::NonZeroU64;
+
 use crate::hot::book::Book;
 use crate::hot::exec::{ExecEngineSetup, ExecSettings, ExecVenueSetup};
 use crate::hot::quant::volatility::EwmaVol;
@@ -36,6 +38,8 @@ pub struct HotEngineSetup<'a> {
 pub struct PersistWiring {
     pub sink: PersistSink,
     pub tables: RecordedTables,
+    /// The fold seals every open file when a spin crosses a multiple of this count.
+    pub seal_interval_spins: NonZeroU64,
 }
 
 pub struct ExecWiring {

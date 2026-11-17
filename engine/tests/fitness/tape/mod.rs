@@ -6,4 +6,5 @@ mod persist_drain;
 mod persist_exec;
 mod persist_retention;
 mod persist_tables;
+mod seal_marker;
 mod tape_files;
