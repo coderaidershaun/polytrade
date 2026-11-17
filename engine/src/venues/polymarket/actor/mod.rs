@@ -22,7 +22,7 @@ use crate::msg::run_state::RunState;
 use crate::msg::time::{EngineClock, LocalTs};
 use crate::runtime::config::PolySeries;
 use crate::runtime::registry::{InstrumentRow, ProducerGroup};
-use crate::runtime::shutdown::{FatalSignal, RunStateCell, TaskHandle};
+use crate::runtime::shutdown::{DesiredReader, FatalSignal, TaskHandle};
 use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::fault::MarketDataError;
 use crate::venues::edge::lane::{Flow, Lane, LaneSpec, SessionEnd, run_lane};
@@ -45,7 +45,7 @@ const RESULTS_CAPACITY: usize = 32;
 pub struct PolymarketAdapterContext {
     pub clock: EngineClock,
     pub fatal: FatalSignal,
-    pub run_state: RunStateCell,
+    pub run_state: DesiredReader,
     pub backoff: BackoffCaps,
     pub rotations_tx: mpsc::Sender<RotationRow>,
     /// Where the execution edge learns which token each leg is trading this window. `None` when no
@@ -75,7 +75,7 @@ struct Actor {
     schedule: PolySchedule,
     clock: EngineClock,
     fatal: FatalSignal,
-    run_state: RunStateCell,
+    run_state: DesiredReader,
     backoff: BackoffCaps,
     producer: QueueProducer,
     rest: Arc<PolyRest>,

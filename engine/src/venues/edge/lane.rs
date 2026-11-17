@@ -2,7 +2,7 @@
 //! for when the back-off starts over, and the halt on a fault of a feed, are written once.
 
 use crate::msg::run_state::RunState;
-use crate::runtime::shutdown::{FatalSignal, RunStateCell};
+use crate::runtime::shutdown::{DesiredReader, FatalSignal};
 use crate::venues::IDLE_POLL;
 use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::fault::{MarketDataError, halt_on_market_data_error};
@@ -33,7 +33,7 @@ pub(crate) struct LaneSpec {
     pub(crate) name: String,
     pub(crate) url: String,
     pub(crate) fatal: FatalSignal,
-    pub(crate) run_state: RunStateCell,
+    pub(crate) run_state: DesiredReader,
     pub(crate) backoff: BackoffCaps,
 }
 

@@ -1,5 +1,5 @@
 //! The latches of a run: `FatalSignal` keeps the first `FatalReason` and stops now, `DrainSignal`
-//! finishes the input first, and the run-state cells turn trading off and on without an ending.
+//! finishes the input first, and the run-state handles turn trading off and on without an ending.
 
 use std::any::Any;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -158,11 +158,10 @@ impl DrainSignal {
     }
 }
 
-/// The state and epoch live in ONE atomic word, so a reader never sees a mismatched pair. There
-/// are two per run: DESIRED, which the link actor writes and the adapters read, and ACKNOWLEDGED,
-/// which the hot thread writes and the link reads to learn whether its marker landed.
+/// The state and epoch live in ONE atomic word, so a reader never sees a mismatched pair. Each
+/// handle below wraps one or two of these, and only a writer handle can store into one.
 #[derive(Clone)]
-pub struct RunStateCell {
+struct RunStateCell {
     packed: Arc<AtomicU64>,
 }
 
@@ -171,44 +170,20 @@ pub struct RunStateCell {
 const IDLE_BIT: u64 = 1 << 63;
 
 impl RunStateCell {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             packed: Arc::new(AtomicU64::new(pack(RunAssertion::INITIAL))),
         }
     }
 
-    /// An unconditional store for the acknowledged cell, which has a single writer: the hot thread
-    /// reporting the state it actually applied.
     #[inline]
-    pub fn store(&self, assertion: RunAssertion) {
+    fn store(&self, assertion: RunAssertion) {
         self.packed.store(pack(assertion), Ordering::Release);
     }
 
-    /// A highest-epoch-wins store for the desired cell. `false` means this controller lost the race
-    /// and is not in charge.
-    pub fn accept_if_newer(&self, assertion: RunAssertion) -> bool {
-        if assertion.epoch <= self.load().epoch {
-            return false;
-        }
-        self.store(assertion);
-        true
-    }
-
     #[inline]
-    pub fn load(&self) -> RunAssertion {
+    fn load(&self) -> RunAssertion {
         unpack(self.packed.load(Ordering::Acquire))
-    }
-
-    /// The state alone, for edge code that does not need the epoch.
-    #[inline]
-    pub fn state(&self) -> RunState {
-        self.load().state
-    }
-}
-
-impl Default for RunStateCell {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -226,35 +201,98 @@ const fn unpack(word: u64) -> RunAssertion {
     }
 }
 
-/// The desired and acknowledged pair is what makes control converge. `pending()` asks which marker
-/// still needs pushing, which makes the control LEVEL-triggered. The marker rides a ring that drops
-/// and counts when it is full, and an edge-triggered design would leave the adapters parked after
-/// such a drop; asking again on the next tick repairs it instead.
-#[derive(Clone, Default)]
-pub struct RunControlGate {
+/// The three handles on the run state of one run, from its one constructor. The desired state is
+/// what the controller asked for, and the acknowledged state is what the fold applied.
+pub struct RunStateHandles {
+    /// For the link actor, the one writer of the desired state.
+    pub desired_writer: DesiredWriter,
+    /// For each edge: clone it once for each.
+    pub desired_reader: DesiredReader,
+    /// For the hot thread, the one writer of the acknowledged state.
+    pub acknowledged_writer: AcknowledgedWriter,
+}
+
+impl RunStateHandles {
+    pub fn new() -> Self {
+        let desired = RunStateCell::new();
+        let acknowledged = RunStateCell::new();
+        Self {
+            desired_writer: DesiredWriter {
+                desired: desired.clone(),
+                acknowledged: acknowledged.clone(),
+            },
+            desired_reader: DesiredReader { desired },
+            acknowledged_writer: AcknowledgedWriter { acknowledged },
+        }
+    }
+}
+
+impl Default for RunStateHandles {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The handle of the link actor: it writes the desired state and reads both. The desired and
+/// acknowledged pair is what makes control converge. `pending()` asks which marker still needs
+/// pushing, which makes the control LEVEL-triggered. The marker rides a ring that drops and counts
+/// when it is full, and an edge-triggered design would leave the adapters parked after such a drop;
+/// asking again on the next tick repairs it instead. Not `Clone`, so it has one holder.
+pub struct DesiredWriter {
     desired: RunStateCell,
     acknowledged: RunStateCell,
 }
 
-impl RunControlGate {
-    pub fn new() -> Self {
-        Self::default()
+impl DesiredWriter {
+    /// A highest-epoch-wins store. `false` means this controller lost the race and is not in
+    /// charge.
+    pub(crate) fn accept_if_newer(&self, assertion: RunAssertion) -> bool {
+        if assertion.epoch <= self.desired.load().epoch {
+            return false;
+        }
+        self.desired.store(assertion);
+        true
     }
 
-    /// Written by the link actor, and read by the adapters.
-    pub fn desired(&self) -> &RunStateCell {
-        &self.desired
+    pub fn desired(&self) -> RunAssertion {
+        self.desired.load()
     }
 
-    /// Written by dispatch as it applies a marker, and reports the hot thread's actual state.
-    pub fn acknowledged(&self) -> &RunStateCell {
-        &self.acknowledged
+    pub fn acknowledged(&self) -> RunAssertion {
+        self.acknowledged.load()
     }
 
     /// The marker to push, or `None` once the hot thread has caught up.
     pub fn pending(&self) -> Option<RunAssertion> {
         let desired = self.desired.load();
         (desired != self.acknowledged.load()).then_some(desired)
+    }
+}
+
+/// The handle of an edge: it reads the desired state to park or resume itself, and can write no
+/// state.
+#[derive(Clone)]
+pub struct DesiredReader {
+    desired: RunStateCell,
+}
+
+impl DesiredReader {
+    #[inline]
+    pub fn state(&self) -> RunState {
+        self.desired.load().state
+    }
+}
+
+/// The handle of the hot thread: it reports the run state that the fold applied. Not `Clone`, so
+/// it has one holder.
+pub struct AcknowledgedWriter {
+    acknowledged: RunStateCell,
+}
+
+impl AcknowledgedWriter {
+    #[inline]
+    pub(crate) fn store(&self, assertion: RunAssertion) {
+        self.acknowledged.store(assertion);
     }
 }
 

@@ -8,7 +8,7 @@ use tokio::runtime::Handle;
 
 use crate::hot::dispatch::LinkWiring;
 use crate::hot::sink::LinkSink;
-use crate::hot::spawn::LinkQueueProducer;
+use crate::hot::spawn::{ControlQueueProducer, LinkQueueProducer};
 use crate::hot::strategy::Strategy;
 use crate::link::{
     FrameGuard, LINK_NAME_LEN, LinkActor, LinkActorSetup, LinkCountsHandle, LinkHash, LinkIdentity,
@@ -19,7 +19,7 @@ use crate::msg::ui::LatencyReport;
 use crate::msg::ui::channel::UiChannels;
 use crate::runtime::config::{Config, RunIdentity};
 use crate::runtime::registry::Registry;
-use crate::runtime::shutdown::{RunControlGate, TaskHandle};
+use crate::runtime::shutdown::{AcknowledgedWriter, DesiredWriter, TaskHandle};
 
 use super::StartError;
 
@@ -114,19 +114,20 @@ pub(super) fn link_bring_up<P>(
 pub(super) struct LinkStart<'a, P> {
     pub config: &'a Config<P>,
     pub inbound: Option<LinkQueueProducer>,
+    pub markers: Option<ControlQueueProducer>,
     pub outbound: Option<Consumer<OutboundLink>>,
     pub latency: Consumer<LatencyReport>,
     pub channels: UiChannels,
-    pub control: RunControlGate,
+    pub control: DesiredWriter,
     pub clock: EngineClock,
     pub spin_interval: DurationUs,
 }
 
-/// The ring that the hot thread fills for the link actor, beside the acknowledged cell that it
+/// The ring that the hot thread fills for the link actor, beside the acknowledged state that it
 /// writes. Both are absent when the config has no `link:` block.
 pub(super) fn outbound_ring(
     bound_link: &Option<BoundLink>,
-    control: &RunControlGate,
+    acknowledged: AcknowledgedWriter,
 ) -> (Option<LinkWiring>, Option<Consumer<OutboundLink>>) {
     match bound_link {
         None => (None, None),
@@ -135,7 +136,7 @@ pub(super) fn outbound_ring(
             (
                 Some(LinkWiring {
                     sink: LinkSink::new(producer),
-                    acknowledged: control.acknowledged().clone(),
+                    acknowledged,
                 }),
                 Some(consumer),
             )
@@ -163,6 +164,9 @@ pub(super) fn spawn_link_actor<P>(
             inbound: start
                 .inbound
                 .expect("a bound link always builds its input queue"),
+            markers: start
+                .markers
+                .expect("a bound link always builds its control queue"),
             outbound: start
                 .outbound
                 .expect("a bound link always builds its outbound ring"),

@@ -1,13 +1,14 @@
-//! The control plane of the link: it judges each controller assertion and parks the engine when the
-//! controller falls silent and the config asks for that. The time comes in as a parameter.
+//! The control plane of the link: it judges each controller assertion, parks the engine when the
+//! controller falls silent and the config asks for that, and pushes the pending marker. The time
+//! comes in as a parameter.
 
 use std::net::SocketAddr;
 
-use crate::msg::inbound::{InboundMessage, MessageBody, RunControl};
+use crate::hot::ingress::ControlQueueProducer;
 use crate::msg::run_state::{RunAssertion, RunState};
 use crate::msg::time::{DurationUs, LocalTs};
 use crate::runtime::config::ControllerLoss;
-use crate::runtime::shutdown::RunControlGate;
+use crate::runtime::shutdown::DesiredWriter;
 use crate::{info, warn};
 
 use super::super::subscribers::LINK_SUBSCRIPTION_TTL;
@@ -24,10 +25,11 @@ pub enum AssertionVerdict {
     Stale,
 }
 
-/// The desired run state of the link, and the watch on the controller that sets it. It reads no
-/// clock and owns no socket or queue, so the actor passes the time in and pushes what it returns.
+/// The desired run state of the link, and the watch on the controller that sets it. It holds the
+/// one writer of the desired state. It reads no clock and owns no socket or queue, so the actor
+/// passes the time and the control queue in.
 pub struct ControlPlane {
-    control: RunControlGate,
+    control: DesiredWriter,
     on_controller_loss: ControllerLoss,
     last_control_ts_us: Option<LocalTs>,
     is_controller_lost: bool,
@@ -38,7 +40,7 @@ impl ControlPlane {
     /// lifetime of a subscription, so a controller that stopped subscribing is the one that is lost.
     pub const SILENCE_LIMIT: DurationUs = LINK_SUBSCRIPTION_TTL;
 
-    pub fn new(control: RunControlGate, on_controller_loss: ControllerLoss) -> Self {
+    pub fn new(control: DesiredWriter, on_controller_loss: ControllerLoss) -> Self {
         Self {
             control,
             on_controller_loss,
@@ -60,7 +62,7 @@ impl ControlPlane {
         }
         self.last_control_ts_us = Some(now);
         self.is_controller_lost = false;
-        if !self.control.desired().accept_if_newer(assertion) {
+        if !self.control.accept_if_newer(assertion) {
             return AssertionVerdict::Stale;
         }
         info!(
@@ -83,12 +85,12 @@ impl ControlPlane {
                 warn!(
                     "no controller assertion for {}s — holding run state {:?}",
                     Self::SILENCE_LIMIT.to_secs(),
-                    self.control.desired().state()
+                    self.control.desired().state
                 );
                 None
             }
             ControllerLoss::Idle => {
-                let epoch = self.control.desired().load().epoch + 1;
+                let epoch = self.control.desired().epoch + 1;
                 warn!(
                     "no controller assertion for {}s — dead-man parking the engine at epoch {epoch}",
                     Self::SILENCE_LIMIT.to_secs()
@@ -97,7 +99,7 @@ impl ControlPlane {
                     state: RunState::Idle,
                     epoch,
                 };
-                self.control.desired().accept_if_newer(park);
+                self.control.accept_if_newer(park);
                 Some(park)
             }
         }
@@ -108,21 +110,27 @@ impl ControlPlane {
         self.control.pending()
     }
 
+    /// Level-triggered: the control queue drops and counts when it is full, so a push on each
+    /// change alone would leave the edges parked after one drop. Pushing the pending marker at each
+    /// heartbeat repairs it, and a duplicate is harmless because the fold applies each epoch once.
+    pub fn push_pending(&self, markers: &mut ControlQueueProducer, now: LocalTs) {
+        if let Some(desired) = self.pending() {
+            markers.push(desired, now);
+        }
+    }
+
+    pub fn desired(&self) -> RunAssertion {
+        self.control.desired()
+    }
+
     /// The run state that the hot thread reports it applied.
-    pub(super) fn acknowledged(&self) -> RunAssertion {
-        self.control.acknowledged().load()
+    pub fn acknowledged(&self) -> RunAssertion {
+        self.control.acknowledged()
     }
 }
 
 impl Actor {
-    /// Level-triggered: drop+count queue means edge-triggered push alone leaves adapters down on full slot. Dups harmless (dedup on epoch).
     pub(super) fn push_marker_if_needed(&mut self, now: LocalTs) {
-        let Some(desired) = self.control.pending() else {
-            return;
-        };
-        self.inbound.push(InboundMessage::new(
-            now,
-            MessageBody::RunControl(RunControl { desired }),
-        ));
+        self.control.push_pending(&mut self.markers, now);
     }
 }

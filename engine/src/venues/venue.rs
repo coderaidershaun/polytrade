@@ -12,7 +12,7 @@ use crate::msg::time::EngineClock;
 use crate::runtime::config::{Config, SimProofs, SourceSpec, VenueMarket};
 use crate::runtime::registry::Registry;
 use crate::runtime::secrets::EnvFile;
-use crate::runtime::shutdown::{FatalSignal, RunStateCell, TaskHandle};
+use crate::runtime::shutdown::{DesiredReader, FatalSignal, TaskHandle};
 use crate::venues::binance::actor::{BinanceAdapter, BinanceAdapterContext};
 use crate::venues::binance::exec::{
     self as binance_exec, ExecutionPreflight, ProbeError, SignError, preflight_execution,
@@ -229,7 +229,7 @@ pub(crate) struct MarketDataWiring<'a> {
     pub(crate) fatal: &'a FatalSignal,
     /// Adapters hold their sockets down according to this state. The execution edge reads
     /// it freely, with no restriction of its own.
-    pub(crate) desired_run_state: &'a RunStateCell,
+    pub(crate) desired_run_state: &'a DesiredReader,
     pub(crate) rotations_tx: &'a mpsc::Sender<RotationRow>,
     /// Rotation bindings for the execution edge; absent when nothing is listening for them.
     pub(crate) window_assignments: Option<mpsc::Sender<WindowAssignment>>,

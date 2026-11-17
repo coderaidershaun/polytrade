@@ -9,7 +9,8 @@ use engine::hot::sink::{
 };
 use engine::hot::spawn::spawn_hot_thread;
 use engine::hot::spawn::{
-    HotDriver, HotLoop, HotThreadConfig, IdleWait, LinkQueueProducer, QueueProducer, SimTapGate,
+    ControlQueueProducer, HotDriver, HotLoop, HotThreadConfig, IdleWait, LinkQueueProducer,
+    QueueProducer, SimTapGate,
 };
 use engine::log::open_hot_lane;
 use engine::msg::failure::{FailureClass, Halt};
@@ -43,7 +44,8 @@ fn spin_at(seq: u64, when: i64) -> InboundMessage {
 /// queue, which an untrusted peer fills, drops the frame and counts it. A full input queue that
 /// dropped would fold a hole in the order of messages, and a full link queue that halted would let
 /// any peer stop the engine. The writer-status queue is one that the engine feeds: its own file
-/// writers fill it.
+/// writers fill it. The control queue drops and counts too: its sender is outside the engine, and
+/// the link actor pushes the pending marker again at its next heartbeat.
 #[test]
 fn each_lane_full_gives_its_class() {
     let queue = QueueId::new(0).unwrap();
@@ -66,6 +68,18 @@ fn each_lane_full_gives_its_class() {
         1,
         "the second frame is dropped and counted, with no trip"
     );
+
+    let (producer, markers) = RingBuffer::<InboundMessage>::new(1);
+    let mut control = ControlQueueProducer::new(producer, QueueId::new(2).unwrap());
+    control.push(idle_at(1), ts(1_000));
+    control.push(running_at(2), ts(2_000));
+    assert_eq!(
+        control.dropped(),
+        1,
+        "the second marker is dropped and counted, with no trip"
+    );
+    assert_eq!(markers.slots(), 1, "the first marker waits in the ring");
+    assert_eq!(ControlQueueProducer::WHEN_FULL, FailureClass::Reject);
 
     let (producer, input_ring) = RingBuffer::<InboundMessage>::new(4);
     let (tap_producer, tap_ring) = RingBuffer::<MarketTapItem>::new(1);

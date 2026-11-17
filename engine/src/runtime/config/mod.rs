@@ -223,6 +223,11 @@ pub struct QueuesConfig {
     pub execution_capacity: Option<usize>,
     #[serde(default = "default_persistence_capacity")]
     pub persistence_capacity: usize,
+    /// The run-control markers of the link. The link actor pushes at most one each heartbeat of
+    /// 1 s, so 16 slots hold 16 s of repair: the longest that a stalled hot thread lives under the
+    /// shipped configs before its full timer queue halts it.
+    #[serde(default = "default_control_capacity")]
+    pub control_capacity: usize,
 }
 
 impl QueuesConfig {
@@ -236,6 +241,7 @@ impl QueuesConfig {
                 "queues.persistence_capacity",
                 Some(self.persistence_capacity),
             ),
+            ("queues.control_capacity", Some(self.control_capacity)),
         ];
         for (field, capacity) in capacities {
             if let Some(capacity) = capacity {
@@ -369,6 +375,10 @@ fn default_link_capacity() -> usize {
 
 fn default_persistence_capacity() -> usize {
     65_536
+}
+
+fn default_control_capacity() -> usize {
+    16
 }
 
 fn default_data_dir() -> PathBuf {

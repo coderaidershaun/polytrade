@@ -44,7 +44,7 @@ use crate::runtime::exposure::{ExposureHandle, ExposureWriter, ExposureWriterSet
 #[cfg(feature = "otlp")]
 use crate::runtime::otlp::{OtlpExporter, OtlpLanes, OtlpPlan};
 use crate::runtime::pin::PinCall;
-use crate::runtime::shutdown::{DrainSignal, FatalSignal, RunControlGate, TaskHandle};
+use crate::runtime::shutdown::{DrainSignal, FatalSignal, RunStateHandles, TaskHandle};
 use crate::tape::PersistHandle;
 use crate::venues::exec::EdgeHandle;
 use crate::venues::venue::{MarketDataWiring, WindowAssignment, spawn_market_data, tap_heartbeat};
@@ -255,7 +255,11 @@ impl Engine {
             .map(|name| (*name).into())
             .collect();
 
-        let control = RunControlGate::new();
+        let RunStateHandles {
+            desired_writer,
+            desired_reader,
+            acknowledged_writer,
+        } = RunStateHandles::new();
         let (rotations_tx, rotations_rx) = mpsc::channel::<RotationRow>(ROTATIONS_CHANNEL_CAPACITY);
         // The rotation binding the execution edge trades against. Sized for a handful of windows:
         // one assignment every five minutes, and the edge drains it on every select pass.
@@ -303,7 +307,7 @@ impl Engine {
             edge: planned_edge,
         } = open_command_lane(execution_plan, armed, spin_interval, &stamper);
 
-        let (link_wiring, link_feed) = link::outbound_ring(&bound_link, &control);
+        let (link_wiring, link_feed) = link::outbound_ring(&bound_link, acknowledged_writer);
 
         let instruments = registry.instruments().to_vec();
         let restored = restored_exposure.instruments().to_vec();
@@ -347,6 +351,7 @@ impl Engine {
             link: link_producer,
             exec: exec_producer,
             writer_status,
+            control: control_producer,
         } = producers;
         let exposure = ExposureWriter::spawn(ExposureWriterSetup {
             dir: config.exposure.dir.clone(),
@@ -378,7 +383,7 @@ impl Engine {
             wires,
             senders: &config.senders,
             fatal: &fatal,
-            desired_run_state: control.desired().clone(),
+            desired_run_state: desired_reader.clone(),
             drain_deadline,
             input_capacity: config.queues.input_capacity,
         });
@@ -392,7 +397,7 @@ impl Engine {
             producers: group_producers,
             clock: &clock,
             fatal: &fatal,
-            desired_run_state: control.desired(),
+            desired_run_state: &desired_reader,
             rotations_tx: &rotations_tx,
             window_assignments: Some(assignments_tx),
             tap_heartbeat: tap_heartbeat(&config),
@@ -424,10 +429,11 @@ impl Engine {
                 LinkStart {
                     config: &config,
                     inbound: link_producer,
+                    markers: control_producer,
                     outbound: link_feed,
                     latency: latency_reports,
                     channels: ui_channels,
-                    control,
+                    control: desired_writer,
                     clock: clock.clone(),
                     spin_interval,
                 },

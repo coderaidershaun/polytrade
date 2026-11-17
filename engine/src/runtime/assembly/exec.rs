@@ -22,7 +22,7 @@ use crate::runtime::config::{
     SourceSpec, validated_mantissa,
 };
 use crate::runtime::registry::Registry;
-use crate::runtime::shutdown::{FatalSignal, RunStateCell};
+use crate::runtime::shutdown::{DesiredReader, FatalSignal};
 use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::{
     EdgeCheck, EdgeInputs, EdgeSettings, EdgeSpawn, SenderSettings, VenueEdge,
@@ -230,7 +230,7 @@ pub(super) struct ExecBringUpSetup<'a> {
     pub(super) wires: SampleSink<WireSample>,
     pub(super) senders: &'a SendersConfig,
     pub(super) fatal: &'a FatalSignal,
-    pub(super) desired_run_state: RunStateCell,
+    pub(super) desired_run_state: DesiredReader,
     pub(super) drain_deadline: Duration,
     pub(super) input_capacity: usize,
 }

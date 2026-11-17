@@ -491,8 +491,8 @@ fn a_public_link_bind_is_a_startup_error_unless_allowed() {
 }
 
 /// FITNESS: no queue id at or past the cap of 20 exists, and each registry numbers its input queues
-/// 0 to n - 1, with the timer, the link, the execution edge and the writer status after the
-/// producer groups. The hot
+/// 0 to n - 1, with the timer, the link, the execution edge, the writer status and the control
+/// queue after the producer groups. The hot
 /// thread sizes its tables by that cap and a tape records each queue id, so an id past the cap, a
 /// gap or a shifted id would fold an order other than the one that the run recorded.
 #[test]
@@ -545,7 +545,7 @@ fn twenty_one_input_queues_are_refused() {
     assert_eq!(
         twenty.input_queue_count(),
         20,
-        "18 connections, the timer and the link"
+        "15 connections, the timer, the link, the venue, the writer status and the control queue"
     );
     registries.push(twenty);
     let config = engine::runtime::config::Config::<NoParams>::from_yaml(&past_cap)
@@ -556,7 +556,7 @@ fn twenty_one_input_queues_are_refused() {
             refused,
             ConfigError::TooManyInputQueues { count: 21, max: 20 }
         ),
-        "the queue of the venue is the 21st, refused by count and cap: {refused}"
+        "the control queue is the 21st, refused by count and cap: {refused}"
     );
 
     for registry in &registries {
@@ -569,19 +569,21 @@ fn twenty_one_input_queues_are_refused() {
         ids.extend(registry.link_queue_id().map(QueueId::index));
         ids.extend(registry.exec_queue_id(VenueId(0)).map(QueueId::index));
         ids.extend(registry.writer_status_queue_id().map(QueueId::index));
+        ids.extend(registry.control_queue_id().map(QueueId::index));
         let count = registry.input_queue_count();
         assert!(count <= 20, "{count} input queues");
         assert_eq!(
             ids,
             (0..count).collect::<Vec<usize>>(),
-            "the ids are dense, and the timer, the link, the execution edge and the writer status \
-             follow the groups"
+            "the ids are dense, and the timer, the link, the execution edge, the writer status and \
+             the control queue follow the groups"
         );
     }
 }
 
 /// The link's input queue exists only when its actor does, and it lands after the timer — a queue id
 /// is a position in the ingress list, and `wire` zips producers back against exactly that order.
+/// The control queue of the link exists with it, after each other queue.
 #[test]
 fn the_link_adds_one_input_queue_only_when_configured() {
     let without = build_from(&config_with_source(BINANCE_PERP_SOURCE));
@@ -590,6 +592,7 @@ fn the_link_adds_one_input_queue_only_when_configured() {
         None,
         "no link block, no link queue"
     );
+    assert_eq!(without.control_queue_id(), None, "and no control queue");
     assert_eq!(
         without.input_queue_count(),
         4,
@@ -608,9 +611,14 @@ fn the_link_adds_one_input_queue_only_when_configured() {
         "the link takes the queue after the timer"
     );
     assert_eq!(
+        with.control_queue_id().map(|id| id.index()),
+        Some(5),
+        "the control queue comes after each other queue"
+    );
+    assert_eq!(
         with.input_queue_count(),
-        5,
-        "three producers + the timer + the link"
+        6,
+        "three producers + the timer + the link + the control queue"
     );
 }
 
@@ -811,7 +819,8 @@ fn the_base_floor_may_be_zero_and_the_quote_floor_may_not() {
 /// Every execution field whose range has no other floor/ceiling test: the µs-duration fields
 /// overflow the runtime's storage type at `u64::MAX`, and the bps field overflows the runtime's
 /// centi-bps conversion at a merely enormous finite float — two different overflow mechanisms,
-/// same refusal shape. A limit of failed writes refuses zero, as each limit of the config does.
+/// same refusal shape. A limit of failed writes refuses zero, as each limit of the config does, and
+/// so does each queue capacity: a ring of no slot cannot be built.
 #[test]
 fn execution_numeric_fields_reject_out_of_range_values() {
     let max = u64::MAX.to_string();
@@ -887,6 +896,27 @@ fn execution_numeric_fields_reject_out_of_range_values() {
             }
             _ => panic!("{expected_field}: overflow must be refused by field, got {error}"),
         }
+    }
+
+    let queues = "queues:\n";
+    for key in [
+        "timer_capacity",
+        "link_capacity",
+        "execution_capacity",
+        "control_capacity",
+    ] {
+        let yaml = config_with_execution(&execution_block("live")).replacen(
+            queues,
+            &format!("{queues}  {key}: 0\n"),
+            1,
+        );
+        let expected_field = format!("queues.{key}");
+        let error = refusal(&yaml);
+        assert!(
+            matches!(&error, ConfigError::Invalid { field, value, .. }
+                if *field == expected_field && value.as_ref() == "0"),
+            "{expected_field}: zero must be refused by field, got {error}"
+        );
     }
 }
 

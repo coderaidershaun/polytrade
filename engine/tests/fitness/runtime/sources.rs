@@ -324,14 +324,15 @@ fn each_source_gives_its_rows_groups_and_queues() {
     }
 }
 
-/// The config case of the cap: six binance sources read on 18 connections, and with the timer and
-/// the link they need 20 queues, which one hot thread reads. An execution block adds the queue of
-/// the venue, the 21st, and the registry refuses the config.
+/// The config case of the cap: five binance sources read on 15 connections, and with the timer, the
+/// link, the queue of the venue, the writer status and the control queue of the link they need 20
+/// queues, which one hot thread reads. Six sources with no execution block need 21: the control
+/// queue is the 21st, and the registry refuses the config.
 pub(super) fn twenty_one_queue_documents() -> (String, String) {
     let coins = ["BTC", "ETH", "SOL", "BNB", "XRP", "ADA"].map(spot_source);
     let live = execution_block_with("live", "");
-    let without: Vec<(&str, &str)> = coins.iter().map(|coin| (coin.as_str(), "")).collect();
-    let mut with = without.clone();
-    with[0].1 = live.as_str();
-    (document(&without, true), document(&with, true))
+    let six: Vec<(&str, &str)> = coins.iter().map(|coin| (coin.as_str(), "")).collect();
+    let mut five_with_execution = six[..5].to_vec();
+    five_with_execution[0].1 = live.as_str();
+    (document(&five_with_execution, true), document(&six, true))
 }

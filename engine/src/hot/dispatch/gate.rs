@@ -11,7 +11,7 @@ use crate::msg::persist::{LinkFrameRow, LinkRowKind, PersistRecord};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, FoldTime, LocalTs};
-use crate::runtime::shutdown::RunStateCell;
+use crate::runtime::shutdown::AcknowledgedWriter;
 
 use super::HotEngine;
 
@@ -162,7 +162,7 @@ pub struct LinkWiring {
     pub sink: LinkSink,
     /// The fold writes the run state that it applied here, and the link reads it to learn whether
     /// its marker landed.
-    pub acknowledged: RunStateCell,
+    pub acknowledged: AcknowledgedWriter,
 }
 
 impl HotEngine {
