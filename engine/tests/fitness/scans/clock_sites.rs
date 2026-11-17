@@ -145,7 +145,7 @@ fn issue_tick_is_read_only_by_senders() {
 /// one entry for each call. Each one says why in the reason of its
 /// `#[expect(clippy::disallowed_methods, ...)]`. A function that only reads keeps a read apart from
 /// the logic beside it, so a read added to that logic fails the lint.
-const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 115] = [
+const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 114] = [
     (
         "engine/src/hot/metrics.rs",
         "stamp",
@@ -335,15 +335,6 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 115] = [
         "engine/src/tape/drain.rs",
         "spawn",
         &["engine::msg::time::wall_clock_now"],
-    ),
-    (
-        "engine/src/tape/drain.rs",
-        "pump",
-        &[
-            "std::time::Instant::elapsed",
-            "std::time::Instant::now",
-            "std::time::Instant::now",
-        ],
     ),
     (
         "engine/src/tape/retention.rs",

@@ -17,7 +17,7 @@ mod sources;
 mod tables;
 mod tracker;
 
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
@@ -53,6 +53,8 @@ pub(crate) use simulated::SimProofs;
 pub(crate) use tracker::TARGET_WINDOW_CANDLES;
 
 const MAX_OPERATIONAL_DURATION_MS: u64 = 24 * 60 * 60 * 1_000;
+/// The seal interval of the tape when the config names none: five minutes of message time.
+const DEFAULT_SEAL_INTERVAL_US: u64 = 300 * 1_000_000;
 
 /// `P` is the strategy's own `params:` type, deserialized in the same single pass so
 /// `deny_unknown_fields` holds inside it too; it defaults to [`NoParams`] for a knob-free strategy.
@@ -158,6 +160,14 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
                     "1 or more",
                 )?;
             }
+            if let Some(spins) = persistence.seal_interval_spins {
+                check_range(
+                    "persistence.seal_interval_spins",
+                    spins,
+                    1..=u64::MAX,
+                    "1 or more",
+                )?;
+            }
         }
         check_range(
             "exposure.max_failed_writes",
@@ -201,6 +211,17 @@ impl<P> Config<P> {
             u32::try_from(spins).unwrap_or(u32::MAX)
         });
         NonZeroU32::new(limit).unwrap_or(NonZeroU32::MIN)
+    }
+
+    /// The spins between two seals of the tape: the configured count, or five minutes of spins.
+    pub fn seal_interval_spins(&self) -> NonZeroU64 {
+        let configured = self
+            .persistence
+            .as_ref()
+            .and_then(|persistence| persistence.seal_interval_spins);
+        let spins = configured
+            .unwrap_or_else(|| DEFAULT_SEAL_INTERVAL_US.div_ceil(self.engine.spin_interval_us));
+        NonZeroU64::new(spins).unwrap_or(NonZeroU64::MIN)
     }
 }
 
@@ -282,6 +303,10 @@ pub struct PersistenceConfig {
     /// `engine.drain_deadline_ms`: a writer that takes no seal for that long has stalled.
     #[serde(default)]
     pub seal_try_limit: Option<u32>,
+    /// The spins of message time between two seals of every open tape file, so a replay seals at
+    /// the borders of its run. `None` takes the spins of five minutes at `engine.spin_interval_us`.
+    #[serde(default)]
+    pub seal_interval_spins: Option<u64>,
 }
 
 /// Separate from `persistence:` and always in force, because position outlives any single run.

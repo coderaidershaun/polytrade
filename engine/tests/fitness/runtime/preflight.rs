@@ -558,7 +558,7 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
     fs::remove_dir(&nonce).expect("the test removes the folder");
     fs::write(&nonce, last_nonce).expect("the test restores the nonce file");
 
-    // E1 and E2: the nine documents that config or the registry refuses, by the field named.
+    // E1 and E2: each document that config or the registry refuses, by the field named.
     for (case, document, is_expected) in refused_documents() {
         let error = match Config::<NoParams>::from_yaml(&document) {
             Err(error) => error,
@@ -662,8 +662,9 @@ proptest! {
 
 type RefusedDocument = (&'static str, String, fn(&ConfigError) -> bool);
 
-/// The nine documents of the old config guard, each with the field that must name its refusal.
-fn refused_documents() -> [RefusedDocument; 9] {
+/// The documents of the old config guard and the zero of each seal key, each with the field that
+/// must name its refusal.
+fn refused_documents() -> [RefusedDocument; 11] {
     let missing_spin = "engine:
   hot_core_id: 0
 queues:
@@ -781,6 +782,26 @@ queues:
             |error: &ConfigError| {
                 matches!(error, ConfigError::Invalid { field, value, .. }
                     if *field == "persistence.retention_hours" && value.as_ref() == "87601")
+            },
+        ),
+        (
+            "seal_try_limit of zero",
+            config_with_source(BINANCE_PERP_SOURCE)
+                .replace("  dir: ./data\n", "  dir: ./data\n  seal_try_limit: 0\n"),
+            |error: &ConfigError| {
+                matches!(error, ConfigError::Invalid { field, value, .. }
+                    if *field == "persistence.seal_try_limit" && value.as_ref() == "0")
+            },
+        ),
+        (
+            "seal_interval_spins of zero",
+            config_with_source(BINANCE_PERP_SOURCE).replace(
+                "  dir: ./data\n",
+                "  dir: ./data\n  seal_interval_spins: 0\n",
+            ),
+            |error: &ConfigError| {
+                matches!(error, ConfigError::Invalid { field, value, .. }
+                    if *field == "persistence.seal_interval_spins" && value.as_ref() == "0")
             },
         ),
     ]

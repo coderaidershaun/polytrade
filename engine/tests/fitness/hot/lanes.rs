@@ -26,7 +26,7 @@ use engine::runtime::registry::Registry;
 use engine::runtime::shutdown::{DrainSignal, FatalReason, FatalSignal};
 use engine::runtime::{DrainDeadline, DrainOutcome, Exit, Trigger, pin_to_core};
 use rtrb::{Consumer, RingBuffer};
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -197,10 +197,15 @@ impl Parked {
     /// Two run controls fill a tape ring of two slots. The park at epoch 5 asks for a seal that
     /// does not fit, so the seal waits, with a cap on its tries.
     fn with_seal_try_limit(limit: u32) -> Parked {
+        Parked::with_seal_borders(limit, NonZeroU64::MAX)
+    }
+
+    fn with_seal_borders(limit: u32, interval_spins: NonZeroU64) -> Parked {
         let (producer, tape) = RingBuffer::<PersistRecord>::new(2);
         let persistence = PersistWiring {
             sink: PersistSink::new(producer, NonZeroU32::new(limit).unwrap()),
             tables: RecordedTables::new(&[TableKind::LinkFrames]),
+            seal_interval_spins: interval_spins,
         };
         Parked::parked_with(persistence, tape)
     }
@@ -367,5 +372,21 @@ fn seal_retry_reaches_cap_then_halts() {
     assert!(
         matches!(tape.as_slice(), [PersistRecord::SealAll]),
         "after the halt the seal still goes when room returns: {tape:?}"
+    );
+
+    // A seal border at each spin asks for a seal while one waits. The waiting seal closes each
+    // file once it goes, so it keeps its count, and try 3 of 3 still halts.
+    let mut parked = Parked::with_seal_borders(3, NonZeroU64::MIN);
+    parked.spin(1, 4_000);
+    let halt = parked.spin(2, 5_000);
+    assert!(
+        matches!(
+            halt,
+            Some(UiHalt::Halted {
+                reason: HaltReason::SealNotAccepted,
+                ..
+            })
+        ),
+        "a border keeps the count of the waiting seal: {halt:?}"
     );
 }

@@ -35,7 +35,7 @@ digest_fields! {
 digest_fields! {
     HotState {
         books, derived, windows, ledger, published_exposure, spin_seq, fold_time, gates,
-        exec, desired, actions, declared_link_topics,
+        exec, desired, actions, seal_borders, declared_link_topics,
     }
     not_state {
         // Its pending snapshot and its count of superseded ones depend on how fast the writer

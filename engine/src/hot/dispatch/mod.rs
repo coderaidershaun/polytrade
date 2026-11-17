@@ -6,6 +6,7 @@ mod digest;
 mod exposure;
 mod gate;
 mod market;
+mod seal;
 mod setup;
 mod telemetry;
 mod ui_emit;
@@ -13,6 +14,7 @@ mod ui_emit;
 use derived::Derived;
 use exposure::{moves_position, restored_snapshot};
 use gate::MarketGates;
+use seal::SealBorders;
 
 use crate::hot::book::Book;
 use crate::hot::dispatch::ui_emit::UiEmitter;
@@ -63,6 +65,8 @@ struct HotState {
     actions: Actions,
     /// None if no persistence configured.
     sink: Option<PersistSink>,
+    /// None if no persistence configured.
+    seal_borders: Option<SealBorders>,
     /// Bound `StrategyCtx::link_send` refuses a topic past.
     declared_link_topics: usize,
 }
@@ -124,9 +128,17 @@ impl HotEngine {
         } = setup;
         let (books, trackers, ewma) = per_instrument_state(instruments);
         let declarations = Declarations::resolve(strategy.as_mut(), instruments);
-        let (persist_sink, tables) = match persistence {
-            Some(PersistWiring { sink, tables }) => (Some(sink), tables),
-            None => (None, RecordedTables::default()),
+        let (persist_sink, seal_borders, tables) = match persistence {
+            Some(PersistWiring {
+                sink,
+                tables,
+                seal_interval_spins,
+            }) => (
+                Some(sink),
+                Some(SealBorders::every(seal_interval_spins)),
+                tables,
+            ),
+            None => (None, None, RecordedTables::default()),
         };
         let (link_sink, run_report) = match link {
             Some(LinkWiring { sink, acknowledged }) => (Some(sink), Some(acknowledged)),
@@ -153,6 +165,7 @@ impl HotEngine {
                     link_schema_hash: declarations.link_schema_hash,
                 }),
                 sink: persist_sink,
+                seal_borders,
                 declared_link_topics: declarations.link_topics,
             },
             strategy,
@@ -214,6 +227,7 @@ impl HotEngine {
         self.state.spin_seq = tick.seq;
         self.sample_trackers();
         self.retry_latched_writes();
+        self.state.seal_at_border(tick.seq);
         self.spin_strategy(tick, received_ts_us);
         self.drain_actions();
         self.run_execution_pass(tick, received_ts_us);

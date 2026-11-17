@@ -63,6 +63,7 @@ pub(super) fn persist_bring_up<P>(setup: PersistBringUpSetup<'_, P>) -> PersistB
         wiring: Some(PersistWiring {
             sink: PersistSink::new(producer, setup.config.seal_try_limit()),
             tables,
+            seal_interval_spins: setup.config.seal_interval_spins(),
         }),
         handle: Some(handle),
     }
