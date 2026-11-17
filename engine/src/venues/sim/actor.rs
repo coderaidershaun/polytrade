@@ -12,7 +12,7 @@ use crate::msg::inbound::InboundMessage;
 use crate::msg::run_state::RunState;
 use crate::msg::time::{EngineClock, LocalTs};
 use crate::runtime::registry::AssetDictionary;
-use crate::runtime::shutdown::{FatalSignal, RunStateCell};
+use crate::runtime::shutdown::{DesiredReader, FatalSignal};
 use crate::venues::IDLE_POLL;
 use crate::venues::binance::exec::{DecodeContext, SymbolTable};
 use crate::venues::edge::stamp_venue;
@@ -49,7 +49,7 @@ pub(super) struct SimActor {
     pub(super) applied_through_ts_us: Option<LocalTs>,
     pub(super) has_opened: bool,
     pub(super) stop: ExecStop,
-    pub(super) run_state: RunStateCell,
+    pub(super) run_state: DesiredReader,
     pub(super) fatal: FatalSignal,
     pub(super) is_parked: bool,
     pub(super) sweep_deadline: Duration,

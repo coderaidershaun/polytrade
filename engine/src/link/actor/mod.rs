@@ -14,7 +14,7 @@ use rtrb::Consumer;
 use tokio::net::UdpSocket;
 use tokio::runtime::Handle;
 
-use crate::hot::spawn::LinkQueueProducer;
+use crate::hot::spawn::{ControlQueueProducer, LinkQueueProducer};
 use crate::info;
 use crate::msg::time::{DurationUs, EngineClock, LocalTs};
 use crate::msg::ui::LatencyReport;
@@ -22,7 +22,7 @@ use crate::msg::ui::channel::UiChannels;
 use crate::runtime::config::{
     ConfigError, ControllerLoss, ExecutionMode, PeerSubscription, SenderPlacement,
 };
-use crate::runtime::shutdown::{RunControlGate, TaskHandle};
+use crate::runtime::shutdown::{DesiredWriter, TaskHandle};
 use crate::venues::edge::sender::SendWait;
 
 use super::control::{LINK_MAX_TOPICS, RunPhase, TopicSet};
@@ -104,12 +104,14 @@ pub struct LinkActorSetup {
     pub peers: Vec<PeerFeed>,
     pub on_controller_loss: ControllerLoss,
     pub inbound: LinkQueueProducer,
+    /// Run-control markers only, so a flood of peer frames never keeps a marker out.
+    pub markers: ControlQueueProducer,
     pub outbound: Consumer<OutboundLink>,
     pub channels: UiChannels,
     /// The metrics thread's reports, about one a second.
     pub latency: Consumer<LatencyReport>,
-    /// Link writes desired, reads acknowledged; dispatch does reverse, never reads desired.
-    pub control: RunControlGate,
+    /// The one writer of the desired state, which also reads what the fold acknowledged.
+    pub control: DesiredWriter,
     pub clock: EngineClock,
     pub spin_interval: DurationUs,
     pub topic_count: usize,
@@ -181,6 +183,7 @@ struct Actor {
     gate: SequenceGate,
     peers: Vec<PeerState>,
     inbound: LinkQueueProducer,
+    markers: ControlQueueProducer,
     outbound: Consumer<OutboundLink>,
     channels: UiChannels,
     latency: Consumer<LatencyReport>,
@@ -223,6 +226,7 @@ impl Actor {
                 })
                 .collect(),
             inbound: setup.inbound,
+            markers: setup.markers,
             outbound: setup.outbound,
             channels: setup.channels,
             latency: setup.latency,

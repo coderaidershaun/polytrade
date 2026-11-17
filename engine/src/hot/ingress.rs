@@ -10,8 +10,9 @@ use crate::log::{hot_error, hot_warn};
 use crate::msg::failure::{FailureClass, Halt};
 use crate::msg::ids::{MAX_INPUT_QUEUES, QueueId, SourceId};
 use crate::msg::inbound::{
-    InboundMessage, MarketTapItem, MessageBody, SpinTick, TappedMessage, VenueMeta,
+    InboundMessage, MarketTapItem, MessageBody, RunControl, SpinTick, TappedMessage, VenueMeta,
 };
+use crate::msg::run_state::RunAssertion;
 use crate::msg::time::LocalTs;
 use crate::runtime::shutdown::{FatalReason, FatalSignal};
 
@@ -299,6 +300,57 @@ impl LinkQueueProducer {
         if self.dropped.is_power_of_two() {
             hot_warn!(
                 "link input queue {} full at capacity {} — dropped {} frames from remote peers",
+                self.queue_id.index(),
+                self.producer.buffer().capacity(),
+                self.dropped
+            );
+        }
+    }
+}
+
+/// The write end of the control queue, which holds run-control markers only. A full ring drops the
+/// marker and counts it: the link actor pushes the pending marker again at its next heartbeat, so a
+/// drop delays control and loses none of it. Peer frames ride the link queue, so a flood of them
+/// never fills this one.
+pub struct ControlQueueProducer {
+    producer: Producer<InboundMessage>,
+    queue_id: QueueId,
+    dropped: u64,
+}
+
+impl ControlQueueProducer {
+    /// Its sender is outside the engine, and the level repair sends the marker again.
+    pub const WHEN_FULL: FailureClass = FailureClass::Reject;
+
+    pub fn new(producer: Producer<InboundMessage>, queue_id: QueueId) -> Self {
+        Self {
+            producer,
+            queue_id,
+            dropped: 0,
+        }
+    }
+
+    /// The marker of `desired`, stamped `now`.
+    pub fn push(&mut self, desired: RunAssertion, now: LocalTs) {
+        let marker = InboundMessage::new(now, MessageBody::RunControl(RunControl { desired }));
+        if self.producer.push(marker).is_err() {
+            self.count_drop();
+        }
+    }
+
+    /// The markers dropped because the queue was full.
+    pub fn dropped(&self) -> u64 {
+        self.dropped
+    }
+
+    /// Warns at the 1st, 2nd, 4th, 8th drop and so on, so a stalled hot thread shows in the log
+    /// without filling it.
+    #[cold]
+    fn count_drop(&mut self) {
+        self.dropped += 1;
+        if self.dropped.is_power_of_two() {
+            hot_warn!(
+                "control queue {} full at capacity {} — dropped {} run-control markers",
                 self.queue_id.index(),
                 self.producer.buffer().capacity(),
                 self.dropped

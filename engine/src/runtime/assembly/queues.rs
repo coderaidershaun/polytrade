@@ -5,7 +5,9 @@ use rtrb::Consumer;
 
 use super::exec::command_lane_capacity;
 use crate::hot::ingress::IngressQueues;
-use crate::hot::spawn::{LinkQueueProducer, QueueProducer, touched_input_ring};
+use crate::hot::spawn::{
+    ControlQueueProducer, LinkQueueProducer, QueueProducer, touched_input_ring,
+};
 use crate::msg::ids::{QueueId, SourceId};
 use crate::msg::inbound::InboundMessage;
 use crate::runtime::config::Config;
@@ -26,6 +28,7 @@ struct QueueCapacities {
     timer: usize,
     link: usize,
     execution: usize,
+    control: usize,
 }
 
 impl QueueCapacities {
@@ -42,6 +45,7 @@ impl QueueCapacities {
             execution: queues
                 .execution_capacity
                 .unwrap_or_else(|| command_lane_capacity(config.engine.spin_interval())),
+            control: queues.control_capacity,
         }
     }
 }
@@ -57,6 +61,7 @@ pub(super) struct RingPlan {
     link: Option<QueueId>,
     exec: Option<(QueueId, SourceId)>,
     writer_status: Option<(QueueId, SourceId)>,
+    control: Option<QueueId>,
     capacities: QueueCapacities,
 }
 
@@ -72,6 +77,9 @@ pub(super) struct InputProducers {
     pub(super) exec: Option<QueueProducer>,
     /// `None` unless execution is armed. A file writer that gives up sends its one message here.
     pub(super) writer_status: Option<QueueProducer>,
+    /// `None` with no `link:` block. A full ring drops the marker and counts it, and the link
+    /// actor pushes it again at its next heartbeat.
+    pub(super) control: Option<ControlQueueProducer>,
 }
 
 impl RingPlan {
@@ -95,6 +103,7 @@ impl RingPlan {
             writer_status: registry
                 .writer_status_queue_id()
                 .map(|queue_id| (queue_id, SourceId(group_count + 2))),
+            control: registry.control_queue_id(),
             capacities: QueueCapacities::of(config),
         }
     }
@@ -135,6 +144,9 @@ impl RingPlan {
             let producer = ring(queue_id, WRITER_STATUS_CAPACITY);
             QueueProducer::new(producer, fatal.clone(), queue_id, source_id)
         });
+        let control = self.control.map(|queue_id| {
+            ControlQueueProducer::new(ring(queue_id, capacities.control), queue_id)
+        });
         let consumers = consumers
             .into_iter()
             .map(|slot| slot.expect("every queue id assigned a ring"))
@@ -145,6 +157,7 @@ impl RingPlan {
             link,
             exec,
             writer_status,
+            control,
         };
         (IngressQueues::new(consumers), producers)
     }

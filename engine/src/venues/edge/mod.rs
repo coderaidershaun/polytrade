@@ -36,7 +36,7 @@ use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, EngineClock, LocalTs, Stamper};
 use crate::runtime::config::{ExecutionConfig, SenderPlacement};
 use crate::runtime::registry::Registry;
-use crate::runtime::shutdown::{FatalSignal, RunStateCell};
+use crate::runtime::shutdown::{DesiredReader, FatalSignal};
 use crate::venues::IDLE_POLL;
 use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::sender::{SendWait, Sender, SenderSetup};
@@ -64,7 +64,7 @@ pub(crate) struct EdgeSettings {
     pub(crate) fatal: FatalSignal,
     /// When the run goes idle, quotes are pulled and the socket drops, because resting orders
     /// cannot simply be parked.
-    pub(crate) run_state: RunStateCell,
+    pub(crate) run_state: DesiredReader,
     pub(crate) backoff: BackoffCaps,
     /// Must stay inside the engine's drain deadline, since the watchdog force-exits once that
     /// deadline is reached.
@@ -158,7 +158,7 @@ pub(crate) struct VenueEdge {
 pub(crate) struct EdgeControl {
     pub(crate) clock: EngineClock,
     pub(crate) fatal: FatalSignal,
-    pub(crate) run_state: RunStateCell,
+    pub(crate) run_state: DesiredReader,
     pub(crate) stop: ExecStop,
     pub(crate) backoff: BackoffCaps,
     pub(crate) sweep_deadline: Duration,

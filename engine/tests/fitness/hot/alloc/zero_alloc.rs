@@ -32,7 +32,7 @@ use engine::runtime::config::{
 };
 use engine::runtime::metrics::{SampleProducers, SinkKind};
 use engine::runtime::registry::InstrumentRow;
-use engine::runtime::shutdown::RunControlGate;
+use engine::runtime::shutdown::RunStateHandles;
 use engine::venues::exec::open_orders_snapshot_end;
 use rtrb::{Consumer, Producer, RingBuffer};
 
@@ -514,8 +514,8 @@ fn kind_of(message: &InboundMessage) -> usize {
     }
 }
 
-/// The input queues of a trading engine: market data, the timer, the venue's answers, the link, and
-/// the status of its file writers.
+/// The input queues of a trading engine: market data, the timer, the venue's answers, the link, the
+/// status of its file writers, and the run-control markers of the link.
 #[derive(Debug, Clone, Copy)]
 enum Queue {
     Market,
@@ -523,9 +523,10 @@ enum Queue {
     Venue,
     Link,
     WriterStatus,
+    Control,
 }
 
-const QUEUES: usize = 5;
+const QUEUES: usize = 6;
 
 /// The write ends of the input rings, and the count of each kind of message pushed into them.
 struct Inputs {
@@ -1090,7 +1091,6 @@ fn armed_at_capacity(case: Case, rows: &[InstrumentRow], stamper: Stamper) -> (H
     let (exposure_sink, exposure) = exposure_ring(EXPOSURE_RING, rows.len());
     let (command_producer, commands) = RingBuffer::<ExecLaneItem>::new(OUTPUT_RING);
     let (link_producer, link) = RingBuffer::<OutboundLink>::new(OUTPUT_RING);
-    let control = RunControlGate::new();
     let engine = HotEngine::new(HotEngineSetup {
         persistence,
         strategy_log_sink,
@@ -1098,7 +1098,7 @@ fn armed_at_capacity(case: Case, rows: &[InstrumentRow], stamper: Stamper) -> (H
         ui_event_sink,
         link: Some(LinkWiring {
             sink: LinkSink::new(link_producer),
-            acknowledged: control.acknowledged().clone(),
+            acknowledged: RunStateHandles::new().acknowledged_writer,
         }),
         exec: vec![ExecWiring {
             sink: ExecSink::new(command_producer, stamper),
@@ -1318,11 +1318,11 @@ fn drive_on_this_thread(case: Case) -> Window {
         }
         match parked_at {
             None if window.steps >= PARK_AT_STEP => {
-                inputs.push(Queue::Link, run_control(idle_at(1), when));
+                inputs.push(Queue::Control, run_control(idle_at(1), when));
                 parked_at = Some(i);
             }
             Some(parked) if i == parked + 5 => {
-                inputs.push(Queue::Link, run_control(running_at(2), when));
+                inputs.push(Queue::Control, run_control(running_at(2), when));
             }
             _ => {}
         }

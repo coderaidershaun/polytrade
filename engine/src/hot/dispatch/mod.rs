@@ -32,7 +32,7 @@ use crate::msg::time::{FoldTime, LocalTs};
 use crate::msg::ui::{DomQuote, UI_QUOTE_LEVELS};
 use crate::runtime::config::RecordedTables;
 use crate::runtime::exposure::ExposureSnapshot;
-use crate::runtime::shutdown::RunStateCell;
+use crate::runtime::shutdown::AcknowledgedWriter;
 
 pub use digest::StateDigest;
 pub use exposure::ExposureWiring;
@@ -102,7 +102,7 @@ pub struct HotEngine {
     strategy_log_sink: StrategyLogSink,
     link_sink: Option<LinkSink>,
     run: RunAssertion,
-    run_report: Option<RunStateCell>,
+    run_report: Option<AcknowledgedWriter>,
     unretained_volume_bars: u64,
     feature_names: Vec<&'static str>,
     ui: UiEmitter,

@@ -67,7 +67,7 @@ impl Harness {
     fn new(on_controller_loss: ControllerLoss) -> Self {
         let resumes = Arc::new(AtomicUsize::new(0));
         let instruments = [instrument_row(0, tracker_spec_all(1), 64)];
-        let linked = engine_with_link(LinkedSetup {
+        let mut linked = engine_with_link(LinkedSetup {
             instruments: &instruments,
             strategy: Box::new(CallProbe {
                 call: None,
@@ -76,7 +76,7 @@ impl Harness {
             tables: RecordedTables::new(&[TableKind::Features, TableKind::LinkFrames]),
             warmup: DurationUs::ZERO,
         });
-        let plane = ControlPlane::new(linked.control.clone(), on_controller_loss);
+        let plane = linked.control_plane(on_controller_loss);
         Self {
             linked,
             plane,
@@ -124,11 +124,11 @@ impl Harness {
     }
 
     fn acknowledged(&self) -> RunAssertion {
-        self.linked.control.acknowledged().load()
+        self.plane.acknowledged()
     }
 
     fn desired(&self) -> RunAssertion {
-        self.linked.control.desired().load()
+        self.plane.desired()
     }
 }
 
