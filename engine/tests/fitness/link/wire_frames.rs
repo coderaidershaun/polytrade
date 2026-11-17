@@ -190,7 +190,7 @@ pub(super) fn arb_side() -> impl Strategy<Value = Side> {
 /// `INFINITE` and `QUIET_NAN`), so no non-finite value would ever ride an event body — while a quant
 /// feature genuinely can be infinite, as Kyle's lambda has already shipped. The infinities are added
 /// back here. NaN cannot join them: it is unequal to itself, so NO structural round-trip can express
-/// it however perfect the codec; [`event_floats_preserve_exact_bits`] covers that half bitwise.
+/// it however perfect the codec; `each_frame_kind_round_trips` covers that half bitwise.
 pub(super) fn arb_wire_f64() -> impl Strategy<Value = f64> {
     prop_oneof![
         8 => any::<f64>(),

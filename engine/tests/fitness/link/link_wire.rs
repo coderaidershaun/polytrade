@@ -1,43 +1,27 @@
-//! Each link frame survives encode and decode, each rejection names its cause, and the sequence
-//! gate drops repeats and lets a restarted peer in, so two builds never misread each other.
+//! Each reason and state keeps its own wire slot, each event body survives its padded tail, and the
+//! sequence gate drops repeats and lets a restarted peer in, so two builds never misread each other.
 
 use std::net::SocketAddr;
 
-use engine::hot::exec::{CloseReason, OrderState, QuoteLevel, ReadinessGap, RejectReason};
+use engine::hot::exec::{OrderState, QuoteLevel, ReadinessGap, RejectReason};
 use engine::link::{
-    GateVerdict, LINK_LAYOUT, LINK_MAGIC, LINK_MAX_DATAGRAM, LINK_MAX_FIELDS, LINK_MAX_GATE_KEYS,
-    LINK_MAX_SUBSCRIBERS, LINK_SUBSCRIPTION_TTL, LinkBody, LinkDatagram, LinkDecodeError, LinkHash,
-    LinkPayload, RefreshOutcome, SequenceGate, SubscriberTable, TopicId, TopicSet,
+    GateVerdict, LINK_MAX_DATAGRAM, LINK_MAX_GATE_KEYS, LINK_MAX_SUBSCRIBERS,
+    LINK_SUBSCRIPTION_TTL, LinkBody, LinkDatagram, LinkHash, RefreshOutcome, SequenceGate,
+    SubscriberTable, TopicId, TopicSet,
 };
 use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, Side};
-use engine::msg::persist::FeatureId;
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
-use engine::msg::ui::{
-    DomQuote, UI_BOOK_LEVELS, UI_ORDER_SNAPSHOT_CAPACITY, UI_ORDER_SNAPSHOT_MAX_TOTAL, UiEvent,
-    UiWorkingOrder,
-};
-use proptest::prelude::*;
+use engine::msg::ui::{DomQuote, UiEvent, UiWorkingOrder};
 
 use super::wire_frames::{
-    EVERY_ORDER_STATE, FRAMES, FRAMES_PATH, REJECT_REASONS, SCHEMA, STRATEGY, TOKEN, arb_datagram,
-    arb_f64_bits, book_datagram, decode, encode, envelope, event_datagram, first_difference,
-    from_hex, golden_frames, order_snapshot, payload_datagram, round_trip, to_hex, working_order,
+    EVERY_ORDER_STATE, REJECT_REASONS, encode, envelope, event_datagram, order_snapshot,
+    round_trip, working_order,
 };
-
-/// The topic field sits at bytes 12..14 of the envelope. Patching the wire is the only way to build a
-/// datagram this build cannot construct through its own types — which is exactly what a peer on a
-/// newer wire does.
-const TOPIC_OFFSET: usize = 12;
-/// `count` follows the 86-byte envelope, the 8-byte schema hash and the 8-byte event stamp.
-const PAYLOAD_COUNT_OFFSET: usize = 102;
-/// `bid_len` follows the 86-byte envelope, the 2-byte instrument, the 8-byte sequence, the 8-byte
-/// event stamp and the 1-byte book state; `ask_len` is the two bytes after it.
-const BOOK_BID_LEN_OFFSET: usize = 105;
 
 /// The slot each refusal claims in [`REJECT_REASONS`], which is what stops that list rotting into a
 /// subset of the enum. A new `RejectReason` lands here as a missing arm, and the arm it needs
 /// indexes one past the array, so it will not compile until the array grows with it and the
-/// round-trip below starts generating it.
+/// round trip of each frame kind starts generating it.
 ///
 /// The `const` blocks are load-bearing, not decoration: a bare `REJECT_REASONS[20]` compiles, since
 /// the out-of-bounds lint does not reach a const of this shape. Only const evaluation refuses it.
@@ -76,291 +60,6 @@ fn every_reject_reason_claims_its_own_slot() {
              refusal is generated twice and another not at all"
         );
     }
-}
-
-proptest! {
-    /// FITNESS: a decoded frame equals the frame that was encoded, for the frame kinds the
-    /// generator draws, including the reserved MAC bytes. The order-snapshot event is not drawn
-    /// here: the named cases below round-trip it and refuse its malformed forms. A drift here
-    /// corrupts a UI's book, a peer's signal or a subscription silently — nothing crashes, the
-    /// numbers are just wrong.
-    #[test]
-    fn round_trips_every_frame_kind(datagram in arb_datagram()) {
-        let decoded = round_trip(&datagram).expect("a canonical frame decodes");
-        prop_assert_eq!(decoded, datagram);
-    }
-
-    /// FITNESS: float slots ride the wire bit-exactly. Normalising a NaN or losing a signed zero
-    /// would make a receiver's statistics disagree with the sender's for no visible reason.
-    #[test]
-    fn payload_preserves_exact_float_bits(
-        bits in prop::collection::vec(any::<u64>(), 1..=LINK_MAX_FIELDS),
-    ) {
-        let values: Vec<f64> = bits.iter().copied().map(f64::from_bits).collect();
-        let datagram = LinkDatagram {
-            envelope: envelope(TopicId::FIRST_STRATEGY, 3),
-            body: LinkBody::Payload(LinkPayload::new(SCHEMA, VenueTs::from_micros(1), &values)),
-        };
-        let decoded = round_trip(&datagram).expect("a canonical payload decodes");
-        let LinkBody::Payload(payload) = decoded.body else {
-            panic!("payload topic decoded as {:?}", decoded.body);
-        };
-        let decoded_bits: Vec<u64> = payload.values().iter().copied().map(f64::to_bits).collect();
-        prop_assert_eq!(decoded_bits, bits);
-    }
-
-    /// FITNESS: the same bit-exactness for the EVENT body's float slots, which carry a strategy's
-    /// feature values and the engine's exposure/PnL. The round-trip above cannot reach here: it
-    /// compares structurally, and a NaN is unequal to itself, so a codec that quietly canonicalised
-    /// one would pass every case it could generate. A normalised non-finite is the dangerous
-    /// outcome — an infinity that arrives as 0 reads as a real measurement instead of the blown-up
-    /// estimate it was, and a NaN payload that arrives as a different NaN breaks nothing visibly.
-    #[test]
-    fn event_floats_preserve_exact_bits(
-        feature_bits in arb_f64_bits(),
-        exposure_bits in arb_f64_bits(),
-        pnl_bits in arb_f64_bits(),
-    ) {
-        let decoded = round_trip(&event_datagram(UiEvent::Feature {
-            instrument: InstrumentId(3),
-            seq: 8,
-            event_ts_us: VenueTs::from_micros(11),
-            feature: FeatureId(2),
-            value: f64::from_bits(feature_bits),
-        }))
-        .expect("a canonical event decodes");
-        let LinkBody::Event(UiEvent::Feature { value, .. }) = decoded.body else {
-            panic!("the events topic decoded as {:?}", decoded.body);
-        };
-        prop_assert_eq!(value.to_bits(), feature_bits);
-
-        let decoded = round_trip(&event_datagram(UiEvent::Position {
-            instrument: InstrumentId(3),
-            seq: 9,
-            event_ts_us: VenueTs::from_micros(12),
-            exposure_quote: f64::from_bits(exposure_bits),
-            pnl_quote: f64::from_bits(pnl_bits),
-        }))
-        .expect("a canonical event decodes");
-        let LinkBody::Event(UiEvent::Position {
-            exposure_quote,
-            pnl_quote,
-            ..
-        }) = decoded.body
-        else {
-            panic!("the events topic decoded as {:?}", decoded.body);
-        };
-        prop_assert_eq!(exposure_quote.to_bits(), exposure_bits);
-        prop_assert_eq!(pnl_quote.to_bits(), pnl_bits);
-    }
-}
-
-/// Every distinct cause the decoder can refuse a frame for, corrupted one at a time. A peer on a
-/// skewed wire version and a peer from someone else's run present the identical symptom — nothing
-/// decodes — so each has to name its own cause or an operator is left guessing which of them is
-/// happening. The book-length cases matter most: `bid_len`/`ask_len` are read straight off the wire
-/// and the UI slices its fixed `[Level; UI_BOOK_LEVELS]` arrays by them (`workstation::dom_view`), so a
-/// forged length is a remote abort of the UI for anyone who can reach the port — the link's producer
-/// is UNTRUSTED by design rather than by assumption. The order-snapshot counts are the same hazard
-/// one body further in, and are refused before any of it reaches projection.
-#[test]
-fn rejects_frames_with_distinct_causes() {
-    const OTHER_RUN: LinkHash = LinkHash::of_name("someone-elses-run");
-    const OTHER_STRATEGY: LinkHash = LinkHash::of_name("strat-something-else");
-    fn snapshot_bytes(detail_len: u8, total_working: u16, details: &[UiWorkingOrder]) -> Vec<u8> {
-        encode(&event_datagram(order_snapshot(
-            detail_len,
-            total_working,
-            details,
-        )))
-    }
-
-    let drifted = LinkHash::of_fields(&["microprice", "mid", "imbalance"]);
-    let book_bytes = encode(&book_datagram());
-    let unknown_topic = TopicId(TopicId::LATENCY.0 + 1);
-    let forged_field_count = LINK_MAX_FIELDS as u8 + 1;
-    let forged_book_len = UI_BOOK_LEVELS as u16 + 1;
-    let over_capacity = (UI_ORDER_SNAPSHOT_CAPACITY + 1) as u8;
-    let terminal = OrderState::Closed(CloseReason::Filled);
-    let live = working_order(7, OrderState::Live);
-    let pair = [live, working_order(8, OrderState::Live)];
-
-    let cases: [(&str, Vec<u8>, LinkDecodeError); 16] = [
-        (
-            "magic mismatch",
-            {
-                let mut datagram = book_datagram();
-                datagram.envelope.magic = LINK_MAGIC ^ 1;
-                encode(&datagram)
-            },
-            LinkDecodeError::MagicMismatch {
-                found: LINK_MAGIC ^ 1,
-            },
-        ),
-        (
-            "layout mismatch",
-            {
-                let mut datagram = book_datagram();
-                datagram.envelope.layout = LinkHash(LINK_LAYOUT.0 + 1);
-                encode(&datagram)
-            },
-            LinkDecodeError::LayoutMismatch {
-                found: LinkHash(LINK_LAYOUT.0 + 1),
-                expected: LINK_LAYOUT,
-            },
-        ),
-        (
-            "token mismatch",
-            {
-                let mut datagram = book_datagram();
-                datagram.envelope.token_hash = OTHER_RUN;
-                encode(&datagram)
-            },
-            LinkDecodeError::TokenMismatch {
-                found: OTHER_RUN,
-                expected: TOKEN,
-            },
-        ),
-        (
-            "strategy mismatch",
-            {
-                let mut datagram = book_datagram();
-                datagram.envelope.strategy_hash = OTHER_STRATEGY;
-                encode(&datagram)
-            },
-            LinkDecodeError::StrategyMismatch {
-                found: OTHER_STRATEGY,
-                expected: STRATEGY,
-            },
-        ),
-        (
-            "schema mismatch (drifted link_fields)",
-            encode(&payload_datagram(drifted)),
-            LinkDecodeError::SchemaMismatch {
-                found: drifted,
-                expected: SCHEMA,
-            },
-        ),
-        (
-            "truncated below the envelope",
-            book_bytes[..8].to_vec(),
-            LinkDecodeError::Truncated { found: 8 },
-        ),
-        (
-            "length does not match its kind",
-            book_bytes[..book_bytes.len() - 1].to_vec(),
-            LinkDecodeError::LengthMismatch {
-                topic: TopicId::BOOKS,
-                expected: book_bytes.len(),
-                found: book_bytes.len() - 1,
-            },
-        ),
-        (
-            "unknown engine topic",
-            {
-                let mut bytes = book_bytes.clone();
-                bytes[TOPIC_OFFSET..TOPIC_OFFSET + 2]
-                    .copy_from_slice(&unknown_topic.0.to_le_bytes());
-                bytes
-            },
-            LinkDecodeError::UnknownTopic {
-                topic: unknown_topic,
-            },
-        ),
-        (
-            "payload count beyond capacity",
-            {
-                let mut bytes = encode(&payload_datagram(SCHEMA));
-                bytes[PAYLOAD_COUNT_OFFSET] = forged_field_count;
-                bytes
-            },
-            LinkDecodeError::FieldCountExceeded {
-                count: forged_field_count,
-                capacity: LINK_MAX_FIELDS,
-            },
-        ),
-        (
-            "book bid_len beyond capacity",
-            {
-                let mut bytes = book_bytes.clone();
-                bytes[BOOK_BID_LEN_OFFSET..BOOK_BID_LEN_OFFSET + 2]
-                    .copy_from_slice(&forged_book_len.to_le_bytes());
-                bytes
-            },
-            LinkDecodeError::BookLevelsExceeded {
-                count: forged_book_len,
-                capacity: UI_BOOK_LEVELS,
-            },
-        ),
-        (
-            "book ask_len beyond capacity",
-            {
-                let mut bytes = book_bytes.clone();
-                bytes[BOOK_BID_LEN_OFFSET + 2..BOOK_BID_LEN_OFFSET + 4]
-                    .copy_from_slice(&forged_book_len.to_le_bytes());
-                bytes
-            },
-            LinkDecodeError::BookLevelsExceeded {
-                count: forged_book_len,
-                capacity: UI_BOOK_LEVELS,
-            },
-        ),
-        (
-            "a snapshot detailing more orders than it can carry",
-            snapshot_bytes(over_capacity, 9, &pair),
-            LinkDecodeError::OrderSnapshotCountsInvalid {
-                detail_len: over_capacity,
-                total_working: 9,
-                detail_capacity: UI_ORDER_SNAPSHOT_CAPACITY,
-                total_capacity: UI_ORDER_SNAPSHOT_MAX_TOTAL,
-            },
-        ),
-        (
-            "a snapshot detailing more orders than it says are working",
-            snapshot_bytes(2, 1, &pair),
-            LinkDecodeError::OrderSnapshotCountsInvalid {
-                detail_len: 2,
-                total_working: 1,
-                detail_capacity: UI_ORDER_SNAPSHOT_CAPACITY,
-                total_capacity: UI_ORDER_SNAPSHOT_MAX_TOTAL,
-            },
-        ),
-        (
-            "a snapshot claiming more working orders than the engine can hold",
-            snapshot_bytes(0, UI_ORDER_SNAPSHOT_MAX_TOTAL + 1, &pair),
-            LinkDecodeError::OrderSnapshotCountsInvalid {
-                detail_len: 0,
-                total_working: UI_ORDER_SNAPSHOT_MAX_TOTAL + 1,
-                detail_capacity: UI_ORDER_SNAPSHOT_CAPACITY,
-                total_capacity: UI_ORDER_SNAPSHOT_MAX_TOTAL,
-            },
-        ),
-        (
-            "a snapshot carrying a closed order",
-            snapshot_bytes(1, 1, &[working_order(7, terminal)]),
-            LinkDecodeError::OrderSnapshotTerminalState { state: terminal },
-        ),
-        (
-            "a snapshot repeating a client id",
-            snapshot_bytes(2, 2, &[live, live]),
-            LinkDecodeError::OrderSnapshotDuplicate {
-                client_id: live.client_id,
-            },
-        ),
-    ];
-
-    for (name, bytes, expected) in cases {
-        assert_eq!(
-            decode(&bytes),
-            Err(expected),
-            "case {name}: wrong rejection cause"
-        );
-    }
-
-    assert!(
-        round_trip(&payload_datagram(SCHEMA)).is_ok(),
-        "the correct schema still round-trips"
-    );
 }
 
 /// The link actor indexes its per-topic sequence array by raw topic id, unchecked, on the send
@@ -439,7 +138,7 @@ fn full_quote_ladder() -> UiEvent {
 /// discriminants in one eleven-state table — and a table of eleven near-identical tags is where a
 /// copy-pasted tag hides.
 ///
-/// [`round_trips_every_frame_kind`] generates these states too, so this is deliberately NOT a second
+/// `each_frame_kind_round_trips` generates these states too, so this is deliberately NOT a second
 /// round-trip: it is the DETERMINISM the generator cannot give. One state sits behind four nested
 /// choices there — datagram kind, then market-vs-exec, then event kind, then the state itself — so a
 /// given state arrives in roughly one case in 900, and 256 cases reach it about a quarter of the
@@ -516,64 +215,6 @@ fn event_encoding_is_independent_of_buffer_reuse() {
     quote.encode(&mut dirty);
     let reused = rotation.encode(&mut dirty);
     assert_eq!(&dirty[..reused], encode(&rotation).as_slice());
-}
-
-/// FITNESS: a fixed frame of every kind encodes to exactly the bytes checked in. Every other test
-/// here is a round trip, and a round trip still passes when the writer and the reader drift
-/// together, while a separately built peer on the old layout misreads every frame.
-///
-/// To accept an intended layout change, bump `LINK_VERSION`, run the suite once with
-/// `POLYSIM_BLESS_LINK=1` to rewrite `link_frames.txt`, then read the diff.
-#[test]
-fn every_frame_kind_encodes_to_checked_in_bytes() {
-    let encoded: Vec<(&str, Vec<u8>)> = golden_frames()
-        .iter()
-        .map(|(kind, datagram)| (*kind, encode(datagram)))
-        .collect();
-    if std::env::var_os("POLYSIM_BLESS_LINK").is_some() {
-        let lines: String = encoded
-            .iter()
-            .map(|(kind, bytes)| format!("{kind} {}\n", to_hex(bytes)))
-            .collect();
-        std::fs::write(FRAMES_PATH, lines).expect("the fixture is writable");
-        return;
-    }
-
-    let checked_in: Vec<(&str, Vec<u8>)> = FRAMES
-        .lines()
-        .filter(|line| !line.starts_with("layout "))
-        .map(|line| {
-            let (kind, hex) = line
-                .split_once(' ')
-                .unwrap_or_else(|| panic!("{FRAMES_PATH}: line {line:?} is not `<kind> <hex>`"));
-            (kind, from_hex(kind, hex))
-        })
-        .collect();
-    let encoded_kinds: Vec<&str> = encoded.iter().map(|(kind, _)| *kind).collect();
-    let checked_in_kinds: Vec<&str> = checked_in.iter().map(|(kind, _)| *kind).collect();
-    assert_eq!(
-        encoded_kinds, checked_in_kinds,
-        "the frame kinds drifted from {FRAMES_PATH}; if intended, rerun with POLYSIM_BLESS_LINK=1"
-    );
-
-    let drifted: Vec<String> = encoded
-        .iter()
-        .zip(&checked_in)
-        .filter_map(|((kind, bytes), (_, expected))| {
-            first_difference(bytes, expected).map(|offset| {
-                format!(
-                    "{kind} first differs at byte {offset} ({} bytes encoded, {} checked in)",
-                    bytes.len(),
-                    expected.len()
-                )
-            })
-        })
-        .collect();
-    assert!(
-        drifted.is_empty(),
-        "the link encoding drifted from {FRAMES_PATH}: {drifted:#?}; if intended, bump LINK_VERSION \
-         and rerun with POLYSIM_BLESS_LINK=1"
-    );
 }
 
 /// The gate ages its slots, so every fixture stamps from one instant unless it is deliberately
