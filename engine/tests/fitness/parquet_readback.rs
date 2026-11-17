@@ -83,6 +83,68 @@ pub fn read_parquet_file(path: &Path) -> FileData {
     }
 }
 
+/// One row of a features file with its id replaced by the column name the id stands for.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NamedFeature {
+    pub event_ts_us: i64,
+    pub instrument_id: u16,
+    pub name: String,
+    pub value_bits: u64,
+}
+
+/// The rows of one features file, each id named through the feature dictionary in the footer of
+/// that same file. Another file of the same folder may come from a build that declared its columns
+/// in another order.
+pub fn named_feature_rows(path: &Path) -> Vec<NamedFeature> {
+    let file = read_parquet_file(path);
+    let dictionary = feature_dictionary(&file);
+    let column = |name: &str| {
+        file.field_names
+            .iter()
+            .position(|field| field == name)
+            .unwrap_or_else(|| panic!("{} has no column {name}", path.display()))
+    };
+    let (ts, instrument, feature, value) = (
+        column("event_ts_us"),
+        column("instrument_id"),
+        column("feature_id"),
+        column("value"),
+    );
+    file.rows
+        .iter()
+        .map(|row| {
+            let (
+                Cell::I64(event_ts_us),
+                Cell::U16(instrument_id),
+                Cell::U16(id),
+                Cell::F64Bits(value_bits),
+            ) = (&row[ts], &row[instrument], &row[feature], &row[value])
+            else {
+                panic!(
+                    "{}: a features row of unexpected cells {row:?}",
+                    path.display()
+                )
+            };
+            NamedFeature {
+                event_ts_us: *event_ts_us,
+                instrument_id: *instrument_id,
+                name: dictionary[usize::from(*id)].clone(),
+                value_bits: *value_bits,
+            }
+        })
+        .collect()
+}
+
+fn feature_dictionary(file: &FileData) -> Vec<String> {
+    let json = file
+        .footer
+        .iter()
+        .find_map(|(key, value)| (key == "feature_dictionary").then_some(value.as_deref()))
+        .flatten()
+        .expect("a tape file's footer holds a feature_dictionary");
+    serde_json::from_str(json).expect("the feature_dictionary is a JSON list of names")
+}
+
 fn cell_at(array: &ArrayRef, row: usize) -> Cell {
     if array.is_null(row) {
         return Cell::Null;
@@ -228,6 +290,24 @@ pub(crate) fn spawn_writer_through(
     PersistWriter::through(steps).spawn(
         persist_config(dir_root, RecordedTables::new(&[TableKind::Features])),
         meta_for(Some(ExecutionMode::Live)),
+        preloaded(records),
+        no_rotations(),
+    )
+}
+
+/// Like [`spawn_writer`] for the features table alone, with the column names its footer records.
+pub(crate) fn spawn_feature_writer(
+    dir_root: &Path,
+    feature_names: &[&str],
+    records: Vec<PersistRecord>,
+) -> PersistHandle {
+    let meta = RunMeta {
+        feature_names: feature_names.iter().map(|name| (*name).into()).collect(),
+        ..meta_for(Some(ExecutionMode::Live))
+    };
+    PersistWriter::on_disk().spawn(
+        persist_config(dir_root, RecordedTables::new(&[TableKind::Features])),
+        meta,
         preloaded(records),
         no_rotations(),
     )

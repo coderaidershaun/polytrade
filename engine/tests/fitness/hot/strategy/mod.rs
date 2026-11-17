@@ -2,8 +2,8 @@
 //! publishes.
 
 mod egarch_seed;
-mod feature_contract;
 mod poly_publisher;
 mod recorder_fixture;
 mod recorder_min_distance;
 mod recorder_quotes;
+mod schema_lock;

@@ -1,0 +1,4 @@
+# The columns this strategy records, in id order, and the digest of its link schema.
+# This engine records no column; it sends the link schema that the recorder receives.
+
+link_schema_digest 0x277cc7cf6091fcd5
