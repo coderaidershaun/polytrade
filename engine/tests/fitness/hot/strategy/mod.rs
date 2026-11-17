@@ -7,3 +7,4 @@ mod poly_publisher;
 mod recorder_fixture;
 mod recorder_min_distance;
 mod recorder_quotes;
+mod schema_lock;
