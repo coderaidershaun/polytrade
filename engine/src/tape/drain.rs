@@ -42,7 +42,7 @@ impl PersistWriter {
 
     #[expect(
         clippy::disallowed_methods,
-        reason = "a writer stamps and paces its own files, which are never engine state"
+        reason = "the boot stamp keeps the file names of two runs apart; it decides no seal and no state"
     )]
     pub fn spawn(
         self,
