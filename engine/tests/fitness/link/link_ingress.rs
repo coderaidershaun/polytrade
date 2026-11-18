@@ -272,6 +272,114 @@ fn a_peer_frame_reaches_the_strategy_and_the_tape_under_independent_gates() {
     }
 }
 
+/// The record of a peer frame and the call of `on_link` have gates of their own: `strategy.tables`
+/// decides whether the `LinkFrames` table exists, and the run state decides whether `on_link` runs.
+/// Neither answers for the other, so a parked engine still records each frame it consumes, and a
+/// strategy with no link table still sees each frame.
+#[test]
+fn link_record_and_link_callback_have_independent_gates() {
+    struct Case {
+        name: &'static str,
+        tables: &'static [TableKind],
+        values: Vec<f64>,
+        park: bool,
+        expect_delivery: bool,
+        expect_rows: bool,
+    }
+    let cases = [
+        Case {
+            name: "LinkFrames sink present",
+            tables: &[TableKind::Features, TableKind::LinkFrames],
+            values: vec![42.5, 0.25],
+            park: false,
+            expect_delivery: true,
+            expect_rows: true,
+        },
+        Case {
+            name: "LinkFrames sink absent",
+            tables: &[TableKind::Features],
+            values: vec![7.0],
+            park: false,
+            expect_delivery: true,
+            expect_rows: false,
+        },
+        Case {
+            name: "parked engine",
+            tables: &[TableKind::Features, TableKind::LinkFrames],
+            values: vec![7.0],
+            park: true,
+            expect_delivery: false,
+            expect_rows: true,
+        },
+    ];
+
+    for case in cases {
+        let mut linked = linked(case.tables);
+        let mut edge = Edge::new();
+        if case.park {
+            linked.engine.dispatch(&run_control(idle_at(1), 50));
+            drain_persist(&mut linked);
+        }
+        let message = edge.admit(1, &case.values, 100).expect("gate admits");
+        linked.engine.dispatch(&message);
+
+        let records = drain_persist(&mut linked);
+        let delivered = features(&records);
+        if case.expect_delivery {
+            assert_eq!(
+                delivered, case.values,
+                "case {}: on_link saw the sender's slots, in slot order",
+                case.name
+            );
+        } else {
+            assert!(
+                delivered.is_empty(),
+                "case {}: on_link is suppressed with every other callback",
+                case.name
+            );
+        }
+
+        let rows = link_rows(&records);
+        if case.expect_rows {
+            assert_eq!(
+                rows.len(),
+                case.values.len(),
+                "case {}: one tape row per value slot",
+                case.name
+            );
+            assert!(
+                rows.iter().all(|row| row.kind == LinkRowKind::Payload
+                    && row.sender_te_hash == SENDER.0
+                    && row.topic == TopicId::FIRST_STRATEGY.0
+                    && row.seq == 1
+                    && row.count == case.values.len() as u16
+                    && row.received_ts_us == ts(100)
+                    && row.event_ts_us == venue_ts(99)),
+                "case {}: every row carries the frame's identity and BOTH clocks, {rows:?}",
+                case.name
+            );
+            assert_eq!(
+                rows.iter()
+                    .map(|row| (row.slot, row.value))
+                    .collect::<Vec<_>>(),
+                case.values
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, value)| (slot as u16, *value))
+                    .collect::<Vec<_>>(),
+                "case {}: slots keep their index",
+                case.name
+            );
+        } else {
+            assert!(
+                rows.is_empty(),
+                "case {}: no link_frames sink, so no rows",
+                case.name
+            );
+        }
+    }
+}
+
 /// FITNESS: the sequence gate sits UPSTREAM of the hot thread, so the sequence the engine consumes
 /// is already deduplicated and in order — which is what makes the consumed sequence the record.
 #[test]
