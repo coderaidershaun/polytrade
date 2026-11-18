@@ -45,7 +45,8 @@ impl PersistWriter {
         }
     }
 
-    /// With no status queue, a fault of an audit table halts nothing: no quote can go out then.
+    /// Without a status queue, a fault of an audit table still stops its table and fails the
+    /// drain, but no message tells the fold, so quoting goes on.
     pub fn reporting_to(self, status: TapeStatus) -> Self {
         Self {
             status: Some(status),
