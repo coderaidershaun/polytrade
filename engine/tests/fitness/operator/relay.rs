@@ -6,7 +6,10 @@ use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::protocol::Message;
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 use engine::link::{
     FrameGuard, LINK_MAX_DATAGRAM, LinkBody, LinkCredential, LinkDatagram, LinkDecodeError,
@@ -17,9 +20,7 @@ use engine::operator::workstation::link::session::{LinkSession, LinkTarget};
 use engine::runtime::config::StrategyId;
 
 use super::web_http::{
-    DEADLINE, TOKEN, Tab, UPGRADE_HEADERS, WebServer, bundle, bytes_of_length, command, exchange,
-    expect_hello, expect_silence, fake_engine, host, listening, next_message, open_tab, receive,
-    within,
+    DEADLINE, UPGRADE_HEADERS, WebServer, bundle, command, exchange, fake_engine, host, listening,
 };
 
 const STRATEGY: &str = "web-test";
@@ -419,3 +420,62 @@ async fn web_guard_runs_before_each_route() {
     let mut tab = open_tab(port, 0).await;
     expect_hello(&mut tab).await;
 }
+
+type Tab = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn within<T>(future: impl Future<Output = T>) -> T {
+    tokio::time::timeout(DEADLINE, future)
+        .await
+        .expect("an answer arrives in time")
+}
+
+/// Connects the way a browser tab does, with the origin of the page the server served.
+async fn open_tab(port: u16, peer: usize) -> Tab {
+    let mut request = format!("ws://127.0.0.1:{port}/api/link?peer={peer}")
+        .into_client_request()
+        .expect("a valid url");
+    let origin = HeaderValue::from_str(&format!("http://127.0.0.1:{port}")).expect("a header");
+    request.headers_mut().insert("Origin", origin);
+    let (tab, response) = within(connect_async(request))
+        .await
+        .expect("the relay accepts the upgrade");
+    assert_eq!(response.status(), 101);
+    tab
+}
+
+async fn next_message(tab: &mut Tab) -> Message {
+    within(tab.next())
+        .await
+        .expect("the relay keeps the socket open")
+        .expect("a well-formed frame")
+}
+
+async fn expect_hello(tab: &mut Tab) -> serde_json::Value {
+    let Message::Text(text) = next_message(tab).await else {
+        panic!("the first message is the hello, as text");
+    };
+    serde_json::from_str(text.as_str()).expect("the hello is json")
+}
+
+fn bytes_of_length(length: usize) -> Vec<u8> {
+    (0..=u8::MAX).cycle().take(length).collect()
+}
+
+fn receive(socket: &UdpSocket) -> (Vec<u8>, SocketAddr) {
+    let mut buffer = [0_u8; 4096];
+    let (length, from) = socket.recv_from(&mut buffer).expect("a datagram arrives");
+    (buffer[..length].to_vec(), from)
+}
+
+fn expect_silence(socket: &UdpSocket) {
+    socket
+        .set_read_timeout(Some(Duration::from_millis(300)))
+        .expect("a read timeout");
+    let mut buffer = [0_u8; 4096];
+    assert!(
+        socket.recv_from(&mut buffer).is_err(),
+        "no datagram should have arrived"
+    );
+}
+
+const TOKEN: &str = "never-printed-token";
