@@ -846,7 +846,8 @@ fn the_base_floor_may_be_zero_and_the_quote_floor_may_not() {
 /// overflow the runtime's storage type at `u64::MAX`, and the bps field overflows the runtime's
 /// centi-bps conversion at a merely enormous finite float — two different overflow mechanisms,
 /// same refusal shape. A limit of failed writes refuses zero, as each limit of the config does, and
-/// so does each queue capacity: a ring of no slot cannot be built.
+/// so does each queue capacity, since a ring of no slot cannot be built, and the rate of a link
+/// sender, which would refuse each peer frame.
 #[test]
 fn execution_numeric_fields_reject_out_of_range_values() {
     let max = u64::MAX.to_string();
@@ -944,6 +945,14 @@ fn execution_numeric_fields_reject_out_of_range_values() {
             "{expected_field}: zero must be refused by field, got {error}"
         );
     }
+
+    let no_rate = config_with_link(&link_block("127.0.0.1:9310", "  sender_rate_per_sec: 0\n"));
+    let error = refusal(&no_rate);
+    assert!(
+        matches!(&error, ConfigError::Invalid { field, value, .. }
+            if *field == "link.sender_rate_per_sec" && value.as_ref() == "0"),
+        "link.sender_rate_per_sec: zero must be refused by field, got {error}"
+    );
 }
 
 /// The log gets its own share of the shutdown: a log deadline at or past the engine's would let

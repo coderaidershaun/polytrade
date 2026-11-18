@@ -4,6 +4,7 @@
 use std::io;
 use std::net::SocketAddr;
 
+use crate::hot::spawn::LinkPush;
 use crate::msg::inbound::{InboundMessage, MessageBody, MessageHeader};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{DurationUs, LocalTs};
@@ -11,7 +12,7 @@ use crate::{info, warn, warn_repeating};
 
 use super::super::control::Subscribe;
 use super::super::envelope::LinkDecodeError;
-use super::super::frame::{LinkBody, LinkDatagram, LinkFrame, LinkOrigin, LinkPayload};
+use super::super::frame::{LinkBody, LinkDatagram, LinkFrame, LinkOrigin};
 use super::super::subscribers::{LINK_MAX_SUBSCRIBERS, LINK_SUBSCRIPTION_TTL, RefreshOutcome};
 use super::control_plane::AssertionVerdict;
 use super::{Actor, PeerFeed};
@@ -39,7 +40,8 @@ impl Actor {
         match datagram.body {
             LinkBody::Subscribe(subscribe) => self.on_subscribe(from, subscribe, now),
             LinkBody::Payload(payload) => {
-                self.on_payload(LinkOrigin::from(&datagram.envelope), payload, now)
+                let origin = LinkOrigin::from(&datagram.envelope);
+                self.on_payload(from, LinkFrame { origin, payload }, now)
             }
             // Engine serves engine topics (never consumes peer's); delivery still proves peer alive
             _ => self.counts.topic_ignored += 1,
@@ -51,14 +53,17 @@ impl Actor {
         clippy::disallowed_methods,
         reason = "the link actor stamps each peer frame and marker with message time before the tape records it"
     )]
-    fn on_payload(&mut self, origin: LinkOrigin, payload: LinkPayload, received_ts_us: LocalTs) {
-        self.inbound.push(InboundMessage {
+    fn on_payload(&mut self, from: SocketAddr, frame: LinkFrame, received_ts_us: LocalTs) {
+        let message = InboundMessage {
             header: MessageHeader {
                 received_ts_us,
                 queued_ts_us: self.clock.now(),
             },
-            body: MessageBody::Link(LinkFrame { origin, payload }),
-        });
+            body: MessageBody::Link(frame),
+        };
+        if let LinkPush::OverRate { refused } = self.inbound.push(from, message) {
+            self.on_over_rate(from, refused);
+        }
     }
 
     fn on_subscribe(&mut self, from: SocketAddr, subscribe: Subscribe, now: LocalTs) {
@@ -107,11 +112,25 @@ impl Actor {
 
     #[cold]
     fn on_decode_error(&mut self, error: &LinkDecodeError) {
+        if matches!(error, LinkDecodeError::LayoutMismatch { .. }) {
+            self.counts.layout_mismatched += 1;
+        }
         warn_repeating!(
             self.counts.decode_failed,
             "link rejected {} datagrams (latest: {error})",
             self.counts.decode_failed
         );
+    }
+
+    /// Warns at the 1st, 2nd, 4th, 8th refusal of one sender and so on.
+    #[cold]
+    fn on_over_rate(&self, from: SocketAddr, refused: u64) {
+        if refused.is_power_of_two() {
+            warn!(
+                "link sender {from} above its rate of {} frames a heartbeat — refused {refused} frames",
+                self.inbound.sender_rate()
+            );
+        }
     }
 
     #[cold]

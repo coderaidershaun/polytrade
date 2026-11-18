@@ -1,6 +1,8 @@
 //! The rows of each closed interval, and the interface that takes them. The table that keeps them
 //! is written elsewhere; the metrics thread only hands rows over.
 
+use std::net::SocketAddr;
+
 use crate::msg::ids::QueueId;
 use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::latency::{Category, Stage};
@@ -88,6 +90,16 @@ pub struct DropRow {
     pub dropped_total: u64,
 }
 
+/// The peer frames that the link queue lost from one sender, since the start of the run. `sender`
+/// is `None` for the row of each sender that came after the table of senders was full.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SenderDropRow {
+    pub interval_end_ts_us: LocalTs,
+    pub sender: Option<SocketAddr>,
+    pub queue_full_total: u64,
+    pub over_rate_total: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BacklogRow {
     pub interval_end_ts_us: LocalTs,
@@ -101,6 +113,7 @@ pub struct BacklogRow {
 pub enum RollupRow {
     Latency(LatencyRow),
     Drop(DropRow),
+    SenderDrop(SenderDropRow),
     Backlog(BacklogRow),
 }
 

@@ -654,4 +654,8 @@ fn digest_mismatch_is_refused_before_the_body() {
         counts.decode_failed, 1,
         "the foreign frame is counted once: {counts:?}"
     );
+    assert_eq!(
+        counts.layout_mismatched, 1,
+        "and counted as a frame of another layout: {counts:?}"
+    );
 }

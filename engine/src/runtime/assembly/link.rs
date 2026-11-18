@@ -2,6 +2,7 @@
 //! file gave, in preflight, before anything spawns.
 
 use std::net::UdpSocket;
+use std::num::NonZeroU32;
 
 use rtrb::{Consumer, RingBuffer};
 use tokio::runtime::Handle;
@@ -121,6 +122,8 @@ pub(super) struct LinkStart<'a, P> {
     pub control: DesiredWriter,
     pub clock: EngineClock,
     pub spin_interval: DurationUs,
+    /// The metrics thread reads the same handle.
+    pub counts: LinkCountsHandle,
 }
 
 /// The ring that the hot thread fills for the link actor, beside the acknowledged state that it
@@ -156,6 +159,19 @@ pub(super) fn spawn_link_actor<P>(
         .map_or_else(Default::default, |link| {
             (link.on_controller_loss, link.controllers.clone())
         });
+    let sender_rate = start
+        .config
+        .link
+        .as_ref()
+        .and_then(|link| link.sender_rate_per_sec)
+        .unwrap_or_else(|| u32::try_from(start.config.queues.link_capacity).unwrap_or(u32::MAX));
+    let inbound = start
+        .inbound
+        .expect("a bound link always builds its input queue")
+        .with_sender_rate(
+            NonZeroU32::new(sender_rate)
+                .expect("the config refuses a sender rate and a link capacity of 0"),
+        );
     LinkActor::spawn(
         LinkActorSetup {
             socket: bound.socket,
@@ -164,9 +180,7 @@ pub(super) fn spawn_link_actor<P>(
             peers: bound.peers,
             on_controller_loss,
             controllers,
-            inbound: start
-                .inbound
-                .expect("a bound link always builds its input queue"),
+            inbound,
             markers: start
                 .markers
                 .expect("a bound link always builds its control queue"),
@@ -182,7 +196,7 @@ pub(super) fn spawn_link_actor<P>(
             feature_count: bound.feature_count,
             placement: start.config.senders.placement,
             flush_period: start.config.senders.link_flush(),
-            counts: LinkCountsHandle::new(),
+            counts: start.counts,
         },
         edge_runtime,
     )

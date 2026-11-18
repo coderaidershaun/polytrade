@@ -185,6 +185,22 @@ impl Gauges {
                 let point = DataPoint::of(row.dropped_total, row.interval_end_ts_us, attributes);
                 self.add("polysim.drops", "{record}", point);
             }
+            RollupRow::SenderDrop(row) => {
+                let sender = row
+                    .sender
+                    .map_or_else(|| "others".to_owned(), |sender| sender.to_string());
+                for (cause, total) in [
+                    ("queue_full", row.queue_full_total),
+                    ("over_rate", row.over_rate_total),
+                ] {
+                    let attributes = vec![
+                        text("polysim.sender", &sender),
+                        text("polysim.cause", cause),
+                    ];
+                    let point = DataPoint::of(total, row.interval_end_ts_us, attributes);
+                    self.add("polysim.link.sender_drops", "{frame}", point);
+                }
+            }
             RollupRow::Backlog(row) => {
                 let attributes = vec![text("polysim.queue", &row.queue.index().to_string())];
                 let point = DataPoint::of(u64::from(row.max), row.interval_end_ts_us, attributes);

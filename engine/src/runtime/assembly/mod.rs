@@ -34,6 +34,7 @@ use crate::hot::metrics::DriverSamples;
 use crate::hot::sink::StrategyLogSink;
 use crate::hot::spawn::{HotThreadConfig, SimTapGate, spawn_hot_thread};
 use crate::hot::strategy::Strategy;
+use crate::link::LinkCountsHandle;
 use crate::log::{self, LaneReader, LogConfig, LogHandle};
 use crate::msg::persist::RotationRow;
 use crate::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, Stamper};
@@ -192,6 +193,7 @@ impl Engine {
         }
         plan.log_report();
 
+        let link_counts = LinkCountsHandle::new();
         let MetricsBringUp {
             thread: metrics,
             samples,
@@ -204,6 +206,7 @@ impl Engine {
             queue_count: plan.registry.input_queue_count(),
             core_id: config.engine.housekeeping_core_id,
             pin,
+            link_counts: config.link.is_some().then(|| link_counts.clone()),
             #[cfg(feature = "otlp")]
             rows: otlp_rows,
         }) {
@@ -443,6 +446,7 @@ impl Engine {
                     control: desired_writer,
                     clock: clock.clone(),
                     spin_interval,
+                    counts: link_counts,
                 },
                 &edge_runtime,
             )

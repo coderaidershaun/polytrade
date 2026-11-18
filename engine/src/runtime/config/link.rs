@@ -4,7 +4,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use serde::Deserialize;
 
-use super::ConfigError;
+use super::{ConfigError, check_range};
 
 const MAX_PEERS: usize = 16;
 
@@ -25,12 +25,26 @@ pub struct LinkConfig {
     /// engine with no list accepts no assertion.
     #[serde(default)]
     pub controllers: Vec<IpAddr>,
+    /// The peer frames that one source address may send in each heartbeat of 1 s. `None` takes
+    /// `queues.link_capacity`, so no one sender alone puts more than one full link queue into a
+    /// second.
+    #[serde(default)]
+    pub sender_rate_per_sec: Option<u32>,
 }
 
 impl LinkConfig {
     /// # Errors
-    /// [`ConfigError::PublicLinkBind`] or [`ConfigError::TooManyLinkPeers`].
+    /// [`ConfigError::PublicLinkBind`], [`ConfigError::TooManyLinkPeers`], or
+    /// [`ConfigError::Invalid`] for a sender rate of 0.
     pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if let Some(rate) = self.sender_rate_per_sec {
+            check_range(
+                "link.sender_rate_per_sec",
+                u64::from(rate),
+                1..=u64::from(u32::MAX),
+                "1 or more",
+            )?;
+        }
         if !self.allow_public_bind && !is_private_bind(self.bind.ip()) {
             return Err(ConfigError::PublicLinkBind {
                 bind: self.bind.to_string().into_boxed_str(),
