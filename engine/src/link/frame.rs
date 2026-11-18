@@ -34,9 +34,9 @@ impl TopicLayout {
     }
 }
 
-/// Each engine topic and its body. Topics 7 to 15 are reserved for the engine; a strategy topic
+/// Each engine topic and its body. Topics 8 to 15 are reserved for the engine; a strategy topic
 /// carries a payload.
-pub(super) const ENGINE_TOPICS: [TopicLayout; 7] = [
+pub(super) const ENGINE_TOPICS: [TopicLayout; 8] = [
     TopicLayout::of::<Subscribe>("subscribe", TopicId::SUBSCRIBE),
     TopicLayout::of::<UiBookSnapshot>("books", TopicId::BOOKS),
     TopicLayout::of::<UiEvent>("events", TopicId::EVENTS),
@@ -44,6 +44,7 @@ pub(super) const ENGINE_TOPICS: [TopicLayout; 7] = [
     TopicLayout::of::<CatalogFeature>("catalog_features", TopicId::CATALOG_FEATURES),
     TopicLayout::of::<Lifecycle>("lifecycle", TopicId::LIFECYCLE),
     TopicLayout::of::<LatencyReport>("latency", TopicId::LATENCY),
+    TopicLayout::of::<UiEvent>("history", TopicId::HISTORY),
 ];
 
 /// The digest of the whole wire layout: the envelope, each engine topic with its body, and the
@@ -232,6 +233,8 @@ pub enum LinkBody {
     CatalogFeature(CatalogFeature),
     Lifecycle(Lifecycle),
     Latency(LatencyReport),
+    /// An event frame recorded before the subscriber came, with the body of a live one.
+    History(UiEvent),
     Payload(LinkPayload),
 }
 
@@ -261,6 +264,7 @@ impl LinkDatagram {
             LinkBody::CatalogFeature(feature) => feature.write(&mut writer),
             LinkBody::Lifecycle(lifecycle) => lifecycle.write(&mut writer),
             LinkBody::Latency(report) => report.write(&mut writer),
+            LinkBody::History(event) => event.write(&mut writer),
             LinkBody::Payload(payload) => payload.write(&mut writer),
         }
         writer.written()
@@ -297,6 +301,7 @@ impl LinkDatagram {
             }
             TopicId::LIFECYCLE => LinkBody::Lifecycle(Lifecycle::read(&mut reader)?),
             TopicId::LATENCY => LinkBody::Latency(LatencyReport::read(&mut reader)?),
+            TopicId::HISTORY => LinkBody::History(UiEvent::read(&mut reader)?),
             _ => LinkBody::Payload(LinkPayload::read(&mut reader, guard)?),
         };
         Ok(Self { envelope, body })
@@ -312,6 +317,7 @@ fn expected_topic(body: &LinkBody) -> Option<TopicId> {
         LinkBody::CatalogFeature(_) => Some(TopicId::CATALOG_FEATURES),
         LinkBody::Lifecycle(_) => Some(TopicId::LIFECYCLE),
         LinkBody::Latency(_) => Some(TopicId::LATENCY),
+        LinkBody::History(_) => Some(TopicId::HISTORY),
         LinkBody::Payload(_) => None,
     }
 }

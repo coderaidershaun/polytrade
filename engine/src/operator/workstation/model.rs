@@ -189,6 +189,12 @@ impl UiModel {
         self.latest_quote[index] = Some((quote, event_ts_us));
     }
 
+    /// An event from the history topic. It is older than what the live topics have shown, so it
+    /// reaches the chart only, never the sequence count or the order and position models.
+    pub fn apply_history(&mut self, event: UiEvent) {
+        self.chart.apply_history(&event);
+    }
+
     pub fn book(&self, instrument: InstrumentId) -> Option<&UiBookSnapshot> {
         self.latest_book.get(instrument.0 as usize)?.as_ref()
     }

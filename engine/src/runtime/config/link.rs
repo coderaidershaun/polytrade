@@ -1,12 +1,21 @@
 //! Link config: receivers name peers (senders declare in code).
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::num::NonZeroUsize;
 
 use serde::Deserialize;
 
 use super::{ConfigError, check_range};
 
 const MAX_PEERS: usize = 16;
+
+/// Five minutes of event frames at 1,000 a second, the rate the history spike measured with room
+/// above the fastest shipped spin. Each frame takes `size_of::<UiEvent>()` bytes, reserved at start.
+const DEFAULT_HISTORY_CAPACITY: usize = 300_000;
+
+/// The spike sent 300,000 history frames at 128 a flush of 10 ms with no failed send and no live
+/// frame late: five minutes of history reach a new tab in about 23 seconds.
+const DEFAULT_HISTORY_PER_FLUSH: usize = 128;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -30,12 +39,36 @@ pub struct LinkConfig {
     /// second.
     #[serde(default)]
     pub sender_rate_per_sec: Option<u32>,
+    /// The event frames the link actor keeps for a tab that opens late.
+    #[serde(default = "default_history_capacity")]
+    pub history_capacity: usize,
+    /// The history frames that one flush sends, so a replay never delays the live frames.
+    #[serde(default = "default_history_per_flush")]
+    pub history_per_flush: usize,
+}
+
+fn default_history_capacity() -> usize {
+    DEFAULT_HISTORY_CAPACITY
+}
+
+fn default_history_per_flush() -> usize {
+    DEFAULT_HISTORY_PER_FLUSH
 }
 
 impl LinkConfig {
+    /// Validated greater than 0.
+    pub fn history_capacity(&self) -> NonZeroUsize {
+        NonZeroUsize::new(self.history_capacity).unwrap_or(NonZeroUsize::MIN)
+    }
+
+    /// Validated greater than 0.
+    pub fn history_per_flush(&self) -> NonZeroUsize {
+        NonZeroUsize::new(self.history_per_flush).unwrap_or(NonZeroUsize::MIN)
+    }
+
     /// # Errors
     /// [`ConfigError::PublicLinkBind`], [`ConfigError::TooManyLinkPeers`], or
-    /// [`ConfigError::Invalid`] for a sender rate of 0.
+    /// [`ConfigError::Invalid`] for a sender rate of 0 or a history key of 0.
     pub(super) fn validate(&self) -> Result<(), ConfigError> {
         if let Some(rate) = self.sender_rate_per_sec {
             check_range(
@@ -55,6 +88,13 @@ impl LinkConfig {
                 count: self.subscribe.len(),
                 max: MAX_PEERS,
             });
+        }
+        let history_keys = [
+            ("link.history_capacity", self.history_capacity),
+            ("link.history_per_flush", self.history_per_flush),
+        ];
+        for (field, value) in history_keys {
+            check_range(field, value as u64, 1..=u64::MAX, "greater than 0")?;
         }
         Ok(())
     }

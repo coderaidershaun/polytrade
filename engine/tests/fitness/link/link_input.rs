@@ -2,16 +2,17 @@
 //! tape holds, whatever the full link queue dropped, and each drop is counted for its sender.
 
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::Duration;
 
 use engine::hot::ingress::IngressQueues;
 use engine::hot::spawn::{ControlQueueProducer, LinkQueueProducer, touched_input_ring};
 use engine::hot::strategy::{Registration, Strategy as EngineStrategy, StrategyCtx};
 use engine::link::{
-    Envelope, FrameGuard, LINK_MAX_DATAGRAM, LINK_MAX_SENDERS, LinkActor, LinkActorSetup, LinkBody,
-    LinkCounts, LinkCountsHandle, LinkDatagram, LinkFrame, LinkHash, LinkIdentity, LinkOrigin,
-    LinkPayload, OutboundLink, SenderCount, SequenceGate, TopicId, schema_hash_of_fields,
+    Envelope, FrameGuard, HistoryRing, LINK_MAX_DATAGRAM, LINK_MAX_SENDERS, LinkActor,
+    LinkActorSetup, LinkBody, LinkCounts, LinkCountsHandle, LinkDatagram, LinkFrame, LinkHash,
+    LinkIdentity, LinkOrigin, LinkPayload, OutboundLink, SenderCount, SequenceGate, TopicId,
+    schema_hash_of_fields,
 };
 use engine::msg::ids::{InstrumentId, QueueId};
 use engine::msg::inbound::{InboundMessage, MessageBody};
@@ -412,6 +413,7 @@ impl FloodedActor {
                 placement: SenderPlacement::Shared,
                 flush_period: Duration::from_millis(10),
                 counts: counts.clone(),
+                history: HistoryRing::new(NonZeroUsize::MIN, NonZeroUsize::MIN),
             },
             runtime.handle(),
         );

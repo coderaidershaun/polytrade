@@ -67,6 +67,8 @@ impl TopicId {
     pub const CATALOG_FEATURES: TopicId = TopicId(4);
     pub const LIFECYCLE: TopicId = TopicId(5);
     pub const LATENCY: TopicId = TopicId(6);
+    /// Recent event frames, sent once to a subscriber that names this topic.
+    pub const HISTORY: TopicId = TopicId(7);
     pub const FIRST_STRATEGY: TopicId = TopicId(16);
 
     /// Id of the strategy topic declared at `index`. The numbering lives here because the sites
