@@ -2,6 +2,7 @@
 //! file gave, in preflight, before anything spawns.
 
 use std::net::UdpSocket;
+use std::num::NonZeroUsize;
 
 use rtrb::{Consumer, RingBuffer};
 use tokio::runtime::Handle;
@@ -11,8 +12,8 @@ use crate::hot::sink::LinkSink;
 use crate::hot::spawn::{ControlQueueProducer, LinkQueueProducer};
 use crate::hot::strategy::Strategy;
 use crate::link::{
-    FrameGuard, LINK_NAME_LEN, LinkActor, LinkActorSetup, LinkCountsHandle, LinkHash, LinkIdentity,
-    OutboundLink, PeerFeed, TopicId, schema_hash_of_fields,
+    FrameGuard, HistoryRing, LINK_NAME_LEN, LinkActor, LinkActorSetup, LinkCountsHandle, LinkHash,
+    LinkIdentity, OutboundLink, PeerFeed, TopicId, schema_hash_of_fields,
 };
 use crate::msg::time::{DurationUs, EngineClock, wall_clock_now};
 use crate::msg::ui::LatencyReport;
@@ -156,6 +157,10 @@ pub(super) fn spawn_link_actor<P>(
         .map_or_else(Default::default, |link| {
             (link.on_controller_loss, link.controllers.clone())
         });
+    let history = start.config.link.as_ref().map_or_else(
+        || HistoryRing::new(NonZeroUsize::MIN, NonZeroUsize::MIN),
+        |link| HistoryRing::new(link.history_capacity(), link.history_per_flush()),
+    );
     LinkActor::spawn(
         LinkActorSetup {
             socket: bound.socket,
@@ -183,6 +188,7 @@ pub(super) fn spawn_link_actor<P>(
             placement: start.config.senders.placement,
             flush_period: start.config.senders.link_flush(),
             counts: LinkCountsHandle::new(),
+            history,
         },
         edge_runtime,
     )

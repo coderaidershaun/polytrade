@@ -12,8 +12,8 @@ mod wire;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use actor::{
-    AssertionVerdict, ControlPlane, LinkActor, LinkActorSetup, LinkCounts, LinkCountsHandle,
-    PeerFeed, RefusedAssertions,
+    AssertionVerdict, ControlPlane, HistoryRing, LinkActor, LinkActorSetup, LinkCounts,
+    LinkCountsHandle, PeerFeed, RefusedAssertions,
 };
 
 pub use control::{

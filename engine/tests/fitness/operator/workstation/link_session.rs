@@ -577,6 +577,7 @@ proptest! {
                     Delivery::Event(event) => model.apply_event(event),
                     Delivery::Catalog(_) => panic!("a feed frame produced a catalog"),
                     Delivery::Latency(_) => panic!("a feed frame produced a latency report"),
+                    Delivery::History(_) => panic!("a feed frame produced a history frame"),
                 }
             }
         }
@@ -860,6 +861,7 @@ impl Replica {
         match &delivery {
             Some(Delivery::Book(snapshot)) => self.model.apply_book(*snapshot),
             Some(Delivery::Event(event)) => self.model.apply_event(*event),
+            Some(Delivery::History(event)) => self.model.apply_history(*event),
             Some(Delivery::Catalog(_) | Delivery::Latency(_)) | None => {}
         }
         delivery

@@ -1,6 +1,6 @@
-//! The sending half of the link: it drains the UI rings and the latency reports to subscribers, and
-//! builds the lifecycle and catalog frames that each heartbeat repeats, so a late subscriber
-//! catches up.
+//! The sending half of the link: it drains the UI rings and the latency reports to subscribers,
+//! sends a late subscriber the recent events, and builds the lifecycle and catalog frames that each
+//! heartbeat repeats, so a late subscriber catches up.
 
 use std::net::SocketAddr;
 
@@ -16,7 +16,10 @@ use super::Actor;
 use crate::msg::run_state::{ControllerEpoch, RunState};
 
 impl Actor {
+    /// History goes first, so a live event recorded in this flush cannot evict a frame that its
+    /// replay is about to send.
     pub(super) fn flush_feeds(&mut self, now: LocalTs) {
+        self.send_history(now);
         while let Ok(outbound) = self.outbound.pop() {
             self.send(outbound.topic, LinkBody::Payload(outbound.payload), now);
         }
@@ -25,9 +28,25 @@ impl Actor {
         }
         while let Ok(event) = self.channels.events.pop() {
             self.send(TopicId::EVENTS, LinkBody::Event(event), now);
+            self.history.record(event);
         }
         while let Ok(report) = self.latency.pop() {
             self.send(TopicId::LATENCY, LinkBody::Latency(report), now);
+        }
+    }
+
+    fn send_history(&mut self, now: LocalTs) {
+        self.recipients.clear();
+        self.recipients
+            .extend(self.subscribers.naming(TopicId::HISTORY, now));
+        self.history.begin_flush(&self.recipients);
+        while let Some((address, event)) = self.history.next_frame() {
+            let len = self.encode(TopicId::HISTORY, LinkBody::History(event));
+            if self.try_transmit(address, len) {
+                self.counts.history_sent += 1;
+            } else {
+                self.counts.history_failed += 1;
+            }
         }
     }
 
@@ -137,12 +156,14 @@ impl Actor {
     /// Never waits, so a peer whose socket is full cannot stall the others. A dropped send is
     /// counted, and the far side sees it as a sequence gap.
     fn transmit(&mut self, address: SocketAddr, len: usize) {
-        if self
-            .socket
-            .try_send_to(&self.buffer[..len], address)
-            .is_err()
-        {
+        if !self.try_transmit(address, len) {
             self.counts.send_failed += 1;
         }
+    }
+
+    fn try_transmit(&self, address: SocketAddr, len: usize) -> bool {
+        self.socket
+            .try_send_to(&self.buffer[..len], address)
+            .is_ok()
     }
 }

@@ -63,6 +63,9 @@ struct InstrumentChart {
     buckets: BoundedHistory<ChartBucket>,
     fills: BoundedHistory<ChartFill>,
     is_gap_pending: bool,
+    /// The newest rotation known, live or from history. A history fill before it belongs to the
+    /// market that rotated away.
+    rotated_ts_us: Option<VenueTs>,
 }
 
 impl InstrumentChart {
@@ -72,7 +75,12 @@ impl InstrumentChart {
             buckets: BoundedHistory::new(bucket_capacity),
             fills: BoundedHistory::new(fill_capacity(bucket_capacity)),
             is_gap_pending: false,
+            rotated_ts_us: None,
         }
+    }
+
+    fn is_before_rotation(&self, at: VenueTs) -> bool {
+        self.rotated_ts_us.is_some_and(|rotated| at < rotated)
     }
 
     fn bank(&mut self, index: u64, mid_half_ticks: i64) {
@@ -146,7 +154,38 @@ impl ChartModel {
                 price,
                 ..
             } => self.bank_fill(instrument, event_ts_us, side, price),
-            UiEvent::Rotation { instrument, .. } => self.clear(instrument),
+            UiEvent::Rotation {
+                instrument,
+                event_ts_us,
+                ..
+            } => self.clear(instrument, event_ts_us),
+            _ => {}
+        }
+    }
+
+    /// An event the engine recorded before this session came. It can arrive after live frames
+    /// that are newer, so only its fills reach the chart, and a replayed rotation removes the
+    /// older fills instead of clearing what the live frames drew.
+    pub fn apply_history(&mut self, event: &UiEvent) {
+        match *event {
+            UiEvent::Fill {
+                instrument,
+                event_ts_us,
+                side,
+                price,
+                ..
+            } => {
+                let slot = instrument.0 as usize;
+                self.ensure_instruments(slot + 1);
+                if !self.charts[slot].is_before_rotation(event_ts_us) {
+                    self.bank_fill(instrument, event_ts_us, side, price);
+                }
+            }
+            UiEvent::Rotation {
+                instrument,
+                event_ts_us,
+                ..
+            } => self.forget_fills_before(instrument, event_ts_us),
             _ => {}
         }
     }
@@ -188,10 +227,32 @@ impl ChartModel {
         });
     }
 
-    fn clear(&mut self, instrument: InstrumentId) {
+    fn clear(&mut self, instrument: InstrumentId, rotated_ts_us: VenueTs) {
         let capacity = self.bucket_capacity;
         let Some(chart) = self.charts.get_mut(instrument.0 as usize) else { return };
+        let newest = chart
+            .rotated_ts_us
+            .map_or(rotated_ts_us, |held| held.max(rotated_ts_us));
         *chart = InstrumentChart::new(chart.tick_size, capacity);
+        chart.rotated_ts_us = Some(newest);
+    }
+
+    fn forget_fills_before(&mut self, instrument: InstrumentId, rotated_ts_us: VenueTs) {
+        let slot = instrument.0 as usize;
+        self.ensure_instruments(slot + 1);
+        let chart = &mut self.charts[slot];
+        if chart.is_before_rotation(rotated_ts_us) {
+            return;
+        }
+        chart.rotated_ts_us = Some(rotated_ts_us);
+        let Some(first_kept) = bucket_index(rotated_ts_us, self.spin_interval) else { return };
+        let mut kept = BoundedHistory::new(fill_capacity(self.bucket_capacity));
+        for fill in chart.fills.iter_oldest_first() {
+            if fill.index >= first_kept {
+                kept.push(*fill);
+            }
+        }
+        chart.fills = kept;
     }
 
     fn ensure_instruments(&mut self, len: usize) {

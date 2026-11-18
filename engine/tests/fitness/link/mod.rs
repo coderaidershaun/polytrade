@@ -3,6 +3,7 @@
 
 mod control_plane;
 mod controller;
+mod history;
 mod link_ingress;
 mod link_wire;
 mod loopback;

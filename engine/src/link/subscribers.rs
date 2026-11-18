@@ -76,6 +76,17 @@ impl SubscriberTable {
             .map(|entry| entry.address)
     }
 
+    /// The subscribers that name `topic` itself. A subscription to every topic does not count, so a
+    /// topic that is sent on request goes only to those who ask for it.
+    pub fn naming(&self, topic: TopicId, now: LocalTs) -> impl Iterator<Item = SocketAddr> + '_ {
+        self.entries
+            .iter()
+            .filter(move |entry| {
+                entry.expires_ts_us > now && entry.topics.topics().contains(&topic)
+            })
+            .map(|entry| entry.address)
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }

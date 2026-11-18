@@ -2,6 +2,7 @@
 //! This root file wires the receive path, the send path and the control plane to one heartbeat.
 
 mod control_plane;
+mod history;
 mod inbound;
 mod outbound;
 
@@ -32,6 +33,7 @@ use super::subscribers::{LINK_MAX_SUBSCRIBERS, SequenceGate, SubscriberTable};
 use inbound::PeerState;
 
 pub use control_plane::{AssertionVerdict, ControlPlane, RefusedAssertions};
+pub use history::HistoryRing;
 
 /// Catalog, lifecycle, staleness, control repair. 1s granularity for display state.
 const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(1);
@@ -123,6 +125,8 @@ pub struct LinkActorSetup {
     pub flush_period: Duration,
     /// Where the actor publishes its counts at each heartbeat.
     pub counts: LinkCountsHandle,
+    /// Made at start with its size from config. A late subscriber is sent what it holds.
+    pub history: HistoryRing,
 }
 
 pub struct LinkActor;
@@ -159,6 +163,12 @@ pub struct LinkCounts {
     pub refused_assertions: RefusedAssertions,
     /// Assertions of a listed controller at the top epoch.
     pub refused_epochs: u64,
+    /// History frames sent to a late subscriber.
+    pub history_sent: u64,
+    /// History frames whose send failed. Live frames go on.
+    pub history_failed: u64,
+    /// History frames evicted before their replay could send them.
+    pub history_skipped: u64,
 }
 
 /// The counts of the link actor as of its last heartbeat, for a reader on another thread.
@@ -209,6 +219,7 @@ struct Actor {
     announce_ticks: u64,
     counts: LinkCounts,
     published_counts: LinkCountsHandle,
+    history: HistoryRing,
 }
 
 impl Actor {
@@ -251,6 +262,7 @@ impl Actor {
             announce_ticks: 0,
             counts: LinkCounts::default(),
             published_counts: setup.counts,
+            history: setup.history,
         }
     }
 
@@ -299,6 +311,7 @@ impl Actor {
         self.check_peer_silence(now);
         self.counts.refused_assertions = self.control.refused_assertions();
         self.counts.refused_epochs = self.control.refused_epochs();
+        self.counts.history_skipped = self.history.skipped();
         self.published_counts.publish(self.counts);
         self.announce_ticks += 1;
         if self.announce_ticks.is_multiple_of(REPORT_TICKS) {
@@ -317,12 +330,14 @@ impl Actor {
             + counts.table_full_refused
             + counts.peer_silenced
             + counts.refused_assertions.total()
-            + counts.refused_epochs;
+            + counts.refused_epochs
+            + counts.history_failed
+            + counts.history_skipped;
         if total == 0 {
             return;
         }
         info!(
-            "link rejected[decode_failed={} gate_rejected={} topic_ignored={} send_failed={} receive_failed={} table_full_refused={} peer_silenced={} refused_assertions={} refused_epochs={}] gate{:?}",
+            "link rejected[decode_failed={} gate_rejected={} topic_ignored={} send_failed={} receive_failed={} table_full_refused={} peer_silenced={} refused_assertions={} refused_epochs={} history_failed={} history_skipped={}] gate{:?}",
             counts.decode_failed,
             counts.gate_rejected,
             counts.topic_ignored,
@@ -332,6 +347,8 @@ impl Actor {
             counts.peer_silenced,
             counts.refused_assertions.total(),
             counts.refused_epochs,
+            counts.history_failed,
+            counts.history_skipped,
             self.gate.counts()
         );
     }

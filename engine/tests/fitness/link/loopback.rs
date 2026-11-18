@@ -2,17 +2,19 @@
 //! the real actor with datagrams and read what it hands on and what it counts.
 
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use engine::hot::spawn::{ControlQueueProducer, LinkQueueProducer, touched_input_ring};
 use engine::link::{
-    LinkActor, LinkActorSetup, LinkCounts, LinkCountsHandle, LinkPayload, OutboundLink, TopicId,
+    HistoryRing, LinkActor, LinkActorSetup, LinkCounts, LinkCountsHandle, LinkPayload,
+    OutboundLink, TopicId,
 };
 use engine::msg::ids::QueueId;
 use engine::msg::inbound::{InboundMessage, MessageBody};
 use engine::msg::time::{DurationUs, EngineClock};
-use engine::msg::ui::LatencyReport;
 use engine::msg::ui::channel::ui_channel;
+use engine::msg::ui::{LatencyReport, UiEvent};
 use engine::runtime::config::{ControllerLoss, SenderPlacement};
 use engine::runtime::shutdown::RunStateHandles;
 use rtrb::RingBuffer;
@@ -25,11 +27,18 @@ pub(super) struct LoopbackActor {
     _runtime: tokio::runtime::Runtime,
     pub(super) address: SocketAddr,
     inbound: rtrb::Consumer<InboundMessage>,
+    /// The end of the event ring that the hot thread would push to.
+    pub(super) events: rtrb::Producer<UiEvent>,
     counts: LinkCountsHandle,
 }
 
 impl LoopbackActor {
     pub(super) fn start() -> Self {
+        let small = NonZeroUsize::new(8).expect("8 is not zero");
+        Self::start_with(HistoryRing::new(small, small))
+    }
+
+    pub(super) fn start_with(history: HistoryRing) -> Self {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
@@ -42,7 +51,9 @@ impl LoopbackActor {
         let address = socket.local_addr().expect("a bound socket has an address");
         let (producer, inbound) = touched_input_ring(64);
         let (marker_producer, _markers) = touched_input_ring(4);
-        let (_wiring, channels) = ui_channel();
+        let (_wiring, mut channels) = ui_channel();
+        let (events, event_ring) = RingBuffer::<UiEvent>::new(64);
+        channels.events = event_ring;
         let (_outbound_producer, outbound) = RingBuffer::<OutboundLink>::new(4);
         let (_latency_producer, latency) = RingBuffer::<LatencyReport>::new(4);
         let counts = LinkCountsHandle::new();
@@ -70,6 +81,7 @@ impl LoopbackActor {
                 placement: SenderPlacement::Shared,
                 flush_period: Duration::from_millis(10),
                 counts: counts.clone(),
+                history,
             },
             runtime.handle(),
         );
@@ -77,20 +89,26 @@ impl LoopbackActor {
             _runtime: runtime,
             address,
             inbound,
+            events,
             counts,
         }
     }
 
-    /// The counts of the actor once they reach `decode_failed` refusals, read at its heartbeat.
-    pub(super) fn counts_after(&self, decode_failed: u64) -> LinkCounts {
+    /// The counts of the actor once `is_reached` holds for them, read at its heartbeat.
+    pub(super) fn counts_when(&self, is_reached: impl Fn(&LinkCounts) -> bool) -> LinkCounts {
         for _ in 0..100 {
             let counts = self.counts.load();
-            if counts.decode_failed >= decode_failed {
+            if is_reached(&counts) {
                 return counts;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
         self.counts.load()
+    }
+
+    /// The counts of the actor once they reach `decode_failed` refusals, read at its heartbeat.
+    pub(super) fn counts_after(&self, decode_failed: u64) -> LinkCounts {
+        self.counts_when(|counts| counts.decode_failed >= decode_failed)
     }
 
     /// Each peer frame that the actor handed on, once at least `count` of them arrived.

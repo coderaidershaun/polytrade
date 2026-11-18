@@ -635,6 +635,15 @@ pub(super) fn arb_datagram() -> impl Strategy<Value = LinkDatagram> {
             ),
         (arb_envelope(TopicId::LATENCY), arb_latency_report())
             .prop_map(|(envelope, body)| LinkDatagram { envelope, body }),
+        (arb_envelope(TopicId::HISTORY), arb_event()).prop_map(|(envelope, body)| {
+            let LinkBody::Event(event) = body else {
+                unreachable!("the event generator draws events");
+            };
+            LinkDatagram {
+                envelope,
+                body: LinkBody::History(event),
+            }
+        }),
         (
             arb_envelope(TopicId(LINK_MAX_TOPICS as u16)),
             any::<i64>(),
@@ -1053,6 +1062,24 @@ pub(super) fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                     ages: [None; 3],
                     cells: [LatencyCell::EMPTY; LATENCY_REPORT_CELLS],
                     backlog_ema: None,
+                }),
+            },
+        ),
+        (
+            "history-fill",
+            LinkDatagram {
+                envelope: envelope(TopicId::HISTORY, 0x1012),
+                body: LinkBody::History(UiEvent::Fill {
+                    instrument: InstrumentId(0x0a0b),
+                    seq: 0x1112,
+                    event_ts_us: VenueTs::from_micros(1_700_000_000_001_018),
+                    quote_level: QuoteLevel::new(3),
+                    side: Side::Buy,
+                    price: Price::from_mantissa(65_987_650_000_000),
+                    qty: Qty::from_mantissa(750_000),
+                    commission: -512_000,
+                    commission_asset: AssetId(0x0c0d),
+                    liquidity: Some(Liquidity::Maker),
                 }),
             },
         ),

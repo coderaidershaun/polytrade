@@ -65,7 +65,7 @@ fn refusals() -> Vec<Refusal> {
     let other_strategy = LinkHash::of_name("strat-something-else");
     let drifted = LinkHash::of_fields(&["microprice", "mid", "imbalance"]);
     let book_bytes = encode(&book_datagram());
-    let unknown_topic = TopicId(TopicId::LATENCY.0 + 1);
+    let unknown_topic = TopicId(TopicId::HISTORY.0 + 1);
     let forged_field_count = LINK_MAX_FIELDS as u8 + 1;
     let forged_book_len = UI_BOOK_LEVELS as u16 + 1;
     let over_capacity = (UI_ORDER_SNAPSHOT_CAPACITY + 1) as u8;
