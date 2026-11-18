@@ -12,7 +12,8 @@ use anyhow::{Context, Result, bail};
 use engine::operator::relay::{WebConfig, serve};
 
 const USAGE: &str = "usage: polysim-web --strategy <strategy-id> --link <addr> [--link <addr>]... \
-                     [--token <token>] [--port <port>] [--bundle <dir>] [--mcp <url>]
+                     [--token <token>] [--port <port>] [--bundle <dir>] [--mcp <url>] \
+                     [--accept-tries <count>]
 
   --strategy  the trading engine's strategy id. Not carried on the wire: a receiver must already
               know it to compute the strategy hash its own frame guard checks
@@ -21,7 +22,10 @@ const USAGE: &str = "usage: polysim-web --strategy <strategy-id> --link <addr> [
   --token     the engine's link token, if its config sets one
   --port      the loopback port to serve on. 0 lets the OS pick (default 7879)
   --bundle    the folder `trunk build` wrote (default browser/dist)
-  --mcp       the polysim-mcp address the app descriptor advertises to Jet";
+  --mcp       the polysim-mcp address the app descriptor advertises to Jet
+  --accept-tries
+              how many accept errors in a row the server takes before it exits with 1. The
+              pause between tries doubles from 100 ms (default 3)";
 
 fn main() -> ExitCode {
     match run() {

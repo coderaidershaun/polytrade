@@ -69,6 +69,10 @@ impl WebServer {
         }
     }
 
+    pub(super) fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
     /// Returns the port named in the listening line, which must be the first line on stderr.
     pub(super) fn wait_until_listening(&self) -> u16 {
         let line = self

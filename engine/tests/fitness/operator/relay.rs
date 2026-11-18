@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::protocol::Message;
 
 use engine::link::{
-    FrameGuard, LINK_MAX_DATAGRAM, LinkBody, LinkDatagram, LinkDecodeError, LinkHash,
-    schema_hash_of_fields,
+    FrameGuard, LINK_MAX_DATAGRAM, LinkBody, LinkCredential, LinkDatagram, LinkDecodeError,
+    LinkHash, schema_hash_of_fields,
 };
 use engine::msg::time::LocalTs;
 use engine::operator::workstation::link::session::{LinkSession, LinkTarget};
@@ -27,11 +27,7 @@ const STRATEGY: &str = "web-test";
 /// The guard that the engine's link builds from its config: the token, the strategy, and the
 /// fields that its strategy declares.
 fn engine_guard(token: &str) -> FrameGuard {
-    FrameGuard {
-        token_hash: LinkHash::of_name(token),
-        strategy_hash: LinkHash::of_name(STRATEGY),
-        schema_hash: schema_hash_of_fields(&["mid"]),
-    }
+    LinkCredential::new(Some(token), STRATEGY).guard(schema_hash_of_fields(&["mid"]))
 }
 
 /// The session that the browser builds from the hello, as the workstation does.

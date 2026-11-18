@@ -19,7 +19,7 @@ use tokio_tungstenite::tungstenite::handshake::server::create_response_with_body
 use tokio_tungstenite::tungstenite::protocol::{Message, Role, WebSocketConfig};
 
 use super::{WebConfig, method_not_allowed, plain};
-use crate::link::{LINK_MAX_DATAGRAM, LinkHash};
+use crate::link::{LINK_MAX_DATAGRAM, LinkCredential};
 use crate::msg::relay::{PEER_KEY, RelayHello};
 
 pub(super) struct Relay {
@@ -55,7 +55,9 @@ impl Relay {
         let hello = RelayHello {
             strategy: config.strategy_id.as_str().to_owned(),
             peers: config.peers.clone(),
-            token_hash: LinkHash::of_name(config.token.as_deref().unwrap_or_default()).0,
+            token_hash: LinkCredential::new(config.token.as_deref(), config.strategy_id.as_str())
+                .token_hash()
+                .0,
         };
         Relay {
             peers: config.peers.clone(),

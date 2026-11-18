@@ -7,6 +7,6 @@ mod mcp_fleet;
 #[cfg(feature = "mcp")]
 mod mcp_http;
 #[cfg(feature = "mcp")]
-mod mcp_support;
+pub(super) mod mcp_support;
 #[cfg(feature = "mcp")]
 mod mcp_tools;

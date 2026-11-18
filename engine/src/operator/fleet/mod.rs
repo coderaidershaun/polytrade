@@ -15,6 +15,8 @@ use rmcp::ServiceExt;
 use rmcp::service::{QuitReason, ServerInitializeError};
 use tokio::signal::unix::{Signal, SignalKind, signal};
 
+use crate::operator::accept::AcceptTries;
+
 pub use error::FleetError;
 pub use reply::{EngineListing, EngineSummary, ModeChange, Started, Stopped};
 pub use supervisor::{Fleet, FleetTiming, StopOutcome};
@@ -57,6 +59,15 @@ pub enum StdinWatch {
     EndAtEof,
 }
 
+/// How the HTTP transport serves: its loopback port, whether stdin ends it, and how many accept
+/// errors in a row it takes before it stops taking new sessions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HttpSettings {
+    pub port: u16,
+    pub stdin_watch: StdinWatch,
+    pub accept_tries: AcceptTries,
+}
+
 /// Serves on stdin and stdout until the client hangs up or the process gets SIGTERM or SIGINT.
 /// Every engine this server started is stopped before it returns, whichever way the session ended.
 pub async fn serve_stdio(fleet: Fleet) -> ServeReport {
@@ -77,13 +88,19 @@ pub async fn serve_stdio(fleet: Fleet) -> ServeReport {
 /// gets SIGTERM or SIGINT, or until stdin closes when `stdin_watch` asks for that. Port 0 lets the
 /// operating system pick a free port, and the line the server prints on stderr once it listens
 /// names that port. Every session drives the same fleet, so an engine outlives the client that
-/// started it. Every engine this server started is stopped before it returns.
-pub async fn serve_http(fleet: Fleet, port: u16, stdin_watch: StdinWatch) -> ServeReport {
+/// started it. Past the cap of accept errors the server takes no new session and keeps its
+/// engines. Every engine this server started is stopped before it returns.
+pub async fn serve_http(fleet: Fleet, settings: HttpSettings) -> ServeReport {
+    let HttpSettings {
+        port,
+        stdin_watch,
+        accept_tries,
+    } = settings;
     serve_until_exit(fleet, |server| async move {
         match stdin_watch {
-            StdinWatch::Ignore => http::serve(server, port).await,
+            StdinWatch::Ignore => http::serve(server, port, accept_tries).await,
             StdinWatch::EndAtEof => tokio::select! {
-                result = http::serve(server, port) => result,
+                result = http::serve(server, port, accept_tries) => result,
                 result = http::wait_until_stdin_closes() => result,
             },
         }

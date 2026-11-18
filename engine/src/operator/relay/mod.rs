@@ -11,7 +11,6 @@ use std::convert::Infallible;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use http_body_util::Full;
 use hyper::body::{Bytes, Incoming};
@@ -20,17 +19,16 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 
 use crate::msg::relay::RELAY_PATH;
+use crate::operator::accept::{self, AcceptError};
 
 use bundle::Bundle;
 use guard::{Refusal, guard};
 use tab::Relay;
 
 pub use arguments::{ArgumentError, WebConfig};
-
-const ACCEPT_RETRY_PAUSE: Duration = Duration::from_millis(100);
 
 #[derive(Debug, thiserror::Error)]
 pub enum WebError {
@@ -50,6 +48,8 @@ pub enum WebError {
     },
     #[error("cannot listen for ctrl-c")]
     Signal(#[source] std::io::Error),
+    #[error(transparent)]
+    Accept(#[from] AcceptError),
 }
 
 struct Shared {
@@ -63,8 +63,9 @@ struct Shared {
 ///
 /// # Errors
 /// [`WebError::BundleMissing`] and [`WebError::BundleRead`] when the bundle cannot be loaded,
-/// [`WebError::Bind`] when the port is taken, and [`WebError::Signal`] when ctrl-c cannot be
-/// awaited.
+/// [`WebError::Bind`] when the port is taken, [`WebError::Signal`] when ctrl-c cannot be awaited,
+/// and [`WebError::Accept`] once accepts fail more times in a row than `--accept-tries` allows.
+/// The relay holds no state that outlives it, so it ends there and its process exits with 1.
 pub async fn serve(config: WebConfig) -> Result<(), WebError> {
     let bundle = Bundle::load(&config.bundle_dir, config.mcp_url.as_deref())?;
     let requested = SocketAddr::from((Ipv4Addr::LOCALHOST, config.port));
@@ -72,7 +73,7 @@ pub async fn serve(config: WebConfig) -> Result<(), WebError> {
         address: requested,
         source,
     };
-    let listener = TcpListener::bind(requested).await.map_err(bind_failed)?;
+    let mut listener = TcpListener::bind(requested).await.map_err(bind_failed)?;
     let address = listener.local_addr().map_err(bind_failed)?;
     let shared = Arc::new(Shared {
         bundle,
@@ -80,38 +81,25 @@ pub async fn serve(config: WebConfig) -> Result<(), WebError> {
         port: address.port(),
     });
     eprintln!("polysim-web: listening on http://{address}/");
+    let accepting = accept::each_connection(&mut listener, config.accept_tries, |stream| {
+        serve_connection(stream, Arc::clone(&shared));
+    });
     tokio::select! {
-        () = accept_forever(listener, shared) => Ok(()),
+        error = accepting => Err(error.into()),
         signalled = tokio::signal::ctrl_c() => signalled.map_err(WebError::Signal),
     }
 }
 
-// SMELL: the MCP server's HTTP listener keeps its own copy of this accept loop and retry pause, so
-// a fix to one leaves the other behind.
-async fn accept_forever(listener: TcpListener, shared: Arc<Shared>) {
-    loop {
-        let stream = match listener.accept().await {
-            Ok((stream, _peer)) => stream,
-            Err(error) => {
-                // An accept error usually means the process is out of file descriptors, which
-                // passes once one is freed. Ending the server over it would drop every tab, and
-                // retrying at once would keep a core busy until then.
-                eprintln!("polysim-web: cannot accept a connection: {error}");
-                tokio::time::sleep(ACCEPT_RETRY_PAUSE).await;
-                continue;
-            }
-        };
-        let shared = Arc::clone(&shared);
-        tokio::spawn(async move {
-            let service = service_fn(move |request| respond(Arc::clone(&shared), request));
-            let connection = http1::Builder::new()
-                .serve_connection(TokioIo::new(stream), service)
-                .with_upgrades();
-            // A client that hangs up mid-reply ends its connection with an error, which is routine
-            // and leaves nothing to clean up.
-            connection.await.ok();
-        });
-    }
+fn serve_connection(stream: TcpStream, shared: Arc<Shared>) {
+    tokio::spawn(async move {
+        let service = service_fn(move |request| respond(Arc::clone(&shared), request));
+        let connection = http1::Builder::new()
+            .serve_connection(TokioIo::new(stream), service)
+            .with_upgrades();
+        // A client that hangs up mid-reply ends its connection with an error, which is routine
+        // and leaves nothing to clean up.
+        connection.await.ok();
+    });
 }
 
 async fn respond(

@@ -4,6 +4,7 @@ use std::net::{AddrParseError, SocketAddr};
 use std::num::ParseIntError;
 use std::path::PathBuf;
 
+use crate::operator::accept::AcceptTries;
 use crate::runtime::config::{ConfigError, StrategyId};
 
 const DEFAULT_PORT: u16 = 7879;
@@ -18,6 +19,7 @@ pub struct WebConfig {
     /// Engines a tab can move between. Each tab follows one at a time.
     pub(super) peers: Vec<SocketAddr>,
     pub(super) token: Option<Box<str>>,
+    pub(super) accept_tries: AcceptTries,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -42,6 +44,12 @@ pub enum ArgumentError {
         #[source]
         source: ParseIntError,
     },
+    #[error("--accept-tries {raw:?} is not a count from 1 to 4294967295")]
+    AcceptTries {
+        raw: String,
+        #[source]
+        source: ParseIntError,
+    },
     #[error("unknown argument {argument:?}")]
     Unknown { argument: String },
     #[error("--strategy is required")]
@@ -55,7 +63,8 @@ impl WebConfig {
     ///
     /// # Errors
     /// [`ArgumentError::MissingValue`] when a flag ends the arguments, [`ArgumentError::Link`],
-    /// [`ArgumentError::Strategy`] and [`ArgumentError::Port`] for a value that does not parse,
+    /// [`ArgumentError::Strategy`], [`ArgumentError::Port`] and [`ArgumentError::AcceptTries`] for
+    /// a value that does not parse,
     /// [`ArgumentError::Unknown`] for a flag nobody reads, and [`ArgumentError::MissingStrategy`]
     /// or [`ArgumentError::NoLink`] when the engine is not named.
     pub fn parse(
@@ -67,6 +76,7 @@ impl WebConfig {
         let mut port = DEFAULT_PORT;
         let mut bundle_dir = PathBuf::from(DEFAULT_BUNDLE);
         let mut mcp_url = None;
+        let mut accept_tries = AcceptTries::default();
         while let Some(flag) = arguments.next() {
             match flag.as_str() {
                 "--help" | "-h" => return Ok(None),
@@ -93,6 +103,12 @@ impl WebConfig {
                 }
                 "--bundle" => bundle_dir = PathBuf::from(take_value(&mut arguments, "--bundle")?),
                 "--mcp" => mcp_url = Some(take_value(&mut arguments, "--mcp")?),
+                "--accept-tries" => {
+                    let raw = take_value(&mut arguments, "--accept-tries")?;
+                    accept_tries = raw
+                        .parse()
+                        .map_err(|source| ArgumentError::AcceptTries { raw, source })?;
+                }
                 _ => {
                     return Err(ArgumentError::Unknown {
                         argument: redact_value(flag),
@@ -111,6 +127,7 @@ impl WebConfig {
             strategy_id,
             peers,
             token,
+            accept_tries,
         }))
     }
 }
