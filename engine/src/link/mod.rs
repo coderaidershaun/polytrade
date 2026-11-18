@@ -4,6 +4,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod actor;
 mod control;
+mod credential;
 mod envelope;
 mod feed;
 mod frame;
@@ -21,6 +22,7 @@ pub use control::{
     CatalogFeature, CatalogInstrument, LINK_MAX_TOPICS, Lifecycle, RunPhase, Subscribe, TopicSet,
     TopicSetError,
 };
+pub use credential::LinkCredential;
 pub use envelope::{
     Envelope, FrameGuard, LINK_MAGIC, LINK_MAX_DATAGRAM, LINK_NAME_LEN, LinkDecodeError, LinkHash,
     LinkIdentity, TopicId, WireName,

@@ -4,18 +4,19 @@
 //!
 //! ```text
 //! cargo run --release --features mcp --bin polysim-mcp -- \
-//!     [--root <path>] [--engines <dir>] [--http <port> [--watch-stdin]]
+//!     [--root <path>] [--engines <dir>] [--http <port> [--watch-stdin] [--accept-tries <count>]]
 //! ```
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result, bail};
+use engine::operator::accept::AcceptTries;
 use engine::operator::fleet::{
-    Fleet, FleetTiming, StdinWatch, StopOutcome, serve_http, serve_stdio,
+    Fleet, FleetTiming, HttpSettings, StdinWatch, StopOutcome, serve_http, serve_stdio,
 };
 
-const USAGE: &str =
-    "usage: polysim-mcp [--root <path>] [--engines <dir>] [--http <port> [--watch-stdin]]
+const USAGE: &str = "usage: polysim-mcp [--root <path>] [--engines <dir>] \
+                     [--http <port> [--watch-stdin] [--accept-tries <count>]]
 
   --root         the repo checkout whose strategies/ folder lists the engines. Defaults to the
                  current directory
@@ -24,7 +25,10 @@ const USAGE: &str =
   --http         serve MCP at http://127.0.0.1:<port>/mcp instead of stdio, so many clients share
                  one server and its engines. 0 lets the OS pick the port
   --watch-stdin  with --http only: when stdin closes, stop every engine this server started and
-                 exit, so a parent holding the stdin pipe open takes the server down with it";
+                 exit, so a parent holding the stdin pipe open takes the server down with it
+  --accept-tries with --http only: how many accept errors in a row the server takes before it
+                 takes no new session. Its engines keep running until it is told to exit. The
+                 pause between tries doubles from 100 ms (default 3)";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Arguments {
@@ -36,7 +40,7 @@ struct Arguments {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Transport {
     Stdio,
-    Http { port: u16, stdin_watch: StdinWatch },
+    Http(HttpSettings),
 }
 
 fn main() -> ExitCode {
@@ -70,7 +74,7 @@ fn run() -> Result<()> {
     let report = runtime.block_on(async {
         match arguments.transport {
             Transport::Stdio => serve_stdio(fleet).await,
-            Transport::Http { port, stdin_watch } => serve_http(fleet, port, stdin_watch).await,
+            Transport::Http(settings) => serve_http(fleet, settings).await,
         }
     });
     // Reading stdin blocks a thread that cannot be cancelled, so a plain drop of the runtime would
@@ -87,6 +91,7 @@ fn parse_arguments(mut arguments: impl Iterator<Item = String>) -> Result<Option
     let mut engines = None;
     let mut port = None;
     let mut stdin_watch = StdinWatch::Ignore;
+    let mut accept_tries = None;
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--help" | "-h" => return Ok(None),
@@ -115,15 +120,28 @@ fn parse_arguments(mut arguments: impl Iterator<Item = String>) -> Result<Option
                     format!("--http needs a port from 0 to 65535, got {value:?}")
                 })?);
             }
+            "--accept-tries" => {
+                let value = value_of("a count")?;
+                accept_tries = Some(value.parse::<AcceptTries>().with_context(|| {
+                    format!("--accept-tries needs a count from 1 to 4294967295, got {value:?}")
+                })?);
+            }
             _ => bail!("unknown argument {argument:?}\n\n{USAGE}"),
         }
     }
     let transport = match (port, stdin_watch) {
-        (Some(port), stdin_watch) => Transport::Http { port, stdin_watch },
-        (None, StdinWatch::Ignore) => Transport::Stdio,
+        (Some(port), stdin_watch) => Transport::Http(HttpSettings {
+            port,
+            stdin_watch,
+            accept_tries: accept_tries.unwrap_or_default(),
+        }),
         (None, StdinWatch::EndAtEof) => bail!(
             "--watch-stdin needs --http: a stdio server already ends when stdin closes\n\n{USAGE}"
         ),
+        (None, StdinWatch::Ignore) if accept_tries.is_some() => {
+            bail!("--accept-tries needs --http: a stdio server accepts no connections\n\n{USAGE}")
+        }
+        (None, StdinWatch::Ignore) => Transport::Stdio,
     };
     Ok(Some(Arguments {
         root,

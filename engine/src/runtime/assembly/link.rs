@@ -12,8 +12,8 @@ use crate::hot::sink::LinkSink;
 use crate::hot::spawn::{ControlQueueProducer, LinkQueueProducer};
 use crate::hot::strategy::Strategy;
 use crate::link::{
-    FrameGuard, LINK_NAME_LEN, LinkActor, LinkActorSetup, LinkCountsHandle, LinkHash, LinkIdentity,
-    OutboundLink, PeerFeed, TopicId, schema_hash_of_fields,
+    FrameGuard, LINK_NAME_LEN, LinkActor, LinkActorSetup, LinkCountsHandle, LinkCredential,
+    LinkHash, LinkIdentity, OutboundLink, PeerFeed, TopicId, schema_hash_of_fields,
 };
 use crate::msg::time::{DurationUs, EngineClock, wall_clock_now};
 use crate::msg::ui::LatencyReport;
@@ -90,21 +90,16 @@ pub(super) fn link_bring_up<P>(
             source,
         })?;
 
-    let token = link_config.token.as_deref().unwrap_or_default();
+    let credential =
+        LinkCredential::new(link_config.token.as_deref(), identity.strategy_id.as_str());
     Ok(Some(BoundLink {
         socket,
-        identity: LinkIdentity {
-            token_hash: LinkHash::of_name(token),
-            strategy_hash: LinkHash::of_name(identity.strategy_id.as_str()),
-            sender_te_hash: LinkHash::of_name(&identity.to_string()),
+        identity: credential.identity(
+            LinkHash::of_name(&identity.to_string()),
             // Wall-clock boot; restarted peer's seq=0 reads as restart, not stale stream.
-            boot_ts_us: wall_clock_now().to_peer(),
-        },
-        guard: FrameGuard {
-            token_hash: LinkHash::of_name(token),
-            strategy_hash: LinkHash::of_name(identity.strategy_id.as_str()),
-            schema_hash: schema_hash_of_fields(strategy.link_fields()),
-        },
+            wall_clock_now().to_peer(),
+        ),
+        guard: credential.guard(schema_hash_of_fields(strategy.link_fields())),
         peers,
         topic_count: TopicId::space_len(topics.len()),
         feature_count,

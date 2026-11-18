@@ -10,6 +10,10 @@
 #[cfg_attr(target_arch = "wasm32", warn(dead_code))]
 pub mod workstation;
 
+/// Both servers take their connections through it, so it builds with either of their features.
+#[cfg(any(feature = "web", feature = "mcp"))]
+pub mod accept;
+
 /// Feature-gated, so a headless engine never builds the agent protocol stack.
 #[cfg(feature = "mcp")]
 pub mod fleet;
