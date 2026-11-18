@@ -5,6 +5,7 @@ mod control_plane;
 mod controller;
 mod link_ingress;
 mod link_wire;
+mod loopback;
 mod marker_queue;
 mod wire_digest;
 mod wire_frames;

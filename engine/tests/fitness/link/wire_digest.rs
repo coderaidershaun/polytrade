@@ -1,34 +1,28 @@
 //! The wire carries a digest of its own layout. Each frame kind round-trips bit for bit, each
 //! refused frame names its own cause, and the bytes of a frame change only with the digest.
 
-use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
-use std::time::Duration;
+use std::net::{Ipv4Addr, UdpSocket};
 
 use engine::hot::exec::{CloseReason, OrderState};
-use engine::hot::spawn::{ControlQueueProducer, LinkQueueProducer, touched_input_ring};
 use engine::link::{
-    LINK_LAYOUT, LINK_MAGIC, LINK_MAX_FIELDS, LinkActor, LinkActorSetup, LinkBody, LinkCounts,
-    LinkCountsHandle, LinkDatagram, LinkDecodeError, LinkHash, LinkPayload, OutboundLink, TopicId,
+    LINK_LAYOUT, LINK_MAGIC, LINK_MAX_FIELDS, LinkBody, LinkDatagram, LinkDecodeError, LinkHash,
+    LinkPayload, TopicId,
 };
-use engine::msg::ids::{InstrumentId, QueueId};
-use engine::msg::inbound::{InboundMessage, MessageBody};
+use engine::msg::ids::InstrumentId;
 use engine::msg::persist::FeatureId;
-use engine::msg::time::{DurationUs, EngineClock, VenueTs};
-use engine::msg::ui::channel::ui_channel;
+use engine::msg::time::VenueTs;
 use engine::msg::ui::{
-    LatencyReport, UI_BOOK_LEVELS, UI_ORDER_SNAPSHOT_CAPACITY, UI_ORDER_SNAPSHOT_MAX_TOTAL,
-    UiEvent, UiWorkingOrder,
+    UI_BOOK_LEVELS, UI_ORDER_SNAPSHOT_CAPACITY, UI_ORDER_SNAPSHOT_MAX_TOTAL, UiEvent,
+    UiWorkingOrder,
 };
-use engine::runtime::config::{ControllerLoss, SenderPlacement};
-use engine::runtime::shutdown::RunStateHandles;
 use proptest::prelude::*;
 use proptest::test_runner::{Config, TestRunner};
-use rtrb::RingBuffer;
 
+use super::loopback::LoopbackActor;
 use super::wire_frames::{
     FRAMES, FRAMES_PATH, SCHEMA, STRATEGY, TOKEN, arb_datagram, arb_f64_bits, book_datagram,
-    decode, encode, envelope, event_datagram, first_difference, from_hex, golden_frames, guard,
-    identity, order_snapshot, payload_datagram, round_trip, to_hex, working_order,
+    decode, encode, envelope, event_datagram, first_difference, from_hex, golden_frames,
+    order_snapshot, payload_datagram, round_trip, to_hex, working_order,
 };
 
 /// The envelope that opens each datagram. The topic is the field after the magic and the layout
@@ -506,98 +500,6 @@ fn changed_frame_bytes_need_a_changed_digest() {
             std::fs::write(FRAMES_PATH, text).expect("the golden file is writable")
         }
         Golden::Red(why) => panic!("{why}"),
-    }
-}
-
-/// A link actor of this build on a loopback socket, with no hot thread: what it hands on stays in
-/// the input ring that the test holds.
-struct LoopbackActor {
-    _runtime: tokio::runtime::Runtime,
-    address: SocketAddr,
-    inbound: rtrb::Consumer<InboundMessage>,
-    counts: LinkCountsHandle,
-}
-
-impl LoopbackActor {
-    fn start() -> Self {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(1)
-            .enable_all()
-            .build()
-            .expect("a test runtime builds");
-        let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("a loopback port binds");
-        socket
-            .set_nonblocking(true)
-            .expect("the socket turns non-blocking");
-        let address = socket.local_addr().expect("a bound socket has an address");
-        let (producer, inbound) = touched_input_ring(64);
-        let (marker_producer, _markers) = touched_input_ring(4);
-        let (_wiring, channels) = ui_channel();
-        let (_outbound_producer, outbound) = RingBuffer::<OutboundLink>::new(4);
-        let (_latency_producer, latency) = RingBuffer::<LatencyReport>::new(4);
-        let counts = LinkCountsHandle::new();
-        LinkActor::spawn(
-            LinkActorSetup {
-                socket,
-                identity: identity(),
-                guard: guard(),
-                peers: Vec::new(),
-                on_controller_loss: ControllerLoss::default(),
-                controllers: Vec::new(),
-                inbound: LinkQueueProducer::new(producer, QueueId::new(1).expect("queue 1 exists")),
-                markers: ControlQueueProducer::new(
-                    marker_producer,
-                    QueueId::new(2).expect("queue 2 exists"),
-                ),
-                outbound,
-                channels,
-                latency,
-                control: RunStateHandles::new().desired_writer,
-                clock: EngineClock::start(),
-                spin_interval: DurationUs::from_micros(1_000_000),
-                topic_count: TopicId::space_len(1),
-                feature_count: 0,
-                placement: SenderPlacement::Shared,
-                flush_period: Duration::from_millis(10),
-                counts: counts.clone(),
-            },
-            runtime.handle(),
-        );
-        Self {
-            _runtime: runtime,
-            address,
-            inbound,
-            counts,
-        }
-    }
-
-    /// The counts of the actor once they reach `decode_failed` refusals, read at its heartbeat.
-    fn counts_after(&self, decode_failed: u64) -> LinkCounts {
-        for _ in 0..100 {
-            let counts = self.counts.load();
-            if counts.decode_failed >= decode_failed {
-                return counts;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        self.counts.load()
-    }
-
-    /// Each peer frame that the actor handed on, once at least `count` of them arrived.
-    fn peer_frames(&mut self, count: usize) -> Vec<LinkPayload> {
-        let mut frames = Vec::new();
-        for _ in 0..100 {
-            while let Ok(message) = self.inbound.pop() {
-                if let MessageBody::Link(frame) = message.body {
-                    frames.push(frame.payload);
-                }
-            }
-            if frames.len() >= count {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        frames
     }
 }
 
