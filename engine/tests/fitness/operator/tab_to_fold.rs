@@ -15,8 +15,8 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 use engine::hot::spawn::{ControlQueueProducer, LinkQueueProducer, touched_input_ring};
 use engine::link::{
-    LinkActor, LinkActorSetup, LinkBody, LinkCountsHandle, LinkCredential, LinkDatagram, LinkHash,
-    OutboundLink, Subscribe, TopicId, schema_hash_of_fields,
+    Envelope, LinkActor, LinkActorSetup, LinkBody, LinkCountsHandle, LinkCredential, LinkDatagram,
+    LinkHash, OutboundLink, Subscribe, TopicId, schema_hash_of_fields,
 };
 use engine::msg::ids::QueueId;
 use engine::msg::inbound::{InboundMessage, MessageBody};
@@ -94,18 +94,22 @@ async fn session_of_tab(tab: &mut Tab, now: LocalTs) -> LinkSession {
     LinkSession::new(target, now).expect("the hello names at least one peer")
 }
 
-/// The subscribe that the session holds for `now`, as the engine's guard decodes it.
-fn decoded(bytes: &[u8]) -> Subscribe {
+/// A subscribe of the session, as the engine's guard decodes it.
+fn decoded_frame(bytes: &[u8]) -> (Envelope, Subscribe) {
     let guard = LinkCredential::new(Some(TOKEN), STRATEGY).guard(schema_hash_of_fields(&[]));
     let datagram = LinkDatagram::decode(bytes, &guard).expect("the engine's guard admits it");
     match datagram.body {
-        LinkBody::Subscribe(subscribe) => subscribe,
+        LinkBody::Subscribe(subscribe) => (datagram.envelope, subscribe),
         other => panic!("a session sends subscribes only, got {other:?}"),
     }
 }
 
+fn decoded(bytes: &[u8]) -> Subscribe {
+    decoded_frame(bytes).1
+}
+
 /// Sends the subscribe that is due at `now` through the tab, and returns it as the engine reads it.
-async fn send_due(session: &mut LinkSession, tab: &mut Tab, now: LocalTs) -> Subscribe {
+async fn send_due(session: &mut LinkSession, tab: &mut Tab, now: LocalTs) -> (Envelope, Subscribe) {
     let bytes = session
         .subscribe_due(now)
         .expect("a subscribe is due")
@@ -113,7 +117,7 @@ async fn send_due(session: &mut LinkSession, tab: &mut Tab, now: LocalTs) -> Sub
     within(tab.send(Message::binary(bytes.clone())))
         .await
         .expect("the subscribe is sent");
-    decoded(&bytes)
+    decoded_frame(&bytes)
 }
 
 /// Hands each datagram that the tab receives to the session, until the verdict of the session
@@ -267,7 +271,12 @@ async fn start_then_stop_from_a_tab_parks_the_fold() {
     let mut tab = open_tab(port, 0).await;
     let mut session = session_of_tab(&mut tab, SESSION_BOOT).await;
 
-    let watching = send_due(&mut session, &mut tab, SESSION_BOOT).await;
+    let (envelope, watching) = send_due(&mut session, &mut tab, SESSION_BOOT).await;
+    assert_eq!(
+        (envelope.topic, envelope.seq, envelope.boot_ts_us),
+        (TopicId::SUBSCRIBE, 1, SESSION_BOOT.to_peer()),
+        "the first subscribe is number 1, and the first clock reading is the boot stamp"
+    );
     assert_eq!(
         watching.desired_epoch,
         ControllerEpoch::ZERO,
@@ -295,12 +304,16 @@ async fn start_then_stop_from_a_tab_parks_the_fold() {
         "one subscribe in each 2 s"
     );
     let refresh = SESSION_BOOT + SUBSCRIBE_INTERVAL;
-    send_due(&mut session, &mut tab, refresh).await;
+    let (envelope, _) = send_due(&mut session, &mut tab, refresh).await;
+    assert_eq!(
+        envelope.seq, 2,
+        "each subscribe numbers itself above the last"
+    );
 
     let start_at = refresh + DurationUs::from_millis(500);
     assert!(session.subscribe_due(start_at).is_none());
     session.assert_run_state(RunState::Running);
-    let start = send_due(&mut session, &mut tab, start_at).await;
+    let (_, start) = send_due(&mut session, &mut tab, start_at).await;
     assert_eq!(
         (start.desired_state, start.desired_epoch.get()),
         (RunState::Running, 5)
@@ -316,7 +329,7 @@ async fn start_then_stop_from_a_tab_parks_the_fold() {
     let stop_at = start_at + DurationUs::from_millis(500);
     session.assert_run_state(RunState::Idle);
     assert_eq!(session.status(stop_at).control, ControlVerdict::Pending);
-    let stop = send_due(&mut session, &mut tab, stop_at).await;
+    let (_, stop) = send_due(&mut session, &mut tab, stop_at).await;
     assert_eq!(
         (stop.desired_state, stop.desired_epoch.get()),
         (RunState::Idle, 6)
@@ -363,7 +376,7 @@ async fn start_then_stop_from_a_tab_parks_the_fold() {
     let mut second_tab = open_tab(port, 0).await;
     let mut second = session_of_tab(&mut second_tab, LocalTs::from_micros(1)).await;
     second.assert_run_state(RunState::Running);
-    let lower = send_due(&mut second, &mut second_tab, LocalTs::from_micros(1)).await;
+    let (_, lower) = send_due(&mut second, &mut second_tab, LocalTs::from_micros(1)).await;
     assert_eq!(lower.desired_epoch.get(), 2);
     assert_eq!(
         read_until(
