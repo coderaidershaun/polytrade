@@ -462,6 +462,17 @@ pub struct LinkedEngine {
 }
 
 impl LinkedEngine {
+    /// The writer of the desired state of this engine, for a link actor that a test runs.
+    ///
+    /// # Panics
+    /// On a second call, or after [`LinkedEngine::control_plane`]: the desired state has one writer.
+    #[cfg(feature = "web")]
+    pub fn desired_writer(&mut self) -> DesiredWriter {
+        self.desired_writer
+            .take()
+            .expect("one writer of the desired state for each linked engine")
+    }
+
     /// The control plane over the run state of this engine, as the link actor holds it, taking
     /// assertions from `controllers` only.
     ///

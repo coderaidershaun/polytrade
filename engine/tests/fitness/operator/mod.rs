@@ -8,6 +8,8 @@ mod fleet;
 #[cfg(feature = "web")]
 mod relay;
 #[cfg(feature = "web")]
+mod tab_to_fold;
+#[cfg(feature = "web")]
 mod web_http;
 mod workstation;
 
