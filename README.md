@@ -107,7 +107,13 @@ The key `sources:` has no default. It lists one source or more. Each item holds 
 | `queues.timer_capacity` | the spins in one `engine.drain_deadline_ms`, and 16 at least | Spin ticks that the timer ring holds. A full ring halts the engine. Greater than 0. |
 | `queues.link_capacity` | `1024` | Frames from peer engines that the link input ring holds. A full ring drops the frame and counts it. Greater than 0. |
 | `queues.execution_capacity` | the capacity of the command lane: 1,024 plus the spins in 30 s | Events of the execution edge that its input ring holds. A full ring halts the engine. Greater than 0. |
+| `queues.control_capacity` | `16` | Run-control markers that the control ring from the link actor to the hot thread holds. A full ring drops the marker and counts it, and the link actor pushes the pending marker again at its next heartbeat of 1 s. Greater than 0. |
 | `persistence.seal_try_limit` | the spins in one `engine.drain_deadline_ms` | Tries of a waiting seal, at the request and at each spin, before quoting halts with the reason "persistence seal not accepted". 1 or more. |
+| `persistence.seal_interval_spins` | the spins in 300 s at `engine.spin_interval_us` | The spins of message time between two seals of each open tape file. The hot thread asks for each seal, so a replay seals at the same borders as its run. 1 or more. |
+| `link.controllers` | empty | The IP addresses, with no port, whose run assertions (START and STOP) the engine takes. An engine with an empty list takes no assertion, and its start says so in one line. A tab asserts from the host of `polysim-web`, so each shipped config lists `127.0.0.1`. |
+| `link.sender_rate_per_sec` | `queues.link_capacity` | The peer frames that one source address can send in each heartbeat of 1 s. The link actor refuses each frame above it and counts it for that address. 1 or more. |
+| `link.history_capacity` | `300000` | The event frames that the link actor keeps for a tab that opens late: five minutes at 1,000 frames a second. The ring is made at start. Greater than 0. |
+| `link.history_per_flush` | `128` | The history frames that one flush sends to a late tab, so the replay never delays the live frames. Greater than 0. |
 | `logging.dir` | `./logs` | The folder of the log files in a release build. A debug build logs to stderr. |
 | `logging.ring_capacity` | `8192` | Records that each log lane of a thread and the strategy lane hold before they drop. |
 | `logging.drain_deadline_ms` | `2000` | How long the log drain writes at shutdown. It must be below `engine.drain_deadline_ms`, or the start is refused. |
