@@ -123,6 +123,9 @@ pub struct HotLoop {
 
 impl HotLoop {
     /// Steps the driver until a fatal stops it at once, or a drain request finds every queue empty.
+    /// The queues are read once more after the request is seen: a producer pushes and then
+    /// requests the drain, so its last push can land between an empty read and the request. The
+    /// flag is stored with Release and loaded with Acquire, so the read after it sees each push.
     fn run(mut self) {
         loop {
             if self.fatal.is_tripped() {
@@ -130,7 +133,11 @@ impl HotLoop {
             }
             match self.driver.step() {
                 Step::Folded => {}
-                Step::Idle if self.drain.is_requested() => return,
+                Step::Idle if self.drain.is_requested() => {
+                    if self.driver.step() == Step::Idle {
+                        return;
+                    }
+                }
                 Step::Idle => match self.idle {
                     IdleWait::Spin => std::hint::spin_loop(),
                     IdleWait::Park(nap) => self.driver.park(nap),
