@@ -298,15 +298,21 @@ impl LinkQueueProducer {
 
     /// Refuses a frame of a sender above its rate, and drops a frame that finds the ring full; each
     /// is counted for `from`.
-    pub fn push(&mut self, from: SocketAddr, message: InboundMessage) {
+    pub fn push(&mut self, from: SocketAddr, message: InboundMessage) -> LinkPush {
         let slot = match self.senders.admit(from, self.sender_rate) {
             Ok(slot) => slot,
-            Err(refused) => return self.warn_over_rate(from, refused),
+            Err(refused) => return LinkPush::OverRate { refused },
         };
         if self.producer.push(message).is_err() {
             self.senders.count_queue_full(slot);
             self.count_drop();
+            return LinkPush::QueueFull;
         }
+        LinkPush::Queued
+    }
+
+    pub fn sender_rate(&self) -> NonZeroU32 {
+        self.sender_rate
     }
 
     /// Each sender gets its whole rate again. The link actor calls it at each heartbeat.
@@ -323,18 +329,6 @@ impl LinkQueueProducer {
         &self.senders
     }
 
-    /// Warns at the 1st, 2nd, 4th, 8th refusal of one sender and so on. The link actor's task
-    /// calls it, never the hot thread, so a text line may carry the address.
-    #[cold]
-    fn warn_over_rate(&self, from: SocketAddr, refused: u64) {
-        if refused.is_power_of_two() {
-            crate::warn!(
-                "link sender {from} above its rate of {} frames a heartbeat — refused {refused} frames",
-                self.sender_rate
-            );
-        }
-    }
-
     /// Warns at the 1st, 2nd, 4th, 8th drop and so on, so a flood shows in the log without filling
     /// it.
     #[cold]
@@ -349,6 +343,19 @@ impl LinkQueueProducer {
             );
         }
     }
+}
+
+/// What became of one peer frame at the link queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkPush {
+    Queued,
+    /// Dropped, because the ring was full.
+    QueueFull,
+    /// Refused, because its sender was above its rate. `refused` counts the refusals of that
+    /// sender so far.
+    OverRate {
+        refused: u64,
+    },
 }
 
 /// The write end of the control queue, which holds run-control markers only. A full ring drops the

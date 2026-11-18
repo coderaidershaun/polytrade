@@ -4,6 +4,7 @@
 use std::io;
 use std::net::SocketAddr;
 
+use crate::hot::spawn::LinkPush;
 use crate::msg::inbound::{InboundMessage, MessageBody, MessageHeader};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{DurationUs, LocalTs};
@@ -60,7 +61,9 @@ impl Actor {
             },
             body: MessageBody::Link(frame),
         };
-        self.inbound.push(from, message);
+        if let LinkPush::OverRate { refused } = self.inbound.push(from, message) {
+            self.on_over_rate(from, refused);
+        }
     }
 
     fn on_subscribe(&mut self, from: SocketAddr, subscribe: Subscribe, now: LocalTs) {
@@ -117,6 +120,17 @@ impl Actor {
             "link rejected {} datagrams (latest: {error})",
             self.counts.decode_failed
         );
+    }
+
+    /// Warns at the 1st, 2nd, 4th, 8th refusal of one sender and so on.
+    #[cold]
+    fn on_over_rate(&self, from: SocketAddr, refused: u64) {
+        if refused.is_power_of_two() {
+            warn!(
+                "link sender {from} above its rate of {} frames a heartbeat — refused {refused} frames",
+                self.inbound.sender_rate()
+            );
+        }
     }
 
     #[cold]

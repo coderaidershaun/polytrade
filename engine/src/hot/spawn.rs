@@ -15,7 +15,8 @@ use crate::runtime::pin::{PinCall, spawn_pinned};
 use crate::runtime::shutdown::{DrainSignal, FatalSignal};
 
 pub use super::ingress::{
-    ControlQueueProducer, LinkQueueProducer, QueueProducer, SimTapGate, touched_input_ring,
+    ControlQueueProducer, LinkPush, LinkQueueProducer, QueueProducer, SimTapGate,
+    touched_input_ring,
 };
 
 /// Where the hot thread runs and its tag in the log. What it folds is built later, on the thread
