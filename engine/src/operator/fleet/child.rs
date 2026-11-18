@@ -23,7 +23,19 @@ pub(super) struct ChildSlot {
 #[derive(Debug)]
 pub(super) enum SlotState {
     Running(LiveChild),
-    Exited { exit_code: Option<i32> },
+    /// Signalled, and waited for outside the lock of the fleet, which holds the child meanwhile.
+    /// The slot stays, so a list shows the engine and a start of it is refused.
+    Stopping(StoppingRow),
+    Exited {
+        exit_code: Option<i32>,
+    },
+}
+
+#[derive(Debug)]
+pub(super) struct StoppingRow {
+    pid: u32,
+    started_ts_us: LocalTs,
+    boot: ParsedConfig,
 }
 
 #[derive(Debug)]
@@ -50,32 +62,68 @@ impl ChildSlot {
         }
     }
 
+    /// The pid of a child that is still alive, running or being stopped.
     pub(super) fn running_pid(&self) -> Option<u32> {
         match &self.state {
             SlotState::Running(live) => Some(live.child.id()),
+            SlotState::Stopping(row) => Some(row.pid),
             SlotState::Exited { .. } => None,
         }
     }
 
+    pub(super) const fn is_stopping(&self) -> bool {
+        matches!(self.state, SlotState::Stopping(_))
+    }
+
     /// Built from what the engine booted with and never from its config file, which may have
-    /// been edited or moved since. `None` unless the child is running.
+    /// been edited or moved since. `None` unless the child is alive.
     pub(super) fn running_row(&self, identity: &RunIdentity) -> Option<EngineSummary> {
-        let SlotState::Running(live) = &self.state else {
-            return None;
+        let (state, pid, started_ts_us, boot) = match &self.state {
+            SlotState::Running(live) => {
+                ("running", live.child.id(), live.started_ts_us, &live.boot)
+            }
+            SlotState::Stopping(row) => ("stopping", row.pid, row.started_ts_us, &row.boot),
+            SlotState::Exited { .. } => return None,
         };
         Some(EngineSummary {
             strategy_id: identity.strategy_id.as_str().to_owned(),
             te_id: identity.te_id.as_str().to_owned(),
             bin: identity.to_string(),
-            mode: ExecutionMode::footer_value(live.boot.mode),
-            state: "running",
-            pid: Some(live.child.id()),
-            started_at: Some(format_rfc3339(live.started_ts_us)),
+            mode: ExecutionMode::footer_value(boot.mode),
+            state,
+            pid: Some(pid),
+            started_at: Some(format_rfc3339(started_ts_us)),
             exit_code: None,
             console_log: self.console_log.display().to_string(),
-            link_bind: live.boot.link_bind.clone(),
+            link_bind: boot.link_bind.clone(),
             config_error: None,
         })
+    }
+
+    /// Takes the child out for a stop, and leaves its row as stopping. `None` unless it runs.
+    pub(super) fn take_for_stop(&mut self, identity: &RunIdentity) -> Option<Stopping> {
+        let SlotState::Running(live) = &self.state else {
+            return None;
+        };
+        let row = StoppingRow {
+            pid: live.child.id(),
+            started_ts_us: live.started_ts_us,
+            boot: live.boot.clone(),
+        };
+        let SlotState::Running(live) = std::mem::replace(&mut self.state, SlotState::Stopping(row))
+        else {
+            unreachable!("the state was checked as running just above");
+        };
+        Some(Stopping {
+            identity: identity.clone(),
+            live,
+        })
+    }
+
+    /// A stop that failed gives its child back, so a child this server could not stop is never
+    /// forgotten.
+    pub(super) fn give_back(&mut self, stopping: Stopping) {
+        self.state = SlotState::Running(stopping.live);
     }
 
     /// Records a child that has gone as exited, and returns its status only on that transition.
@@ -93,13 +141,12 @@ impl ChildSlot {
     }
 }
 
-/// A live child taken out of the registry for the length of a stop. It goes back into the registry
-/// if the stop fails, so a child this server could not stop is never forgotten.
+/// A live child taken out of its slot for the length of a stop. It goes back into the slot if the
+/// stop fails.
 #[derive(Debug)]
 pub(super) struct Stopping {
     pub(super) identity: RunIdentity,
-    pub(super) console_log: PathBuf,
-    pub(super) live: LiveChild,
+    live: LiveChild,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -150,14 +197,6 @@ impl Stopping {
             status,
             is_forced: true,
         }))
-    }
-
-    pub(super) fn into_slot(self) -> (RunIdentity, ChildSlot) {
-        let slot = ChildSlot {
-            console_log: self.console_log,
-            state: SlotState::Running(self.live),
-        };
-        (self.identity, slot)
     }
 }
 

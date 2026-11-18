@@ -4,9 +4,11 @@
 use engine::hot::exec::{MAX_ORDER_BUDGET_WINDOWS, OrderBudgetWindow};
 use engine::msg::ids::{AssetId, Notional, Price, Qty, VenueId};
 use engine::msg::time::{DurationUs, VenueTs};
-use engine::runtime::config::{BinanceEnv, BinanceMarket, VenueMarket};
+use engine::runtime::config::{
+    BinanceEnv, BinanceMarket, Config, NoParams, RunIdentity, VenueMarket,
+};
 use engine::runtime::registry::{InstrumentRow, OrderRateLimit, RateInterval, Registry};
-use engine::runtime::{StartError, check_symbol_order_capacity};
+use engine::runtime::{Preflight, StartError, StartPlan};
 use engine::venues::binance::preflight::{
     ScaleError, check_order_rate_limits, check_symbol_scale, order_budget,
 };
@@ -16,7 +18,9 @@ use engine::venues::polymarket::preflight::{
 };
 use engine::venues::polymarket::rest::GammaMarket;
 
-use crate::engine_support::{ONE, instrument_row, tracker_spec_all};
+use crate::engine_support::{Idle, ONE, instrument_row, tracker_spec_all};
+use crate::parquet_readback::TempDir;
+use crate::runtime::preflight::{Scales, StandInVenue, locks_beside, sim_document};
 
 const PERP_EXCHANGE_INFO: &str = include_str!("../../../fixtures/binance/perp_exchange_info.json");
 const SPOT_EXCHANGE_INFO: &str = include_str!("../../../fixtures/binance/spot_exchange_info.json");
@@ -108,15 +112,31 @@ fn each_market_parses_to_its_own_exact_grid_and_limits() {
     }
 }
 
+/// Preflight of a simulated engine with a ladder of eight orders on each side, against a venue
+/// that allows `max_num_orders` resting orders on its symbol.
+fn ladder_preflight(max_num_orders: u32) -> Result<StartPlan, StartError> {
+    let root = TempDir::new("scale-ladder");
+    let state = root.path().join("state");
+    let config = Config::<NoParams>::from_yaml(&sim_document(&state, "  max_orders_per_side: 8\n"))
+        .expect("the document passes config");
+    Preflight {
+        identity: &RunIdentity::new("strat-scale", "te-ladder").expect("a valid identity"),
+        config: &config,
+        strategy: &Idle,
+        locks: &locks_beside(&state),
+    }
+    .run_with(&mut StandInVenue {
+        scales: Scales::Stamped { max_num_orders },
+    })
+}
+
 #[test]
 fn configured_two_sided_ladder_must_fit_the_symbol_order_limit() {
-    let mut row = btc_spot();
-    row.max_num_orders = Some(16);
-    check_symbol_order_capacity(&row, 8).expect("eight orders on both sides exactly fit sixteen");
+    ladder_preflight(16).expect("eight orders on both sides exactly fit sixteen");
 
-    row.max_num_orders = Some(15);
-    match check_symbol_order_capacity(&row, 8)
-        .expect_err("the requested steady-state ladder cannot fit")
+    match ladder_preflight(15)
+        .err()
+        .expect("the requested steady-state ladder cannot fit")
     {
         StartError::ExecutionOrderCapacity {
             configured_per_side,

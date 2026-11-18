@@ -19,6 +19,7 @@ use rustix::process::{Pid, Signal, kill_process, test_kill_process};
 use serde_json::Value;
 
 use engine::operator::fleet::{Fleet, FleetTiming};
+use engine::runtime::IdentityLocks;
 use engine::runtime::config::RunIdentity;
 
 use crate::parquet_readback::TempDir;
@@ -121,8 +122,14 @@ impl EngineTree {
         );
     }
 
+    /// The identity locks of the tree, in a folder of its own, so that two tests never share one.
+    pub fn locks(&self) -> IdentityLocks {
+        IdentityLocks::in_folder(self.root().join("locks"))
+    }
+
     pub fn fleet(&self, timing: FleetTiming) -> Fleet {
         Fleet::new(self.root().to_path_buf(), self.bin_dir(), timing)
+            .with_identity_locks(self.locks())
     }
 }
 

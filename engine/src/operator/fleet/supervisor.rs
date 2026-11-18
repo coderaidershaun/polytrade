@@ -1,12 +1,15 @@
 //! What is running: the engines this server started, each one a child process it alone can
-//! signal.
+//! signal, and the engines that another process runs, which their identity locks show.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::runtime::IdentityLocks;
 use crate::runtime::config::{ExecutionMode, RunIdentity};
+use crate::runtime::durable_file::{DiskFiles, FileSteps};
 
 use super::catalog::{self, ConsoleLog, Engine, ProbedConfig};
 use super::child::{ChildSlot, SlotState};
@@ -34,13 +37,28 @@ impl Default for FleetTiming {
 
 /// The operator's supervisor: it starts engines as child processes, stops them by signal and
 /// edits their configs, so any front end can drive the engines through it.
-#[derive(Debug)]
 pub struct Fleet {
     root: PathBuf,
     bin_dir: PathBuf,
     pub(super) timing: FleetTiming,
     pub(super) children: HashMap<RunIdentity, ChildSlot>,
     pub(super) is_closed: bool,
+    files: Arc<dyn FileSteps>,
+    locks: IdentityLocks,
+}
+
+impl std::fmt::Debug for Fleet {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Fleet")
+            .field("root", &self.root)
+            .field("bin_dir", &self.bin_dir)
+            .field("timing", &self.timing)
+            .field("children", &self.children)
+            .field("is_closed", &self.is_closed)
+            .field("locks", &self.locks)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug)]
@@ -57,14 +75,31 @@ impl Fleet {
             timing,
             children: HashMap::new(),
             is_closed: false,
+            files: Arc::new(DiskFiles),
+            locks: IdentityLocks::of_host(),
         }
+    }
+
+    /// The folder where the engines hold their identity locks, which is the one of the host unless
+    /// a test gives its own.
+    #[must_use]
+    pub fn with_identity_locks(mut self, locks: IdentityLocks) -> Fleet {
+        self.locks = locks;
+        self
+    }
+
+    /// The config edit writes through these steps, so a test can fail it at any one of them.
+    #[must_use]
+    pub fn with_file_steps(mut self, files: Arc<dyn FileSteps>) -> Fleet {
+        self.files = files;
+        self
     }
 
     /// # Errors
     /// [`FleetError::ReadDir`] when `strategies/` or a strategy folder inside it cannot be read. An
     /// unreadable `strategies/` usually means the root is wrong. [`FleetError::Wait`] when a
-    /// child's exit status cannot be read. One unreadable config never fails the listing: its row
-    /// says why instead.
+    /// child's exit status cannot be read, and [`FleetError::LockProbe`] when an identity lock
+    /// cannot be read. One unreadable config never fails the listing: its row says why instead.
     pub fn list(&mut self) -> Result<EngineListing, FleetError> {
         let engines = catalog::discover(&self.root)?;
         let tracked: Vec<RunIdentity> = self.children.keys().cloned().collect();
@@ -74,7 +109,7 @@ impl Fleet {
         let mut rows: Vec<EngineSummary> = engines
             .iter()
             .map(|engine| self.summarize(engine))
-            .collect();
+            .collect::<Result<_, _>>()?;
         // A running engine whose folder was renamed or removed keeps its row, so a client never
         // loses sight of an engine it still has to stop.
         let moved = self
@@ -93,18 +128,31 @@ impl Fleet {
     ///
     /// # Errors
     /// [`FleetError::ShuttingDown`], [`FleetError::UnknownEngine`], [`FleetError::AlreadyRunning`],
+    /// [`FleetError::Stopping`], [`FleetError::RunningElsewhere`],
     /// [`FleetError::ConfigUnreadable`], [`FleetError::BinaryMissing`],
-    /// [`FleetError::ExitedEarly`], or a failure to read the strategies tree, open the console
-    /// log, spawn the binary or read its exit status.
+    /// [`FleetError::ExitedEarly`], or a failure to read the strategies tree, probe the identity
+    /// lock, open the console log, spawn the binary or read its exit status.
     pub async fn start(&mut self, identity: &RunIdentity) -> Result<Started, FleetError> {
         if self.is_closed {
             return Err(FleetError::ShuttingDown);
         }
         let engine = self.find_engine(identity)?;
         if let Some(pid) = self.live_pid(identity)? {
-            return Err(FleetError::AlreadyRunning {
+            let is_stopping = self
+                .children
+                .get(identity)
+                .is_some_and(ChildSlot::is_stopping);
+            let identity = identity.clone();
+            return Err(if is_stopping {
+                FleetError::Stopping { identity, pid }
+            } else {
+                FleetError::AlreadyRunning { identity, pid }
+            });
+        }
+        if self.is_held_elsewhere(identity)? {
+            return Err(FleetError::RunningElsewhere {
                 identity: identity.clone(),
-                pid,
+                lock: self.locks.path_of(identity),
             });
         }
         let boot = match engine.probe() {
@@ -159,7 +207,7 @@ impl Fleet {
                 pid,
             });
         }
-        let previous = engine.rewrite_mode(mode)?;
+        let previous = engine.rewrite_mode(mode, self.files.as_ref())?;
         Ok(ModeChange {
             strategy_id: identity.strategy_id.as_str().to_owned(),
             te_id: identity.te_id.as_str().to_owned(),
@@ -217,6 +265,15 @@ impl Fleet {
         }
     }
 
+    fn is_held_elsewhere(&self, identity: &RunIdentity) -> Result<bool, FleetError> {
+        self.locks
+            .is_held(identity)
+            .map_err(|source| FleetError::LockProbe {
+                path: self.locks.path_of(identity),
+                source,
+            })
+    }
+
     fn find_engine(&self, identity: &RunIdentity) -> Result<Engine, FleetError> {
         catalog::discover(&self.root)?
             .into_iter()
@@ -248,15 +305,22 @@ impl Fleet {
         })
     }
 
-    /// A stopped or exited row reads the config file, because that is what the next start boots
-    /// from.
-    fn summarize(&self, engine: &Engine) -> EngineSummary {
+    /// A row of an engine that this server does not run reads the config file, because that is
+    /// what the next start boots from. An engine whose identity lock is held runs in another
+    /// process.
+    fn summarize(&self, engine: &Engine) -> Result<EngineSummary, FleetError> {
         let slot = self.children.get(&engine.identity);
         if let Some(row) = slot.and_then(|slot| slot.running_row(&engine.identity)) {
-            return row;
+            return Ok(row);
         }
         let probed = engine.probe();
+        let is_held_elsewhere = self.is_held_elsewhere(&engine.identity)?;
         let (state, exit_code, console_log) = match slot {
+            _ if is_held_elsewhere => (
+                "running elsewhere",
+                None,
+                engine.console_log_path(&self.root, probed.mode()),
+            ),
             Some(ChildSlot {
                 console_log,
                 state: SlotState::Exited { exit_code },
@@ -272,7 +336,7 @@ impl Fleet {
             ProbedConfig::Parsed(parsed) => (parsed.link_bind, None),
             ProbedConfig::Unreadable(refusal) => (None, Some(refusal.to_string())),
         };
-        EngineSummary {
+        Ok(EngineSummary {
             strategy_id: engine.identity.strategy_id.as_str().to_owned(),
             te_id: engine.identity.te_id.as_str().to_owned(),
             bin: engine.identity.to_string(),
@@ -284,6 +348,6 @@ impl Fleet {
             console_log: console_log.display().to_string(),
             link_bind,
             config_error,
-        }
+        })
     }
 }

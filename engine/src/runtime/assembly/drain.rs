@@ -26,7 +26,8 @@ impl Engine {
     /// watchdog.
     pub(super) fn run_until_shutdown(self, forced_exit: ForcedExit) -> Exit {
         let Engine {
-            _execution_lease: execution_lease,
+            _identity_lock: identity_lock,
+            _execution_lease: _,
             runtime,
             log_handle,
             hot,
@@ -108,7 +109,7 @@ impl Engine {
         watchdog.disarm();
         // Released only after every order-related component has stopped, so a replacement
         // process cannot start while this one is still draining.
-        drop(execution_lease);
+        drop(identity_lock);
         exit
     }
 }

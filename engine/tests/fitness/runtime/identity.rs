@@ -7,7 +7,7 @@ use std::path::Path;
 
 use engine::msg::failure::{FailureClass, Halt};
 use engine::runtime::config::{BinanceEnv, Config, NoParams, RunIdentity};
-use engine::runtime::{ExecutionLease, Preflight, StartError, StartPlan};
+use engine::runtime::{ExecutionLease, IdentityLocks, Preflight, StartError, StartPlan};
 use engine::venues::binance::exec as binance_exec;
 use engine::venues::exec::{LeaseNamespace, TeTag};
 use engine::venues::polymarket::exec as polymarket_exec;
@@ -37,9 +37,9 @@ fn run_nonce(state: &Path, tag: TeTag, namespace: &LeaseNamespace<'_>) -> u32 {
         .run_nonce()
 }
 
-fn is_refused_as_held(state: &Path, tag: TeTag, namespace: &LeaseNamespace<'_>) -> bool {
+fn is_refused_as_held(locks: &IdentityLocks, te_id: &str) -> bool {
     matches!(
-        ExecutionLease::acquire(state, tag, namespace),
+        locks.take(&identity(te_id)),
         Err(StartError::ExecutionIdentityInUse { .. })
     )
 }
@@ -53,6 +53,7 @@ fn preflight(state: &Path) -> Result<StartPlan, StartError> {
         identity: &identity("te-empty-nonce"),
         config: &config,
         strategy: &Idle,
+        locks: &IdentityLocks::in_folder(state.with_file_name("locks")),
     }
     .run_with(&mut StandInVenue {
         scales: Scales::Stamped {
@@ -142,20 +143,17 @@ fn nonce_file_names_and_keys_are_exact() {
     expected.sort();
     assert_eq!(file_names(state), expected);
 
-    let held = ExecutionLease::acquire(state, tag, &testnet).expect("the lease is free");
-    assert_eq!(held.run_nonce(), 2, "a restart advances its own history");
+    let locks_root = TempDir::new("nonce-names-locks");
+    let locks = IdentityLocks::in_folder(locks_root.path());
+    let held = locks
+        .take(&identity("te-nonce-names"))
+        .expect("the lock is free");
+    let lease = ExecutionLease::acquire(state, tag, &testnet).expect("the nonce advances");
+    assert_eq!(lease.run_nonce(), 2, "a restart advances its own history");
     assert!(
-        is_refused_as_held(state, tag, &second_account),
-        "a second account under one engine identity is a second armed process"
-    );
-    assert!(
-        is_refused_as_held(state, tag, &polymarket),
-        "one engine identity is one armed process on a host, whichever venue it trades"
-    );
-    let elsewhere = TempDir::new("nonce-names-elsewhere");
-    assert!(
-        is_refused_as_held(elsewhere.path(), tag, &testnet),
-        "another state folder cannot evade the host lock"
+        is_refused_as_held(&locks, "te-nonce-names"),
+        "a second process of one engine identity is refused whichever account, venue or state \
+         folder it reads, because the lock takes the identity alone"
     );
     drop(held);
 

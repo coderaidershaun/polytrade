@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use engine::msg::failure::{FailureClass, Halt};
 use engine::runtime::config::{Config, NoParams, RunIdentity};
-use engine::runtime::{Engine, PinRefused, Preflight, StartError};
+use engine::runtime::{Engine, IdentityLocks, PinRefused, Preflight, StartError};
 
 use super::config_guards::{BINANCE_SPOT_SOURCE, SIM_BLOCK, execution_block_with, sources_with};
 use super::preflight::{Scales, StandInVenue, snapshot};
@@ -24,14 +24,20 @@ const HOT_CORE: usize = 3;
 const HOUSEKEEPING_CORE: usize = 5;
 const SENDER_CORE: usize = 7;
 
-/// Set in the process that runs the cases. The last case starts the log, which a process starts
-/// only once and which then reaches each thread of that process, so no other test may share it.
+/// Set in a process that runs cases, to the set of cases it runs. A case that passes the log pin
+/// starts the log, which a process starts only once and which then reaches each thread of that
+/// process, so each such case runs in a process of its own, and no other test may share it.
 const CASES_PROCESS: &str = "POLYSIM_START_ORDER_CASES";
+const PIN_CASES: &str = "pins";
+const METRICS_CASE: &str = "metrics";
 const THIS_TEST: &str = "runtime::start_order::pin_failure_refuses_start_before_any_producer";
 
 /// The core that the stand-in refuses. Only this test pins through the stand-in, and it runs its
 /// cases one after the other.
 static REFUSED_CORE: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// When set, the stand-in refuses the core only to this thread, since the log and the metrics
+/// thread share their core.
+static REFUSED_THREAD: Mutex<Option<&'static str>> = Mutex::new(None);
 static PIN_REQUESTS: Mutex<Vec<PinRequest>> = Mutex::new(Vec::new());
 
 /// One call of the stand-in: the core, the thread that asked, and whether that thread has ended.
@@ -62,6 +68,10 @@ fn stand_in_pin(core_id: usize) -> Result<(), PinRefused> {
         .name()
         .unwrap_or("unnamed")
         .to_owned();
+    let refused_thread = *REFUSED_THREAD
+        .lock()
+        .expect("no case panics while it holds the refused thread");
+    let is_refused_thread = refused_thread.is_none_or(|refused| refused == thread);
     PIN_REQUESTS
         .lock()
         .expect("no case panics while it holds the requests")
@@ -70,7 +80,7 @@ fn stand_in_pin(core_id: usize) -> Result<(), PinRefused> {
             thread,
             has_ended,
         });
-    if core_id == REFUSED_CORE.load(Ordering::Acquire) {
+    if core_id == REFUSED_CORE.load(Ordering::Acquire) && is_refused_thread {
         return Err(PinRefused { core_id });
     }
     Ok(())
@@ -186,7 +196,11 @@ fn assert_no_engine_thread_added(before: Option<&[String]>) {
 /// each case must leave: the class of a refused start, each thread that asked for a pin ended, the
 /// old tape file in place, no file written to the state folder by the start, and the nonce that
 /// preflight spent.
-fn refused_start(root: &Path, refused_core: usize) -> (StartError, Vec<(usize, String)>) {
+fn refused_start(
+    root: &Path,
+    refused_core: usize,
+    refused_thread: Option<&'static str>,
+) -> (StartError, Vec<(usize, String)>) {
     let config = Config::<NoParams>::from_yaml(&document(root)).expect("the document is valid");
     let state = root.join("state");
     let old_tape = plant_old_tape(root);
@@ -194,6 +208,7 @@ fn refused_start(root: &Path, refused_core: usize) -> (StartError, Vec<(usize, S
         identity: &identity(),
         config: &config,
         strategy: &Idle,
+        locks: &IdentityLocks::in_folder(root.join("locks")),
     }
     .run_with(&mut StandInVenue {
         scales: Scales::Stamped {
@@ -209,6 +224,9 @@ fn refused_start(root: &Path, refused_core: usize) -> (StartError, Vec<(usize, S
     );
 
     REFUSED_CORE.store(refused_core, Ordering::Release);
+    *REFUSED_THREAD
+        .lock()
+        .expect("no case panics while it holds the refused thread") = refused_thread;
     let census_before = engine_thread_names();
     let started = Engine::start(config, Box::new(Idle), plan, stand_in_pin);
     let Err(refused) = started else {
@@ -258,20 +276,50 @@ fn requests(expected: &[(usize, &str)]) -> Vec<(usize, String)> {
 /// alone.
 #[test]
 fn pin_failure_refuses_start_before_any_producer() {
-    if std::env::var_os(CASES_PROCESS).is_some() {
-        return each_refused_start();
+    match std::env::var(CASES_PROCESS).as_deref() {
+        Ok(PIN_CASES) => return each_refused_start(),
+        Ok(METRICS_CASE) => return the_metrics_pin_refuses_after_the_log_pin(),
+        _ => {}
     }
-    let suite = std::env::current_exe().expect("the suite knows the path of its own binary");
-    let run = Command::new(suite)
-        .args(["--exact", THIS_TEST, "--test-threads=1", "--nocapture"])
-        .env(CASES_PROCESS, "1")
-        .output()
-        .expect("the suite starts its own binary again");
-    let stdout = String::from_utf8_lossy(&run.stdout);
-    let stderr = String::from_utf8_lossy(&run.stderr);
+    for cases in [PIN_CASES, METRICS_CASE] {
+        let suite = std::env::current_exe().expect("the suite knows the path of its own binary");
+        let run = Command::new(suite)
+            .args(["--exact", THIS_TEST, "--test-threads=1", "--nocapture"])
+            .env(CASES_PROCESS, cases)
+            .output()
+            .expect("the suite starts its own binary again");
+        let stdout = String::from_utf8_lossy(&run.stdout);
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert!(
+            run.status.success() && stdout.contains("test result: ok. 1 passed"),
+            "the {cases} cases of the start order failed in their own process:\n{stdout}\n{stderr}"
+        );
+    }
+}
+
+/// The log pin passes and the metrics pin, on the same core, refuses: the log and the hot thread
+/// that started before it have ended when the start returns.
+fn the_metrics_pin_refuses_after_the_log_pin() {
+    let root = TempDir::new("start-order-metrics");
+    let (metrics, asked) = refused_start(root.path(), HOUSEKEEPING_CORE, Some("polysim-metrics"));
     assert!(
-        run.status.success() && stdout.contains("test result: ok. 1 passed"),
-        "the cases of the start order failed in their own process:\n{stdout}\n{stderr}"
+        matches!(
+            metrics,
+            StartError::HousekeepingPin {
+                core_id: HOUSEKEEPING_CORE,
+                thread: "metrics"
+            }
+        ),
+        "the metrics thread pins after the log thread: {metrics}"
+    );
+    assert_eq!(
+        asked,
+        requests(&[
+            (HOT_CORE, "polysim-hot"),
+            (HOUSEKEEPING_CORE, "polysim-log"),
+            (HOUSEKEEPING_CORE, "polysim-metrics"),
+        ]),
+        "the sender thread never started"
     );
 }
 
@@ -279,7 +327,7 @@ fn pin_failure_refuses_start_before_any_producer() {
 fn each_refused_start() {
     let root = TempDir::new("start-order");
 
-    let (hot, asked) = refused_start(root.path(), HOT_CORE);
+    let (hot, asked) = refused_start(root.path(), HOT_CORE, None);
     assert!(
         matches!(hot, StartError::HotPin { core: HOT_CORE }),
         "the hot pin refuses with its core: {hot}"
@@ -290,7 +338,7 @@ fn each_refused_start() {
         "the hot thread is the only thread that the refused start began"
     );
 
-    let (log, asked) = refused_start(root.path(), HOUSEKEEPING_CORE);
+    let (log, asked) = refused_start(root.path(), HOUSEKEEPING_CORE, None);
     assert!(
         matches!(
             log,
@@ -310,7 +358,7 @@ fn each_refused_start() {
         "the metrics thread never started"
     );
 
-    let (sender, asked) = refused_start(root.path(), SENDER_CORE);
+    let (sender, asked) = refused_start(root.path(), SENDER_CORE, None);
     assert!(
         matches!(
             sender,

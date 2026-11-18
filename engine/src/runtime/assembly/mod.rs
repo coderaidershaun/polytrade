@@ -67,13 +67,9 @@ pub use drain::{DrainWatchdog, ForcedExit};
 pub use error::StartError;
 #[cfg(feature = "otlp")]
 pub(crate) use exec::SWEEP_SHARE_OF_DRAIN;
-pub use exec_identity::ExecutionLease;
+pub use exec_identity::{ExecutionLease, IdentityLock, IdentityLocks};
 pub use exit::{DrainDeadline, DrainFailure, DrainOutcome, Exit, Trigger};
 pub use preflight::{Preflight, StartPlan};
-// SMELL: `check_symbol_order_capacity` is public only because the fitness suite calls it. A test is
-// not a reason to make an item public, so its check should move onto a public entry point and it
-// should go back to crate visibility.
-pub use preflight::check_symbol_order_capacity;
 pub use run::run_trading_engine;
 pub use senders::PinnedSenders;
 
@@ -81,8 +77,9 @@ const ROTATIONS_CHANNEL_CAPACITY: usize = 256;
 
 pub struct Engine {
     /// One trading engine per host: while this is held, no second process under the same TE
-    /// identity can place. The credential names the nonce file, not the lock, so swapping keys
+    /// identity can start. The credential names the nonce file, not the lock, so swapping keys
     /// does not buy a second engine.
+    _identity_lock: IdentityLock,
     _execution_lease: Option<ExecutionLease>,
     runtime: Runtime,
     log_handle: LogHandle,
@@ -241,6 +238,7 @@ impl Engine {
             .map_or_else(|| tokio_handle.clone(), |senders| senders.handle().clone());
 
         let StartPlan {
+            identity_lock,
             registry,
             exposure: restored_exposure,
             rest_quiet,
@@ -453,6 +451,7 @@ impl Engine {
         });
 
         Ok(Engine {
+            _identity_lock: identity_lock,
             _execution_lease: execution_lease,
             runtime,
             log_handle,

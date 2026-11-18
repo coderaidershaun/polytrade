@@ -13,7 +13,7 @@ pub(crate) mod metrics;
 #[cfg(feature = "otlp")]
 mod otlp;
 mod pin;
-mod preflight;
+pub(crate) mod preflight;
 mod sources;
 mod start_order;
 mod timer;

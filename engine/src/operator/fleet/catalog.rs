@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 use crate::runtime::artifacts::RunArtifacts;
 use crate::runtime::config::{ExecutionMode, RunIdentity};
+use crate::runtime::durable_file::{self, FileSteps, WriteError, WriteFailure};
 
 use super::error::FleetError;
 
@@ -76,6 +77,7 @@ impl Engine {
     pub(super) fn rewrite_mode(
         &self,
         mode: ExecutionMode,
+        steps: &dyn FileSteps,
     ) -> Result<Option<ExecutionMode>, FleetError> {
         let path = &self.config_path;
         let text = fs::read_to_string(path).map_err(|source| FleetError::ConfigRead {
@@ -95,7 +97,7 @@ impl Engine {
                 read_back: read_back.label(),
             });
         }
-        write_by_rename(path, &rewritten)?;
+        write_durably(steps, path, &rewritten)?;
         Ok(previous)
     }
 }
@@ -263,28 +265,36 @@ fn sorted_subdirectories(dir: &Path) -> Result<Vec<PathBuf>, FleetError> {
     Ok(subdirectories)
 }
 
-/// A rename replaces the file in one step, so a server that dies mid-write never leaves a torn
-/// config behind. The new file takes the old one's permission bits, so the edit changes nothing
-/// but the mode value.
-fn write_by_rename(path: &Path, text: &str) -> Result<(), FleetError> {
+/// The durable writer replaces the file in one rename, so a server that dies mid-write never leaves
+/// a torn config behind. The new file takes the old one's permission bits, so the edit changes
+/// nothing but the mode value.
+fn write_durably(steps: &dyn FileSteps, path: &Path, text: &str) -> Result<(), FleetError> {
     let permissions = fs::metadata(path)
         .map_err(|source| FleetError::ConfigRead {
             path: path.to_path_buf(),
             source,
         })?
         .permissions();
-    let staging = path.with_extension(format!("yaml.tmp-{}", std::process::id()));
-    // SMELL: if a step after creating the staging file fails, that file stays next to the config
-    // and nothing removes it. A cleanup needs a way to report its own failure first.
-    fs::write(&staging, text)
-        .and_then(|()| fs::set_permissions(&staging, permissions))
-        .map_err(|source| FleetError::ConfigWrite {
-            path: staging.clone(),
+    let WriteFailure { error, left_behind } =
+        match durable_file::write_through(steps, path, text.as_bytes(), Some(permissions)) {
+            Ok(()) => return Ok(()),
+            Err(failure) => failure,
+        };
+    Err(match (error, left_behind) {
+        (WriteError::NotWritten { path, source }, None) => FleetError::ConfigWrite { path, source },
+        (WriteError::NotWritten { path, source }, Some(left_behind)) => {
+            FleetError::ConfigWriteLeftBehind {
+                path,
+                source,
+                temporary: left_behind.temporary,
+                cleanup: left_behind.source,
+            }
+        }
+        (WriteError::FolderNotSynced { directory, source }, _) => FleetError::ConfigNotSynced {
+            path: path.to_path_buf(),
+            directory,
             source,
-        })?;
-    fs::rename(&staging, path).map_err(|source| FleetError::ConfigWrite {
-        path: path.to_path_buf(),
-        source,
+        },
     })
 }
 
