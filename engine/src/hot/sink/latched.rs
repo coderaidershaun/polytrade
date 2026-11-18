@@ -50,6 +50,9 @@ impl PersistSink {
         }
     }
 
+    // SMELL: a full ring drops an order or a fill row and counts it, as it does a research row, so
+    // the audit trail can miss a row while the engine trades on. An audit row needs a ring that
+    // never drops it.
     pub(crate) fn push(&mut self, record: PersistRecord) {
         if self.can_push_seal() {
             self.send_seal();

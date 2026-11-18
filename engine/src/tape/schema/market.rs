@@ -6,6 +6,7 @@ use crate::msg::persist::{
     BookEventKind, BookEventRow, FeatureRow, KlineRow, LinkFrameRow, RotationRow, TradeRow,
 };
 use crate::msg::time::LocalTs;
+use crate::tape::TapeTable;
 
 use super::TableRow;
 use super::column::Column;
@@ -19,7 +20,7 @@ fn kind_str(kind: BookEventKind) -> &'static str {
 }
 
 impl TableRow for FeatureRow {
-    const NAME: &'static str = "features";
+    const TABLE: TapeTable = TapeTable::Features;
     const COLUMNS: &'static [Column<Self>] = &[
         Column::Ts("event_ts_us", |row| row.event_ts_us),
         Column::U16("instrument_id", |row| row.instrument.0),
@@ -33,7 +34,7 @@ impl TableRow for FeatureRow {
 }
 
 impl TableRow for TradeRow {
-    const NAME: &'static str = "trades";
+    const TABLE: TapeTable = TapeTable::Trades;
     const COLUMNS: &'static [Column<Self>] = &[
         Column::VenueTs("exchange_ts_us", |row| row.exchange_ts_us),
         Column::Ts("received_ts_us", |row| row.received_ts_us),
@@ -49,7 +50,7 @@ impl TableRow for TradeRow {
 }
 
 impl TableRow for BookEventRow {
-    const NAME: &'static str = "book_events";
+    const TABLE: TapeTable = TapeTable::BookEvents;
     const COLUMNS: &'static [Column<Self>] = &[
         Column::Ts("received_ts_us", |row| row.received_ts_us),
         Column::U16("instrument_id", |row| row.instrument.0),
@@ -66,7 +67,7 @@ impl TableRow for BookEventRow {
 }
 
 impl TableRow for KlineRow {
-    const NAME: &'static str = "klines";
+    const TABLE: TapeTable = TapeTable::Klines;
     const COLUMNS: &'static [Column<Self>] = &[
         Column::VenueTs("exchange_ts_us", |row| row.exchange_ts_us),
         Column::Ts("received_ts_us", |row| row.received_ts_us),
@@ -89,7 +90,7 @@ impl TableRow for KlineRow {
 }
 
 impl TableRow for LinkFrameRow {
-    const NAME: &'static str = "link_frames";
+    const TABLE: TapeTable = TapeTable::LinkFrames;
     const COLUMNS: &'static [Column<Self>] = &[
         Column::Ts("received_ts_us", |row| row.received_ts_us),
         Column::VenueTs("event_ts_us", |row| row.event_ts_us),
@@ -108,7 +109,7 @@ impl TableRow for LinkFrameRow {
 }
 
 impl TableRow for RotationRow {
-    const NAME: &'static str = "rotations";
+    const TABLE: TapeTable = TapeTable::Rotations;
     const COLUMNS: &'static [Column<Self>] = &[
         Column::Ts("received_ts_us", |row| row.received_ts_us),
         Column::U16("instrument_id", |row| row.instrument.0),

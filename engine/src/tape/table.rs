@@ -15,8 +15,8 @@ use crate::info;
 use crate::msg::time::LocalTs;
 use crate::runtime::durable_file::{FileSteps, Staging, StepFile, WriteError};
 
-use super::PersistError;
 use super::schema::TableRow;
+use super::{PersistError, TapeTable};
 
 const ROWS_PER_WRITE: usize = 1000;
 const ROWS_PER_SEAL: u64 = 10_000;
@@ -105,15 +105,15 @@ impl<R: TableRow> TableWriter<R> {
                 hour_bucket: _,
             } = open;
             writer.finish().map_err(|source| PersistError::Parquet {
-                table: R::NAME,
+                table: R::TABLE,
                 source,
             })?;
             staging
                 .finish(&*self.files.steps, writer.inner_mut().as_mut())
-                .map_err(not_durable)?;
+                .map_err(|error| not_durable(R::TABLE, error))?;
             info!(
                 "persist sealed {} {} ({} rows)",
-                R::NAME,
+                R::TABLE,
                 staging.target.display(),
                 rows_written
             );
@@ -134,7 +134,7 @@ impl<R: TableRow> TableWriter<R> {
         let rows = self.pending.len() as u64;
         let batch =
             R::to_batch(&self.pending, &self.schema).map_err(|source| PersistError::Batch {
-                table: R::NAME,
+                table: R::TABLE,
                 source,
             })?;
         let Some(open) = self.open.as_mut() else {
@@ -144,7 +144,7 @@ impl<R: TableRow> TableWriter<R> {
         open.writer
             .write(&batch)
             .map_err(|source| PersistError::Parquet {
-                table: R::NAME,
+                table: R::TABLE,
                 source,
             })?;
         open.rows_written += rows;
@@ -159,7 +159,7 @@ impl<R: TableRow> TableWriter<R> {
             self.files
                 .steps
                 .create_folder(parent)
-                .map_err(PersistError::io_at(parent))?;
+                .map_err(PersistError::io_at(R::TABLE, parent))?;
         }
         let staging = Staging {
             temporary: unfinished_path(&target),
@@ -169,14 +169,14 @@ impl<R: TableRow> TableWriter<R> {
             .files
             .steps
             .create(&staging.temporary)
-            .map_err(PersistError::io_at(&staging.temporary))?;
+            .map_err(PersistError::io_at(R::TABLE, &staging.temporary))?;
         let writer =
             ArrowWriter::try_new(file, self.schema.clone(), Some(self.writer_properties()))
                 .map_err(|source| PersistError::Parquet {
-                    table: R::NAME,
+                    table: R::TABLE,
                     source,
                 })?;
-        info!("persist open {} {}", R::NAME, staging.temporary.display());
+        info!("persist open {} {}", R::TABLE, staging.temporary.display());
         self.open = Some(OpenFile {
             writer,
             hour_bucket,
@@ -205,7 +205,7 @@ impl<R: TableRow> TableWriter<R> {
     fn file_path(&self, hour_bucket: i64, sequence: u32) -> PathBuf {
         let at = LocalTs::from_micros(hour_bucket * US_PER_HOUR).civil();
         let mut path = self.files.run_dir.clone();
-        path.push(R::NAME);
+        path.push(R::TABLE.as_str());
         path.push(format!(
             "{DATE_FOLDER_PREFIX}{:04}-{:02}-{:02}",
             at.year, at.month, at.day
@@ -225,13 +225,17 @@ fn unfinished_path(target: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-fn not_durable(error: WriteError) -> PersistError {
+fn not_durable(table: TapeTable, error: WriteError) -> PersistError {
     match error {
         WriteError::NotWritten { path, source }
         | WriteError::FolderNotSynced {
             directory: path,
             source,
-        } => PersistError::Io { path, source },
+        } => PersistError::Io {
+            table,
+            path,
+            source,
+        },
     }
 }
 

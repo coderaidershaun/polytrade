@@ -221,9 +221,10 @@ pub struct WriterFailure {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FileWriter {
     Exposure,
+    Tape,
 }
 
-crate::log::fieldless_log_value!(FileWriter { Exposure });
+crate::log::fieldless_log_value!(FileWriter { Exposure, Tape });
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TappedMessage {

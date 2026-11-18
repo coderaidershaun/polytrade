@@ -43,8 +43,8 @@ fn spin_at(seq: u64, when: i64) -> InboundMessage {
 /// CONTRACT: an input queue that the engine feeds halts the engine when it is full, and the link
 /// queue, which an untrusted peer fills, drops the frame and counts it. A full input queue that
 /// dropped would fold a hole in the order of messages, and a full link queue that halted would let
-/// any peer stop the engine. The writer-status queue is one that the engine feeds: its own file
-/// writers fill it. The control queue drops and counts too: its sender is outside the engine, and
+/// any peer stop the engine. The writer-status queues are ones that the engine feeds: its own file
+/// writers fill them, the exposure writer one and the tape writer the other. The control queue drops and counts too: its sender is outside the engine, and
 /// the link actor pushes the pending marker again at its next heartbeat.
 #[test]
 fn each_lane_full_gives_its_class() {
@@ -58,6 +58,14 @@ fn each_lane_full_gives_its_class() {
         }),
     );
     full_engine_fed_queue_halts(shipped_writer_status_queue(), [writer_failed; 2]);
+    let tape_failed = InboundMessage::new(
+        ts(1_000),
+        MessageBody::WriterFailed(WriterFailure {
+            writer: FileWriter::Tape,
+            consecutive_failures: 1,
+        }),
+    );
+    full_engine_fed_queue_halts(shipped_tape_status_queue(), [tape_failed; 2]);
 
     let (producer, _peer_frames) = RingBuffer::<InboundMessage>::new(1);
     let mut link = LinkQueueProducer::new(producer, QueueId::new(1).unwrap());
@@ -184,6 +192,18 @@ fn shipped_writer_status_queue() -> QueueId {
         .expect("the shipped binance registry builds")
         .writer_status_queue_id()
         .expect("an engine that trades has a writer-status queue")
+}
+
+/// The status queue of the tape writer of the binance engine that ships, which keeps a tape.
+fn shipped_tape_status_queue() -> QueueId {
+    let config = Config::<MicroRecorderParams>::load(Path::new(
+        "../strategies/strat-micro-recorder/te-binance-spot-btcusdt/config.yaml",
+    ))
+    .expect("the shipped binance config loads");
+    Registry::build(&config)
+        .expect("the shipped binance registry builds")
+        .tape_status_queue_id()
+        .expect("an engine with a tape has a tape status queue")
 }
 
 /// A tape that records the link-frame table, so that each run-control message writes one row.
