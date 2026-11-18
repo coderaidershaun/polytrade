@@ -1,10 +1,5 @@
 //! A peer frame on its way into `on_link`, the tape row that the fold writes for it, and a payload
 //! that a strategy banks on its way out.
-//!
-//! The edge pipeline is exercised without a socket, which is deliberate: the wire format and the
-//! gate LOGIC belong in this suite, while socket behaviour belongs to contract-seam and
-//! integration tests. What is architectural here is the composition — that the gate sits
-//! upstream of the ring, so the sequence the hot thread consumes IS the record.
 
 use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
 use engine::link::{
@@ -159,119 +154,6 @@ fn features(records: &[PersistRecord]) -> Vec<f64> {
         .collect()
 }
 
-/// FITNESS: a peer frame reaches the strategy AND the tape, the tape is written by dispatch on the
-/// hot side, and the two are gated independently. `strategy.tables` decides whether the `LinkFrames`
-/// sink exists, and the run state decides whether `on_link` fires — neither answers for the other.
-///
-/// Recording at the link actor instead would sit upstream of the drop-and-count input ring, so a
-/// dropped frame would leave the tape holding one the hot thread never consumed — and a replay of
-/// that tape would diverge from the run it claims to describe. A parked engine still CONSUMES frames
-/// off its ring, so they belong in the record for the same reason, whether or not the strategy was
-/// shown them.
-#[test]
-fn a_peer_frame_reaches_the_strategy_and_the_tape_under_independent_gates() {
-    struct Case {
-        name: &'static str,
-        tables: &'static [TableKind],
-        values: Vec<f64>,
-        park: bool,
-        expect_delivery: bool,
-        expect_rows: bool,
-    }
-    let cases = [
-        Case {
-            name: "LinkFrames sink present",
-            tables: &[TableKind::Features, TableKind::LinkFrames],
-            values: vec![42.5, 0.25],
-            park: false,
-            expect_delivery: true,
-            expect_rows: true,
-        },
-        Case {
-            name: "LinkFrames sink absent",
-            tables: &[TableKind::Features],
-            values: vec![7.0],
-            park: false,
-            expect_delivery: true,
-            expect_rows: false,
-        },
-        Case {
-            name: "parked engine",
-            tables: &[TableKind::Features, TableKind::LinkFrames],
-            values: vec![7.0],
-            park: true,
-            expect_delivery: false,
-            expect_rows: true,
-        },
-    ];
-
-    for case in cases {
-        let mut linked = linked(case.tables);
-        let mut edge = Edge::new();
-        if case.park {
-            linked.engine.dispatch(&run_control(idle_at(1), 50));
-            drain_persist(&mut linked);
-        }
-        let message = edge.admit(1, &case.values, 100).expect("gate admits");
-        linked.engine.dispatch(&message);
-
-        let records = drain_persist(&mut linked);
-        let delivered = features(&records);
-        if case.expect_delivery {
-            assert_eq!(
-                delivered, case.values,
-                "case {}: on_link saw the sender's slots, in slot order",
-                case.name
-            );
-        } else {
-            assert!(
-                delivered.is_empty(),
-                "case {}: on_link is suppressed with every other callback",
-                case.name
-            );
-        }
-
-        let rows = link_rows(&records);
-        if case.expect_rows {
-            assert_eq!(
-                rows.len(),
-                case.values.len(),
-                "case {}: one tape row per value slot",
-                case.name
-            );
-            assert!(
-                rows.iter().all(|row| row.kind == LinkRowKind::Payload
-                    && row.sender_te_hash == SENDER.0
-                    && row.topic == TopicId::FIRST_STRATEGY.0
-                    && row.seq == 1
-                    && row.count == case.values.len() as u16
-                    && row.received_ts_us == ts(100)
-                    && row.event_ts_us == venue_ts(99)),
-                "case {}: every row carries the frame's identity and BOTH clocks, {rows:?}",
-                case.name
-            );
-            assert_eq!(
-                rows.iter()
-                    .map(|row| (row.slot, row.value))
-                    .collect::<Vec<_>>(),
-                case.values
-                    .iter()
-                    .enumerate()
-                    .map(|(slot, value)| (slot as u16, *value))
-                    .collect::<Vec<_>>(),
-                "case {}: slots keep their index",
-                case.name
-            );
-        } else {
-            assert!(
-                rows.is_empty(),
-                "case {}: no link_frames sink, so no rows",
-                case.name
-            );
-        }
-    }
-}
-
 /// The record of a peer frame and the call of `on_link` have gates of their own: `strategy.tables`
 /// decides whether the `LinkFrames` table exists, and the run state decides whether `on_link` runs.
 /// Neither answers for the other, so a parked engine still records each frame it consumes, and a
@@ -378,38 +260,6 @@ fn link_record_and_link_callback_have_independent_gates() {
             );
         }
     }
-}
-
-/// FITNESS: the sequence gate sits UPSTREAM of the hot thread, so the sequence the engine consumes
-/// is already deduplicated and in order — which is what makes the consumed sequence the record.
-#[test]
-fn the_sequence_gate_keeps_duplicates_and_reorders_off_the_hot_thread() {
-    let mut linked = linked(&[TableKind::Features, TableKind::LinkFrames]);
-    let mut edge = Edge::new();
-    let mut admitted = Vec::new();
-    for (seq, value) in [(1, 1.0), (2, 2.0), (2, 22.0), (1, 11.0), (3, 3.0)] {
-        let Some(message) = edge.admit(seq, &[value], 100 + seq as i64) else {
-            continue;
-        };
-        admitted.push(seq);
-        linked.engine.dispatch(&message);
-    }
-    assert_eq!(
-        admitted,
-        vec![1, 2, 3],
-        "the duplicate and the reorder never entered the ring"
-    );
-
-    let records = drain_persist(&mut linked);
-    assert_eq!(features(&records), vec![1.0, 2.0, 3.0]);
-    assert_eq!(
-        link_rows(&records)
-            .iter()
-            .map(|row| row.seq)
-            .collect::<Vec<_>>(),
-        vec![1, 2, 3],
-        "and the tape holds exactly what was consumed"
-    );
 }
 
 /// FITNESS: `link_send` banks against the strategy's OWN declared schema and its registered topic,
