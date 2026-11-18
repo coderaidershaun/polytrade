@@ -735,7 +735,8 @@ fn a_subscribe_is_due_at_start_every_two_seconds_and_at_once_after_an_assert() {
             TopicId::CATALOG_INSTRUMENTS,
             TopicId::CATALOG_FEATURES,
             TopicId::LIFECYCLE,
-            TopicId::LATENCY
+            TopicId::LATENCY,
+            TopicId::HISTORY
         ],
         "the workstation names the topics it reads: 'all' would have the engine unicast strategy \
          payload frames at a process that can only count them as rejects"
