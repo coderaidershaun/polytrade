@@ -145,7 +145,7 @@ fn issue_tick_is_read_only_by_senders() {
 /// one entry for each call. Each one says why in the reason of its
 /// `#[expect(clippy::disallowed_methods, ...)]`. A function that only reads keeps a read apart from
 /// the logic beside it, so a read added to that logic fails the lint.
-const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 115] = [
+const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 116] = [
     (
         "engine/src/hot/metrics.rs",
         "stamp",
@@ -220,19 +220,24 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 115] = [
         &["engine::msg::time::wall_clock_now"],
     ),
     (
+        "engine/src/operator/fleet/stop.rs",
+        "begin_stops",
+        &["std::time::Instant::now"],
+    ),
+    (
+        "engine/src/operator/fleet/stop.rs",
+        "settle",
+        &["std::time::Instant::now"],
+    ),
+    (
+        "engine/src/operator/fleet/stop.rs",
+        "stopped",
+        &["std::time::Instant::elapsed"],
+    ),
+    (
         "engine/src/operator/fleet/supervisor.rs",
         "await_start_grace",
         &["std::time::Instant::now", "std::time::Instant::now"],
-    ),
-    (
-        "engine/src/operator/fleet/supervisor.rs",
-        "stop_together",
-        &["std::time::Instant::now", "std::time::Instant::now"],
-    ),
-    (
-        "engine/src/operator/fleet/supervisor.rs",
-        "stopped",
-        &["std::time::Instant::elapsed"],
     ),
     (
         "engine/src/operator/workstation/browser/app.rs",

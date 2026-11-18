@@ -1,22 +1,99 @@
-//! Host-scoped execution ownership and durable run nonces.
+//! One running process for each engine identity on a host, by the lock of that identity, and the
+//! durable run nonce of an armed run.
 
 use std::fs::{File, OpenOptions, TryLockError};
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 
+use crate::runtime::config::RunIdentity;
 use crate::runtime::durable_file::{self, WriteError};
 use crate::venues::exec::{EngineIdentity, LeaseNamespace, TeTag};
 
 use super::StartError;
 
-/// Locks one TE identity per host and advances its venue-specific run nonce.
+/// The folder where each running engine holds the lock of its identity. The engine takes the lock
+/// and the fleet server probes it. One folder serves the whole host, so two engines of one
+/// identity cannot run at once, whatever config, state folder, venue or account each reads.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IdentityLocks {
+    folder: PathBuf,
+}
+
+/// Held for the whole run, in each mode: while it lives, no second process of the identity
+/// starts on this host.
+#[derive(Debug)]
+pub struct IdentityLock {
+    _file: File,
+}
+
+impl IdentityLocks {
+    pub fn of_host() -> Self {
+        Self::in_folder(std::env::temp_dir().join("polysim-execution-locks"))
+    }
+
+    /// A folder of its own, so that tests of two threads or two checkouts never share a lock.
+    pub fn in_folder(folder: impl Into<PathBuf>) -> Self {
+        Self {
+            folder: folder.into(),
+        }
+    }
+
+    /// The name is the engine identity alone, so a second account, venue or state folder is still
+    /// a second process.
+    pub fn path_of(&self, identity: &RunIdentity) -> PathBuf {
+        self.folder
+            .join(format!(".exec-{:08x}.lock", TeTag::of(identity).get()))
+    }
+
+    /// # Errors
+    /// [`StartError::ExecutionIdentityInUse`] when another process holds the lock, and
+    /// [`StartError::ExecutionIdentityIo`] when the folder or the file cannot be made or locked.
+    pub fn take(&self, identity: &RunIdentity) -> Result<IdentityLock, StartError> {
+        std::fs::create_dir_all(&self.folder).map_err(StartError::identity_io_at(&self.folder))?;
+        let path = self.path_of(identity);
+        let file = open_read_write(&path)?;
+        match file.try_lock() {
+            Ok(()) => Ok(IdentityLock { _file: file }),
+            Err(TryLockError::WouldBlock) => Err(StartError::ExecutionIdentityInUse { path }),
+            Err(TryLockError::Error(source)) => Err(StartError::identity_io_at(&path)(source)),
+        }
+    }
+
+    /// Whether a running engine holds the lock. The probe takes a shared lock and lets it go at
+    /// once, so two probes never see each other. An engine that starts in that instant is refused
+    /// as held, which a person reads and retries.
+    ///
+    /// # Errors
+    /// The error of the file system when the lock file exists but cannot be opened or locked.
+    pub fn is_held(&self, identity: &RunIdentity) -> io::Result<bool> {
+        let file = match File::open(self.path_of(identity)) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        match file.try_lock_shared() {
+            Ok(()) => Ok(false),
+            Err(TryLockError::WouldBlock) => Ok(true),
+            Err(TryLockError::Error(error)) => Err(error),
+        }
+    }
+}
+
+impl Default for IdentityLocks {
+    fn default() -> Self {
+        Self::of_host()
+    }
+}
+
+/// Advances the run nonce of one venue and account. The identity lock, taken before it, is what
+/// keeps a second process of the identity from spending the same nonce.
 pub struct ExecutionLease {
-    _lock_file: File,
     run_nonce: u32,
 }
 
 impl ExecutionLease {
     /// # Errors
-    /// The `ExecutionIdentity*` variants for lock, nonce, or filesystem failures, and
+    /// The `ExecutionIdentity*` variants for nonce or filesystem failures, and
     /// [`StartError::ExecutionNonceEmpty`] for a nonce file that holds no nonce.
     pub fn acquire(
         directory: &Path,
@@ -24,15 +101,9 @@ impl ExecutionLease {
         namespace: &LeaseNamespace<'_>,
     ) -> Result<Self, StartError> {
         std::fs::create_dir_all(directory).map_err(StartError::identity_io_at(directory))?;
-        // The lock is TE identity alone, so one host runs one process per trading engine whichever
-        // venue it trades; only the nonce history below is per venue and account.
-        let lock_file = lock_host_identity(te_tag)?;
         let stem = namespace.nonce_file_stem(te_tag);
         let run_nonce = advance_nonce(&directory.join(format!("{stem}.nonce")))?;
-        Ok(Self {
-            _lock_file: lock_file,
-            run_nonce,
-        })
+        Ok(Self { run_nonce })
     }
 
     pub const fn run_nonce(&self) -> u32 {
@@ -44,21 +115,6 @@ impl ExecutionLease {
             te_tag,
             run_nonce: self.run_nonce,
         }
-    }
-}
-
-fn lock_host_identity(te_tag: TeTag) -> Result<File, StartError> {
-    let lock_directory = std::env::temp_dir().join("polysim-execution-locks");
-    std::fs::create_dir_all(&lock_directory)
-        .map_err(StartError::identity_io_at(&lock_directory))?;
-    let lock_path = lock_directory.join(format!(".exec-{:08x}.lock", te_tag.get()));
-    let lock_file = open_read_write(&lock_path)?;
-    match lock_file.try_lock() {
-        Ok(()) => Ok(lock_file),
-        Err(TryLockError::WouldBlock) => {
-            Err(StartError::ExecutionIdentityInUse { path: lock_path })
-        }
-        Err(TryLockError::Error(source)) => Err(StartError::identity_io_at(&lock_path)(source)),
     }
 }
 

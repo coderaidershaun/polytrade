@@ -35,8 +35,6 @@ pub(super) async fn serve(
     let config = StreamableHttpServerConfig::default().enforce_origin_validation();
     let cancel = config.cancellation_token.clone();
     let _end_every_session = cancel.clone().drop_guard();
-    // SMELL: every session shares one lock on the fleet, and a stop holds it until the engine has
-    // exited, so a list from another client can wait behind that stop for up to the stop deadline.
     let service = TowerToHyperService::new(StreamableHttpService::new(
         move || Ok(server.clone()),
         Arc::new(LocalSessionManager::default()),

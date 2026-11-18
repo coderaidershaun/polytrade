@@ -25,6 +25,22 @@ pub enum FleetError {
     AlreadyRunning { identity: RunIdentity, pid: u32 },
     #[error("{identity} is not running")]
     NotRunning { identity: RunIdentity },
+    #[error("{identity} is stopping as pid {pid}; wait for its stop to end")]
+    Stopping { identity: RunIdentity, pid: u32 },
+    #[error(
+        "{identity} is running in a process this server did not start, which holds its identity lock {}; stop that process first",
+        .lock.display()
+    )]
+    RunningElsewhere {
+        identity: RunIdentity,
+        lock: PathBuf,
+    },
+    #[error("cannot read the identity lock {}", .path.display())]
+    LockProbe {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
     #[error("no binary at {}; build it with `cargo build --release --bin {bin}`", .path.display())]
     BinaryMissing { path: PathBuf, bin: String },
     #[error(
@@ -74,9 +90,34 @@ pub enum FleetError {
         #[source]
         source: io::Error,
     },
-    #[error("cannot write {}", .path.display())]
+    #[error("cannot write {}; the config is as it was", .path.display())]
     ConfigWrite {
         path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error(
+        "cannot write {}, and cannot remove its temporary file {} ({cleanup}); the config is as \
+         it was, and the temporary file can be deleted by hand",
+        .path.display(),
+        .temporary.display()
+    )]
+    ConfigWriteLeftBehind {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+        temporary: PathBuf,
+        cleanup: io::Error,
+    },
+    #[error(
+        "{} now holds the new mode, but its folder {} could not be synced, so the edit is not \
+         durable: a power cut can bring back the old mode; read the file before a start",
+        .path.display(),
+        .directory.display()
+    )]
+    ConfigNotSynced {
+        path: PathBuf,
+        directory: PathBuf,
         #[source]
         source: io::Error,
     },

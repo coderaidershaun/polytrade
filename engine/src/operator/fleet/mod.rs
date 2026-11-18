@@ -6,6 +6,7 @@ mod child;
 mod error;
 mod http;
 mod reply;
+mod stop;
 mod supervisor;
 mod tools;
 

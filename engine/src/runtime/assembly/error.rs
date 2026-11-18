@@ -69,7 +69,7 @@ pub enum StartError {
         venue_max: u32,
     },
     #[error(
-        "execution identity is already held at {path} — refusing a second process that could exceed the per-side order cap"
+        "another process of this engine identity holds its lock at {path} — refusing a second process, which could share its files and exceed the per-side order cap"
     )]
     ExecutionIdentityInUse { path: PathBuf },
     #[error("execution identity state at {path} could not be read or written")]

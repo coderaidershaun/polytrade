@@ -3,7 +3,9 @@
 
 /// These drive `engine::operator::fleet` and its binary, which exist only under feature `mcp`.
 #[cfg(feature = "mcp")]
-mod mcp_fleet;
+mod fleet_contract;
+#[cfg(feature = "mcp")]
+mod fleet_server;
 #[cfg(feature = "mcp")]
 mod mcp_http;
 #[cfg(feature = "mcp")]
