@@ -6,7 +6,7 @@ mod inbound;
 mod outbound;
 
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -31,7 +31,7 @@ use super::frame::{LinkBody, OutboundLink};
 use super::subscribers::{LINK_MAX_SUBSCRIBERS, SequenceGate, SubscriberTable};
 use inbound::PeerState;
 
-pub use control_plane::{AssertionVerdict, ControlPlane};
+pub use control_plane::{AssertionVerdict, ControlPlane, RefusedAssertions};
 
 /// Catalog, lifecycle, staleness, control repair. 1s granularity for display state.
 const ANNOUNCE_INTERVAL: Duration = Duration::from_secs(1);
@@ -103,6 +103,8 @@ pub struct LinkActorSetup {
     pub guard: FrameGuard,
     pub peers: Vec<PeerFeed>,
     pub on_controller_loss: ControllerLoss,
+    /// The IP addresses whose assertions the control plane takes.
+    pub controllers: Vec<IpAddr>,
     pub inbound: LinkQueueProducer,
     /// Run-control markers only, so a flood of peer frames never keeps a marker out.
     pub markers: ControlQueueProducer,
@@ -153,6 +155,10 @@ pub struct LinkCounts {
     pub receive_failed: u64,
     pub table_full_refused: u64,
     pub peer_silenced: u64,
+    /// Assertions from a sender whose address is not listed, by address.
+    pub refused_assertions: RefusedAssertions,
+    /// Assertions of a listed controller at the top epoch.
+    pub refused_epochs: u64,
 }
 
 /// The counts of the link actor as of its last heartbeat, for a reader on another thread.
@@ -230,7 +236,7 @@ impl Actor {
             outbound: setup.outbound,
             channels: setup.channels,
             latency: setup.latency,
-            control: ControlPlane::new(setup.control, setup.on_controller_loss),
+            control: ControlPlane::new(setup.control, &setup.controllers, setup.on_controller_loss),
             clock: setup.clock,
             spin_interval: setup.spin_interval,
             feature_count: setup.feature_count,
@@ -291,6 +297,8 @@ impl Actor {
         }
         self.push_marker_if_needed(now);
         self.check_peer_silence(now);
+        self.counts.refused_assertions = self.control.refused_assertions();
+        self.counts.refused_epochs = self.control.refused_epochs();
         self.published_counts.publish(self.counts);
         self.announce_ticks += 1;
         if self.announce_ticks.is_multiple_of(REPORT_TICKS) {
@@ -307,12 +315,14 @@ impl Actor {
             + counts.send_failed
             + counts.receive_failed
             + counts.table_full_refused
-            + counts.peer_silenced;
+            + counts.peer_silenced
+            + counts.refused_assertions.total()
+            + counts.refused_epochs;
         if total == 0 {
             return;
         }
         info!(
-            "link rejected[decode_failed={} gate_rejected={} topic_ignored={} send_failed={} receive_failed={} table_full_refused={} peer_silenced={}] gate{:?}",
+            "link rejected[decode_failed={} gate_rejected={} topic_ignored={} send_failed={} receive_failed={} table_full_refused={} peer_silenced={} refused_assertions={} refused_epochs={}] gate{:?}",
             counts.decode_failed,
             counts.gate_rejected,
             counts.topic_ignored,
@@ -320,6 +330,8 @@ impl Actor {
             counts.receive_failed,
             counts.table_full_refused,
             counts.peer_silenced,
+            counts.refused_assertions.total(),
+            counts.refused_epochs,
             self.gate.counts()
         );
     }

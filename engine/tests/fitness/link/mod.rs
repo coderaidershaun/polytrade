@@ -2,6 +2,7 @@
 //! reach the hot thread.
 
 mod control_plane;
+mod controller;
 mod link_ingress;
 mod link_wire;
 mod marker_queue;

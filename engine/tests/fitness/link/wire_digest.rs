@@ -543,6 +543,7 @@ impl LoopbackActor {
                 guard: guard(),
                 peers: Vec::new(),
                 on_controller_loss: ControllerLoss::default(),
+                controllers: Vec::new(),
                 inbound: LinkQueueProducer::new(producer, QueueId::new(1).expect("queue 1 exists")),
                 markers: ControlQueueProducer::new(
                     marker_producer,

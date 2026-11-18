@@ -327,6 +327,8 @@ pub enum LinkDecodeError {
     NameNotUtf8,
     #[error("unknown {field} discriminant {value}")]
     UnknownDiscriminant { field: &'static str, value: u8 },
+    #[error("controller epoch {found} is 2^63 or above")]
+    EpochOutOfRange { found: u64 },
 }
 
 impl LinkDecodeError {

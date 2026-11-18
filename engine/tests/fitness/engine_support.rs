@@ -1,6 +1,7 @@
 //! Builders that many tests share, so that each builds its messages, its instrument row, and its
 //! persistence ring wired to a `PersistSink` the same way.
 
+use std::net::IpAddr;
 use std::num::{NonZeroU32, NonZeroU64};
 
 use engine::hot::dispatch::{
@@ -31,8 +32,8 @@ use engine::msg::inbound::{
     MessageBody, RunControl, SpinTick, TradeEvent,
 };
 use engine::msg::persist::{FeatureId, FillRow, OrderRow, PersistRecord};
-use engine::msg::run_state::RunAssertion;
 use engine::msg::run_state::RunState;
+use engine::msg::run_state::{ControllerEpoch, RunAssertion};
 use engine::msg::time::{DurationUs, LocalTs, Stamper, VenueTs};
 use engine::msg::ui::{UI_BOOK_RING_CAPACITY, UI_EVENT_RING_CAPACITY, UiBookSnapshot, UiEvent};
 use engine::runtime::config::ControllerLoss;
@@ -461,16 +462,21 @@ pub struct LinkedEngine {
 }
 
 impl LinkedEngine {
-    /// The control plane over the run state of this engine, as the link actor holds it.
+    /// The control plane over the run state of this engine, as the link actor holds it, taking
+    /// assertions from `controllers` only.
     ///
     /// # Panics
     /// On a second call: the desired state has one writer.
-    pub fn control_plane(&mut self, on_controller_loss: ControllerLoss) -> ControlPlane {
+    pub fn control_plane(
+        &mut self,
+        controllers: &[IpAddr],
+        on_controller_loss: ControllerLoss,
+    ) -> ControlPlane {
         let writer = self
             .desired_writer
             .take()
             .expect("one control plane for each linked engine: the desired state has one writer");
-        ControlPlane::new(writer, on_controller_loss)
+        ControlPlane::new(writer, controllers, on_controller_loss)
     }
 }
 
@@ -524,14 +530,14 @@ pub fn run_control(assertion: RunAssertion, when: i64) -> InboundMessage {
 pub fn idle_at(epoch: u64) -> RunAssertion {
     RunAssertion {
         state: RunState::Idle,
-        epoch,
+        epoch: ControllerEpoch::new(epoch),
     }
 }
 
 pub fn running_at(epoch: u64) -> RunAssertion {
     RunAssertion {
         state: RunState::Running,
-        epoch,
+        epoch: ControllerEpoch::new(epoch),
     }
 }
 

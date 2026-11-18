@@ -13,7 +13,7 @@ use engine::msg::exec::{Liquidity, RejectClass};
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::Level;
 use engine::msg::persist::FeatureId;
-use engine::msg::run_state::RunState;
+use engine::msg::run_state::{ControllerEpoch, RunState};
 use engine::msg::time::{DurationUs, VenueTs};
 use engine::msg::ui::{
     DomQuote, LATENCY_REPORT_CELLS, LatencyCell, LatencyReport, UI_BOOK_LEVELS,
@@ -542,8 +542,8 @@ pub(super) fn arb_catalog_instrument() -> impl Strategy<Value = LinkBody> {
 }
 
 /// A controller epoch. Epochs of 2^63 and above are refused on the wire, so none is drawn.
-fn arb_epoch() -> impl Strategy<Value = u64> {
-    0..1_u64 << 63
+fn arb_epoch() -> impl Strategy<Value = ControllerEpoch> {
+    (0..1_u64 << 63).prop_map(ControllerEpoch::new)
 }
 
 pub(super) fn arb_datagram() -> impl Strategy<Value = LinkDatagram> {
@@ -691,7 +691,7 @@ pub(super) fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
             topics: TopicSet::new(&[TopicId::BOOKS, TopicId::LIFECYCLE, TopicId(0x1234)])
                 .expect("three topics fit"),
             desired_state: RunState::Idle,
-            desired_epoch: 0x1122_3344_5566_7788,
+            desired_epoch: ControllerEpoch::new(0x1122_3344_5566_7788),
         }),
     };
 
@@ -775,7 +775,7 @@ pub(super) fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                     phase: RunPhase::Draining,
                     run_state: RunState::Running,
                     execution_mode: Some(ExecutionMode::Live),
-                    acknowledged_epoch: 0x2233_4455_6677_8899,
+                    acknowledged_epoch: ControllerEpoch::new(0x2233_4455_6677_8899),
                     spin_interval_us: DurationUs::from_micros(250_000),
                     feature_count: 0x0301,
                 },
@@ -789,7 +789,7 @@ pub(super) fn golden_frames() -> Vec<(&'static str, LinkDatagram)> {
                     phase: RunPhase::Starting,
                     run_state: RunState::Idle,
                     execution_mode: None,
-                    acknowledged_epoch: 0x3344_5566_7788_99aa,
+                    acknowledged_epoch: ControllerEpoch::new(0x3344_5566_7788_99aa),
                     spin_interval_us: DurationUs::from_micros(-1_000_001),
                     feature_count: 0x0402,
                 },

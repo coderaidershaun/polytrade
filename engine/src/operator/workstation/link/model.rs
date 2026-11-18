@@ -7,8 +7,8 @@ use crate::link::{
     CatalogFeature, CatalogInstrument, Envelope, LINK_SUBSCRIPTION_TTL, Lifecycle, LinkHash,
     RunPhase,
 };
-use crate::msg::run_state::RunAssertion;
 use crate::msg::run_state::RunState;
+use crate::msg::run_state::{ControllerEpoch, RunAssertion};
 use crate::msg::time::{DurationUs, LocalTs, VenueTs};
 use crate::msg::ui::{UiCatalog, UiInstrument};
 
@@ -123,7 +123,7 @@ impl Controller {
             None => RunAssertion::INITIAL,
             Some(state) => RunAssertion {
                 state,
-                epoch: self.boot_epoch.saturating_add(self.assertions),
+                epoch: ControllerEpoch::saturating(self.boot_epoch.saturating_add(self.assertions)),
             },
         }
     }
@@ -142,7 +142,7 @@ impl Controller {
         let mine = self.assertion().epoch;
         if reported.acknowledged_epoch > mine {
             return ControlVerdict::Lost {
-                holder_epoch: reported.acknowledged_epoch,
+                holder_epoch: reported.acknowledged_epoch.get(),
             };
         }
         let is_applied =

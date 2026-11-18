@@ -11,7 +11,7 @@ use engine::link::{
 };
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::persist::FeatureId;
-use engine::msg::run_state::RunState;
+use engine::msg::run_state::{ControllerEpoch, RunState};
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::msg::ui::{UiBookSnapshot, UiBookState, UiCatalog, UiEvent};
 use engine::operator::workstation::link::model::{ConnectionState, ControlVerdict};
@@ -157,7 +157,7 @@ fn lifecycle(acknowledged_epoch: u64, run_state: RunState) -> Lifecycle {
         phase: RunPhase::Ready,
         run_state,
         execution_mode: Some(ExecutionMode::Live),
-        acknowledged_epoch,
+        acknowledged_epoch: ControllerEpoch::new(acknowledged_epoch),
         spin_interval_us: SPIN_INTERVAL,
         feature_count: 0,
     }
@@ -635,7 +635,8 @@ fn controller_epoch_rises_and_its_verdict_tracks_the_engines_acknowledgement() {
 
     let (_, watching) = next_subscribe(&mut session, NOW);
     assert_eq!(
-        watching.desired_epoch, 0,
+        watching.desired_epoch,
+        ControllerEpoch::ZERO,
         "epoch 0 is the reserved 'no opinion': it is what lets a workstation watch an engine \
          without taking control of it away from whoever holds it"
     );
@@ -652,7 +653,7 @@ fn controller_epoch_rises_and_its_verdict_tracks_the_engines_acknowledgement() {
     let (_, opening) = next_subscribe(&mut session, NOW);
     assert_eq!(opening.desired_state, RunState::Idle);
     assert!(
-        opening.desired_epoch > 0,
+        opening.desired_epoch > ControllerEpoch::ZERO,
         "the engine accepts on a strict >, so 0 could never win"
     );
 
@@ -664,7 +665,7 @@ fn controller_epoch_rises_and_its_verdict_tracks_the_engines_acknowledgement() {
     );
     assert_eq!(status.control, ControlVerdict::NoOpinion);
     let (_, released) = next_subscribe(&mut session, NOW);
-    assert_eq!(released.desired_epoch, 0);
+    assert_eq!(released.desired_epoch, ControllerEpoch::ZERO);
 
     session.assert_run_state(RunState::Running);
     let (_, held) = next_subscribe(&mut session, NOW);
@@ -683,7 +684,7 @@ fn controller_epoch_rises_and_its_verdict_tracks_the_engines_acknowledgement() {
     let mut session = session_at(NOW);
     session.assert_run_state(RunState::Idle);
     let (_, asserted) = next_subscribe(&mut session, NOW);
-    let mine = asserted.desired_epoch;
+    let mine = asserted.desired_epoch.get();
     let mut verdict_after = |acknowledged_epoch: u64, run_state: RunState| {
         let frame = engine.send(LinkBody::Lifecycle(lifecycle(
             acknowledged_epoch,
@@ -757,7 +758,7 @@ fn a_subscribe_is_due_at_start_every_two_seconds_and_at_once_after_an_assert() {
     let (_, subscribe) = next_subscribe(&mut session, asserted_at);
     assert_eq!(subscribe.desired_state, RunState::Idle);
     assert!(
-        subscribe.desired_epoch > 0,
+        subscribe.desired_epoch > ControllerEpoch::ZERO,
         "the raised epoch rides the very next subscribe"
     );
 
@@ -1031,7 +1032,11 @@ fn moving_to_the_next_peer_starts_the_gate_the_catalog_and_the_controller_over()
         first_subscribe.seq + 1,
         "the subscribe count keeps rising across a move, because an engine remembers the highest it heard"
     );
-    assert_eq!(subscribe.desired_epoch, 0, "the assertion was released");
+    assert_eq!(
+        subscribe.desired_epoch,
+        ControllerEpoch::ZERO,
+        "the assertion was released"
+    );
 
     // The same positions the first engine used: stale to an old gate, fresh to a reset one.
     assert_eq!(

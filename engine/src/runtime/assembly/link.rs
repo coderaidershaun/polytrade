@@ -149,11 +149,13 @@ pub(super) fn spawn_link_actor<P>(
     start: LinkStart<'_, P>,
     edge_runtime: &Handle,
 ) -> TaskHandle {
-    let on_controller_loss = start
+    let (on_controller_loss, controllers) = start
         .config
         .link
         .as_ref()
-        .map_or_else(Default::default, |link| link.on_controller_loss);
+        .map_or_else(Default::default, |link| {
+            (link.on_controller_loss, link.controllers.clone())
+        });
     LinkActor::spawn(
         LinkActorSetup {
             socket: bound.socket,
@@ -161,6 +163,7 @@ pub(super) fn spawn_link_actor<P>(
             guard: bound.guard,
             peers: bound.peers,
             on_controller_loss,
+            controllers,
             inbound: start
                 .inbound
                 .expect("a bound link always builds its input queue"),

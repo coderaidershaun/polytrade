@@ -75,5 +75,8 @@ link:
   # Different port from the binance engine (9310). Publishes only, never subscribes.
   bind: "127.0.0.1:9311"
   on_controller_loss: hold
+  # Only these hosts may start or park this engine: the relay of the workstation on this box.
+  # IP addresses only, no port: the relay sends from a port that the OS selects.
+  controllers: ["127.0.0.1"]
 logging:
   dir: ./logs

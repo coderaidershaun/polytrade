@@ -21,6 +21,10 @@ pub struct LinkConfig {
     pub token: Option<Box<str>>,
     #[serde(default)]
     pub on_controller_loss: ControllerLoss,
+    /// The IP addresses whose run assertions the engine takes, with no port. Empty by default: an
+    /// engine with no list accepts no assertion.
+    #[serde(default)]
+    pub controllers: Vec<IpAddr>,
 }
 
 impl LinkConfig {

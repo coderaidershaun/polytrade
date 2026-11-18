@@ -223,7 +223,7 @@ impl HotEngine {
                 kind,
                 sender_te_hash: 0,
                 topic: TopicId::SUBSCRIBE.0,
-                seq: control.desired.epoch,
+                seq: control.desired.epoch.get(),
                 slot: 0,
                 count: 0,
                 value: 0.0,
@@ -250,7 +250,7 @@ impl HotEngine {
     fn park(&mut self) {
         hot_info!(
             "run state IDLE (epoch {}) — sealing parquet",
-            self.run.epoch
+            self.run.epoch.get()
         );
         self.drain_actions();
         self.state.gates.park();
@@ -266,7 +266,7 @@ impl HotEngine {
     fn resume(&mut self, received_ts: LocalTs) {
         hot_info!(
             "run state RUNNING (epoch {}) — derived state reset, warmup re-armed",
-            self.run.epoch
+            self.run.epoch.get()
         );
         self.state.derived.reset_for_gap();
         let mut ctx = self.state.ctx(received_ts);
