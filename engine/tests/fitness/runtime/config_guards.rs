@@ -509,8 +509,8 @@ fn a_public_link_bind_is_a_startup_error_unless_allowed() {
 }
 
 /// FITNESS: no queue id at or past the cap of 20 exists, and each registry numbers its input queues
-/// 0 to n - 1, with the timer, the link, the execution edge, the writer status and the control
-/// queue after the producer groups. The hot
+/// 0 to n - 1, with the timer, the link, the execution edge, the writer status, the control queue
+/// and the status of the tape writer after the producer groups. The hot
 /// thread sizes its tables by that cap and a tape records each queue id, so an id past the cap, a
 /// gap or a shifted id would fold an order other than the one that the run recorded.
 #[test]
@@ -588,20 +588,22 @@ fn twenty_one_input_queues_are_refused() {
         ids.extend(registry.exec_queue_id(VenueId(0)).map(QueueId::index));
         ids.extend(registry.writer_status_queue_id().map(QueueId::index));
         ids.extend(registry.control_queue_id().map(QueueId::index));
+        ids.extend(registry.tape_status_queue_id().map(QueueId::index));
         let count = registry.input_queue_count();
         assert!(count <= 20, "{count} input queues");
         assert_eq!(
             ids,
             (0..count).collect::<Vec<usize>>(),
-            "the ids are dense, and the timer, the link, the execution edge, the writer status and \
-             the control queue follow the groups"
+            "the ids are dense, and the timer, the link, the execution edge, the writer status, \
+             the control queue and the status of the tape writer follow the groups"
         );
     }
 }
 
 /// The link's input queue exists only when its actor does, and it lands after the timer — a queue id
 /// is a position in the ingress list, and `wire` zips producers back against exactly that order.
-/// The control queue of the link exists with it, after each other queue.
+/// The control queue of the link exists with it, and only the status queue of the tape writer comes
+/// after it.
 #[test]
 fn the_link_adds_one_input_queue_only_when_configured() {
     let without = build_from(&config_with_source(BINANCE_PERP_SOURCE));
@@ -613,8 +615,8 @@ fn the_link_adds_one_input_queue_only_when_configured() {
     assert_eq!(without.control_queue_id(), None, "and no control queue");
     assert_eq!(
         without.input_queue_count(),
-        4,
-        "three producers + the timer"
+        5,
+        "three producers + the timer + the status of the tape writer"
     );
 
     let with = build_from(&config_with_link(&link_block("127.0.0.1:9310", "")));
@@ -631,12 +633,18 @@ fn the_link_adds_one_input_queue_only_when_configured() {
     assert_eq!(
         with.control_queue_id().map(|id| id.index()),
         Some(5),
-        "the control queue comes after each other queue"
+        "the control queue comes after each queue before it"
+    );
+    assert_eq!(
+        with.tape_status_queue_id().map(|id| id.index()),
+        Some(6),
+        "the status of the tape writer comes last"
     );
     assert_eq!(
         with.input_queue_count(),
-        6,
-        "three producers + the timer + the link + the control queue"
+        7,
+        "three producers + the timer + the link + the control queue + the status of the tape \
+         writer"
     );
 }
 
@@ -716,7 +724,7 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             "",
             ExecutionMode::Off,
             false,
-            4,
+            5,
         ),
         (
             "binance live",
@@ -725,7 +733,7 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             "",
             ExecutionMode::Live,
             true,
-            6,
+            7,
         ),
         (
             "binance sim",
@@ -734,7 +742,7 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             SIM_BLOCK,
             ExecutionMode::Sim,
             true,
-            6,
+            7,
         ),
         (
             "polymarket off",
@@ -743,7 +751,7 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             "",
             ExecutionMode::Off,
             false,
-            2,
+            3,
         ),
         (
             "polymarket live",
@@ -752,7 +760,7 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             "",
             ExecutionMode::Live,
             true,
-            4,
+            5,
         ),
     ];
     for (case, source, spelling, extra, expected, expects_queue, input_queues) in modes {
@@ -779,8 +787,8 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
         assert_eq!(
             registry.input_queue_count(),
             input_queues,
-            "{case}: producer groups + the timer, plus execution and the writer status when it is \
-             armed"
+            "{case}: producer groups + the timer + the status of the tape writer, plus execution \
+             and the writer status when it is armed"
         );
     }
 }

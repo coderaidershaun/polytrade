@@ -45,7 +45,7 @@ use crate::runtime::exposure::{ExposureHandle, ExposureWriter, ExposureWriterSet
 use crate::runtime::otlp::{OtlpExporter, OtlpLanes, OtlpPlan};
 use crate::runtime::pin::PinCall;
 use crate::runtime::shutdown::{DrainSignal, FatalSignal, RunStateHandles, TaskHandle};
-use crate::tape::PersistHandle;
+use crate::tape::{PersistHandle, TapeStatus};
 use crate::venues::exec::EdgeHandle;
 use crate::venues::venue::{MarketDataWiring, WindowAssignment, spawn_market_data, tap_heartbeat};
 use crate::{info, warn};
@@ -267,7 +267,7 @@ impl Engine {
             mpsc::channel::<WindowAssignment>(exec::ASSIGNMENTS_CHANNEL_CAPACITY);
         let PersistBringUp {
             wiring: persist_wiring,
-            handle: persistence,
+            tape,
         } = persist_bring_up(PersistBringUpSetup {
             config: &config,
             identity: &identity,
@@ -352,7 +352,14 @@ impl Engine {
             exec: exec_producer,
             writer_status,
             control: control_producer,
+            tape_status,
         } = producers;
+        let persistence = tape.map(|tape| {
+            tape.spawn(tape_status.map(|queue| TapeStatus {
+                queue,
+                clock: clock.clone(),
+            }))
+        });
         let exposure = ExposureWriter::spawn(ExposureWriterSetup {
             dir: config.exposure.dir.clone(),
             identity: identity.clone(),

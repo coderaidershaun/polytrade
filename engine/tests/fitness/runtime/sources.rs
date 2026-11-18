@@ -97,7 +97,7 @@ fn each_source_gives_its_rows_groups_and_queues() {
         has_klines: false,
         categories: &[ConnectionCategory::Market],
         instruments_per_group: &[4],
-        input_queues: 2,
+        input_queues: 3,
     };
     let binance = FanOut {
         case: "binance perpetual",
@@ -111,7 +111,7 @@ fn each_source_gives_its_rows_groups_and_queues() {
             ConnectionCategory::Klines,
         ],
         instruments_per_group: &[1, 1, 1],
-        input_queues: 4,
+        input_queues: 5,
     };
     for expected in [&polymarket, &binance] {
         let case = expected.case;
@@ -156,7 +156,7 @@ fn each_source_gives_its_rows_groups_and_queues() {
         assert_eq!(
             registry.input_queue_count(),
             expected.input_queues,
-            "{case}: producer groups + the timer"
+            "{case}: producer groups + the timer + the status of the tape writer"
         );
     }
 
@@ -334,5 +334,7 @@ pub(super) fn twenty_one_queue_documents() -> (String, String) {
     let six: Vec<(&str, &str)> = coins.iter().map(|coin| (coin.as_str(), "")).collect();
     let mut five_with_execution = six[..5].to_vec();
     five_with_execution[0].1 = live.as_str();
-    (document(&five_with_execution, true), document(&six, true))
+    // With no tape there is no status queue of the tape writer, so five sources reach the cap.
+    let at_cap = document(&five_with_execution, true).replace("persistence:\n  dir: ./data\n", "");
+    (at_cap, document(&six, true))
 }

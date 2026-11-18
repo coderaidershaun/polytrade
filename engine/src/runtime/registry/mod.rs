@@ -139,6 +139,9 @@ pub struct Registry {
     writer_status_queue_id: Option<QueueId>,
     /// `None` when the config carries no `link:` block: the run-control markers of the link.
     control_queue_id: Option<QueueId>,
+    /// `None` with no `persistence:` block. The tape writer reports a fault of an audit table here,
+    /// on a queue of its own, because each input queue has one producer.
+    tape_status_queue_id: Option<QueueId>,
     input_queue_count: usize,
 }
 
@@ -165,8 +168,8 @@ impl Registry {
             .as_ref()
             .map(|_| queue_id_at(timer_queue_id.index() + 1))
             .transpose()?;
-        // The queue of each venue that takes orders, in venue order, then the writer status, then
-        // the control queue of the link are appended last: queue ids are recorded on messages, and
+        // The queue of each venue that takes orders, in venue order, then the writer status, the
+        // control queue of the link and the status of the tape writer are appended last: queue ids are recorded on messages, and
         // shifting one would re-attribute an entire recorded tape.
         let mut last_queue_id = link_queue_id.unwrap_or(timer_queue_id);
         let mut exec_queue_ids = Vec::new();
@@ -193,7 +196,13 @@ impl Registry {
             .as_ref()
             .map(|_| queue_id_at(last_queue_id.index() + 1))
             .transpose()?;
-        let input_queue_count = control_queue_id.unwrap_or(last_queue_id).index() + 1;
+        let last_queue_id = control_queue_id.unwrap_or(last_queue_id);
+        let tape_status_queue_id = config
+            .persistence
+            .as_ref()
+            .map(|_| queue_id_at(last_queue_id.index() + 1))
+            .transpose()?;
+        let input_queue_count = tape_status_queue_id.unwrap_or(last_queue_id).index() + 1;
 
         Ok(Registry {
             instruments,
@@ -210,6 +219,7 @@ impl Registry {
             exec_queue_ids,
             writer_status_queue_id,
             control_queue_id,
+            tape_status_queue_id,
             input_queue_count,
         })
     }
@@ -328,6 +338,10 @@ impl Registry {
 
     pub fn control_queue_id(&self) -> Option<QueueId> {
         self.control_queue_id
+    }
+
+    pub fn tape_status_queue_id(&self) -> Option<QueueId> {
+        self.tape_status_queue_id
     }
 }
 

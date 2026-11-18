@@ -11,7 +11,6 @@ use engine::msg::persist::{FeatureId, FeatureRow, PersistRecord};
 use engine::msg::time::LocalTs;
 use engine::runtime::config::{RecordedTables, TableKind};
 use engine::runtime::durable_file::{DiskFiles, FileSteps, StepFile};
-use engine::tape::PersistError;
 
 use crate::parquet_readback::{
     BASE_TS_US, Cell, TempDir, drain_blocking, parquet_files, read_parquet_file, run_dir,
@@ -47,7 +46,11 @@ fn kill_at_each_write_step_leaves_no_file_without_footer() {
 fn steps_of_one_file() -> Vec<Step> {
     let dir = TempDir::new("tape-steps");
     let full_run = EndsAfter::steps(usize::MAX);
-    write_one_file(dir.path(), &full_run).expect("a writer that is not killed drains clean");
+    assert_eq!(
+        write_one_file(dir.path(), &full_run),
+        0,
+        "a writer that is not killed stops no table"
+    );
     let steps = full_run.taken();
     let writes = steps.iter().filter(|step| **step == Step::Write).count();
     assert!(
@@ -61,13 +64,13 @@ fn steps_of_one_file() -> Vec<Step> {
 fn assert_a_kill_leaves_no_file_without_footer(steps: &[Step], allowed: usize) {
     let dir = TempDir::new("tape-kill");
     let features = run_dir(dir.path()).join("features");
-    let drained = write_one_file(dir.path(), &EndsAfter::steps(allowed));
+    let stopped = write_one_file(dir.path(), &EndsAfter::steps(allowed));
     let taken = &steps[..allowed];
     let last = taken.last().expect("the kill comes after a step");
     assert_eq!(
-        drained.is_ok(),
+        stopped == 0,
         allowed == steps.len(),
-        "the drain fails exactly when a step after {last:?} was refused: {drained:?}"
+        "the table stops exactly when a step after {last:?} was refused: {stopped} stopped"
     );
     let complete = parquet_files(&features);
     let unfinished = unfinished_files(&features);
@@ -148,13 +151,14 @@ fn assert_sealed_files_read_back_mid_run() {
     );
 }
 
-fn write_one_file(dir_root: &Path, steps: &EndsAfter) -> Result<(), PersistError> {
+/// The count of tables that the writer stopped. The features table is research data, so its fault
+/// stops it alone and the drain stays clean.
+fn write_one_file(dir_root: &Path, steps: &EndsAfter) -> u32 {
     let records = (0..ONE_FILE_ROWS).map(feature_record).collect();
-    drain_blocking(spawn_writer_through(
-        Arc::new(steps.clone()),
-        dir_root,
-        records,
-    ))
+    let handle = spawn_writer_through(Arc::new(steps.clone()), dir_root, records);
+    let stopped = handle.stopped_tables();
+    drain_blocking(handle).expect("a fault of a research table leaves the drain clean");
+    stopped.count()
 }
 
 /// Polls, because the claim is that files appear without a drain.

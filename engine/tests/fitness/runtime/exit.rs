@@ -19,7 +19,7 @@ use engine::runtime::{
     DrainDeadline, DrainFailure, DrainOutcome, DrainWatchdog, ExecutionLease, Exit, Preflight,
     StartError, Trigger,
 };
-use engine::tape::PersistError;
+use engine::tape::{PersistError, TapeTable};
 use engine::venues::VenueError;
 use engine::venues::binance::exec::ProbeError;
 use engine::venues::exec::{
@@ -330,15 +330,16 @@ fn each_exposure_error() -> [ExposureError; 9] {
 fn each_persist_error() -> [PersistError; 5] {
     [
         PersistError::Io {
-            path: PathBuf::from("data/orders.parquet"),
+            table: TapeTable::Trades,
+            path: PathBuf::from("data/trades.parquet"),
             source: std::io::Error::other("disk full"),
         },
         PersistError::Parquet {
-            table: "orders",
+            table: TapeTable::Orders,
             source: ParquetError::General("short write".to_owned()),
         },
         PersistError::Batch {
-            table: "fills",
+            table: TapeTable::Fills,
             source: ArrowError::ComputeError("columns of two lengths".to_owned()),
         },
         PersistError::WriterPanicked {
