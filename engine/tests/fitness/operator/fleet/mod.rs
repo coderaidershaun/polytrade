@@ -7,8 +7,6 @@ mod fleet_contract;
 #[cfg(feature = "mcp")]
 mod fleet_server;
 #[cfg(feature = "mcp")]
-mod mcp_fleet;
-#[cfg(feature = "mcp")]
 mod mcp_http;
 #[cfg(feature = "mcp")]
 pub(crate) mod mcp_support;

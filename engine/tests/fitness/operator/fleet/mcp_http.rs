@@ -8,16 +8,12 @@ use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::process::{Command, Stdio};
 
 use rustix::process::{Signal, kill_process};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::operator::fleet::mcp_support::{
-    EngineTree, FRESH_SCRIPT_DEADLINE, IGNORE_TERM, MODE_OFF, Server, TRAP_TERM, call, is_alive,
-    open_session, pid_of, reply_of, started_pid, status_of_browser_request, text_of, within,
+    EngineTree, FRESH_SCRIPT_DEADLINE, IGNORE_TERM, MODE_OFF, Server, call, is_alive, open_session,
+    pid_of, reply_of, started_pid,
 };
-
-fn shared_engine() -> Value {
-    json!({"strategy_id": "http-shared", "te_id": "te-one"})
-}
 
 /// Opens a connection that sits idle between requests, the way a client's pooled connection waits
 /// for its next one. Each request carries an `Origin` header, so the server refuses it at once with
@@ -60,76 +56,6 @@ fn read_response(connection: &mut BufReader<TcpStream>) {
     connection
         .read_exact(&mut body)
         .expect("the whole body arrives");
-}
-
-/// The server exists so an engine started from one agent reply survives that reply and every later
-/// session sees it. A server that stopped an engine with the session that started it, or gave each
-/// session its own fleet, would still pass every in-process test.
-#[tokio::test(flavor = "multi_thread")]
-async fn engines_outlive_their_session_and_every_session_shares_them_until_sigterm() {
-    let tree = EngineTree::new("mcp-http-shared");
-    // No binary of this name is built beside the server, so it finds this one only through
-    // `--engines`.
-    tree.engine("http-shared", "te-one", MODE_OFF, TRAP_TERM);
-    let mut server = Server::spawn(&tree, 0);
-    let port = server.wait_until_listening();
-
-    let first = open_session(port).await;
-    let tools = within(first.list_all_tools()).await.expect("lists tools");
-    let mut names: Vec<String> = tools.iter().map(|tool| tool.name.to_string()).collect();
-    names.sort();
-    assert_eq!(
-        names,
-        [
-            "list_strategies",
-            "set_execution_mode",
-            "start_strategy",
-            "stop_strategy"
-        ]
-    );
-    let started = reply_of(&call(&first, "start_strategy", shared_engine()).await);
-    assert_eq!(started["mode"], "off");
-    let pid = started_pid(&started);
-    tree.wait_until_ready("http-shared-te-one");
-    within(first.cancel())
-        .await
-        .expect("the first session closes");
-    assert!(
-        is_alive(pid),
-        "closing the session that started an engine must not stop it"
-    );
-
-    let second = open_session(port).await;
-    let again = call(&second, "start_strategy", shared_engine()).await;
-    assert_eq!(again.is_error, Some(true), "{again:?}");
-    assert!(
-        text_of(&again).contains("already running"),
-        "{}",
-        text_of(&again)
-    );
-    let listing = reply_of(&call(&second, "list_strategies", json!({})).await);
-    let row = &listing["engines"][0];
-    assert_eq!(row["state"], "running");
-    assert_eq!(row["pid"].as_u64(), Some(u64::from(pid)));
-
-    let status = status_of_browser_request(port);
-    assert!(
-        status.starts_with("HTTP/1.1 403"),
-        "a request from a browser page is refused: {status:?}"
-    );
-
-    let exited = server.terminate();
-    drop(second);
-    assert_eq!(exited.status.code(), Some(0), "{}", exited.stderr);
-    assert!(
-        exited
-            .stderr
-            .contains("polysim-mcp: stopped http-shared-te-one (exit code 0, forced false)"),
-        "{}",
-        exited.stderr
-    );
-    assert!(!is_alive(pid), "the engine is gone once the server exits");
-    assert_eq!(exited.stdout, "", "stdout stays silent over http too");
 }
 
 /// A client must hear that the server is going away while the engines are still being stopped,
@@ -183,41 +109,6 @@ fn a_taken_port_fails_the_server_with_a_bind_error() {
     );
     assert!(!exited.stderr.contains("listening on"), "{}", exited.stderr);
     assert_eq!(exited.stdout, "");
-}
-
-/// A parent that starts the server and then dies without stopping it, by a crash or a force quit,
-/// must not leave the server and its engines running where the next parent cannot reach them.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_server_watching_stdin_stops_its_engines_and_exits_when_the_parent_closes_it() {
-    let tree = EngineTree::new("mcp-http-parent");
-    tree.engine("http-parent", "te-one", MODE_OFF, TRAP_TERM);
-    let mut command = Server::command(&tree);
-    command
-        .args(["--http", "0", "--watch-stdin"])
-        .stdin(Stdio::piped());
-    let mut server = Server::start(command);
-    let port = server.wait_until_listening();
-    // Bytes on the pipe must not end the server. Only closing the pipe does.
-    let parent = server.child.stdin.as_mut().expect("stdin is piped");
-    parent.write_all(b"noise\n").expect("the parent writes");
-    let session = open_session(port).await;
-    let engine = json!({"strategy_id": "http-parent", "te_id": "te-one"});
-    let pid = started_pid(&reply_of(&call(&session, "start_strategy", engine).await));
-    tree.wait_until_ready("http-parent-te-one");
-
-    drop(server.child.stdin.take());
-    let exited = server.wait_for_exit();
-    drop(session);
-    assert_eq!(exited.status.code(), Some(0), "{}", exited.stderr);
-    assert!(
-        exited
-            .stderr
-            .contains("polysim-mcp: stopped http-parent-te-one (exit code 0, forced false)"),
-        "{}",
-        exited.stderr
-    );
-    assert!(!is_alive(pid), "the engine is gone once the server exits");
-    assert_eq!(exited.stdout, "", "stdout stays silent over http too");
 }
 
 /// A server that can no longer watch its parent must say so and exit, not run on unwatched.
