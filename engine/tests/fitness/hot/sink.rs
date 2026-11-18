@@ -19,7 +19,7 @@ use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrd
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BookChunk, InboundMessage, MessageBody, SpinTick, TradeEvent};
 use engine::msg::persist::{FeatureId, PersistRecord};
-use engine::msg::run_state::{RunAssertion, RunState};
+use engine::msg::run_state::{ControllerEpoch, RunAssertion, RunState};
 use engine::msg::time::Stamper;
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
 use engine::runtime::config::{RecordedTables, TableKind};
@@ -595,7 +595,7 @@ impl Market {
                 let state = if is_running { RunState::Running } else { RunState::Idle };
                 let desired = RunAssertion {
                     state,
-                    epoch: self.epoch,
+                    epoch: ControllerEpoch::new(self.epoch),
                 };
                 run_control(desired, when)
             }

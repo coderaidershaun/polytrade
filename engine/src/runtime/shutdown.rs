@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 
 use crate::msg::failure::{FailureClass, Halt};
 use crate::msg::ids::{ClientOrderId, QueueId, SourceId, TradeId};
-use crate::msg::run_state::{RunAssertion, RunState};
+use crate::msg::run_state::{ControllerEpoch, RunAssertion, RunState};
 use crate::warn;
 
 /// A one-way latch: the engine drains and exits immediately. Cheap to clone and to check, and the
@@ -166,7 +166,7 @@ struct RunStateCell {
 }
 
 /// The epoch occupies the low 63 bits and the state the sign bit, which keeps the whole assertion
-/// in one word while still letting the epoch reach 2^63.
+/// in one word. `ControllerEpoch` stays below 2^63, so the two never overlap.
 const IDLE_BIT: u64 = 1 << 63;
 
 impl RunStateCell {
@@ -189,15 +189,15 @@ impl RunStateCell {
 
 const fn pack(assertion: RunAssertion) -> u64 {
     match assertion.state {
-        RunState::Running => assertion.epoch,
-        RunState::Idle => assertion.epoch | IDLE_BIT,
+        RunState::Running => assertion.epoch.get(),
+        RunState::Idle => assertion.epoch.get() | IDLE_BIT,
     }
 }
 
 const fn unpack(word: u64) -> RunAssertion {
     RunAssertion {
         state: if word & IDLE_BIT == 0 { RunState::Running } else { RunState::Idle },
-        epoch: word & !IDLE_BIT,
+        epoch: ControllerEpoch::new(word & !IDLE_BIT),
     }
 }
 

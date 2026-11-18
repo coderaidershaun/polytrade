@@ -61,7 +61,7 @@ fn payload_flood_never_delays_a_marker_past_its_next_pop() {
         tables: RecordedTables::new(&[TableKind::LinkFrames]),
         warmup: DurationUs::ZERO,
     });
-    let mut plane = linked.control_plane(ControllerLoss::Hold);
+    let mut plane = linked.control_plane(&[CONTROLLER.ip()], ControllerLoss::Hold);
     let (link_ring, link_queue) = touched_input_ring(LINK_CAPACITY);
     let mut link = LinkQueueProducer::new(link_ring, QueueId::new(0).unwrap());
     let (control_ring, control_queue) = touched_input_ring(CONTROL_CAPACITY);

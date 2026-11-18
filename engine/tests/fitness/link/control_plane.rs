@@ -13,7 +13,7 @@ use engine::link::{AssertionVerdict, ControlPlane};
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, RunControl, SpinTick, TradeEvent};
 use engine::msg::persist::{FeatureId, LinkRowKind, PersistRecord};
-use engine::msg::run_state::{RunAssertion, RunState};
+use engine::msg::run_state::{ControllerEpoch, RunAssertion, RunState};
 use engine::msg::time::{DurationUs, LocalTs};
 use engine::runtime::config::{ControllerLoss, RecordedTables, TableKind};
 
@@ -76,7 +76,7 @@ impl Harness {
             tables: RecordedTables::new(&[TableKind::Features, TableKind::LinkFrames]),
             warmup: DurationUs::ZERO,
         });
-        let plane = linked.control_plane(on_controller_loss);
+        let plane = linked.control_plane(&[CONTROLLER.ip()], on_controller_loss);
         Self {
             linked,
             plane,
@@ -169,7 +169,7 @@ fn link_markers(records: &[PersistRecord]) -> Vec<RunAssertion> {
                     LinkRowKind::RunIdle => RunState::Idle,
                     _ => RunState::Running,
                 },
-                epoch: row.seq,
+                epoch: ControllerEpoch::new(row.seq),
             }),
             _ => None,
         })
@@ -318,7 +318,7 @@ fn marker() -> impl Strategy<Value = Marker> {
 fn step() -> impl Strategy<Value = Step> {
     let assertion = (any::<bool>(), 0..8u64).prop_map(|(is_idle, epoch)| RunAssertion {
         state: if is_idle { RunState::Idle } else { RunState::Running },
-        epoch,
+        epoch: ControllerEpoch::new(epoch),
     });
     prop_oneof![
         3 => (assertion, marker()).prop_map(|(assertion, marker)| Step::Assert { assertion, marker }),
@@ -362,9 +362,9 @@ fn converges(is_dead_man: bool, steps: &[(Step, i64)]) -> Result<(), TestCaseErr
         harness.wait(DurationUs::from_millis(gap_ms));
         match step {
             Step::Assert { assertion, marker } => {
-                let expected = match assertion.epoch {
+                let expected = match assertion.epoch.get() {
                     0 => AssertionVerdict::NoClaim,
-                    epoch if epoch > highest.epoch => AssertionVerdict::Accepted,
+                    epoch if epoch > highest.epoch.get() => AssertionVerdict::Accepted,
                     _ => AssertionVerdict::Stale,
                 };
                 if expected == AssertionVerdict::Accepted {
@@ -406,8 +406,8 @@ fn converges(is_dead_man: bool, steps: &[(Step, i64)]) -> Result<(), TestCaseErr
     );
 
     harness.wait(ControlPlane::SILENCE_LIMIT);
-    let has_claim = highest.epoch > 0;
-    let expected_park = (is_dead_man && has_claim).then(|| idle_at(highest.epoch + 1));
+    let has_claim = highest.epoch > ControllerEpoch::ZERO;
+    let expected_park = (is_dead_man && has_claim).then(|| idle_at(highest.epoch.get() + 1));
     prop_assert_eq!(
         harness.announce(Marker::Delivered),
         expected_park,

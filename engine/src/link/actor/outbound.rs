@@ -13,7 +13,7 @@ use super::super::control::{CatalogFeature, CatalogInstrument, Lifecycle, RunPha
 use super::super::envelope::{Envelope, TopicId, WireName};
 use super::super::frame::{LinkBody, LinkDatagram};
 use super::Actor;
-use crate::msg::run_state::RunState;
+use crate::msg::run_state::{ControllerEpoch, RunState};
 
 impl Actor {
     pub(super) fn flush_feeds(&mut self, now: LocalTs) {
@@ -102,7 +102,7 @@ impl Actor {
             let body = LinkBody::Subscribe(Subscribe {
                 topics,
                 desired_state: RunState::Running,
-                desired_epoch: 0,
+                desired_epoch: ControllerEpoch::ZERO,
             });
             self.send_to(address, TopicId::SUBSCRIBE, body);
         }

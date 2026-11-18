@@ -416,6 +416,14 @@ fn the_shipped_configs_run_their_strategies_and_ship_disarmed() {
         publisher_link.bind, micro_link.bind,
         "two trading engines of one strategy ship runnable side by side on one box"
     );
+    let relay_host = [std::net::IpAddr::from([127, 0, 0, 1])];
+    for (engine, link) in [("binance", micro_link), ("polymarket", publisher_link)] {
+        assert_eq!(
+            link.controllers, relay_host,
+            "{engine}: only the relay on this box may assert a run state, and an empty list would \
+             accept none"
+        );
+    }
     assert_eq!(
         micro_peer.address, publisher_link.bind,
         "the consumer's peer address must be the address the publisher actually binds"

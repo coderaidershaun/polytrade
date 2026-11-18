@@ -19,7 +19,7 @@ use engine::msg::inbound::{
     SpinTick, TradeEvent, WriterFailure,
 };
 use engine::msg::persist::{FeatureId, PersistRecord};
-use engine::msg::run_state::{RunAssertion, RunState};
+use engine::msg::run_state::{ControllerEpoch, RunAssertion, RunState};
 use engine::msg::time::{DurationUs, Stamper};
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
 use engine::runtime::config::{KlineInterval, RecordedTables, TableKind};
@@ -804,7 +804,7 @@ impl Builder {
                 let state = if is_running { RunState::Running } else { RunState::Idle };
                 let desired = RunAssertion {
                     state,
-                    epoch: self.epoch,
+                    epoch: ControllerEpoch::new(self.epoch),
                 };
                 run_control(desired, when)
             }
