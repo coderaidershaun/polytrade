@@ -4,6 +4,8 @@
 mod fleet;
 /// These drive `engine::operator::relay` and its binary, which exist only under feature `web`.
 #[cfg(feature = "web")]
+mod relay;
+#[cfg(feature = "web")]
 mod web_http;
 mod workstation;
 

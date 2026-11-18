@@ -26,7 +26,7 @@ use crate::parquet_readback::TempDir;
 
 /// A freshly built binary can sit in the operating system's malware scan for tens of seconds.
 /// Every wait returns as soon as its answer arrives, so a fast machine never pays this.
-const DEADLINE: Duration = Duration::from_secs(60);
+pub(super) const DEADLINE: Duration = Duration::from_secs(60);
 
 const INDEX: &[u8] = b"<!doctype html><title>workstation</title>";
 const WASM: &[u8] = b"\0asm\x01\0\0\0";
@@ -36,18 +36,18 @@ const DESCRIPTOR: &str = r#"{"version":1,"name":"Polysim","ui":"./","embedding":
 const MCP_URL: &str = "http://127.0.0.1:8765/mcp";
 
 /// Dropping this kills the server process, so a test that panics never leaves one running.
-struct WebServer {
+pub(super) struct WebServer {
     child: Child,
-    stderr: Receiver<String>,
+    pub(super) stderr: Receiver<String>,
 }
 
-struct Exited {
-    status: ExitStatus,
-    stderr: String,
+pub(super) struct Exited {
+    pub(super) status: ExitStatus,
+    pub(super) stderr: String,
 }
 
 impl WebServer {
-    fn start(mut command: Command) -> WebServer {
+    pub(super) fn start(mut command: Command) -> WebServer {
         let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -70,7 +70,7 @@ impl WebServer {
     }
 
     /// Returns the port named in the listening line, which must be the first line on stderr.
-    fn wait_until_listening(&self) -> u16 {
+    pub(super) fn wait_until_listening(&self) -> u16 {
         let line = self
             .stderr
             .recv_timeout(DEADLINE)
@@ -91,7 +91,7 @@ impl WebServer {
         port
     }
 
-    fn wait_for_line_containing(&self, needle: &str) -> String {
+    pub(super) fn wait_for_line_containing(&self, needle: &str) -> String {
         let deadline = Instant::now() + DEADLINE;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
@@ -105,7 +105,7 @@ impl WebServer {
         }
     }
 
-    fn wait_for_exit(&mut self) -> Exited {
+    pub(super) fn wait_for_exit(&mut self) -> Exited {
         let deadline = Instant::now() + DEADLINE;
         let status = loop {
             if let Some(status) = self.child.try_wait().expect("the server can be waited on") {
@@ -141,7 +141,7 @@ impl Drop for WebServer {
 }
 
 /// A UDP socket standing in for a trading engine's link port.
-fn fake_engine() -> (UdpSocket, SocketAddr) {
+pub(super) fn fake_engine() -> (UdpSocket, SocketAddr) {
     let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("a free udp port");
     socket
         .set_read_timeout(Some(DEADLINE))
@@ -151,7 +151,7 @@ fn fake_engine() -> (UdpSocket, SocketAddr) {
 }
 
 /// A bundle shaped like Trunk's output: a page, a wasm module and a nested file.
-fn bundle(tag: &str) -> TempDir {
+pub(super) fn bundle(tag: &str) -> TempDir {
     let dir = TempDir::new(tag);
     let files = [
         ("index.html", INDEX),
@@ -166,7 +166,7 @@ fn bundle(tag: &str) -> TempDir {
     dir
 }
 
-fn command(bundle: &Path, engines: &[SocketAddr]) -> Command {
+pub(super) fn command(bundle: &Path, engines: &[SocketAddr]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_polysim-web"));
     command
         .args(["--strategy", "web-test", "--port", "0", "--bundle"])
@@ -177,20 +177,20 @@ fn command(bundle: &Path, engines: &[SocketAddr]) -> Command {
     command
 }
 
-fn listening(command: Command) -> (WebServer, u16) {
+pub(super) fn listening(command: Command) -> (WebServer, u16) {
     let server = WebServer::start(command);
     let port = server.wait_until_listening();
     (server, port)
 }
 
-struct Reply {
-    status: u16,
+pub(super) struct Reply {
+    pub(super) status: u16,
     headers: Vec<(String, String)>,
-    body: Vec<u8>,
+    pub(super) body: Vec<u8>,
 }
 
 impl Reply {
-    fn header(&self, name: &str) -> Option<&str> {
+    pub(super) fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .iter()
             .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
@@ -198,12 +198,12 @@ impl Reply {
     }
 }
 
-fn host(port: u16) -> String {
+pub(super) fn host(port: u16) -> String {
     format!("127.0.0.1:{port}")
 }
 
 /// Sends exactly these headers plus `Connection: close`, so the whole answer ends at end of file.
-fn exchange(port: u16, method: &str, path: &str, headers: &[(&str, &str)]) -> Reply {
+pub(super) fn exchange(port: u16, method: &str, path: &str, headers: &[(&str, &str)]) -> Reply {
     let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).expect("the server accepts");
     stream
         .set_read_timeout(Some(DEADLINE))
@@ -246,7 +246,7 @@ fn parse_reply(raw: &[u8]) -> Reply {
     }
 }
 
-fn get(port: u16, path: &str) -> Reply {
+pub(super) fn get(port: u16, path: &str) -> Reply {
     exchange(port, "GET", path, &[("Host", &host(port))])
 }
 
@@ -363,7 +363,7 @@ fn a_missing_bundle_stops_the_server_with_the_trunk_hint() {
     }
 }
 
-const UPGRADE_HEADERS: [(&str, &str); 4] = [
+pub(super) const UPGRADE_HEADERS: [(&str, &str); 4] = [
     ("Connection", "Upgrade"),
     ("Upgrade", "websocket"),
     ("Sec-WebSocket-Version", "13"),
@@ -544,16 +544,16 @@ fn a_peer_the_server_does_not_relay_to_is_not_found_before_any_upgrade() {
     assert_eq!(post.header("allow"), Some("GET"));
 }
 
-type Tab = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+pub(super) type Tab = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 
-async fn within<T>(future: impl Future<Output = T>) -> T {
+pub(super) async fn within<T>(future: impl Future<Output = T>) -> T {
     tokio::time::timeout(DEADLINE, future)
         .await
         .expect("an answer arrives in time")
 }
 
 /// Connects the way a browser tab does, with the origin of the page the server served.
-async fn open_tab(port: u16, peer: usize) -> Tab {
+pub(super) async fn open_tab(port: u16, peer: usize) -> Tab {
     let mut request = format!("ws://127.0.0.1:{port}/api/link?peer={peer}")
         .into_client_request()
         .expect("a valid url");
@@ -566,31 +566,31 @@ async fn open_tab(port: u16, peer: usize) -> Tab {
     tab
 }
 
-async fn next_message(tab: &mut Tab) -> Message {
+pub(super) async fn next_message(tab: &mut Tab) -> Message {
     within(tab.next())
         .await
         .expect("the relay keeps the socket open")
         .expect("a well-formed frame")
 }
 
-async fn expect_hello(tab: &mut Tab) -> serde_json::Value {
+pub(super) async fn expect_hello(tab: &mut Tab) -> serde_json::Value {
     let Message::Text(text) = next_message(tab).await else {
         panic!("the first message is the hello, as text");
     };
     serde_json::from_str(text.as_str()).expect("the hello is json")
 }
 
-fn bytes_of_length(length: usize) -> Vec<u8> {
+pub(super) fn bytes_of_length(length: usize) -> Vec<u8> {
     (0..=u8::MAX).cycle().take(length).collect()
 }
 
-fn receive(socket: &UdpSocket) -> (Vec<u8>, SocketAddr) {
+pub(super) fn receive(socket: &UdpSocket) -> (Vec<u8>, SocketAddr) {
     let mut buffer = [0_u8; 4096];
     let (length, from) = socket.recv_from(&mut buffer).expect("a datagram arrives");
     (buffer[..length].to_vec(), from)
 }
 
-fn expect_silence(socket: &UdpSocket) {
+pub(super) fn expect_silence(socket: &UdpSocket) {
     socket
         .set_read_timeout(Some(Duration::from_millis(300)))
         .expect("a read timeout");
@@ -601,7 +601,7 @@ fn expect_silence(socket: &UdpSocket) {
     );
 }
 
-const TOKEN: &str = "never-printed-token";
+pub(super) const TOKEN: &str = "never-printed-token";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_tab_reads_the_hello_first_and_datagrams_cross_untouched_both_ways() {
