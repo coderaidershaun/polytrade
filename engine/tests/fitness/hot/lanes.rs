@@ -26,6 +26,7 @@ use engine::runtime::registry::Registry;
 use engine::runtime::shutdown::{DrainSignal, FatalReason, FatalSignal};
 use engine::runtime::{DrainDeadline, DrainOutcome, Exit, Trigger, pin_to_core};
 use rtrb::{Consumer, RingBuffer};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::num::{NonZeroU32, NonZeroU64};
 use std::path::Path;
 use std::sync::Arc;
@@ -61,8 +62,9 @@ fn each_lane_full_gives_its_class() {
 
     let (producer, _peer_frames) = RingBuffer::<InboundMessage>::new(1);
     let mut link = LinkQueueProducer::new(producer, QueueId::new(1).unwrap());
-    link.push(spin_at(0, 1_000));
-    link.push(spin_at(1, 2_000));
+    let peer = SocketAddr::from((Ipv4Addr::LOCALHOST, 47_004));
+    link.push(peer, spin_at(0, 1_000));
+    link.push(peer, spin_at(1, 2_000));
     assert_eq!(
         link.dropped(),
         1,

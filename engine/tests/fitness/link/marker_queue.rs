@@ -22,6 +22,7 @@ use crate::engine_support::{
 };
 
 const CONTROLLER: SocketAddr = SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 47_002);
+const PEER: SocketAddr = SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), 47_003);
 const LINK_CAPACITY: usize = 4;
 const CONTROL_CAPACITY: usize = 2;
 
@@ -67,7 +68,7 @@ fn payload_flood_never_delays_a_marker_past_its_next_pop() {
     let (control_ring, control_queue) = touched_input_ring(CONTROL_CAPACITY);
     let mut markers = ControlQueueProducer::new(control_ring, QueueId::new(1).unwrap());
     for seq in 1..=4 {
-        link.push(payload(seq, seq as i64 * 10));
+        link.push(PEER, payload(seq, seq as i64 * 10));
     }
     assert_eq!(
         plane.on_assertion(CONTROLLER, idle_at(9), ts(50)),
@@ -82,13 +83,14 @@ fn payload_flood_never_delays_a_marker_past_its_next_pop() {
         0,
         "the push of the marker succeeds while the link queue is full"
     );
-    link.push(payload(5, 70));
-    link.push(payload(6, 80));
+    link.push(PEER, payload(5, 70));
+    link.push(PEER, payload(6, 80));
     assert_eq!(
         link.dropped(),
         2,
         "each payload of the flood is dropped and counted"
     );
+    assert_eq!(link.senders().of(PEER).queue_full, 2, "for its sender");
 
     let mut queues = IngressQueues::new(vec![link_queue, control_queue]);
     let mut pops_before_marker = 0;
@@ -99,10 +101,10 @@ fn payload_flood_never_delays_a_marker_past_its_next_pop() {
         }
         pops_before_marker += 1;
         // A frame that lands once the marker waits is newer than it, and pops after it.
-        link.push(payload(
-            10 + pops_before_marker,
-            100 + pops_before_marker as i64,
-        ));
+        link.push(
+            PEER,
+            payload(10 + pops_before_marker, 100 + pops_before_marker as i64),
+        );
     }
     assert_eq!(
         pops_before_marker, 4,

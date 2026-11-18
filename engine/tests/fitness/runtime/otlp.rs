@@ -458,6 +458,29 @@ fn points_of_row(row: &RollupRow) -> Vec<Point> {
             row.dropped_total,
             row.interval_end_ts_us,
         )],
+        RollupRow::SenderDrop(row) => {
+            let sender = row
+                .sender
+                .map_or_else(|| "others".to_owned(), |sender| sender.to_string());
+            [
+                ("queue_full", row.queue_full_total),
+                ("over_rate", row.over_rate_total),
+            ]
+            .into_iter()
+            .map(|(cause, total)| {
+                point(
+                    "polysim.link.sender_drops",
+                    "{frame}",
+                    &[
+                        ("polysim.sender", sender.clone()),
+                        ("polysim.cause", cause.to_owned()),
+                    ],
+                    total,
+                    row.interval_end_ts_us,
+                )
+            })
+            .collect()
+        }
         RollupRow::Backlog(row) => vec![point(
             "polysim.backlog.max",
             "{message}",

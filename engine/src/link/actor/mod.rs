@@ -28,6 +28,7 @@ use crate::venues::edge::sender::SendWait;
 use super::control::{LINK_MAX_TOPICS, RunPhase, TopicSet};
 use super::envelope::{FrameGuard, LINK_MAX_DATAGRAM, LinkIdentity, TopicId};
 use super::frame::{LinkBody, OutboundLink};
+use super::senders::SenderCounts;
 use super::subscribers::{LINK_MAX_SUBSCRIBERS, SequenceGate, SubscriberTable};
 use inbound::PeerState;
 
@@ -147,12 +148,16 @@ enum Wake {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LinkCounts {
     pub decode_failed: u64,
+    /// Of the datagrams that did not decode, those of another layout digest.
+    pub layout_mismatched: u64,
     pub gate_rejected: u64,
     pub topic_ignored: u64,
     pub send_failed: u64,
     pub receive_failed: u64,
     pub table_full_refused: u64,
     pub peer_silenced: u64,
+    /// The peer frames that the link queue lost, for each sender.
+    pub senders: SenderCounts,
 }
 
 /// The counts of the link actor as of its last heartbeat, for a reader on another thread.
@@ -291,6 +296,8 @@ impl Actor {
         }
         self.push_marker_if_needed(now);
         self.check_peer_silence(now);
+        self.counts.senders = *self.inbound.senders();
+        self.inbound.start_rate_period();
         self.published_counts.publish(self.counts);
         self.announce_ticks += 1;
         if self.announce_ticks.is_multiple_of(REPORT_TICKS) {
@@ -301,7 +308,15 @@ impl Actor {
     #[cold]
     fn report_counts(&self) {
         let counts = &self.counts;
-        let total = counts.decode_failed
+        let (queue_full, over_rate) = counts
+            .senders
+            .rows()
+            .fold((0, 0), |(full, over), (_, count)| {
+                (full + count.queue_full, over + count.over_rate)
+            });
+        let total = queue_full
+            + over_rate
+            + counts.decode_failed
             + counts.gate_rejected
             + counts.topic_ignored
             + counts.send_failed
@@ -312,8 +327,9 @@ impl Actor {
             return;
         }
         info!(
-            "link rejected[decode_failed={} gate_rejected={} topic_ignored={} send_failed={} receive_failed={} table_full_refused={} peer_silenced={}] gate{:?}",
+            "link rejected[decode_failed={} layout_mismatched={} gate_rejected={} topic_ignored={} send_failed={} receive_failed={} table_full_refused={} peer_silenced={} queue_full={queue_full} over_rate={over_rate}] gate{:?}",
             counts.decode_failed,
+            counts.layout_mismatched,
             counts.gate_rejected,
             counts.topic_ignored,
             counts.send_failed,

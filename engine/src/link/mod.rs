@@ -7,6 +7,7 @@ mod control;
 mod envelope;
 mod feed;
 mod frame;
+mod senders;
 mod subscribers;
 mod wire;
 
@@ -28,6 +29,7 @@ pub use frame::{
     LINK_LAYOUT, LINK_MAX_FIELDS, LinkBody, LinkDatagram, LinkFrame, LinkOrigin, LinkPayload,
     OutboundLink,
 };
+pub use senders::{LINK_MAX_SENDERS, SenderCount, SenderCounts};
 pub use subscribers::{
     GateCounts, GateVerdict, LINK_MAX_GATE_KEYS, LINK_MAX_SUBSCRIBERS, LINK_SUBSCRIPTION_TTL,
     RefreshOutcome, SequenceGate, SubscriberTable,

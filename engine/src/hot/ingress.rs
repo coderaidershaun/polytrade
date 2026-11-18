@@ -1,11 +1,14 @@
 //! The input queues of the hot thread: the write end of each producer, and the read end, which picks
 //! the oldest head. Order is exact within one queue, and a message late to an empty queue stays late.
 
+use std::net::SocketAddr;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 use rtrb::{Consumer, Producer, RingBuffer};
 
+use crate::link::SenderCounts;
 use crate::log::{hot_error, hot_warn};
 use crate::msg::failure::{FailureClass, Halt};
 use crate::msg::ids::{MAX_INPUT_QUEUES, QueueId, SourceId};
@@ -260,36 +263,76 @@ enum FullRing {
 }
 
 /// The write end of the link input queue. A peer on the network fills it, so a full ring drops the
-/// frame and counts it: a halt there would let any peer stop the engine.
+/// frame and counts it for its sender: a halt there would let any peer stop the engine.
 /// WARNING: a drop is safe only while each link topic carries a whole state, never a delta or an
 /// event. A strategy that folds a stream of deltas breaks on the first drop.
 pub struct LinkQueueProducer {
     producer: Producer<InboundMessage>,
     queue_id: QueueId,
     dropped: u64,
+    senders: SenderCounts,
+    sender_rate: NonZeroU32,
 }
 
 impl LinkQueueProducer {
     /// A full ring drops the frame and counts it, because an untrusted peer fills it.
     pub const WHEN_FULL: FailureClass = FailureClass::Reject;
 
+    /// No sender has a rate until [`LinkQueueProducer::with_sender_rate`] gives one.
     pub fn new(producer: Producer<InboundMessage>, queue_id: QueueId) -> Self {
         Self {
             producer,
             queue_id,
             dropped: 0,
+            senders: SenderCounts::default(),
+            sender_rate: NonZeroU32::MAX,
         }
     }
 
-    pub fn push(&mut self, message: InboundMessage) {
+    /// The frames each sender may put into one heartbeat period. The frames above it are refused
+    /// and counted for that sender.
+    pub fn with_sender_rate(mut self, rate: NonZeroU32) -> Self {
+        self.sender_rate = rate;
+        self
+    }
+
+    /// Refuses a frame of a sender above its rate, and drops a frame that finds the ring full; each
+    /// is counted for `from`.
+    pub fn push(&mut self, from: SocketAddr, message: InboundMessage) {
+        let slot = match self.senders.admit(from, self.sender_rate) {
+            Ok(slot) => slot,
+            Err(refused) => return self.warn_over_rate(from, refused),
+        };
         if self.producer.push(message).is_err() {
+            self.senders.count_queue_full(slot);
             self.count_drop();
         }
     }
 
-    /// The frames dropped because the queue was full.
+    /// Each sender gets its whole rate again. The link actor calls it at each heartbeat.
+    pub fn start_rate_period(&mut self) {
+        self.senders.start_period();
+    }
+
+    /// The frames dropped because the queue was full, from each sender together.
     pub fn dropped(&self) -> u64 {
         self.dropped
+    }
+
+    pub fn senders(&self) -> &SenderCounts {
+        &self.senders
+    }
+
+    /// Warns at the 1st, 2nd, 4th, 8th refusal of one sender and so on. The link actor's task
+    /// calls it, never the hot thread, so a text line may carry the address.
+    #[cold]
+    fn warn_over_rate(&self, from: SocketAddr, refused: u64) {
+        if refused.is_power_of_two() {
+            crate::warn!(
+                "link sender {from} above its rate of {} frames a heartbeat — refused {refused} frames",
+                self.sender_rate
+            );
+        }
     }
 
     /// Warns at the 1st, 2nd, 4th, 8th drop and so on, so a flood shows in the log without filling

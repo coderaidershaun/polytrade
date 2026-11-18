@@ -11,7 +11,7 @@ use crate::{info, warn, warn_repeating};
 
 use super::super::control::Subscribe;
 use super::super::envelope::LinkDecodeError;
-use super::super::frame::{LinkBody, LinkDatagram, LinkFrame, LinkOrigin, LinkPayload};
+use super::super::frame::{LinkBody, LinkDatagram, LinkFrame, LinkOrigin};
 use super::super::subscribers::{LINK_MAX_SUBSCRIBERS, LINK_SUBSCRIPTION_TTL, RefreshOutcome};
 use super::control_plane::AssertionVerdict;
 use super::{Actor, PeerFeed};
@@ -39,7 +39,8 @@ impl Actor {
         match datagram.body {
             LinkBody::Subscribe(subscribe) => self.on_subscribe(from, subscribe, now),
             LinkBody::Payload(payload) => {
-                self.on_payload(LinkOrigin::from(&datagram.envelope), payload, now)
+                let origin = LinkOrigin::from(&datagram.envelope);
+                self.on_payload(from, LinkFrame { origin, payload }, now)
             }
             // Engine serves engine topics (never consumes peer's); delivery still proves peer alive
             _ => self.counts.topic_ignored += 1,
@@ -51,14 +52,15 @@ impl Actor {
         clippy::disallowed_methods,
         reason = "the link actor stamps each peer frame and marker with message time before the tape records it"
     )]
-    fn on_payload(&mut self, origin: LinkOrigin, payload: LinkPayload, received_ts_us: LocalTs) {
-        self.inbound.push(InboundMessage {
+    fn on_payload(&mut self, from: SocketAddr, frame: LinkFrame, received_ts_us: LocalTs) {
+        let message = InboundMessage {
             header: MessageHeader {
                 received_ts_us,
                 queued_ts_us: self.clock.now(),
             },
-            body: MessageBody::Link(LinkFrame { origin, payload }),
-        });
+            body: MessageBody::Link(frame),
+        };
+        self.inbound.push(from, message);
     }
 
     fn on_subscribe(&mut self, from: SocketAddr, subscribe: Subscribe, now: LocalTs) {
@@ -107,6 +109,9 @@ impl Actor {
 
     #[cold]
     fn on_decode_error(&mut self, error: &LinkDecodeError) {
+        if matches!(error, LinkDecodeError::LayoutMismatch { .. }) {
+            self.counts.layout_mismatched += 1;
+        }
         warn_repeating!(
             self.counts.decode_failed,
             "link rejected {} datagrams (latest: {error})",
