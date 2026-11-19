@@ -52,11 +52,6 @@ impl RefusedAssertions {
             .map_or(0, |(_, count)| *count)
     }
 
-    /// The refusals of the addresses past the table, together.
-    pub fn past_table(&self) -> u64 {
-        self.past_table
-    }
-
     pub fn total(&self) -> u64 {
         let in_table: u64 = self
             .by_address
