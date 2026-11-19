@@ -25,7 +25,7 @@ use proptest::prelude::*;
 pub(super) const TOKEN: LinkHash = LinkHash::of_name("fitness-run-token");
 pub(super) const STRATEGY: LinkHash = LinkHash::of_name("strat-micro-recorder");
 pub(super) const SCHEMA: LinkHash = LinkHash::of_fields(&["mid", "microprice", "imbalance"]);
-pub(super) const SENDER: LinkHash = LinkHash::of_name("te-binance-spot-btcusdt");
+const SENDER: LinkHash = LinkHash::of_name("te-binance-spot-btcusdt");
 
 pub(super) fn guard() -> FrameGuard {
     FrameGuard {
@@ -131,7 +131,7 @@ pub(super) fn payload_datagram(schema_hash: LinkHash) -> LinkDatagram {
     }
 }
 
-pub(super) fn arb_envelope(topic: TopicId) -> impl Strategy<Value = Envelope> {
+fn arb_envelope(topic: TopicId) -> impl Strategy<Value = Envelope> {
     (
         any::<u64>(),
         any::<i64>(),
@@ -154,16 +154,16 @@ pub(super) fn arb_envelope(topic: TopicId) -> impl Strategy<Value = Envelope> {
         })
 }
 
-pub(super) fn arb_topic_set() -> impl Strategy<Value = TopicSet> {
+fn arb_topic_set() -> impl Strategy<Value = TopicSet> {
     prop::collection::vec(any::<u16>().prop_map(TopicId), 0..=LINK_MAX_TOPICS)
         .prop_map(|topics| TopicSet::new(&topics).expect("generated within capacity"))
 }
 
-pub(super) fn arb_run_state() -> impl Strategy<Value = RunState> {
+fn arb_run_state() -> impl Strategy<Value = RunState> {
     prop_oneof![Just(RunState::Running), Just(RunState::Idle)]
 }
 
-pub(super) fn arb_levels() -> impl Strategy<Value = [Level; UI_BOOK_LEVELS]> {
+fn arb_levels() -> impl Strategy<Value = [Level; UI_BOOK_LEVELS]> {
     prop::collection::vec(
         (any::<i64>(), any::<i64>()).prop_map(|(price, qty)| Level {
             price: Price::from_mantissa(price),
@@ -174,14 +174,14 @@ pub(super) fn arb_levels() -> impl Strategy<Value = [Level; UI_BOOK_LEVELS]> {
     .prop_map(|levels| levels.try_into().expect("generated exactly one side"))
 }
 
-pub(super) fn arb_optional_level() -> impl Strategy<Value = Option<(Price, Qty)>> {
+fn arb_optional_level() -> impl Strategy<Value = Option<(Price, Qty)>> {
     prop::option::of(
         (any::<i64>(), any::<i64>())
             .prop_map(|(price, qty)| (Price::from_mantissa(price), Qty::from_mantissa(qty))),
     )
 }
 
-pub(super) fn arb_side() -> impl Strategy<Value = Side> {
+fn arb_side() -> impl Strategy<Value = Side> {
     prop_oneof![Just(Side::Buy), Just(Side::Sell)]
 }
 
@@ -191,7 +191,7 @@ pub(super) fn arb_side() -> impl Strategy<Value = Side> {
 /// feature genuinely can be infinite, as Kyle's lambda has already shipped. The infinities are added
 /// back here. NaN cannot join them: it is unequal to itself, so NO structural round-trip can express
 /// it however perfect the codec; `each_frame_kind_round_trips` covers that half bitwise.
-pub(super) fn arb_wire_f64() -> impl Strategy<Value = f64> {
+fn arb_wire_f64() -> impl Strategy<Value = f64> {
     prop_oneof![
         8 => any::<f64>(),
         1 => Just(f64::INFINITY),
@@ -201,7 +201,7 @@ pub(super) fn arb_wire_f64() -> impl Strategy<Value = f64> {
 
 /// Every non-finite bit pattern: a sign, an all-ones exponent, and an arbitrary mantissa — zero for
 /// an infinity, anything else for a NaN, quiet or signalling.
-pub(super) fn arb_non_finite_bits() -> impl Strategy<Value = u64> {
+fn arb_non_finite_bits() -> impl Strategy<Value = u64> {
     (any::<bool>(), 0u64..(1 << 52)).prop_map(|(negative, mantissa)| {
         (u64::from(negative) << 63) | 0x7ff0_0000_0000_0000 | mantissa
     })
@@ -215,11 +215,11 @@ pub(super) fn arb_f64_bits() -> impl Strategy<Value = u64> {
     prop_oneof![any::<u64>(), arb_non_finite_bits()]
 }
 
-pub(super) fn arb_name() -> impl Strategy<Value = WireName> {
+fn arb_name() -> impl Strategy<Value = WireName> {
     "[a-z_]{0,32}".prop_map(|name| WireName::new(&name))
 }
 
-pub(super) fn arb_book() -> impl Strategy<Value = LinkBody> {
+fn arb_book() -> impl Strategy<Value = LinkBody> {
     (
         any::<u16>(),
         any::<u64>(),
@@ -252,15 +252,15 @@ pub(super) fn arb_book() -> impl Strategy<Value = LinkBody> {
 /// Every order state, including all five close reasons: the wire flattens `Closed(_)` into the same
 /// byte as the open states to fit the tail, so a reason that failed to round-trip would silently
 /// report a cancel as a fill.
-pub(super) fn arb_order_state() -> impl Strategy<Value = OrderState> {
+fn arb_order_state() -> impl Strategy<Value = OrderState> {
     prop::sample::select(EVERY_ORDER_STATE.to_vec())
 }
 
-pub(super) fn arb_quote_level() -> impl Strategy<Value = Option<QuoteLevel>> {
+fn arb_quote_level() -> impl Strategy<Value = Option<QuoteLevel>> {
     prop_oneof![Just(None), (0_u8..8).prop_map(QuoteLevel::new),]
 }
 
-pub(super) fn arb_liquidity() -> impl Strategy<Value = Option<Liquidity>> {
+fn arb_liquidity() -> impl Strategy<Value = Option<Liquidity>> {
     prop_oneof![
         Just(None),
         Just(Some(Liquidity::Maker)),
@@ -293,7 +293,7 @@ pub(super) const REJECT_REASONS: [RejectReason; 20] = [
 
 /// Both refusal origins. The local arm pads the venue arm's code field, so a decoder that read the
 /// padding as a code would report a venue rejection that never happened.
-pub(super) fn arb_reject_origin() -> impl Strategy<Value = RejectOrigin> {
+fn arb_reject_origin() -> impl Strategy<Value = RejectOrigin> {
     prop_oneof![
         prop::sample::select(REJECT_REASONS.to_vec()).prop_map(RejectOrigin::Local),
         (
@@ -310,7 +310,7 @@ pub(super) fn arb_reject_origin() -> impl Strategy<Value = RejectOrigin> {
     ]
 }
 
-pub(super) fn arb_halt() -> impl Strategy<Value = UiHalt> {
+fn arb_halt() -> impl Strategy<Value = UiHalt> {
     prop_oneof![
         Just(UiHalt::Armed),
         (
@@ -340,7 +340,7 @@ pub(super) fn arb_halt() -> impl Strategy<Value = UiHalt> {
     ]
 }
 
-pub(super) fn arb_report_cell() -> impl Strategy<Value = LatencyCell> {
+fn arb_report_cell() -> impl Strategy<Value = LatencyCell> {
     any::<[u64; 5]>().prop_map(|[count, p50_ns, p99_ns, p999_ns, max_ns]| LatencyCell {
         count,
         p50_ns,
@@ -350,7 +350,7 @@ pub(super) fn arb_report_cell() -> impl Strategy<Value = LatencyCell> {
     })
 }
 
-pub(super) fn arb_latency_report() -> impl Strategy<Value = LinkBody> {
+fn arb_latency_report() -> impl Strategy<Value = LinkBody> {
     (
         any::<i64>(),
         prop::array::uniform3(prop::option::of(any::<i64>())),
@@ -369,7 +369,7 @@ pub(super) fn arb_latency_report() -> impl Strategy<Value = LinkBody> {
         })
 }
 
-pub(super) fn arb_event() -> impl Strategy<Value = LinkBody> {
+fn arb_event() -> impl Strategy<Value = LinkBody> {
     let head = (any::<u16>(), any::<u64>(), any::<i64>());
     prop_oneof![
         (head, arb_optional_level(), arb_optional_level()).prop_map(
@@ -502,7 +502,7 @@ pub(super) fn arb_event() -> impl Strategy<Value = LinkBody> {
     .prop_map(LinkBody::Event)
 }
 
-pub(super) fn arb_catalog_instrument() -> impl Strategy<Value = LinkBody> {
+fn arb_catalog_instrument() -> impl Strategy<Value = LinkBody> {
     (
         any::<i64>(),
         any::<u16>(),
@@ -682,7 +682,7 @@ pub(super) const FRAMES: &str = include_str!("link_frames.txt");
 /// Where `POLYSIM_BLESS_LINK` writes, relative to the package root the suite runs from.
 pub(super) const FRAMES_PATH: &str = "tests/fitness/link/link_frames.txt";
 
-pub(super) fn event(seq: u64, event: UiEvent) -> LinkDatagram {
+fn event(seq: u64, event: UiEvent) -> LinkDatagram {
     let mut datagram = event_datagram(event);
     datagram.envelope.seq = seq;
     datagram
