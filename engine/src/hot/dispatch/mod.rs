@@ -28,7 +28,7 @@ use crate::hot::strategy::{Actions, ActionsSetup, DrainSinks, Strategy, Strategy
 use crate::log::hot_error;
 use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
-use crate::msg::inbound::{InboundMessage, MessageBody, SpinTick, WriterFailure};
+use crate::msg::inbound::{FileWriter, InboundMessage, MessageBody, SpinTick, WriterFailure};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{FoldTime, LocalTs};
 use crate::msg::ui::{DomQuote, UI_QUOTE_LEVELS};
@@ -339,11 +339,15 @@ impl HotEngine {
     /// The message is the one point in the input where a writer gave up, so a replay halts at it.
     #[cold]
     fn halt_on_writer_failure(&mut self, failure: &WriterFailure) {
-        hot_error!(
-            "the {:?} writer failed {} writes in a row, so its file no longer follows the position — quoting halts",
-            failure.writer,
-            failure.consecutive_failures
-        );
+        match failure.writer {
+            FileWriter::Exposure => hot_error!(
+                "the exposure writer failed {} writes in a row, so its file no longer follows the position — quoting halts",
+                failure.consecutive_failures
+            ),
+            FileWriter::Tape => hot_error!(
+                "the tape writer could not write an audit table, so the tape no longer records each order and fill — quoting halts"
+            ),
+        }
         let at = self.state.fold_time.as_local();
         self.state.exec.halt(HaltReason::WriterFailed, at);
     }

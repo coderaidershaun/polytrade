@@ -214,7 +214,7 @@ impl<P> Config<P> {
     }
 
     /// The spins between two seals of the tape: the configured count, or five minutes of spins.
-    pub fn seal_interval_spins(&self) -> NonZeroU64 {
+    pub(crate) fn seal_interval_spins(&self) -> NonZeroU64 {
         let configured = self
             .persistence
             .as_ref()
