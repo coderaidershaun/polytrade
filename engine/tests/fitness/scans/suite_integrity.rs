@@ -1,15 +1,24 @@
 //! A test that no `mod` line reaches compiles nowhere and never runs, while the gate stays green.
-//! So each test folder is checked against its declarations, and a fitness test cannot be ignored.
+//! So each test folder is checked against its declarations, a fitness test cannot be ignored, and
+//! no test code sits outside `tests/`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::log_lane_ownership::without_comments_and_literals;
 use crate::operator::rust_sources;
 
 const TESTS_FOLDER: &str = "tests";
 const FITNESS_ROOT: &str = "tests/fitness";
 const REGRESSIONS_FOLDER: &str = "tests/proptest-regressions";
 const TARGET_ROOT_FILE: &str = "main.rs";
+
+/// The folders of the workspace that a build ships, relative to the workspace root. Test code
+/// lives only below `<package>/tests/`, so a test here is one that no gate step selects.
+const PRODUCTION_ROOTS: [&str; 4] = ["engine/src", "lab/src", "strategies", "tools"];
+
+/// The spellings of test code: a test function, a test-only item, an inline test module.
+const TEST_CODE: [&str; 4] = ["#[test]", "cfg(test)", "::test]", "mod tests"];
 
 /// Each fitness test that a gate step selects by a name filter. A filter that matches no test
 /// passes with zero tests, so a renamed test would switch that step off without a red line.
@@ -32,6 +41,11 @@ fn each_test_file_is_declared_and_none_is_ignored() {
     }
     for source in rust_sources(Path::new(FITNESS_ROOT)) {
         problems.extend(ignore_problems(&source));
+    }
+    for root in PRODUCTION_ROOTS {
+        for source in rust_sources(&Path::new("..").join(root)) {
+            problems.extend(test_code_problems(&source));
+        }
     }
     assert!(
         problems.is_empty(),
@@ -204,6 +218,22 @@ fn inner_cfg_problems(source: &Path, features: &[String]) -> Vec<String> {
                     index + 1
                 )
             })
+        })
+        .collect()
+}
+
+fn test_code_problems(source: &Path) -> Vec<String> {
+    let code = without_comments_and_literals(&read(source));
+    code.lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let spelling = TEST_CODE.iter().find(|spelling| line.contains(*spelling))?;
+            Some(format!(
+                "{}:{}: `{spelling}` is test code outside `tests/`, where no gate step runs it and \
+                 the build that ships carries it. Move it below `<package>/tests/`",
+                source.display(),
+                index + 1
+            ))
         })
         .collect()
 }

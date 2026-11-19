@@ -6,7 +6,7 @@ use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
 use engine::hot::tracker::{MicroTracker, VolumeBarSeries};
 use engine::msg::ids::{InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, KlineEvent, MessageBody};
-use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::msg::persist::{FeatureId, ResearchRecord};
 use engine::msg::time::LocalTs;
 use engine::runtime::config::{
     CandlesSpec, KlineInterval, TrackerSpec, VolumeBarsSpec, VolumeThreshold,
@@ -314,10 +314,10 @@ impl Strategy for BarProbe {
     }
 }
 
-fn delivered_bars(consumer: &mut Consumer<PersistRecord>) -> Vec<(f64, LocalTs)> {
+fn delivered_bars(consumer: &mut Consumer<ResearchRecord>) -> Vec<(f64, LocalTs)> {
     let mut rows = Vec::new();
     while let Ok(record) = consumer.pop() {
-        if let PersistRecord::Feature(row) = record {
+        if let ResearchRecord::Feature(row) = record {
             rows.push((row.value, row.event_ts_us));
         }
     }
@@ -331,7 +331,8 @@ fn delivered_bars(consumer: &mut Consumer<PersistRecord>) -> Vec<(f64, LocalTs)>
 #[test]
 fn on_volume_fires_once_per_closed_bar_oldest_first() {
     let instruments = [instrument_row(0, tracker_spec_all(100), 128)];
-    let (sink, mut consumer) = persist_ring(4096);
+    let (sink, rings) = persist_ring(4096);
+    let mut consumer = rings.research;
     let (log_sink, _log_consumer) = strategy_log_ring(64);
     let mut engine = engine_without_warmup(
         &instruments,

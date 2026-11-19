@@ -14,7 +14,7 @@ use engine::hot::strategy::{Registration, Strategy, StrategyCtx};
 use engine::msg::exec::{ExecCommand, ExecLaneItem};
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
-use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::msg::persist::{FeatureId, ResearchRecord};
 use engine::msg::time::Stamper;
 use engine::msg::ui::UiEvent;
 use engine::runtime::config::{RecordedTables, SpinField};
@@ -83,7 +83,7 @@ impl Strategy for OneBid {
 struct Run {
     driver: HotDriver,
     input: Producer<InboundMessage>,
-    persist: Consumer<PersistRecord>,
+    persist: Consumer<ResearchRecord>,
     commands: Consumer<ExecLaneItem>,
     ui_events: Consumer<UiEvent>,
     metrics: Metrics,
@@ -94,7 +94,7 @@ struct Run {
 /// What the spin of the scenario wrote to each lane, and what the strategy saw.
 struct SpinOutputs {
     sampled: Vec<usize>,
-    tape: Vec<PersistRecord>,
+    tape: Vec<ResearchRecord>,
     commands: Vec<ExecLaneItem>,
     events: Vec<UiEvent>,
 }
@@ -120,7 +120,8 @@ impl Run {
         let rows_of_market = [instrument_row(0, tracker_spec_all(1), 64)];
         // A ring of one slot holds one seal, so a second seal waits until the test reads the first.
         // No table is recorded, so nothing else is ever pushed onto it to carry the seal out early.
-        let (persistence, persist) = persist_ring_for(1, RecordedTables::new(&[]));
+        let (persistence, rings) = persist_ring_for(1, RecordedTables::new(&[]));
+        let persist = rings.research;
         let (ui_event_sink, ui_events) = ui_event_ring(ui_event_capacity);
         let (command_producer, commands) = RingBuffer::<ExecLaneItem>::new(LANE);
         let strategy = OneBid {
@@ -180,7 +181,7 @@ impl Run {
         }
         let seals = Run::take(&mut self.persist);
         assert!(
-            matches!(seals.as_slice(), [PersistRecord::SealAll]),
+            matches!(seals.as_slice(), [ResearchRecord::SealAll]),
             "the first seal fits the ring, and the second waits behind it: {seals:?}"
         );
         let late = [
@@ -285,7 +286,7 @@ fn spin_steps_run_in_named_order() {
         "the trackers took the spin before the strategy read them: one sample since the resume"
     );
     assert!(
-        matches!(tape.as_slice(), [PersistRecord::SealAll]),
+        matches!(tape.as_slice(), [ResearchRecord::SealAll]),
         "the spin tried the pending seal, and it went: {tape:?}"
     );
     let (client_id, price) = placement(&commands);

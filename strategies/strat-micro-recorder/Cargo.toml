@@ -10,11 +10,25 @@ name = "strat-micro-recorder-te-binance-spot-btcusdt"
 path = "te-binance-spot-btcusdt/main.rs"
 
 [[bin]]
+name = "strat-micro-recorder-te-binance-spot-btcusdt-replay"
+path = "te-binance-spot-btcusdt/replay.rs"
+required-features = ["replay"]
+
+[[bin]]
 name = "strat-micro-recorder-te-polymarket-btc-updown-5m"
 path = "te-polymarket-btc-updown-5m/main.rs"
 
+[[bin]]
+name = "strat-micro-recorder-te-polymarket-btc-updown-5m-replay"
+path = "te-polymarket-btc-updown-5m/replay.rs"
+required-features = ["replay"]
+
+[features]
+replay = ["dep:lab"]
+
 [dependencies]
 engine = { path = "../../engine" }
+lab = { path = "../../lab", optional = true }
 serde = { version = "1.0.228", default-features = false, features = ["std", "derive"] }
 
 [lints]

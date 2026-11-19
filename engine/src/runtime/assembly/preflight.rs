@@ -3,14 +3,14 @@
 
 use crate::hot::exec::ExecCapacity;
 use crate::hot::strategy::Strategy;
-use crate::info;
 use crate::msg::ids::VenueId;
 use crate::runtime::artifacts::RunArtifacts;
 use crate::runtime::config::{Config, ExecutionConfig, RunIdentity, SourceSpec};
 use crate::runtime::exposure::{self, ExposureState};
 use crate::runtime::registry::{InstrumentRow, Registry};
 use crate::venues::edge::rest_quiet::SharedRestQuiet;
-use crate::venues::port::{NetworkPort, VenuePort};
+use crate::venues::port::{NetworkPort, ReportLine, VenuePort, VenueReport};
+use crate::{info, warn};
 
 use super::StartError;
 use super::exec::{ExecCheck, ExecPlan, check_execution, check_order_client_timeout};
@@ -49,6 +49,8 @@ pub struct StartPlan {
     /// `None` with no `otlp:` block.
     #[cfg(feature = "otlp")]
     pub(super) otlp: Option<crate::runtime::otlp::OtlpPlan>,
+    /// What the scale read and the permission probe found, logged once the log runs.
+    pub(super) venue_report: VenueReport,
 }
 
 impl<P> Preflight<'_, P> {
@@ -91,7 +93,9 @@ impl<P> Preflight<'_, P> {
         }
         // Every venue's grid is checked against the deployment the registry names rather than a
         // constant, so a production run is checked against the production grid.
-        port.read_scales(&registry)?.stamp(&mut registry);
+        let mut scales = port.read_scales(&registry)?;
+        let mut venue_report = std::mem::take(&mut scales.report);
+        scales.stamp(&mut registry);
         ExecCapacity::of(registry.instruments())?;
         for (source, venue) in config.sources.iter().zip(config.source_venues()) {
             if let Some(execution) = &source.execution {
@@ -102,10 +106,13 @@ impl<P> Preflight<'_, P> {
         let rest_quiet = SharedRestQuiet::new();
         // One signed call that proves the key can trade, before a strategy quotes with no
         // permission.
-        let probed = armed
+        let mut probed = armed
             .filter(|(.., execution)| execution.mode.needs_credentials())
             .map(|(_, source, _)| port.probe(source, &registry, &rest_quiet))
             .transpose()?;
+        if let Some(probed) = probed.as_mut() {
+            venue_report.append(probed.0.take_report());
+        }
         let link = link_bring_up(config, identity, strategy, &registry)?;
         // In each mode: two engines of one identity would share one tape folder, where each start
         // removes the unfinished files of the other.
@@ -129,6 +136,7 @@ impl<P> Preflight<'_, P> {
             execution,
             #[cfg(feature = "otlp")]
             otlp,
+            venue_report,
         })
     }
 }
@@ -141,6 +149,12 @@ impl StartPlan {
             self.registry.instruments().len(),
             self.registry.input_queue_count()
         );
+        for line in self.venue_report.lines() {
+            match line {
+                ReportLine::Info(text) => info!("{text}"),
+                ReportLine::Warn(text) => warn!("{text}"),
+            }
+        }
         report_restored(&self.exposure, &self.registry);
         if let Some(link) = &self.link {
             let address = link

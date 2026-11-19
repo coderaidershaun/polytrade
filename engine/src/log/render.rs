@@ -5,15 +5,7 @@ use core::fmt;
 
 use super::record::{Callsite, WORDS_PER_RECORD};
 use crate::msg::ids::InstrumentId;
-
-/// The placeholder forms a hot template takes: `{}`, `{:?}`, `{:x}` and `{:.N}`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Spec {
-    Display,
-    Debug,
-    LowerHex,
-    Precision(usize),
-}
+pub use crate::msg::log_value::{LogValue, Spec};
 
 /// Writes the text of one argument from its words, under the placeholder that the template gives.
 pub type RenderFn = fn(&[u64], Spec, &mut dyn fmt::Write) -> fmt::Result;
@@ -46,24 +38,6 @@ impl Renderer {
     ) -> fmt::Result {
         (self.render)(words, spec, out)
     }
-}
-
-/// A value that a hot log call can carry: it fits in whole words, and it writes its own text on the
-/// drain thread, which is where all hot log text is made.
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` is not a `LogValue`, so a hot log call cannot carry it",
-    label = "not a `LogValue`",
-    note = "a hot log call takes numbers, `bool`, ids, fieldless enums and `Option`s of them: \
-            the text is made on the drain thread, never on the hot thread"
-)]
-pub trait LogValue: Copy {
-    const WORDS: usize;
-
-    /// `words` holds exactly [`Self::WORDS`] words.
-    fn to_words(self, words: &mut [u64]);
-
-    /// `words` holds exactly [`Self::WORDS`] words, as `to_words` wrote them.
-    fn render(words: &[u64], spec: Spec, out: &mut dyn fmt::Write) -> fmt::Result;
 }
 
 /// The argument list of one hot log call: a tuple of up to six `LogValue`s.
@@ -206,61 +180,6 @@ impl<T: LogValue> LogValue for Option<T> {
         out.write_str(")")
     }
 }
-
-/// `LogValue` for an enum with no fields: the word is the variant's place in the declaration. With
-/// `label = accessor`, a plain placeholder prints that label; `{:?}` always prints the variant name.
-macro_rules! fieldless_log_value {
-    ($ty:ident { $($variant:ident),+ $(,)? }, label = $label:ident) => {
-        $crate::log::fieldless_log_value!(@impl $ty { $($variant),+ }, |variant, spec| match spec {
-            $crate::log::Spec::Debug => match variant {
-                $($ty::$variant => ::core::stringify!($variant)),+
-            },
-            _ => variant.$label(),
-        });
-    };
-    ($ty:ident { $($variant:ident),+ $(,)? }) => {
-        $crate::log::fieldless_log_value!(@impl $ty { $($variant),+ }, |variant, _spec| match variant {
-            $($ty::$variant => ::core::stringify!($variant)),+
-        });
-    };
-    (@impl $ty:ident { $($variant:ident),+ }, |$value:ident, $spec:ident| $text:expr) => {
-        impl $crate::log::LogValue for $ty {
-            const WORDS: usize = 1;
-
-            #[inline]
-            fn to_words(self, words: &mut [u64]) {
-                words[0] = self as u64;
-            }
-
-            fn render(
-                words: &[u64],
-                $spec: $crate::log::Spec,
-                out: &mut dyn ::core::fmt::Write,
-            ) -> ::core::fmt::Result {
-                const VARIANTS: &[$ty] = &[$($ty::$variant),+];
-                const _: () = {
-                    let mut index = 0;
-                    while index < VARIANTS.len() {
-                        assert!(
-                            VARIANTS[index] as usize == index,
-                            "the variants are listed out of their declaration order"
-                        );
-                        index += 1;
-                    }
-                };
-                let found = usize::try_from(words[0])
-                    .ok()
-                    .and_then(|index| VARIANTS.get(index));
-                let Some(&$value) = found else {
-                    return out.write_str("?");
-                };
-                out.write_str($text)
-            }
-        }
-    };
-}
-
-pub(crate) use fieldless_log_value;
 
 /// One step through a template: literal text (a byte range), or one placeholder.
 #[derive(Clone, Copy)]

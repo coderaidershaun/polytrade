@@ -30,6 +30,37 @@ repos:
         language: system
         pass_filenames: false
         stages: [pre-push]
+      - id: posttrade-lock
+        name: posttrade uv lock matches pyproject
+        entry: uv sync --locked --project posttrade
+        language: system
+        files: ^posttrade/
+        pass_filenames: false
+      - id: posttrade-ruff-format
+        name: posttrade ruff format
+        entry: uv run --project posttrade ruff format --check posttrade
+        language: system
+        files: ^posttrade/
+        pass_filenames: false
+      - id: posttrade-ruff
+        name: posttrade ruff check
+        entry: uv run --project posttrade ruff check posttrade
+        language: system
+        files: ^posttrade/
+        pass_filenames: false
+      - id: posttrade-mypy
+        name: posttrade mypy
+        entry: bash -c 'cd posttrade && uv run mypy .'
+        language: system
+        files: ^posttrade/
+        pass_filenames: false
+      - id: posttrade-pytest
+        name: posttrade pytest against a fresh golden run
+        entry: bash -c 'cargo run -q -p engine --bin golden-run -- target/golden-run && cd posttrade && uv run pytest -q'
+        language: system
+        files: ^(posttrade/|contract/|tools/golden-run/)
+        pass_filenames: false
+        stages: [pre-push]
       - id: cargo-fmt
         name: cargo fmt
         entry: cargo fmt --all -- --check

@@ -5,6 +5,7 @@ pub mod artifacts;
 pub mod config;
 pub mod durable_file;
 pub mod exposure;
+pub mod manifest;
 #[cfg(all(feature = "otlp", not(target_arch = "wasm32")))]
 pub mod otlp;
 pub(crate) mod pin;
@@ -17,6 +18,10 @@ pub use pin::{PinCall, PinRefused, pin_to_core};
 #[cfg(not(target_arch = "wasm32"))]
 mod assembly;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use assembly::fold::{
+    FoldMetrics, FoldRings, FoldTape, RunFold, RunFoldError, RunFoldSetup, build_run_fold,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use assembly::{
     DrainDeadline, DrainFailure, DrainOutcome, DrainWatchdog, Engine, ExecutionLease, Exit,

@@ -1,5 +1,6 @@
-//! Writer thread: drain the record ring into one Parquet writer per table, sealing at each seal
-//! record of the fold, row cap, hour cross, or shutdown. Dedicated thread (encode and fsync block).
+//! Writer thread: drain the tape ring, the audit ring, the research ring, the rollup ring and the
+//! rotation channel into one Parquet writer per table, sealing at each seal record of the fold, row
+//! cap, hour cross, or shutdown. Dedicated thread (encode and fsync block).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -8,20 +9,19 @@ use std::time::Duration;
 use rtrb::Consumer;
 use tokio::sync::mpsc;
 
-use crate::msg::persist::{
-    BookEventRow, FeatureRow, FillRow, IncidentRow, KlineRow, LinkFrameRow, OrderRow,
-    PersistRecord, RotationRow, TradeRow,
-};
-use crate::msg::time::wall_clock_now;
-use crate::runtime::config::{RecordedTables, TableKind};
+use crate::msg::persist::{AuditRecord, ResearchRecord, RotationRow, TapeRecord};
+use crate::runtime::config::TableKind;
 use crate::runtime::durable_file::{DiskFiles, FileSteps};
+use crate::runtime::metrics::RollupRow;
 use crate::runtime::shutdown::WriterThread;
 
-use super::fault::{Faults, StoppedTables, Table, TapeStatus};
+use super::fault::{Faults, StoppedTables, TapeStatus};
 use super::retention::Retention;
-use super::schema::{self, TableRow};
-use super::table::{TableFiles, TableWriter};
-use super::{PersistConfig, PersistError, RunMeta};
+use super::schema;
+use super::table::TableFiles;
+use super::tables::{AuditTables, MetricTables, ResearchTables, Routed, TableWriterBuilder};
+use super::tape_table::{TapeInput, TapeTable};
+use super::{PersistConfig, PersistError, RunMeta, WriterInputs};
 
 const IDLE_SLEEP: Duration = Duration::from_millis(1);
 const MAX_POP_BATCH: usize = 8_192;
@@ -31,6 +31,7 @@ const MAX_POP_BATCH: usize = 8_192;
 pub struct PersistWriter {
     steps: Arc<dyn FileSteps>,
     status: Option<TapeStatus>,
+    tape: Option<TapeInput>,
 }
 
 impl PersistWriter {
@@ -42,6 +43,16 @@ impl PersistWriter {
         Self {
             steps,
             status: None,
+            tape: None,
+        }
+    }
+
+    /// Writes the tape table from the ring of the tee, its boot row first. Without it the run has
+    /// no tape, as a replay has none.
+    pub fn recording_tape(self, tape: TapeInput) -> Self {
+        Self {
+            tape: Some(tape),
+            ..self
         }
     }
 
@@ -54,74 +65,65 @@ impl PersistWriter {
         }
     }
 
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the boot stamp keeps the file names of two runs apart; it decides no seal and no state"
-    )]
-    pub fn spawn(
+    /// The boot stamp comes from `meta`, read once by the start, so the writer reads no clock.
+    pub fn spawn(self, cfg: PersistConfig, meta: RunMeta, inputs: WriterInputs) -> PersistHandle {
+        let (state, stopped) = self.state(cfg, meta, inputs);
+        let writer = WriterThread::spawn("persist", move |drain| state.run(&drain));
+        PersistHandle { writer, stopped }
+    }
+
+    /// The writer of a fold on one thread, a re-fold: the loop body of the writer thread, run by the
+    /// caller after each message, so no ring fills and no record waits on a thread.
+    pub fn inline(self, cfg: PersistConfig, meta: RunMeta, inputs: WriterInputs) -> InlineWriter {
+        let (state, stopped) = self.state(cfg, meta, inputs);
+        state.retention.prune();
+        InlineWriter { state, stopped }
+    }
+
+    fn state(
         self,
         cfg: PersistConfig,
         meta: RunMeta,
-        records: Consumer<PersistRecord>,
-        rotations: mpsc::Receiver<RotationRow>,
-    ) -> PersistHandle {
-        let boot_ts_us = wall_clock_now().micros();
-        let run_dir = meta.artifacts.tape_dir(&cfg.dir);
-        let retention = Retention::new(run_dir.clone(), cfg.retention, boot_ts_us);
-        let writers = TableWriterBuilder {
+        inputs: WriterInputs,
+    ) -> (WriterState, StoppedTables) {
+        let boot_ts_us = meta.run_id.micros();
+        let kind_dir = meta.artifacts.kind_dir(&cfg.dir, meta.run_kind);
+        let retention = Retention::new(kind_dir, cfg.retention, boot_ts_us);
+        let builder = TableWriterBuilder {
             tables: cfg.tables,
             files: TableFiles {
-                run_dir,
+                run_dir: meta.run_dir(&cfg.dir),
                 boot_ts_us,
                 footer: schema::footer_metadata(&meta),
                 steps: self.steps,
             },
         };
         let stopped = StoppedTables::default();
+        let WriterInputs {
+            audit,
+            research,
+            rollups,
+            rotations,
+        } = inputs;
+        let mut faults = Faults::new(self.status, stopped.clone());
+        let tape = self.tape.map(|TapeInput { records, boot }| {
+            let table = TapeTable::open(builder.files.clone(), &boot, &mut faults);
+            (records, table)
+        });
         let state = WriterState {
-            consumer: records,
-            features: writers.named(TableKind::Features),
-            trades: writers.named(TableKind::Trades),
-            book_events: writers.named(TableKind::BookEvents),
-            klines: writers.named(TableKind::Klines),
-            link_frames: writers.named(TableKind::LinkFrames),
-            orders: writers.named(TableKind::Orders),
-            fills: writers.named(TableKind::Fills),
-            incidents: writers.always_written(),
-            rotations: writers.always_written(),
-            rotations_rx: rotations,
+            tape,
+            audit_input: audit,
+            research_input: research,
+            rollup_input: rollups,
+            rotation_input: rotations,
+            audit: AuditTables::open(&builder),
+            research: ResearchTables::open(&builder),
+            metrics: MetricTables::open(&builder),
             unnamed_table_rows: 0,
             retention,
-            faults: Faults::new(self.status, stopped.clone()),
+            faults,
         };
-        let writer = WriterThread::spawn("persist", move |drain| state.run(&drain));
-        PersistHandle { writer, stopped }
-    }
-}
-
-struct TableWriterBuilder {
-    tables: RecordedTables,
-    files: TableFiles,
-}
-
-impl TableWriterBuilder {
-    fn named<R: TableRow>(&self, table: TableKind) -> Table<R> {
-        if self.tables.contains(table) {
-            Table::Writing(Box::new(self.writer()))
-        } else {
-            Table::Unnamed
-        }
-    }
-
-    /// For the tables that `TableKind` names nowhere, so `strategy.tables` has no way to switch them
-    /// off: the venue lineage, without which no row says which market its `instrument_id` stood
-    /// for, and the incidents, the record of money that the engine could not book.
-    fn always_written<R: TableRow>(&self) -> Table<R> {
-        Table::Writing(Box::new(self.writer()))
-    }
-
-    fn writer<R: TableRow>(&self) -> TableWriter<R> {
-        TableWriter::new(self.files.clone())
+        (state, stopped)
     }
 }
 
@@ -151,18 +153,39 @@ impl PersistHandle {
     }
 }
 
+/// The writer on the caller's thread. Each [`InlineWriter::pump`] drains every input once.
+pub struct InlineWriter {
+    state: WriterState,
+    stopped: StoppedTables,
+}
+
+impl InlineWriter {
+    pub fn pump(&mut self) {
+        while self.state.consume_batch(usize::MAX) {}
+    }
+
+    /// Drains each input, then seals each table.
+    ///
+    /// # Errors
+    /// [`PersistError`] of the first fault of an audit table. A fault of a research table stops
+    /// that table only, and the tables it stopped come back on success.
+    pub fn finish(mut self) -> Result<StoppedTables, PersistError> {
+        self.pump();
+        self.state.seal_all();
+        self.state.faults.into_result()?;
+        Ok(self.stopped)
+    }
+}
+
 struct WriterState {
-    consumer: Consumer<PersistRecord>,
-    features: Table<FeatureRow>,
-    trades: Table<TradeRow>,
-    book_events: Table<BookEventRow>,
-    klines: Table<KlineRow>,
-    link_frames: Table<LinkFrameRow>,
-    orders: Table<OrderRow>,
-    fills: Table<FillRow>,
-    incidents: Table<IncidentRow>,
-    rotations: Table<RotationRow>,
-    rotations_rx: mpsc::Receiver<RotationRow>,
+    tape: Option<(Consumer<TapeRecord>, TapeTable)>,
+    audit_input: Consumer<AuditRecord>,
+    research_input: Consumer<ResearchRecord>,
+    rollup_input: Option<Consumer<RollupRow>>,
+    rotation_input: mpsc::Receiver<RotationRow>,
+    audit: AuditTables,
+    research: ResearchTables,
+    metrics: MetricTables,
     /// Rows of tables that the config does not name. The bank filters them first, so only a row
     /// sent past it counts. A warning, never fatal.
     unnamed_table_rows: u64,
@@ -184,9 +207,9 @@ impl WriterState {
     fn pump(&mut self, drain: &AtomicBool) {
         self.retention.prune();
         loop {
-            let drained_any = self.consume_batch();
+            let drained_any = self.consume_batch(MAX_POP_BATCH);
             if drain.load(Ordering::Acquire) {
-                self.consume_all();
+                while self.consume_batch(usize::MAX) {}
                 return;
             }
             if !drained_any {
@@ -195,55 +218,66 @@ impl WriterState {
         }
     }
 
-    fn consume_batch(&mut self) -> bool {
-        let mut count = 0;
-        while count < MAX_POP_BATCH {
-            let Ok(record) = self.consumer.pop() else { break };
-            self.route(record);
-            count += 1;
+    /// Pops up to `limit` records from each input in turn, and says whether any input had one.
+    fn consume_batch(&mut self, limit: usize) -> bool {
+        let mut taped = 0_usize;
+        while let Some((input, table)) = self.tape.as_mut()
+            && taped < limit
+            && let Ok(record) = input.pop()
+        {
+            table.route(record, &mut self.faults);
+            taped += 1;
         }
-        let mut rotations = 0;
-        while rotations < MAX_POP_BATCH {
-            let Ok(row) = self.rotations_rx.try_recv() else {
+        let mut popped = 0_usize;
+        while popped < limit {
+            let Ok(record) = self.audit_input.pop() else {
                 break;
             };
-            self.rotations.push(row, &mut self.faults);
+            let routed = self.audit.route(record, &mut self.faults);
+            self.after_route(routed, Seal::Audit);
+            popped += 1;
+        }
+        let mut research = 0_usize;
+        while research < limit {
+            let Ok(record) = self.research_input.pop() else {
+                break;
+            };
+            let routed = self.research.route(record, &mut self.faults);
+            self.after_route(routed, Seal::Research);
+            research += 1;
+        }
+        let mut rollups = 0_usize;
+        while let Some(input) = self.rollup_input.as_mut()
+            && rollups < limit
+            && let Ok(row) = input.pop()
+        {
+            self.metrics.push(row, &mut self.faults);
+            rollups += 1;
+        }
+        let mut rotations = 0_usize;
+        while rotations < limit {
+            let Ok(row) = self.rotation_input.try_recv() else {
+                break;
+            };
+            self.audit.push_rotation(row, &mut self.faults);
             rotations += 1;
         }
-        count > 0 || rotations > 0
+        taped + popped + research + rollups + rotations > 0
     }
 
-    fn consume_all(&mut self) {
-        while let Ok(record) = self.consumer.pop() {
-            self.route(record);
-        }
-        while let Ok(row) = self.rotations_rx.try_recv() {
-            self.rotations.push(row, &mut self.faults);
-        }
-    }
-
-    fn route(&mut self, record: PersistRecord) {
-        let faults = &mut self.faults;
-        let landed = match record {
-            PersistRecord::Feature(row) => self.features.push(row, faults),
-            PersistRecord::Trade(row) => self.trades.push(row, faults),
-            PersistRecord::BookEvent(row) => self.book_events.push(row, faults),
-            PersistRecord::Kline(row) => self.klines.push(row, faults),
-            PersistRecord::LinkFrame(row) => self.link_frames.push(row, faults),
-            PersistRecord::Order(row) => self.orders.push(row, faults),
-            PersistRecord::Fill(row) => self.fills.push(row, faults),
-            PersistRecord::Incident(row) => self.incidents.push(row, faults),
-            // It comes through the ring, so each record banked before it is already here. The fold
-            // sends one at each seal border of message time and at each park, and the prune of old
-            // files follows each one.
-            PersistRecord::SealAll => {
-                self.seal_all();
+    /// A seal comes through its ring, so each record banked before it is already here. The fold
+    /// sends one on each ring at each seal border of message time and at each park, and the prune
+    /// of old files follows each one of the research ring.
+    fn after_route(&mut self, routed: Routed, ring: Seal) {
+        match (routed, ring) {
+            (Routed::Landed, _) => {}
+            (Routed::Unnamed(table), _) => self.count_unnamed_table_row(table),
+            (Routed::Seal, Seal::Audit) => self.audit.seal(&mut self.faults),
+            (Routed::Seal, Seal::Research) => {
+                self.research.seal(&mut self.faults);
+                self.metrics.seal(&mut self.faults);
                 self.retention.prune();
-                return;
             }
-        };
-        if let (false, Some(table)) = (landed, record.table()) {
-            self.count_unnamed_table_row(table);
         }
     }
 
@@ -261,15 +295,18 @@ impl WriterState {
     }
 
     fn seal_all(&mut self) {
-        let faults = &mut self.faults;
-        self.features.seal(faults);
-        self.trades.seal(faults);
-        self.book_events.seal(faults);
-        self.klines.seal(faults);
-        self.link_frames.seal(faults);
-        self.orders.seal(faults);
-        self.fills.seal(faults);
-        self.incidents.seal(faults);
-        self.rotations.seal(faults);
+        if let Some((_, table)) = self.tape.as_mut() {
+            table.seal(&mut self.faults);
+        }
+        self.audit.seal(&mut self.faults);
+        self.research.seal(&mut self.faults);
+        self.metrics.seal(&mut self.faults);
     }
+}
+
+/// Which ring a seal record came on, and so which tables it closes.
+#[derive(Clone, Copy)]
+enum Seal {
+    Audit,
+    Research,
 }

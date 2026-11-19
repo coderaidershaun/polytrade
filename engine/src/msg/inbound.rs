@@ -1,15 +1,12 @@
 //! Normalised inbound messages, the only data into the hot path: a header of the two local stamps,
 //! so each kind is ordered by one received stamp, and a fixed-size body of one kind.
 
-// SMELL: the plain message data imports the link and the runtime config here, and other message
-// files import the hot thread, its sinks, and the runtime registry, so the vocabulary depends on
-// the code it should sit beneath. These types need a home that imports nothing above it.
-use crate::link::LinkFrame;
 use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{AggregateTradeId, InstrumentId, Price, Qty, RawTradeId, Side, StreamEpoch};
+use crate::msg::kinds::KlineInterval;
+use crate::msg::link::LinkFrame;
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{LocalTs, VenueTs};
-use crate::runtime::config::KlineInterval;
 
 pub const BOOK_CHUNK_LEVELS: usize = 20;
 
@@ -55,6 +52,7 @@ pub enum MessageBody {
     Exec(ExecEvent),
     Account(AccountChunk),
     WriterFailed(WriterFailure),
+    AuditBankFull(AuditBankFull),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -70,6 +68,7 @@ pub enum MessageKind {
     Exec,
     Account,
     WriterFailed,
+    AuditBankFull,
 }
 
 impl InboundMessage {
@@ -99,6 +98,7 @@ impl InboundMessage {
             MessageBody::Exec(_) => MessageKind::Exec,
             MessageBody::Account(_) => MessageKind::Account,
             MessageBody::WriterFailed(_) => MessageKind::WriterFailed,
+            MessageBody::AuditBankFull(_) => MessageKind::AuditBankFull,
         }
     }
 }
@@ -118,6 +118,12 @@ pub struct TradeEvent {
     pub exchange_ts_us: VenueTs,
     /// Venue SEND stamp vs `exchange_ts_us`'s MATCH stamp; `None` when the venue publishes only one.
     pub exchange_sent_ts_us: Option<VenueTs>,
+    /// The simulator proves continuity of the trade stream by these ids and the epoch of the
+    /// connection. A venue that numbers no trades sends zero for each, and reads none of them.
+    pub aggregate_id: AggregateTradeId,
+    pub first_trade_id: RawTradeId,
+    pub last_trade_id: RawTradeId,
+    pub stream_epoch: StreamEpoch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +176,9 @@ impl BookChunk {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BookReset {
     pub instrument: InstrumentId,
+    /// The venue time of the message that broke the book. A reset with no venue message behind it
+    /// carries its local time on the venue calendar.
+    pub exchange_ts_us: VenueTs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,36 +233,19 @@ pub enum FileWriter {
     Tape,
 }
 
-crate::log::fieldless_log_value!(FileWriter { Exposure, Tape });
+crate::msg::log_value::fieldless_log_value!(FileWriter { Exposure, Tape });
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TappedMessage {
-    pub message: InboundMessage,
-    pub venue_meta: VenueMeta,
+/// The audit bank of the hot thread reached its high mark: the writer has fallen so far behind
+/// that the next rows could be lost, so the fold halts quoting when it folds this message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AuditBankFull {
+    pub banked: u32,
+    pub capacity: u32,
 }
 
 #[allow(clippy::large_enum_variant)] // Same reason as MessageBody: heap indirection forbidden.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MarketTapItem {
-    Event(TappedMessage),
+    Event(InboundMessage),
     Watermark { received_ts_us: LocalTs },
-}
-
-/// Venue continuity metadata used only by the simulator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum VenueMeta {
-    Trade {
-        aggregate_id: AggregateTradeId,
-        first_trade_id: RawTradeId,
-        last_trade_id: RawTradeId,
-        stream_epoch: StreamEpoch,
-    },
-    DepthDelta {
-        exchange_ts_us: VenueTs,
-    },
-    DepthReset {
-        exchange_ts_us: VenueTs,
-    },
-    /// Snapshot chunks and messages without venue sequence data.
-    None,
 }

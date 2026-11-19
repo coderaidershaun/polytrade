@@ -18,7 +18,7 @@ use engine::log::{HotRecord, LaneReader, TextRecord, open_hot_lane, open_text_la
 use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus};
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BookChunk, InboundMessage, MessageBody, SpinTick, TradeEvent};
-use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::msg::persist::FeatureId;
 use engine::msg::run_state::{ControllerEpoch, RunAssertion, RunState};
 use engine::msg::time::Stamper;
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
@@ -32,9 +32,9 @@ use proptest::test_runner::{Config, TestCaseError, TestRunner};
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
-    ExposureLane, ONE, account_chunk, delta_chunk, detached_setup, exec_event, exposure_ring,
-    instrument_row, last_snapshot_chunk, partial_snapshot_chunk, persist_ring_for, run_control,
-    snapshot_pair, spin, strategy_log_ring, stream_ready, tracker_spec_all, trade, ts,
+    ExposureLane, ONE, PersistRings, account_chunk, delta_chunk, detached_setup, exec_event,
+    exposure_ring, instrument_row, last_snapshot_chunk, partial_snapshot_chunk, persist_ring_for,
+    run_control, snapshot_pair, spin, strategy_log_ring, stream_ready, tracker_spec_all, trade, ts,
     ui_book_ring, ui_event_ring, venue_ts,
 };
 use crate::exec_support::exec_settings;
@@ -149,6 +149,7 @@ impl Strategy for Probe {
 #[derive(Debug, Default)]
 struct Records {
     tape_rows: Vec<String>,
+    audit_rows: Vec<String>,
     commands: Vec<String>,
     ui_books: Vec<String>,
     ui_events: Vec<UiEvent>,
@@ -161,7 +162,7 @@ struct Records {
 
 /// The read ends of each output ring of one engine, with the log lanes of its thread.
 struct Lanes {
-    persist: Consumer<PersistRecord>,
+    persist: PersistRings,
     commands: Consumer<ExecLaneItem>,
     ui_books: Consumer<UiBookSnapshot>,
     ui_events: Consumer<UiEvent>,
@@ -201,8 +202,11 @@ impl Lanes {
             .collect();
         records.commands.extend(texts(commands.iter()));
         records
+            .audit_rows
+            .extend(texts(take(&mut self.persist.audit, at_most)));
+        records
             .tape_rows
-            .extend(texts(take(&mut self.persist, at_most)));
+            .extend(texts(take(&mut self.persist.research, at_most)));
         records
             .ui_books
             .extend(texts(take(&mut self.ui_books, at_most)));
@@ -694,6 +698,7 @@ fn run_a(market: Vec<InboundMessage>) -> RunA {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Lost {
     tape_rows: u64,
+    audit_rows: u64,
     ui_books: u64,
     ui_events: u64,
     exposure: u64,
@@ -708,7 +713,9 @@ impl Lost {
     fn of(engine: &HotEngine, lanes: &Lanes, commands_held: u64) -> Lost {
         let counters = engine.counters();
         Lost {
-            tape_rows: counters.persist_dropped,
+            tape_rows: counters.research_dropped.total(),
+            // A row that never left the bank is lost to this reader too.
+            audit_rows: counters.audit_lost + engine.banked_audit_rows() as u64,
             ui_books: counters.ui_books_dropped,
             ui_events: counters.ui_events_dropped,
             exposure: counters.exposure_superseded,
@@ -723,6 +730,7 @@ impl Lost {
     fn plus(self, other: Lost) -> Lost {
         Lost {
             tape_rows: self.tape_rows + other.tape_rows,
+            audit_rows: self.audit_rows + other.audit_rows,
             ui_books: self.ui_books + other.ui_books,
             ui_events: self.ui_events + other.ui_events,
             exposure: self.exposure + other.exposure,
@@ -780,6 +788,12 @@ fn run_b(a: &RunA) -> Result<Ending, String> {
             commands_held = commands_held.max(held);
         }
         let lost = Lost::of(&engine, &lanes, commands_held);
+        // B reads no more audit rows, so the bank flushes into a ring that no one reads and the
+        // drop does not wait for it.
+        let audit = std::mem::replace(&mut lanes.persist.audit, RingBuffer::new(1).1);
+        records
+            .audit_rows
+            .extend(texts(take(&mut { audit }, TIGHT)));
         drop(engine);
         lanes.read(TIGHT, &mut records);
         Ok(Ending::Equal {
@@ -820,6 +834,12 @@ fn check(written: &Records, read: &Records, lost: Lost) -> Result<(), String> {
             &written.tape_rows,
             &read.tape_rows,
             lost.tape_rows,
+        ),
+        (
+            "audit rows",
+            &written.audit_rows,
+            &read.audit_rows,
+            lost.audit_rows,
         ),
         ("ui books", &written.ui_books, &read.ui_books, lost.ui_books),
         ("exposure", &written.exposure, &read.exposure, lost.exposure),

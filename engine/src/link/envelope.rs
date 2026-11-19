@@ -20,82 +20,10 @@ const LINK_MAC_LEN: usize = 32;
 
 pub(super) const ENVELOPE_LEN: usize = Envelope::WIDTH;
 
-pub(super) const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+pub use crate::msg::link::{LinkHash, TopicId};
 
-/// FNV-1a digest; no strings on wire. Not security (sniffable); separates runs only.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LinkHash(pub u64);
-
-impl LinkHash {
-    pub const fn of_name(name: &str) -> Self {
-        Self(fnv_fold(FNV_OFFSET_BASIS, name.as_bytes()))
-    }
-
-    /// Ordered field-name digest; order+count both in digest -> read slot 7 as 7, not 8.
-    pub const fn of_fields(names: &[&str]) -> Self {
-        let mut hash = FNV_OFFSET_BASIS;
-        let mut index = 0;
-        while index < names.len() {
-            hash = fnv_fold(hash, names[index].as_bytes());
-            hash = fnv_fold(hash, &[0]);
-            index += 1;
-        }
-        Self(hash)
-    }
-}
-
-pub(super) const fn fnv_fold(mut hash: u64, bytes: &[u8]) -> u64 {
-    let mut index = 0;
-    while index < bytes.len() {
-        hash ^= bytes[index] as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-        index += 1;
-    }
-    hash
-}
-
-/// Topic <-> body kind one-to-one; below FIRST_STRATEGY reserved (strategy claim = config error).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TopicId(pub u16);
-
+/// The numbering of the engine topics lives in the link, which owns the table of topics.
 impl TopicId {
-    pub const SUBSCRIBE: TopicId = TopicId(0);
-    pub const BOOKS: TopicId = TopicId(1);
-    pub const EVENTS: TopicId = TopicId(2);
-    pub const CATALOG_INSTRUMENTS: TopicId = TopicId(3);
-    pub const CATALOG_FEATURES: TopicId = TopicId(4);
-    pub const LIFECYCLE: TopicId = TopicId(5);
-    pub const LATENCY: TopicId = TopicId(6);
-    /// Recent event frames, sent once to a subscriber that names this topic.
-    pub const HISTORY: TopicId = TopicId(7);
-    pub const FIRST_STRATEGY: TopicId = TopicId(16);
-
-    /// Id of the strategy topic declared at `index`. The numbering lives here because the sites
-    /// that resolve a topic name, stamp ids on outbound frames, and size the per-topic sequence
-    /// array must agree — a disagreement surfaces as an out-of-bounds index on the link send path
-    /// rather than as a startup rejection.
-    ///
-    /// # Panics
-    /// Index past the u16 topic space (a strategy declaring tens of thousands of topics).
-    #[inline]
-    pub fn strategy(index: usize) -> Self {
-        let raw = usize::from(Self::FIRST_STRATEGY.0) + index;
-        TopicId(u16::try_from(raw).expect("strategy topic index overflows the u16 topic space"))
-    }
-
-    /// Width of the id space once `strategy_topic_count` strategy topics exist — the length an
-    /// array indexed by raw topic id must have.
-    #[inline]
-    pub fn space_len(strategy_topic_count: usize) -> usize {
-        usize::from(Self::FIRST_STRATEGY.0) + strategy_topic_count
-    }
-
-    #[inline]
-    pub const fn is_strategy_topic(self) -> bool {
-        self.0 >= Self::FIRST_STRATEGY.0
-    }
-
     /// The topic a config file names: an engine topic by its fixed name, else the strategy topic
     /// declared under that name.
     /// A config never names the subscription itself: it is how a peer asks for the others.

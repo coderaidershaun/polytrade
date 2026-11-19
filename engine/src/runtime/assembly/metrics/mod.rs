@@ -2,6 +2,7 @@
 //! so the hot thread pays only fixed-size pushes. It writes rows, log lines and the latency report.
 
 mod error;
+mod outputs;
 mod report;
 mod ring;
 mod rollup;
@@ -9,7 +10,7 @@ mod rows;
 mod stage;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -27,6 +28,7 @@ use crate::{warn, warn_repeating};
 use super::StartError;
 
 pub use error::MetricsError;
+pub use outputs::RollupOutputs;
 pub use ring::{SampleProducers, SampleRing};
 pub use rows::{BacklogRow, DropRow, LatencyRow, RollupRow, RollupSink, SenderDropRow, SinkKind};
 
@@ -74,6 +76,8 @@ pub struct Metrics {
     display_period: DurationUs,
     next_report_ts_us: LocalTs,
     link_counts: Option<LinkCountsHandle>,
+    /// The drops of the ring that takes rows to the tape, when the run has a tape.
+    tape_drops: Option<Arc<AtomicU64>>,
 }
 
 impl Metrics {
@@ -98,6 +102,7 @@ impl Metrics {
             display_period,
             next_report_ts_us: setup.start_ts_us + display_period,
             link_counts: None,
+            tape_drops: None,
         };
         MetricsParts {
             metrics,
@@ -133,6 +138,9 @@ impl Metrics {
     fn read_link_counts(&mut self) {
         if let Some(counts) = &self.link_counts {
             self.rollup.note_link_senders(counts.load().senders);
+        }
+        if let Some(drops) = &self.tape_drops {
+            self.rollup.note_rollup_drops(drops.load(Ordering::Relaxed));
         }
     }
 
@@ -177,14 +185,6 @@ impl Metrics {
     }
 }
 
-/// Until the tape gains a table for rollup rows, a run keeps them only as the log lines of each
-/// interval.
-struct NoTable;
-
-impl RollupSink for NoTable {
-    fn write(&mut self, _row: RollupRow) {}
-}
-
 pub(super) struct MetricsBringUp {
     pub thread: MetricsThread,
     pub samples: SampleProducers,
@@ -203,9 +203,9 @@ pub(super) struct MetricsBringUpSetup<'a> {
     pub pin: PinCall,
     /// What the link actor publishes, when the engine has a link.
     pub link_counts: Option<LinkCountsHandle>,
-    /// The rows lane of the OTLP export. Absent, the rows stay in the log lines of each interval.
-    #[cfg(feature = "otlp")]
-    pub rows: Option<crate::runtime::otlp::OtlpRows>,
+    /// The tape and the OTLP export that take the rows. With neither, the rows stay in the log
+    /// lines of each interval.
+    pub outputs: RollupOutputs,
 }
 
 /// # Errors
@@ -233,6 +233,7 @@ pub(super) fn metrics_bring_up(
     if let Some(counts) = setup.link_counts {
         metrics.watch_link_counts(counts);
     }
+    metrics.tape_drops = setup.outputs.tape_drops();
     let thread_setup = MetricsThreadSetup {
         metrics,
         clock: setup.clock.clone(),
@@ -240,13 +241,7 @@ pub(super) fn metrics_bring_up(
         core_id: setup.core_id,
         pin: setup.pin,
     };
-    #[cfg(feature = "otlp")]
-    let thread = match setup.rows {
-        Some(rows) => MetricsThread::spawn_writing(thread_setup, rows)?,
-        None => MetricsThread::spawn(thread_setup)?,
-    };
-    #[cfg(not(feature = "otlp"))]
-    let thread = MetricsThread::spawn(thread_setup)?;
+    let thread = MetricsThread::spawn_writing(thread_setup, setup.outputs)?;
     Ok(MetricsBringUp {
         thread,
         samples,
@@ -287,7 +282,7 @@ impl MetricsThread {
     /// # Errors
     /// [`StartError::HousekeepingPin`] when the thread cannot pin itself to `core_id` on Linux.
     pub fn spawn(setup: MetricsThreadSetup) -> Result<MetricsThread, StartError> {
-        MetricsThread::spawn_writing(setup, NoTable)
+        MetricsThread::spawn_writing(setup, RollupOutputs::default())
     }
 
     /// The same thread, writing the rows of each closed interval into `sink`.

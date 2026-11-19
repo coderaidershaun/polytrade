@@ -4,11 +4,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use engine::hot::strategy::{FeatureId, Registration, Strategy, StrategyConfig, StrategyCtx};
+use engine::hot::strategy::{
+    FeatureId, FeatureKind, Registration, Strategy, StrategyConfig, StrategyCtx,
+};
 use engine::link::schema_hash_of_fields;
 use engine::msg::ids::InstrumentId;
 use engine::msg::inbound::SpinTick;
-use engine::msg::persist::PersistRecord;
+use engine::msg::persist::ResearchRecord;
 
 use crate::engine_support::{
     NOMINAL_SPIN, engine_view, engine_without_warmup, instrument_row, persist_ring, recorder_spec,
@@ -61,6 +63,7 @@ fn shipped_strategies() -> Vec<Shipped> {
 /// What a `schema.lock` holds. The test only reads it: a person writes each line by hand.
 struct SchemaLock {
     columns: Vec<String>,
+    kinds: Vec<String>,
     link_schema_digest: u64,
 }
 
@@ -69,11 +72,12 @@ impl SchemaLock {
         let text = fs::read_to_string(path).unwrap_or_else(|error| {
             panic!(
                 "cannot read {}: {error}. Each strategy folder holds a {LOCK_FILE} with its \
-                 columns in order and the digest of its link schema",
+                 columns and their kinds in order and the digest of its link schema",
                 path.display()
             )
         });
         let mut columns = Vec::new();
+        let mut kinds = Vec::new();
         let mut link_schema_digest = None;
         for (index, line) in text.lines().enumerate() {
             let line = line.trim();
@@ -82,7 +86,13 @@ impl SchemaLock {
             }
             let at = format!("{}:{}", path.display(), index + 1);
             match line.split_once(' ') {
-                Some(("column", name)) => columns.push(name.to_owned()),
+                Some(("column", column)) => {
+                    let Some((name, kind)) = column.split_once(' ') else {
+                        panic!("{at}: {line:?} has no kind: write `column <name> <kind>`")
+                    };
+                    columns.push(name.to_owned());
+                    kinds.push(kind.to_owned());
+                }
                 Some(("link_schema_digest", hex)) => {
                     let digits = hex.strip_prefix("0x").unwrap_or_else(|| {
                         panic!("{at}: the digest {hex:?} is not written as 0x and hex digits")
@@ -95,7 +105,7 @@ impl SchemaLock {
                     );
                 }
                 _ => panic!(
-                    "{at}: {line:?} is neither `column <name>` nor `link_schema_digest 0x<hex>`"
+                    "{at}: {line:?} is neither `column <name> <kind>` nor `link_schema_digest 0x<hex>`"
                 ),
             }
         }
@@ -103,6 +113,7 @@ impl SchemaLock {
             .unwrap_or_else(|| panic!("{} has no link_schema_digest line", path.display()));
         Self {
             columns,
+            kinds,
             link_schema_digest,
         }
     }
@@ -174,6 +185,22 @@ fn column_drift(declared: &[&str], locked: &[String]) -> Option<String> {
             locked.len()
         )
     })
+}
+
+/// The first locked column whose kind the strategy now declares otherwise. A column keeps its kind:
+/// a reader decides by it whether a replay under another strategy gives the column again.
+fn kind_drift(declared: &[FeatureKind], locked: &[String]) -> Option<String> {
+    locked
+        .iter()
+        .zip(declared)
+        .enumerate()
+        .find(|(_, (locked, declared))| declared.as_str() != locked.as_str())
+        .map(|(index, (locked, declared))| {
+            format!(
+                "column {index} is declared {} but locked {locked}: a column never changes its kind",
+                declared.as_str()
+            )
+        })
 }
 
 /// Each field of each group accessor, with the column it claims, written out for each side so the
@@ -275,6 +302,14 @@ fn schema_lock_of_each_strategy_holds() {
         if let Some(drift) = column_drift(columns, &lock.columns) {
             panic!("{folder}: {drift}");
         }
+        assert_eq!(
+            strategy.feature_kinds().len(),
+            columns.len(),
+            "{folder}: each declared column has one kind"
+        );
+        if let Some(drift) = kind_drift(strategy.feature_kinds(), &lock.kinds) {
+            panic!("{folder}: {drift}");
+        }
         let digest = schema_hash_of_fields(strategy.link_fields()).0;
         assert_eq!(
             digest, lock.link_schema_digest,
@@ -290,18 +325,18 @@ fn schema_lock_of_each_strategy_holds() {
 
 engine::features! {
     struct FirstOrder {
-        alpha,
-        beta,
-        gamma,
+        alpha: market_only,
+        beta: market_only,
+        gamma: execution_aware,
     }
     const FIRST_ORDER;
 }
 
 engine::features! {
     struct SecondOrder {
-        gamma,
-        alpha,
-        beta,
+        gamma: execution_aware,
+        alpha: market_only,
+        beta: market_only,
     }
     const SECOND_ORDER;
 }
@@ -363,7 +398,8 @@ fn record_a_run(
     declared: &'static [&'static str],
     resolve: fn(&[FeatureId]) -> Columns,
 ) {
-    let (persistence, mut consumer) = persist_ring(64);
+    let (persistence, rings) = persist_ring(64);
+    let mut consumer = rings.research;
     let (log_sink, _log_consumer) = strategy_log_ring(16);
     let probe = OrderProbe {
         declared,
@@ -384,8 +420,8 @@ fn record_a_run(
     }
     let mut records = Vec::new();
     while let Ok(record) = consumer.pop() {
-        if matches!(record, PersistRecord::Feature(_)) {
-            records.push(record);
+        if matches!(record, ResearchRecord::Feature(_)) {
+            records.push(record.into());
         }
     }
     assert_eq!(records.len(), 9, "three spins of three columns");

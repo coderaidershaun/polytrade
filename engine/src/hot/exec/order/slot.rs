@@ -5,69 +5,9 @@ use crate::msg::exec::{ExecEvent, OrderStyle};
 use crate::msg::ids::{
     ClientOrderId, InstrumentId, Notional, Price, Qty, Side, Spend, VenueOrderId,
 };
-use crate::msg::persist::OrderLifecycle;
 use crate::msg::time::LocalTs;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CloseReason {
-    Filled,
-    Canceled,
-    Rejected,
-    Expired,
-    ReconciledGone,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum OrderState {
-    Free,
-    PendingNew,
-    Live,
-    CancelInFlight,
-    AmendInFlight,
-    Unknown,
-    Closed(CloseReason),
-}
-
-impl OrderState {
-    #[inline]
-    pub fn is_in_flight(self) -> bool {
-        matches!(
-            self,
-            OrderState::PendingNew
-                | OrderState::CancelInFlight
-                | OrderState::AmendInFlight
-                | OrderState::Unknown
-        )
-    }
-
-    #[inline]
-    pub fn is_terminal(self) -> bool {
-        matches!(self, OrderState::Free | OrderState::Closed(_))
-    }
-
-    #[inline]
-    pub fn is_working(self) -> bool {
-        !self.is_terminal()
-    }
-}
-
-impl From<OrderState> for OrderLifecycle {
-    fn from(state: OrderState) -> Self {
-        match state {
-            OrderState::Free => OrderLifecycle::Free,
-            OrderState::PendingNew => OrderLifecycle::PendingNew,
-            OrderState::Live => OrderLifecycle::Live,
-            OrderState::CancelInFlight => OrderLifecycle::CancelInFlight,
-            OrderState::AmendInFlight => OrderLifecycle::AmendInFlight,
-            OrderState::Unknown => OrderLifecycle::Unknown,
-            OrderState::Closed(CloseReason::Filled) => OrderLifecycle::ClosedFilled,
-            OrderState::Closed(CloseReason::Canceled) => OrderLifecycle::ClosedCanceled,
-            OrderState::Closed(CloseReason::Rejected) => OrderLifecycle::ClosedRejected,
-            OrderState::Closed(CloseReason::Expired) => OrderLifecycle::ClosedExpired,
-            OrderState::Closed(CloseReason::ReconciledGone) => OrderLifecycle::ClosedReconciledGone,
-        }
-    }
-}
+pub use crate::msg::order::{CloseReason, OrderState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OrderSlot {

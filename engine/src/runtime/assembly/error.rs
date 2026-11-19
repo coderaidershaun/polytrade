@@ -6,6 +6,7 @@ use crate::log::LogHandle;
 use crate::msg::failure::{FailureClass, Halt};
 use crate::runtime::config::ConfigError;
 use crate::runtime::exposure::ExposureError;
+use crate::runtime::manifest::ManifestError;
 use crate::venues::VenueError;
 use std::path::{Path, PathBuf};
 
@@ -17,6 +18,8 @@ pub enum StartError {
     Exposure(#[from] ExposureError),
     #[error(transparent)]
     Venue(#[from] VenueError),
+    #[error("the run folder could not be opened")]
+    Manifest(#[from] ManifestError),
     #[error(
         "execution.mode is {mode} but {detail} — refusing to start, because a run that reports itself armed and places nothing is worse than one that does not start"
     )]
@@ -143,6 +146,7 @@ impl StartError {
             StartError::Config(_)
             | StartError::Exposure(_)
             | StartError::Venue(_)
+            | StartError::Manifest(_)
             | StartError::ExecutionNotWired { .. }
             | StartError::ExecutionOnSeveralSources { .. }
             | StartError::ExecutionWithSeveralVenues { .. }

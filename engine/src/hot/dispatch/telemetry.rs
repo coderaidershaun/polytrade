@@ -3,16 +3,24 @@
 
 use crate::hot::book::Book;
 use crate::hot::quant::intensity::IntensityCounts;
-use crate::hot::sink::LinkSink;
+use crate::hot::sink::{AuditSink, LinkSink, ResearchSink};
 use crate::hot::tracker::MicroTracker;
-use crate::msg::latency::EngineCounters;
+use crate::msg::latency::{EngineCounters, ResearchDrops};
 
 use super::HotEngine;
 
 impl HotEngine {
-    /// A full output ring drops the record, never fatal.
-    pub fn dropped_persist_records(&self) -> u64 {
-        self.state.persist_dropped()
+    /// A full research ring drops the record and counts it by table, never fatal.
+    pub fn dropped_research_records(&self) -> ResearchDrops {
+        self.state
+            .sink
+            .as_ref()
+            .map_or_else(ResearchDrops::default, ResearchSink::dropped)
+    }
+
+    /// Audit records that wait in the bank for room in the ring, a waiting seal included.
+    pub fn banked_audit_rows(&self) -> usize {
+        self.state.actions.audit().map_or(0, AuditSink::banked)
     }
 
     /// A full event ring drops the event, never fatal.
@@ -44,8 +52,13 @@ impl HotEngine {
     /// The drop and event counts since the start of the run, which the hot loop reads once a spin.
     pub fn counters(&self) -> EngineCounters {
         let incidents = self.state.exec.incident_counts();
+        let audit = self.state.actions.audit();
         EngineCounters {
-            persist_dropped: self.state.persist_dropped(),
+            research_dropped: self.dropped_research_records(),
+            audit_banked_peak: audit.map_or(0, AuditSink::banked_peak),
+            audit_lost: audit.map_or(0, AuditSink::lost),
+            tape_lost: 0,
+            tape_gaps: 0,
             book_trimmed: self.state.books.iter().map(Book::trimmed_count).sum(),
             book_remove_missing: self
                 .state

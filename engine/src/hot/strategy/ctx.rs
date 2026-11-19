@@ -7,12 +7,33 @@ use crate::hot::tracker::MicroTracker;
 use crate::link::TopicId;
 use crate::log::{Callsite, HotRecord, LogArgs};
 use crate::msg::ids::{AssetId, InstrumentId, Notional, Qty, Side};
-use crate::msg::persist::{BookEventRow, FeatureId, FeatureRow, KlineRow, PersistRecord, TradeRow};
+use crate::msg::persist::{
+    BookEventRow, FeatureId, FeatureRow, KlineRow, ResearchRecord, TradeRow,
+};
 use crate::msg::time::{FoldTime, LocalTs};
 
+use super::view::{Market, Position};
 use super::{StrategyCtx, StrategyGate, WindowInfo};
 
 impl StrategyCtx<'_> {
+    /// The market as it stands after the message under fold: its touch, its window, its grid.
+    pub fn market(&self, instrument: InstrumentId) -> Market {
+        let index = usize::from(instrument.0);
+        Market::of(
+            instrument,
+            &self.books[index],
+            self.gates[index],
+            self.exec.tick_grid(instrument),
+            self.windows[index],
+            self.fold_time.as_local(),
+        )
+    }
+
+    /// What this engine holds in the market, from real fills.
+    pub fn position(&self, instrument: InstrumentId) -> Position {
+        Position::of(self.ledger.row(instrument), self.exec.tick_grid(instrument))
+    }
+
     /// Declares the quote that this level of the ladder should rest this spin, or `None` to
     /// withdraw it. Declare it again each spin: a quote that is not declared again is withdrawn.
     /// The engine decides whether, where, and how much it places, and a quote never takes
@@ -150,15 +171,15 @@ impl StrategyCtx<'_> {
     }
 
     pub fn emit_trade_row(&mut self, row: TradeRow) {
-        self.actions.push_persist(PersistRecord::Trade(row));
+        self.actions.push_research(ResearchRecord::Trade(row));
     }
 
     pub fn emit_book_event_row(&mut self, row: BookEventRow) {
-        self.actions.push_persist(PersistRecord::BookEvent(row));
+        self.actions.push_research(ResearchRecord::BookEvent(row));
     }
 
     pub fn emit_kline_row(&mut self, row: KlineRow) {
-        self.actions.push_persist(PersistRecord::Kline(row));
+        self.actions.push_research(ResearchRecord::Kline(row));
     }
 
     /// Bank link payload: topic + values (Strategy::link_fields prefix). Stamped w/ event time (pure fn).

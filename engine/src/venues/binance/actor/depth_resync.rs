@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use crate::msg::ids::InstrumentId;
-use crate::msg::inbound::{InboundMessage, TappedMessage, VenueMeta};
+use crate::msg::inbound::InboundMessage;
 use crate::msg::time::LocalTs;
 use crate::runtime::config::BinanceMarket;
 use crate::venues::binance::depth::{ChainRule, DepthSequencer, DiffOutcome};
@@ -139,13 +139,8 @@ impl Actor {
     }
 }
 
-fn tapped_into(out: &mut Vec<TappedMessage>) -> impl FnMut(InboundMessage, VenueMeta) {
-    move |message, venue_meta| {
-        out.push(TappedMessage {
-            message,
-            venue_meta,
-        })
-    }
+fn tapped_into(out: &mut Vec<InboundMessage>) -> impl FnMut(InboundMessage) {
+    move |message| out.push(message)
 }
 
 fn chain_rule(market: BinanceMarket) -> ChainRule {

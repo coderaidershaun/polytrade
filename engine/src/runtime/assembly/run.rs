@@ -8,11 +8,13 @@ use crate::msg::failure::FailureClass;
 use crate::runtime::config::{Config, RunIdentity};
 use crate::runtime::pin::pin_to_core;
 
-use super::Engine;
+use tokio::runtime::Runtime;
+
 use super::drain::ForcedExit;
 use super::exec_identity::IdentityLocks;
 use super::exit::Exit;
 use super::preflight::Preflight;
+use super::{Engine, StartError};
 
 /// Runs strategy `S` as a trading engine and drains it on SIGINT, SIGTERM or a fatal trip. The
 /// config comes from `--config`, or from the default path. Each failure is printed before it
@@ -104,4 +106,14 @@ fn refuse(label: &str, error: &dyn std::error::Error, class: FailureClass) -> Ex
         source = cause.source();
     }
     Exit::refused(class)
+}
+
+/// The runtime of the tasks of one engine, built at the start.
+pub(super) fn build_runtime(workers: usize) -> Result<Runtime, StartError> {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(workers.max(1))
+        .enable_all()
+        .thread_name("polysim-tokio")
+        .build()
+        .map_err(StartError::Runtime)
 }

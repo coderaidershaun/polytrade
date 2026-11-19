@@ -8,7 +8,7 @@ use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{
     BookChunk, InboundMessage, KlineEvent, MarketRotation, MessageBody, SpinTick, TradeEvent,
 };
-use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::msg::persist::{FeatureId, ResearchRecord};
 use engine::msg::time::{DurationUs, LocalTs};
 use engine::runtime::config::{Instruments, KlineInterval, NoParams, StrategySpec, TableKind};
 
@@ -118,14 +118,14 @@ impl Strategy for EwmaProbe {
 
 fn dispatch_capture(
     engine: &mut HotEngine,
-    consumer: &mut Consumer<PersistRecord>,
+    consumer: &mut Consumer<ResearchRecord>,
     message: InboundMessage,
 ) -> (Option<f64>, Option<f64>) {
     engine.dispatch(&message);
     let mut ewma = None;
     let mut microprice_present = None;
     while let Ok(record) = consumer.pop() {
-        if let PersistRecord::Feature(row) = record {
+        if let ResearchRecord::Feature(row) = record {
             if row.feature == FeatureId(0) {
                 ewma = Some(row.value);
             } else if row.feature == FeatureId(1) {
@@ -352,7 +352,8 @@ fn recorder_records_only_configured_instruments() {
         tables: vec![TableKind::Trades],
         params: NoParams {},
     };
-    let (sink, mut consumer) = persist_ring(256);
+    let (sink, rings) = persist_ring(256);
+    let mut consumer = rings.research;
     let (log_sink, _log_consumer) = strategy_log_ring(64);
     let mut engine = engine_without_warmup(
         &instruments,
@@ -374,7 +375,7 @@ fn recorder_records_only_configured_instruments() {
     ));
 
     let mut instruments_recorded = Vec::new();
-    while let Ok(PersistRecord::Trade(row)) = consumer.pop() {
+    while let Ok(ResearchRecord::Trade(row)) = consumer.pop() {
         instruments_recorded.push(row.instrument);
     }
     assert_eq!(
@@ -389,7 +390,8 @@ fn recorder_records_only_configured_instruments() {
 #[test]
 fn one_sided_book_does_not_perturb_ewma() {
     let instruments = [instrument_row(0, tracker_spec_all(4), 64)];
-    let (sink, mut consumer) = persist_ring(256);
+    let (sink, rings) = persist_ring(256);
+    let mut consumer = rings.research;
     let (log_sink, _log_consumer) = strategy_log_ring(64);
     let mut engine =
         engine_without_warmup(&instruments, Box::new(EwmaProbe::default()), sink, log_sink);

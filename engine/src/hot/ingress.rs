@@ -12,9 +12,7 @@ use crate::link::SenderCounts;
 use crate::log::{hot_error, hot_warn};
 use crate::msg::failure::{FailureClass, Halt};
 use crate::msg::ids::{MAX_INPUT_QUEUES, QueueId, SourceId};
-use crate::msg::inbound::{
-    InboundMessage, MarketTapItem, MessageBody, RunControl, SpinTick, TappedMessage, VenueMeta,
-};
+use crate::msg::inbound::{InboundMessage, MarketTapItem, MessageBody, RunControl, SpinTick};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::LocalTs;
 use crate::runtime::shutdown::{FatalReason, FatalSignal};
@@ -179,7 +177,7 @@ impl QueueProducer {
     }
 
     /// Writes the tap before the hot queue so both consumers observe a consistent prefix.
-    pub fn push_tapped(&mut self, message: InboundMessage, venue_meta: VenueMeta) {
+    pub fn push_tapped(&mut self, message: InboundMessage) {
         let Some(tap) = self.tap.as_mut() else {
             return self.push(message);
         };
@@ -193,10 +191,7 @@ impl QueueProducer {
             return self.signal_full(FullRing::MarketTap);
         }
         tap.high_water_ts_us = tap.high_water_ts_us.max(message.header.received_ts_us);
-        let tapped = MarketTapItem::Event(TappedMessage {
-            message,
-            venue_meta,
-        });
+        let tapped = MarketTapItem::Event(message);
         assert!(
             tap.producer.push(tapped).is_ok(),
             "market tap ring filled between its capacity check and its push — single producer violated"

@@ -16,7 +16,7 @@ use engine::link::{
 };
 use engine::msg::ids::{InstrumentId, QueueId};
 use engine::msg::inbound::{InboundMessage, MessageBody};
-use engine::msg::persist::{FeatureId, LinkFrameRow, LinkRowKind, PersistRecord};
+use engine::msg::persist::{FeatureId, LinkFrameRow, LinkRowKind, ResearchRecord};
 use engine::msg::time::{DurationUs, EngineClock};
 use engine::msg::ui::LatencyReport;
 use engine::msg::ui::channel::ui_channel;
@@ -98,7 +98,7 @@ enum Step {
 struct Run {
     admitted: Vec<(usize, u64)>,
     consumed: Vec<InboundMessage>,
-    records: Vec<PersistRecord>,
+    records: Vec<ResearchRecord>,
     digest: engine::hot::dispatch::StateDigest,
 }
 
@@ -174,11 +174,11 @@ fn run(script: &[Step], link_capacity: usize) -> Run {
     }
 }
 
-fn link_rows(records: &[PersistRecord]) -> Vec<LinkFrameRow> {
+fn link_rows(records: &[ResearchRecord]) -> Vec<LinkFrameRow> {
     records
         .iter()
         .filter_map(|record| match record {
-            PersistRecord::LinkFrame(row) => Some(*row),
+            ResearchRecord::LinkFrame(row) => Some(*row),
             _ => None,
         })
         .collect()
@@ -278,11 +278,11 @@ fn holds_for(script: &[Step], link_capacity: usize) -> Run {
     first
 }
 
-fn features(records: &[PersistRecord]) -> Vec<f64> {
+fn features(records: &[ResearchRecord]) -> Vec<f64> {
     records
         .iter()
         .filter_map(|record| match record {
-            PersistRecord::Feature(row) => Some(row.value),
+            ResearchRecord::Feature(row) => Some(row.value),
             _ => None,
         })
         .collect()

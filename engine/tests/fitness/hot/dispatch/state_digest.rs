@@ -15,10 +15,10 @@ use engine::log::{HotRecord, TextRecord, open_hot_lane, open_text_lane};
 use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus};
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{
-    BookChunk, FileWriter, InboundMessage, KlineEvent, MarketRotation, MessageBody, MessageKind,
-    SpinTick, TradeEvent, WriterFailure,
+    AuditBankFull, BookChunk, FileWriter, InboundMessage, KlineEvent, MarketRotation, MessageBody,
+    MessageKind, SpinTick, TradeEvent, WriterFailure,
 };
-use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::msg::persist::{AuditRecord, FeatureId, ResearchRecord};
 use engine::msg::run_state::{ControllerEpoch, RunAssertion, RunState};
 use engine::msg::time::{DurationUs, Stamper};
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
@@ -32,11 +32,11 @@ use proptest::test_runner::{Config, TestCaseError, TestRunner};
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
-    ALL_TABLES, ExposureLane, FillPen, ONE, account_chunk, book_reset, call_codes, delta_chunk,
-    detached_setup, exec_event, exposure_ring, instrument_row, kline, last_snapshot_chunk,
-    partial_snapshot_chunk, persist_ring_for, rotation, run_control, snapshot_pair, spin,
-    strategy_log_ring, stream_ready, tracker_spec_all, trade, ts, ui_book_ring, ui_event_ring,
-    venue_ts,
+    ALL_TABLES, ExposureLane, FillPen, ONE, PersistRings, account_chunk, book_reset, call_codes,
+    delta_chunk, detached_setup, exec_event, exposure_ring, instrument_row, kline,
+    last_snapshot_chunk, partial_snapshot_chunk, persist_ring_for, rotation, run_control,
+    snapshot_pair, spin, strategy_log_ring, stream_ready, tracker_spec_all, trade, ts,
+    ui_book_ring, ui_event_ring, venue_ts,
 };
 use crate::exec_support::exec_settings;
 
@@ -238,7 +238,7 @@ enum Measure {
 
 /// The read ends of each output lane of one engine.
 struct Readers {
-    persist: Consumer<PersistRecord>,
+    persist: PersistRings,
     commands: Consumer<ExecLaneItem>,
     ui_books: Consumer<UiBookSnapshot>,
     ui_events: Consumer<UiEvent>,
@@ -287,7 +287,8 @@ fn engine(start: Start, stamper: Stamper) -> (HotEngine, Readers) {
 #[derive(Debug, Default)]
 struct Folded {
     digests: Vec<StateDigest>,
-    tape_rows: Vec<PersistRecord>,
+    tape_rows: Vec<ResearchRecord>,
+    audit_rows: Vec<AuditRecord>,
     commands: Vec<ExecLaneItem>,
     ui_books: Vec<UiBookSnapshot>,
     ui_events: Vec<UiEvent>,
@@ -303,7 +304,7 @@ impl Folded {
     /// Each lane as the text of its records, so a float compares by the text of its value and a
     /// failure can print the record. A command counts by its bank stamp, never by the latency tick
     /// that it carries.
-    fn lanes(&self) -> [(&'static str, Vec<String>); 8] {
+    fn lanes(&self) -> [(&'static str, Vec<String>); 9] {
         let commands = self.commands.iter().map(|item| match item {
             ExecLaneItem::Command(stamped) => {
                 format!("{:?} {:?}", stamped.command, stamped.issued_ts_us)
@@ -312,6 +313,7 @@ impl Folded {
         });
         [
             ("tape rows", texts(&self.tape_rows)),
+            ("audit rows", texts(&self.audit_rows)),
             ("commands", commands.collect()),
             ("ui books", texts(&self.ui_books)),
             ("ui events", texts(&self.ui_events)),
@@ -389,7 +391,8 @@ fn fold_on_this_thread(start: Start, sequence: &[InboundMessage], measure: Measu
             std::hint::black_box(engine.counters());
         }
         folded.digests.push(engine.state_digest());
-        drain(&mut readers.persist, &mut folded.tape_rows);
+        drain(&mut readers.persist.research, &mut folded.tape_rows);
+        drain(&mut readers.persist.audit, &mut folded.audit_rows);
         drain(&mut readers.commands, &mut folded.commands);
         drain(&mut readers.ui_books, &mut folded.ui_books);
         drain(&mut readers.ui_events, &mut folded.ui_events);
@@ -407,7 +410,7 @@ fn fold_on_this_thread(start: Start, sequence: &[InboundMessage], measure: Measu
     let counters = engine.counters();
     assert_eq!(
         (
-            counters.persist_dropped,
+            counters.research_dropped.total(),
             counters.ui_books_dropped,
             counters.ui_events_dropped,
             counters.exposure_superseded,
@@ -475,7 +478,7 @@ fn two_folds_agree(start: Start, sequence: &[InboundMessage]) -> Result<Folded, 
 }
 
 /// One name for each kind of message, in the order of [`kind_of`].
-const KINDS: [&str; 11] = [
+const KINDS: [&str; 12] = [
     "trade",
     "book",
     "book reset",
@@ -487,6 +490,7 @@ const KINDS: [&str; 11] = [
     "exec",
     "account",
     "writer failed",
+    "audit bank full",
 ];
 
 /// No arm catches the rest, so a new kind of message stops this file compiling here. Its name then
@@ -504,6 +508,7 @@ fn kind_of(message: &InboundMessage) -> usize {
         MessageBody::Exec(_) => 8,
         MessageBody::Account(_) => 9,
         MessageBody::WriterFailed(_) => 10,
+        MessageBody::AuditBankFull(_) => 11,
     }
 }
 
@@ -544,6 +549,9 @@ enum Draw {
     },
     WriterFailed {
         consecutive_failures: u32,
+    },
+    AuditBankFull {
+        banked: u32,
     },
 }
 
@@ -664,6 +672,7 @@ fn draw() -> impl Generator<Value = Draw> {
         1 => (1..5_u32).prop_map(|consecutive_failures| Draw::WriterFailed {
             consecutive_failures
         }),
+        1 => (1..65_536_u32).prop_map(|banked| Draw::AuditBankFull { banked }),
     ]
 }
 
@@ -835,6 +844,13 @@ impl Builder {
                 MessageBody::WriterFailed(WriterFailure {
                     writer: FileWriter::Exposure,
                     consecutive_failures,
+                }),
+            ),
+            Draw::AuditBankFull { banked } => InboundMessage::new(
+                ts(when),
+                MessageBody::AuditBankFull(AuditBankFull {
+                    banked,
+                    capacity: 65_536,
                 }),
             ),
         }
@@ -1170,6 +1186,7 @@ fn kind_named_by(body: &MessageBody) -> MessageKind {
         MessageBody::Exec(_) => MessageKind::Exec,
         MessageBody::Account(_) => MessageKind::Account,
         MessageBody::WriterFailed(_) => MessageKind::WriterFailed,
+        MessageBody::AuditBankFull(_) => MessageKind::AuditBankFull,
     }
 }
 

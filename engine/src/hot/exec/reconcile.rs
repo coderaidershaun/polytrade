@@ -14,17 +14,14 @@
 //! pass and in its flatten pass. A second copy here would be a second place to get
 //! `max_orders_per_side` wrong.
 
-use core::fmt;
-use core::mem::discriminant;
-
 use crate::hot::digest::digest_by_hash;
-use crate::log::{LogValue, Spec};
 use crate::msg::exec::OrderStyle;
 use crate::msg::ids::{Notional, Price, Qty, Side, Spend};
 use crate::msg::time::{DurationUs, LocalTs};
 
+pub use crate::msg::order::RejectReason;
+
 use super::desired::DesiredQuote;
-use super::gates::ReadinessGap;
 
 digest_by_hash!(TickGrid, RejectReason);
 
@@ -125,117 +122,6 @@ pub enum ReconcileOutcome {
     Cancel,
     AmendQty(Qty),
     Reject(RejectReason),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RejectReason {
-    QtyBelowMin,
-    NotionalBelowMin,
-    NotionalAboveMax,
-    WouldCross,
-    OutsideBand,
-    Underfunded,
-    NotReady(ReadinessGap),
-    Halted,
-    SessionReducingOnly,
-    ExposureCeiling,
-    NoQuoteDeclared,
-    BookNotQuotable,
-    DuplicatePrice,
-    OrderLimit,
-    /// The venue's account-wide placement budget for this run is spent.
-    RateBudget,
-    /// Declared before the market opened, or inside the margin before it closes.
-    OutsideWindow,
-    /// Declared for a market whose warmup has not passed: the quote is held until it is live.
-    Warming,
-    /// Each idle slot of the level is retired: its next client id would wrap to one already sent.
-    IdsSpent,
-}
-
-impl RejectReason {
-    /// Operator words for the refusal an order carries onto the screen. The match is exhaustive, so
-    /// a new reason cannot ship as a bare Rust identifier the way a `Debug` rendering would let it.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::QtyBelowMin => "quantity below venue minimum",
-            Self::NotionalBelowMin => "notional below venue minimum",
-            Self::NotionalAboveMax => "notional above configured maximum",
-            Self::WouldCross => "would cross the book",
-            Self::OutsideBand => "outside the price band",
-            Self::Underfunded => "underfunded",
-            Self::NotReady(ReadinessGap::Stream) => "waiting for the account stream",
-            Self::NotReady(ReadinessGap::Balances) => "waiting for balances",
-            Self::NotReady(ReadinessGap::OpenOrders) => "waiting for open orders",
-            Self::Halted => "halted",
-            Self::SessionReducingOnly => "session is reducing only",
-            Self::ExposureCeiling => "exposure ceiling reached",
-            Self::NoQuoteDeclared => "no quote declared",
-            Self::BookNotQuotable => "book not quotable",
-            Self::DuplicatePrice => "duplicate price on this side",
-            Self::OrderLimit => "order limit reached",
-            Self::RateBudget => "order rate budget spent",
-            Self::OutsideWindow => "outside the trading window",
-            Self::Warming => "market still warming up",
-            Self::IdsSpent => "client ids of this level spent",
-        }
-    }
-}
-
-/// Every kind of refusal, in the order whose place a hot log record carries. `NotReady` stands for
-/// each gap here, and the gap itself travels in the second word.
-const REJECT_KINDS: [RejectReason; 18] = [
-    RejectReason::QtyBelowMin,
-    RejectReason::NotionalBelowMin,
-    RejectReason::NotionalAboveMax,
-    RejectReason::WouldCross,
-    RejectReason::OutsideBand,
-    RejectReason::Underfunded,
-    RejectReason::NotReady(ReadinessGap::Stream),
-    RejectReason::Halted,
-    RejectReason::SessionReducingOnly,
-    RejectReason::ExposureCeiling,
-    RejectReason::NoQuoteDeclared,
-    RejectReason::BookNotQuotable,
-    RejectReason::DuplicatePrice,
-    RejectReason::OrderLimit,
-    RejectReason::RateBudget,
-    RejectReason::OutsideWindow,
-    RejectReason::Warming,
-    RejectReason::IdsSpent,
-];
-
-/// Prints what `{:?}` prints, `NotReady(Stream)` included, whatever the placeholder: the operator
-/// words live in [`RejectReason::label`], and log lines have always shown the variant.
-impl LogValue for RejectReason {
-    const WORDS: usize = 2;
-
-    fn to_words(self, words: &mut [u64]) {
-        let kind = REJECT_KINDS
-            .iter()
-            .position(|kind| discriminant(kind) == discriminant(&self));
-        debug_assert!(kind.is_some(), "{self:?} is missing from REJECT_KINDS");
-        words[0] = kind.map_or(u64::MAX, |kind| kind as u64);
-        match self {
-            Self::NotReady(gap) => gap.to_words(&mut words[1..]),
-            _ => words[1] = 0,
-        }
-    }
-
-    fn render(words: &[u64], _spec: Spec, out: &mut dyn fmt::Write) -> fmt::Result {
-        let kind = usize::try_from(words[0])
-            .ok()
-            .and_then(|kind| REJECT_KINDS.get(kind));
-        match kind {
-            Some(Self::NotReady(_)) => {
-                out.write_str("NotReady(")?;
-                ReadinessGap::render(&words[1..], Spec::Debug, out)?;
-                out.write_str(")")
-            }
-            Some(kind) => write!(out, "{kind:?}"),
-            None => out.write_str("?"),
-        }
-    }
 }
 
 /// The one decision function; see the module header for why the guard order is not stylistic.

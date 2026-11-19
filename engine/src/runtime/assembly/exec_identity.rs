@@ -24,6 +24,14 @@ pub struct IdentityLocks {
 #[derive(Debug)]
 pub struct IdentityLock {
     _file: File,
+    path: PathBuf,
+}
+
+impl IdentityLock {
+    /// The file that holds the lock, which the manifest names so a reader can probe it.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 impl IdentityLocks {
@@ -53,7 +61,7 @@ impl IdentityLocks {
         let path = self.path_of(identity);
         let file = open_read_write(&path)?;
         match file.try_lock() {
-            Ok(()) => Ok(IdentityLock { _file: file }),
+            Ok(()) => Ok(IdentityLock { _file: file, path }),
             Err(TryLockError::WouldBlock) => Err(StartError::ExecutionIdentityInUse { path }),
             Err(TryLockError::Error(source)) => Err(StartError::identity_io_at(&path)(source)),
         }

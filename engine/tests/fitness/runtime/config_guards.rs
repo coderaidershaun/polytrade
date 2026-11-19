@@ -3,11 +3,13 @@
 
 use std::path::Path;
 
-use engine::hot::strategy::{EngineView, StrategyConfig};
+use engine::hot::strategy::{EngineView, ParamError, ParamValue, StrategyConfig, StrategyParams};
 use engine::msg::failure::{FailureClass, Halt};
 use engine::msg::ids::{QueueId, QueueIdError, VenueId};
 use engine::msg::time::DurationUs;
-use engine::runtime::config::{ConfigError, ExecutionMode, NoParams, TableKind, VolumeThreshold};
+use engine::runtime::config::{
+    Config, ConfigError, ExecutionMode, NoParams, TableKind, VolumeThreshold,
+};
 use engine::runtime::registry::Registry;
 
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
@@ -55,6 +57,12 @@ pub(super) fn config_with_source(source_block: &str) -> String {
 }
 
 const DEFAULT_PERSISTENCE: &str = "persistence:\n  dir: ./data\n";
+
+/// A document whose `strategy.params` block holds `params`, a block of keys indented by four
+/// spaces.
+pub(crate) fn config_with_params(params: &str) -> String {
+    config_with_strategy(BINANCE_PERP_SOURCE, &format!("  params:\n{params}"))
+}
 
 fn config_with_strategy(source_block: &str, strategy_block: &str) -> String {
     with_link(
@@ -252,9 +260,17 @@ fn volume_bar_thresholds_parse_in_both_forms() {
 
 /// Generic over the strategy's `params:` type, so a shipped config is read through the same typed
 /// pass its own binary uses — parsing it as [`NoParams`] would skip its knobs entirely.
-fn load<P: serde::de::DeserializeOwned + Default>(
-    path: &str,
-) -> engine::runtime::config::Config<P> {
+/// The shipped config at `path` with `from` written as `to`, which must refuse the load.
+fn refused_edit<P: StrategyParams>(path: &str, from: &str, to: &str) -> ConfigError {
+    let shipped = std::fs::read_to_string(path).unwrap_or_else(|error| panic!("{path}: {error}"));
+    assert!(shipped.contains(from), "{path} holds {from}");
+    match Config::<P>::from_yaml(&shipped.replace(from, to)) {
+        Ok(_) => panic!("{path} with {to} must refuse the load"),
+        Err(error) => error,
+    }
+}
+
+fn load<P: StrategyParams>(path: &str) -> Config<P> {
     engine::runtime::config::Config::load(Path::new(path))
         .unwrap_or_else(|error| panic!("{path} must load: {error}"))
 }
@@ -318,12 +334,21 @@ fn the_shipped_configs_run_their_strategies_and_ship_disarmed() {
         1,
         "one source, one binance spot instrument"
     );
-    // Construction is the strategy's own validation pass — a shipped params value its asserts
-    // reject (a non-positive Guéant risk budget, say) must fail here, not at first launch.
+    // The params of the shipped config pass their bounds at load, so construction gets a value it
+    // can build from. A value out of its bounds refuses the load and names the param.
     let micro_engine = EngineView {
         spin_interval: DurationUs::from_micros(micro.engine.spin_interval_us as i64),
     };
     let _ = MicroRecorder::from_spec(&micro.strategy, micro_engine);
+    let negative = refused_edit::<MicroRecorderParams>(
+        "../strategies/strat-micro-recorder/te-binance-spot-btcusdt/config.yaml",
+        "order_notional: 10",
+        "order_notional: -10",
+    );
+    assert!(
+        matches!(&negative, ConfigError::Param(ParamError::Refused { field: "order_notional", seen: ParamValue::Float(seen), .. }) if *seen == -10.0),
+        "{negative}"
+    );
 
     let publisher = load::<PolyUpParams>(
         "../strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/config.yaml",
@@ -390,6 +415,21 @@ fn the_shipped_configs_run_their_strategies_and_ship_disarmed() {
         spin_interval: DurationUs::from_micros(publisher.engine.spin_interval_us as i64),
     };
     let _ = PolyUpPublisher::from_spec(&publisher.strategy, publisher_engine);
+    let no_shares = refused_edit::<PolyUpParams>(
+        "../strategies/strat-micro-recorder/te-polymarket-btc-updown-5m/config.yaml",
+        "order_shares: 5.0",
+        "order_shares: 0",
+    );
+    assert!(
+        matches!(
+            &no_shares,
+            ConfigError::Param(ParamError::Refused {
+                field: "order_shares",
+                ..
+            })
+        ),
+        "{no_shares}"
+    );
     // The one arithmetic relation between these numbers that nothing else checks. An outcome share
     // cannot be worth more than a dollar, so `order_shares` IS the worst-case notional — set it
     // above the single-order ceiling and every place is refused as oversized, on a config that
@@ -420,37 +460,52 @@ fn the_shipped_configs_run_their_strategies_and_ship_disarmed() {
     );
 }
 
-/// A strategy's typed `params:` block deserializes in the same pass with `deny_unknown_fields`
-/// intact: a good block parses to the typed value, an unknown key inside `params` fails naming the
-/// field, and an omitted block yields the strategy's default. This is the seam that lets a strategy
-/// carry its own knobs without the lib knowing the shape.
+/// A strategy's typed `params:` block parses to the typed value, and an omitted block yields the
+/// strategy's default. A key that the strategy does not read refuses the start, names the key and
+/// lists the params of the strategy, whatever serde attributes its type carries: a misspelt knob
+/// that parsed would run the strategy on its default without a word.
 #[test]
-fn strategy_params_parse_typed_and_reject_unknown_keys() {
-    #[derive(serde::Deserialize, Debug, Clone, Default)]
-    #[serde(deny_unknown_fields)]
+fn unknown_param_field_refuses_start() {
+    #[derive(serde::Deserialize, serde::Serialize, Debug, Clone, Default)]
+    #[serde(default)]
     struct FakeParams {
         threshold: f64,
+        window: u32,
     }
+    impl StrategyParams for FakeParams {}
 
     let with_params = config_with_strategy(BINANCE_PERP_SOURCE, "  params:\n    threshold: 1.5\n");
-    let config = engine::runtime::config::Config::<FakeParams>::from_yaml(&with_params)
+    let config = Config::<FakeParams>::from_yaml(&with_params)
         .expect("typed params parse in the single pass");
     assert_eq!(config.strategy.params.threshold, 1.5);
 
     let unknown_key = config_with_strategy(BINANCE_PERP_SOURCE, "  params:\n    threshld: 1.5\n");
-    let error = engine::runtime::config::Config::<FakeParams>::from_yaml(&unknown_key)
-        .expect_err("an unknown key inside params must reject");
+    let error = Config::<FakeParams>::from_yaml(&unknown_key)
+        .expect_err("an unknown key inside params must refuse the start");
     assert!(
-        matches!(&error, ConfigError::Parse { detail } if detail.contains("threshld")),
-        "error names the unknown params field, got: {error}"
+        matches!(
+            &error,
+            ConfigError::Param(ParamError::Unknown { field, known })
+                if &**field == "threshld" && &**known == "threshold, window"
+        ),
+        "the refusal names the unknown key and the params of the strategy, got: {error}"
     );
+    assert_eq!(error.failure_class(), FailureClass::Halt(Halt::Start));
 
     let omitted = config_with_strategy(BINANCE_PERP_SOURCE, "  instruments: all\n");
-    let config = engine::runtime::config::Config::<FakeParams>::from_yaml(&omitted)
-        .expect("an omitted params block is legal");
+    let config =
+        Config::<FakeParams>::from_yaml(&omitted).expect("an omitted params block is legal");
     assert_eq!(
         config.strategy.params.threshold, 0.0,
         "omitted params yields the strategy default"
+    );
+
+    let knob_free = config_with_strategy(BINANCE_PERP_SOURCE, "  params:\n    threshold: 1.5\n");
+    let error = Config::<NoParams>::from_yaml(&knob_free)
+        .expect_err("a strategy with no params refuses any key");
+    assert!(
+        matches!(&error, ConfigError::Param(ParamError::Unknown { known, .. }) if &**known == "none"),
+        "{error}"
     );
 }
 
@@ -579,21 +634,23 @@ fn twenty_one_input_queues_are_refused() {
         ids.extend(registry.writer_status_queue_id().map(QueueId::index));
         ids.extend(registry.control_queue_id().map(QueueId::index));
         ids.extend(registry.tape_status_queue_id().map(QueueId::index));
+        ids.extend(registry.audit_status_queue_id().map(QueueId::index));
         let count = registry.input_queue_count();
         assert!(count <= 20, "{count} input queues");
         assert_eq!(
             ids,
             (0..count).collect::<Vec<usize>>(),
             "the ids are dense, and the timer, the link, the execution edge, the writer status, \
-             the control queue and the status of the tape writer follow the groups"
+             the control queue, the status of the tape writer and the audit status follow the \
+             groups"
         );
     }
 }
 
 /// The link's input queue exists only when its actor does, and it lands after the timer — a queue id
 /// is a position in the ingress list, and `wire` zips producers back against exactly that order.
-/// The control queue of the link exists with it, and only the status queue of the tape writer comes
-/// after it.
+/// The control queue of the link exists with it, and only the status queues of the tape writer and
+/// of the audit sink come after it.
 #[test]
 fn the_link_adds_one_input_queue_only_when_configured() {
     let without = build_from(&config_with_source(BINANCE_PERP_SOURCE));
@@ -605,8 +662,8 @@ fn the_link_adds_one_input_queue_only_when_configured() {
     assert_eq!(without.control_queue_id(), None, "and no control queue");
     assert_eq!(
         without.input_queue_count(),
-        5,
-        "three producers + the timer + the status of the tape writer"
+        6,
+        "three producers + the timer + the status of the tape writer + the audit status"
     );
 
     let with = build_from(&config_with_link(&link_block("127.0.0.1:9310", "")));
@@ -628,13 +685,18 @@ fn the_link_adds_one_input_queue_only_when_configured() {
     assert_eq!(
         with.tape_status_queue_id().map(|id| id.index()),
         Some(6),
-        "the status of the tape writer comes last"
+        "the status of the tape writer comes after the control queue"
+    );
+    assert_eq!(
+        with.audit_status_queue_id().map(|id| id.index()),
+        Some(7),
+        "the audit status comes last"
     );
     assert_eq!(
         with.input_queue_count(),
-        7,
+        8,
         "three producers + the timer + the link + the control queue + the status of the tape \
-         writer"
+         writer + the audit status"
     );
 }
 
@@ -714,7 +776,7 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             "",
             ExecutionMode::Off,
             false,
-            5,
+            6,
         ),
         (
             "binance live",
@@ -723,7 +785,7 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             "",
             ExecutionMode::Live,
             true,
-            7,
+            8,
         ),
         (
             "binance sim",
@@ -732,7 +794,7 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             SIM_BLOCK,
             ExecutionMode::Sim,
             true,
-            7,
+            8,
         ),
         (
             "polymarket off",
@@ -741,7 +803,7 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             "",
             ExecutionMode::Off,
             false,
-            3,
+            4,
         ),
         (
             "polymarket live",
@@ -750,7 +812,7 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
             "",
             ExecutionMode::Live,
             true,
-            5,
+            6,
         ),
     ];
     for (case, source, spelling, extra, expected, expects_queue, input_queues) in modes {
@@ -777,8 +839,8 @@ fn every_execution_mode_parses_and_only_the_armed_ones_cost_a_queue() {
         assert_eq!(
             registry.input_queue_count(),
             input_queues,
-            "{case}: producer groups + the timer + the status of the tape writer, plus execution \
-             and the writer status when it is armed"
+            "{case}: producer groups + the timer + the status of the tape writer + the audit \
+             status, plus execution and the writer status when it is armed"
         );
     }
 }

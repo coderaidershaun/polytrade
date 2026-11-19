@@ -2,10 +2,13 @@
 //! included, a row for each fill, and a counted row for each incident.
 
 use crate::hot::digest::digest_by_hash;
+use crate::hot::ledger::PositionLedger;
 use crate::hot::strategy::Actions;
 use crate::msg::exec::{ExecEvent, ExecKind, Provenance, RejectClass};
+use crate::msg::ids::Qty;
 use crate::msg::persist::{
-    FillRow, IncidentKind, IncidentRow, OrderLifecycle, OrderRow, OrderTransition, PersistRecord,
+    AuditRecord, FillRow, IncidentKind, IncidentRow, LedgerEntry, LedgerKind, OrderLifecycle,
+    OrderRow, OrderTransition,
 };
 use crate::msg::time::{LocalTs, VenueTs};
 
@@ -21,6 +24,7 @@ struct OrderAudit<'a> {
     /// Zero for a transition that the engine made on its own: the venue never heard of it.
     exchange_ts_us: VenueTs,
     received_ts_us: LocalTs,
+    depth_ahead: Option<Qty>,
 }
 
 /// The incidents of each kind that the fold recorded, and the events of its own orders that held no
@@ -45,7 +49,7 @@ pub(super) fn bank_incident(bank: &mut Actions, counts: &mut IncidentCounts, row
         IncidentKind::UnbookedFee => &mut counts.unbooked_fees,
     };
     *count += 1;
-    bank.push_persist(PersistRecord::Incident(row));
+    bank.push_audit(AuditRecord::Incident(row));
 }
 
 /// A transition the engine made on its own, so there is no venue answer, no reject and no exchange
@@ -68,6 +72,31 @@ pub(super) fn bank_engine_driven(
             reject_code: 0,
             exchange_ts_us: VenueTs::from_micros(0),
             received_ts_us: at,
+            depth_ahead: None,
+        },
+    );
+}
+
+/// The row of a placement, with the quantity that stood ahead of it at its price when it was
+/// banked.
+pub(super) fn bank_placed(
+    bank: &mut Actions,
+    slot: &OrderSlot,
+    depth_ahead: Option<Qty>,
+    at: LocalTs,
+) {
+    bank_order(
+        bank,
+        OrderAudit {
+            slot,
+            transition: OrderTransition::Placed,
+            previous_state: OrderLifecycle::Free,
+            provenance: Provenance::Mine,
+            reject: None,
+            reject_code: 0,
+            exchange_ts_us: VenueTs::from_micros(0),
+            received_ts_us: at,
+            depth_ahead,
         },
     );
 }
@@ -76,7 +105,7 @@ pub(super) fn bank_engine_driven(
 /// names the slot.
 fn bank_order(bank: &mut Actions, audit: OrderAudit<'_>) {
     let slot = audit.slot;
-    bank.push_persist(PersistRecord::Order(OrderRow {
+    bank.push_audit(AuditRecord::Order(OrderRow {
         instrument: slot.instrument(),
         client_id: slot.client_id(),
         venue_order_id: slot.venue_order_id(),
@@ -95,6 +124,7 @@ fn bank_order(bank: &mut Actions, audit: OrderAudit<'_>) {
         reject_code: audit.reject_code,
         exchange_ts_us: audit.exchange_ts_us,
         received_ts_us: audit.received_ts_us,
+        depth_ahead: audit.depth_ahead,
     }));
 }
 
@@ -107,7 +137,7 @@ pub(super) fn bank_fill(
     delta: FillDelta,
     received_ts_us: LocalTs,
 ) {
-    bank.push_persist(PersistRecord::Fill(FillRow {
+    bank.push_audit(AuditRecord::Fill(FillRow {
         instrument: slot.instrument(),
         trade_id: event.trade_id,
         venue_order_id: slot.venue_order_id(),
@@ -154,6 +184,7 @@ pub(super) fn bank_event_rows(
             reject_code: event.reject_code,
             exchange_ts_us: event.exchange_ts_us,
             received_ts_us,
+            depth_ahead: None,
         },
     );
     if !fill.is_empty() {
@@ -189,4 +220,23 @@ fn transition_of(kind: ExecKind) -> Option<OrderTransition> {
 #[inline]
 fn is_worth_recording(previous_state: OrderLifecycle, slot: &OrderSlot, fill: FillDelta) -> bool {
     OrderLifecycle::from(slot.state()) != previous_state || !fill.is_empty()
+}
+
+/// The ledger after a fill that it booked, its fee included, named by the order and the trade.
+pub(super) fn bank_fill_ledger_row(
+    bank: &mut Actions,
+    ledger: &PositionLedger,
+    slot: &OrderSlot,
+    event: &ExecEvent,
+    received_ts_us: LocalTs,
+) {
+    let row =
+        ledger
+            .row(slot.instrument())
+            .entry(LedgerKind::Fill, slot.instrument(), received_ts_us);
+    bank.push_audit(AuditRecord::Ledger(LedgerEntry {
+        client_id: Some(slot.client_id()),
+        trade_id: event.trade_id,
+        ..row
+    }));
 }

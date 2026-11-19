@@ -258,14 +258,9 @@ impl ExecEngine {
     ) {
         let refusal = match outcome {
             FlattenOutcome::Nothing => None,
-            FlattenOutcome::Place(intent) => self.place(
-                instrument,
-                side,
-                intent,
-                PlacementKind::Flatten,
-                input.stamps(),
-                input.bank,
-            ),
+            FlattenOutcome::Place(intent) => {
+                self.place(instrument, side, intent, PlacementKind::Flatten, input)
+            }
             FlattenOutcome::Refuse(reason) => Some(reason),
         };
         let index = usize::from(instrument.0);

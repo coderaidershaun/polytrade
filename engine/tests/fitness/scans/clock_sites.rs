@@ -318,6 +318,11 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 116] = [
         ],
     ),
     (
+        "engine/src/runtime/assembly/persist.rs",
+        "open_run",
+        &["engine::msg::time::wall_clock_now"],
+    ),
+    (
         "engine/src/runtime/assembly/timer.rs",
         "spawn_timer",
         &[
@@ -334,11 +339,6 @@ const PERMITTED_CLOCK_SITES: [(&str, &str, &[&str]); 116] = [
     (
         "engine/src/runtime/exposure/writer.rs",
         "document",
-        &["engine::msg::time::wall_clock_now"],
-    ),
-    (
-        "engine/src/tape/drain.rs",
-        "spawn",
         &["engine::msg::time::wall_clock_now"],
     ),
     (
@@ -823,7 +823,7 @@ fn permitted_clock_sites_equal_the_list() {
         .parent()
         .expect("the package sits in the workspace");
     let banned = banned_paths(workspace);
-    let mut problems = Vec::new();
+    let mut problems = lint_reach_problems(workspace);
     let mut found = Vec::new();
     for root in PRODUCTION_ROOTS {
         for path in rust_sources(&workspace.join(root)) {
@@ -1184,6 +1184,42 @@ fn function_end(code_lines: &[&str], first: usize) -> usize {
     (first + 1..code_lines.len())
         .find(|&index| code_lines[index].trim_end() == closing)
         .unwrap_or(code_lines.len() - 1)
+}
+
+/// The lint reaches a package only through its `[lints]` table, so each member of the workspace,
+/// `lab` among them, takes the table of the workspace and sets no lint of its own, and the
+/// workspace denies the lint.
+fn lint_reach_problems(workspace: &Path) -> Vec<String> {
+    let root = read(&workspace.join("Cargo.toml"));
+    let mut problems = Vec::new();
+    if !root.contains("[workspace.lints.clippy]\ndisallowed_methods = \"deny\"") {
+        problems.push("Cargo.toml no longer denies clippy::disallowed_methods".to_owned());
+    }
+    let members_line = root
+        .lines()
+        .find(|line| line.starts_with("members = ["))
+        .expect("the workspace manifest lists its members on one line");
+    let members: Vec<&str> = members_line.split('"').skip(1).step_by(2).collect();
+    if !members.contains(&"lab") {
+        problems.push(format!(
+            "the workspace members {members:?} no longer hold lab"
+        ));
+    }
+    for member in members {
+        let manifest = read(&workspace.join(member).join("Cargo.toml"));
+        if !manifest.contains("[lints]\nworkspace = true") {
+            problems.push(format!(
+                "{member}/Cargo.toml does not take the lints of the workspace, so the clock lint \
+                 does not reach it"
+            ));
+        }
+        if manifest.contains("[lints.") {
+            problems.push(format!(
+                "{member}/Cargo.toml sets lints of its own, which can lift the clock lint"
+            ));
+        }
+    }
+    problems
 }
 
 fn banned_paths(workspace: &Path) -> Vec<String> {

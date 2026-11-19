@@ -12,8 +12,12 @@ comply. IF one cannot comply, THEN surface conflict explicitly. Amendments: §15
 | lib                 | a lib crate of the workspace: `engine` or `lab` (§8). "The lib" = `engine`   |
 | bin                 | binary                                                                       |
 | TE                  | trading engine (§8)                                                          |
-| fitness             | test target `fitness` of a lib crate: `engine/tests/fitness/` (§12)          |
-| gate G              | the six gate steps of §14                                                    |
+| fitness             | test target `fitness` of a lib crate: `engine/tests/fitness/`, `lab/tests/fitness/` (§12) |
+| gate G              | the seven gate steps of §14                                                  |
+| run                 | one boot of an engine, one re-fold, or one backtest: one folder, one `run.json` (§7) |
+| tape                | table `tape`: each message that the fold consumed, in pop order (§6)         |
+| re-fold             | a fold of a whole tape again, from its first message, by `lab` (§12)         |
+| audit bank          | rows that wait behind a full audit ring, first in, first out (§6)            |
 | live policy         | rules of the owner for keys and live runs. Git does not track them (§12)     |
 | `live-runner`       | the one role of a job that starts a live run, by the live policy (§12)       |
 | failure class       | the reaction to an error: HALT, RESET, RETRY, or REJECT (§6)                 |
@@ -131,6 +135,13 @@ The start:
     its input rings, because it takes the producer of its own status queue (§6, 2026-11-18 section
     on tape faults). The exposure writer starts after it, then the execution edge, the timer, the
     market-data actors, and the link. The record ring of the tape is made before the hot thread.
+  - Amended 2026-11-19, as built: the tape ring, the audit ring, the research ring and the rollup
+    ring are made before the hot thread. The run folder and its `run.json` (`end_state` `open`)
+    are made after the engine runtime builds, as the last refusal of `Engine::start`, and before
+    the writer starts. So an engine start never writes `end_state` `start_refused`. Sections on
+    three rings (end of §6) and on the artifacts of each run kind (end of §7). WHY: the writer
+    needs the run folder, and the boot record of the tape needs the nonce and the restored
+    position that preflight read.
 - [ ] IF a pin is refused (Linux), THEN each thread that started stops before the start returns.
   No writer has started, so no tape file is pruned. The run nonce is spent by then.
 - [ ] The pin call is a parameter (`PinCall`). `run_trading_engine` passes `pin_to_core`, and a
@@ -370,6 +381,9 @@ WHY: execution command ring carries EVENTS, not state. Thus the precondition of 
   retries next spin.
 - This is the latched pattern that `PersistSink::request_seal` already uses for the one record
   that must never be dropped.
+  - Amended 2026-11-19, as built: `PersistSink` is gone. `ResearchSink::request_seal` and
+    `AuditSink::request_seal` (`engine/src/hot/sink/`) hold the seal of their ring. The audit
+    sink also banks each audit row that its ring refuses (§6, 2026-11-19 section on three rings).
 - [ ] Thus ring pressure delays the WIRE, never the STATE.
 - [ ] Two consequences bind:
   - The command lane is RETRY. A command that the ring refuses stays in the bank, in order, with
@@ -522,6 +536,13 @@ Lanes:
 | Command bank | quoting halt `HaltReason::CommandBankOverflow` | HALT (quoting) |
 | Persistence seal | try at the request and at each spin, up to `persistence.seal_try_limit` tries, then quoting halt `HaltReason::SealNotAccepted` | RETRY, then HALT (quoting) |
 | Amended 2026-11-18: status queue of the tape writer | fatal latch, bounded drain | HALT (engine) |
+| Amended 2026-11-19: tape ring | latch one gap: each refused record keeps its sequence number and is counted `tape_lost`; the gap row, a seal and one snapshot of each book go when the ring holds them all (2026-11-19 section on three rings, below) | REJECT |
+| Amended 2026-11-19: audit ring | the row waits in the audit bank, first in, first out | RETRY |
+| Amended 2026-11-19: audit bank at its high mark (49,152 of 65,536 rows) | one `AuditBankFull` message on the audit status queue; the fold halts quoting at it (`HaltReason::AuditBankFull`) | HALT (quoting) |
+| Amended 2026-11-19: audit bank at its capacity | drop the row, count `audit_lost` | REJECT |
+| Amended 2026-11-19: audit status queue | fatal latch, bounded drain | HALT (engine) |
+| Amended 2026-11-19: research ring (`queues.persistence_capacity`) | drop the row, count it for its table (`research_<table>`) | REJECT |
+| Amended 2026-11-19: rollup ring of the metrics thread to the writer | drop the row, count `rollup_rows` | REJECT |
 | Copy lane of the OTLP export (feature `otlp`): each line that the log drain writes | drop the copy, count it (2026-11-13, the OTLP export) | REJECT |
 | Rows lane of the OTLP export (feature `otlp`): each row of the metrics thread | drop the row, count it (2026-11-13, the OTLP export) | REJECT |
 
@@ -650,8 +671,11 @@ differ, and no record says why.
 - [ ] The tape writer writes the incident table whenever the tape exists, as it writes the table
   of rotations. No config can remove it. WHY: an incident is a money event.
 - [ ] A run with no tape has no incident table. Its counts stay in hot state, beside the hot log
-  lines. IF the persistence ring is full, THEN it drops the record and counts the drop. The
-  incident count stays.
+  lines. IF the audit ring is full, THEN the record waits in the audit bank. The incident count
+  stays.
+  - Replaced 2026-11-19: "IF the persistence ring is full, THEN it drops the record and counts the
+    drop." WHY: an incident rides the audit ring, which never drops a row below the capacity of
+    its bank (2026-11-19 section on three rings, end of §6).
 
 ### Amended 2026-11-13: the OTLP export
 
@@ -835,10 +859,19 @@ it. A reader that listed the files during a run, or after a crash, opened a file
   of the file, the rename, and a sync of its folder.
 - [ ] The final name keeps its form (§7, 2026-07-29):
   `{persistence.dir}/{strategy-id}/{te-id}[/sim]/{table}/date=YYYY-MM-DD/{HH}-{boot_ts_us}-{seq:06}.parquet`.
+  - Amended 2026-11-19, as built: each run has a folder of its own, and the file name keeps its
+    form inside it:
+    `{persistence.dir}/{strategy-id}/{te-id}/{kind}/{run_id}/{table}/date=YYYY-MM-DD/{HH}-{run_id}-{seq:06}.parquet`.
+    Section on the artifacts of each run kind, end of §7. WHY: the boots of one engine shared one
+    folder, so a reader could not tell which run wrote a file.
 - [ ] A reader lists `.parquet` names only. Thus no reader opens a file that is not complete. The
   readers in the repo obey: the retention walk of the writer, the read-back helper of the fitness
-  suite, the test of rotations of target `integration`, and `strategies/etl.py`. A new reader
-  obeys too.
+  suite, the test of rotations of target `integration`, the tape reader of `lab`
+  (`lab/src/backtest/reader.rs`), the run reader of `posttrade`
+  (`posttrade/src/posttrade/runs.py`), and `tape-sync` (`tools/tape-sync/`). A new reader obeys
+  too.
+  - Replaced 2026-11-19: the fourth reader was the Python reader below `strategies/`. WHY: stage 2
+    removed it. Package `posttrade` reads each run now (§11, 2026-11-19).
 - [ ] IF the sync of the file or the rename fails, THEN the writer removes the `.part` and returns
   `PersistError::Io` with its path. IF only the sync of the folder fails, THEN the file keeps its
   final name, and the error names the folder.
@@ -861,6 +894,14 @@ it. A reader that listed the files during a run, or after a crash, opened a file
     not run after a seal at the row cap, at an hour cross, or at shutdown. WHY: the writer has no
     interval of its own now (section on the seal by message time, end of §6).
   - Replaced 2026-11-18: "after each periodic seal". WHY: no periodic seal exists.
+  - Amended 2026-11-19, as built: the walk runs below the kind folder of the run
+    (`{strategy-id}/{te-id}/{kind}/`), over each run folder there. It runs at the start of the
+    writer and after each `ResearchRecord::SealAll`, not after a seal of the audit ring or of the
+    tape. It removes each `.part` of another run. WHY: a run folder holds one run, and retention
+    must still reach the files of the runs before it.
+  - CAUTION: Retention deletes sealed files of an open run too. `tape-sync` ships no file of an
+    open run. Set `persistence.retention_hours` well above the longest run, or the oldest files
+    of a long run are deleted before they ship (`ops/tape-sync/README.md`).
 - [ ] The walk is safe only while one writer writes a run folder. The identity lock that each
   engine takes in each mode (part 5 of the plan, the fleet server) makes that a fact of the code.
   - Amended 2026-11-18, as built: preflight takes the identity lock in each mode, and the drain
@@ -984,10 +1025,24 @@ borders, so a border of a tape file was no function of the messages.
 - [ ] The count of borders that the fold passed is state, in the state digest.
 - [ ] The request sends `PersistRecord::SealAll` through the seal sink. A request while a seal
   waits keeps the count of tries of that seal. A park also requests a seal.
+  - Amended 2026-11-19, as built: at a border and at a park, the fold sends
+    `ResearchRecord::SealAll` on the research ring and `AuditRecord::SealAll` on the audit ring.
+    Each sink keeps the count of tries of its own seal. An audit seal waits behind the rows that
+    the audit bank holds, so it never puts a row in the wrong file. At a border the driver puts
+    `TapeRecord::Seal` and one snapshot of each book on the tape ring, before the record of that
+    spin (`HotEngine::seals_at`). WHY: three rings, one writer, and the border of each file stays
+    a function of the messages.
 - [ ] The writer has no interval and no clock read that decides a seal. It still seals at its row
   cap (10,000 rows), at an hour cross of the row stamps, at each `SealAll`, and at shutdown.
+  - Amended 2026-11-19, as built: table `tape` seals only at a border of the fold, after a gap, and
+    at shutdown. It has no row cap and no hour roll. WHY: each tape file opens with a snapshot of
+    each book, and only the hot thread knows when a file opens.
 - [ ] The rows of `rotations` come over a channel of their own, not the record ring. Thus their
-  borders follow the reads of the writer. Stage 2 of the master plan owns that table.
+  borders follow the reads of the writer.
+  - Amended 2026-11-19: `rotations` is an audit table, and it keeps its channel (2026-11-19 section
+    on three rings, below).
+  - Replaced 2026-11-19: "Stage 2 of the master plan owns that table." WHY: stage 2 ruled its
+    class.
 - [ ] Pins: `run_and_second_run_seal_at_equal_borders` (`engine/tests/fitness/tape/seal_marker.rs`),
   which compares the file names with the boot stamp masked; the border case of
   `seal_retry_reaches_cap_then_halts`; the zero case of
@@ -1000,9 +1055,18 @@ traded on while no order or fill reached the disk (defect 14, the part of a writ
 
 - [ ] Each table names its kind in `TapeTable` (`engine/src/tape/mod.rs`). `TapeTable::fault_class`
   gives its class, with no catch-all arm:
-  - audit tables, HALT (quoting): `orders`, `fills`, `incidents`, `link_frames`
-  - research tables, REJECT (of that table): `features`, `trades`, `book_events`, `klines`,
-    `rotations`
+  - audit tables, HALT (quoting): `orders`, `fills`, `incidents`, `ledger`, `rotations`
+  - each other table, REJECT (of that table): `features`, `trades`, `book_events`, `klines`,
+    `link_frames`, `mids`, `no_quotes`, `tape`, `metrics_latency`, `metrics_drops`,
+    `metrics_sender_drops`, `metrics_backlog`
+  - Amended 2026-11-19, as built: 17 tables, each with its ring, its switch and its class in
+    `TapeTable` (2026-11-19 section on three rings, below). WHY: open question 1 (a) of stage 2
+    put `link_frames` on the research ring, because the tape records each consumed frame and run
+    marker. Ruling D20 made `rotations` audit, because only that table names the market of each
+    Polymarket order and fill.
+  - Replaced 2026-11-19: "audit tables, HALT (quoting): `orders`, `fills`, `incidents`,
+    `link_frames`. Research tables, REJECT (of that table): `features`, `trades`, `book_events`,
+    `klines`, `rotations`."
 - [ ] `PersistError::{Io, Parquet, Batch}` name their table, and their `failure_class()` is the
   class of the table. `WriterPanicked` and `DrainInterrupted` are HALT (engine).
 - [ ] A fault at any step of a file (open, write, seal) stops its table. The open file of that
@@ -1017,10 +1081,96 @@ traded on while no order or fill reached the disk (defect 14, the part of a writ
 - [ ] Research fault: one ERROR line and one more stopped table in the count
   (`PersistHandle::stopped_tables`). Nothing halts, and the drain ends `Ok`.
 - [ ] The count of stopped tables counts each stop, audit or research.
-- [ ] The full ring still drops an audit row and counts it. The flag of defect 14 stands at
-  `engine/src/hot/sink/latched.rs` and waits for the audit ring of stage 2.
-- [ ] `rotations` is research by open question 3 (a) of the plan. The case for audit goes to stage
-  2 of the master plan, with the audit ring.
+- [ ] A full audit ring drops no audit row: the row waits in the audit bank, and the bank at its
+  high mark halts quoting by one message of the input. The flag of defect 14 is gone.
+  - Replaced 2026-11-19: "The full ring still drops an audit row and counts it. The flag of defect
+    14 stands at `engine/src/hot/sink/latched.rs` and waits for the audit ring of stage 2." WHY:
+    stage 2 built the audit ring and its bank (2026-11-19 section on three rings, below).
+- [ ] `rotations` is audit (ruling D20 of stage 2).
+  - Replaced 2026-11-19: "`rotations` is research by open question 3 (a) of the plan. The case for
+    audit goes to stage 2 of the master plan, with the audit ring." WHY: stage 2 ruled it.
+
+### Amended 2026-11-19: three rings, the audit bank, and the tape
+
+WHY: one ring held research rows and audit rows, so a flood of research rows dropped a fill row
+while the engine traded on (defects 12 and 14). The tape held what a strategy emitted, not what the
+fold consumed, so no run could be folded again. Design: `stage-2-design.md` of the master plan,
+§5.1 to §5.5.
+
+- [ ] Three rings go from the hot thread to the one writer thread (`persist`). Each ring has one
+  policy for a full ring (lane table, above):
+
+| Ring | Producer | Record | Capacity | Full ring |
+| --- | --- | --- | --- | --- |
+| tape | the tee of the driver, `TapeSink` (`engine/src/hot/sink/tape.rs`) | `TapeRecord` | `TAPE_RING_CAPACITY` 65,536 | one gap latch, REJECT |
+| audit | `AuditSink` (`engine/src/hot/sink/audit.rs`), held by `Actions` | `AuditRecord`: orders, fills, incidents, ledger | `AUDIT_RING_CAPACITY` 4,096 | the audit bank, RETRY |
+| research | `ResearchSink` (`engine/src/hot/sink/research.rs`) | `ResearchRecord`: features, trades, book events, klines, link frames, mids, no-quote rows | `queues.persistence_capacity` | drop, count by table, REJECT |
+
+- [ ] Two more inputs reach the writer. The metrics thread writes its rollup rows into
+  `tape::RollupRows` (1,024 rows, drop and count, REJECT). The Polymarket actor sends each row of
+  `rotations` on its own channel (256 rows, drop, count and warn, as before).
+- [ ] An audit row never passes a lane that drops. `Actions::push_audit` gives it straight to the
+  audit sink. A row of `orders` or `fills` that `strategy.tables` does not name is filtered, as
+  before. An incident row and a ledger row always pass. A research row waits in its action lane
+  until the drain of the message.
+- [ ] The audit bank holds `AUDIT_BANK_ROWS` (65,536) rows, reserved at start. A row that the ring
+  refuses waits in the bank, first in, first out. The bank drains into the ring at each push and at
+  each spin.
+- [ ] At `AUDIT_BANK_HIGH_MARK` (49,152 rows) the audit sink posts one
+  `AuditBankFull { banked, capacity }` on the audit status queue, one time in a run. It stamps the
+  message with the received stamp of the row that crossed the mark, and reads no clock.
+- [ ] The fold halts quoting when it folds that message: `HaltReason::AuditBankFull` (link halt
+  code 16). It sweeps its own orders and keeps its state. The tee records the message as each other
+  message, so a re-fold halts at the same message.
+- [ ] Past its capacity the bank drops a row and counts it in `audit_lost`. Quoting has halted
+  before that point. The order audit of `posttrade` finds the break.
+- [ ] At `Drop` the audit sink flushes its bank into the ring for at most 250 tries of 2 ms. WHY:
+  the rows banked at shutdown are records of money.
+- [ ] The audit status queue is an engine-fed input queue: a full queue is HALT (engine). It holds 4
+  messages (`WRITER_STATUS_CAPACITY`). It exists when the config has a `persistence:` block. Its id
+  comes after the id of the status queue of the tape writer. Its one producer is the audit sink on
+  the hot thread. WHY: each status queue of a writer has its producer on that writer's thread, and
+  an SPSC ring has one producer.
+- [ ] The tape records each message that the fold consumes (TS-08 to TS-13):
+  - The driver tees each popped message, with the id of its queue, after the pop and before
+    `dispatch` (`HotDriver::with_tape`, `HotDriver::step`). So the tee falls inside the stage
+    `processing`.
+  - A row holds `seq`, `kind`, `queue_id`, `received_ts_us`, `queued_ts_us`, and `payload`.
+  - The writer writes the boot row first (`seq` 0, kind `boot`): the run nonce of each venue that
+    trades and each position that the run before left. A re-fold reads it first.
+  - Each later record of the tee takes the next `seq`. A lost record keeps its `seq`, so a gap row
+    names each lost number.
+  - At a border of the fold the driver seals the tape and writes one snapshot of each book, before
+    the record of that spin. So each tape file opens with the books.
+- [ ] The payload of each kind is its field list (`engine/src/tape/payload/`): one declaration
+  gives the width, the writer, the reader and the digest of that kind. The footer key `tape_kinds`
+  holds the id, the name and the digest of each kind of the build. Kinds 1 to 12 are the message
+  kinds, 256 `boot`, 257 `book_snapshot`, 258 `gap`.
+- [ ] CAUTION: Do not change the field list of a kind that a tape holds. Add a kind with a new id.
+  A changed list makes each recorded tape of that kind unreadable, and the replay refuses it.
+  `old_tape_stays_readable_after_new_variant` holds the recorded kinds
+  (`engine/tests/fitness/tape/tape_kinds.txt`).
+- [ ] The tape never halts quoting. A full tape ring latches a gap. A writer fault of `tape` stops
+  that table alone, and `run.json` names it in `stopped_tables`.
+- [ ] A full disk is an expected failure (top of §6). It is never a panic and never trips the fatal
+  latch. Each table whose write fails stops by its class (2026-11-18 section above): an audit table
+  halts quoting by one `WriterFailed`; the tape, a research table and a metrics table stop alone.
+  `run.json` names each stopped table in `stopped_tables` at the end of the drain. WHY: a disk
+  fills with the data of the run, not by a bug, and the class of a table says what its loss costs.
+- [ ] `EngineCounters` holds `research_dropped` (one count for each research table),
+  `audit_banked_peak`, `audit_lost`, `tape_lost` and `tape_gaps`. The metrics thread writes each one
+  as a row of `metrics_drops`, with the labels `research_<table>`, `audit_lost`, `tape_lost` and
+  `rollup_rows`.
+- [ ] Pins:
+  - `research_flood_drops_no_audit_row` and `full_audit_bank_halts_quoting`
+    (`engine/tests/fitness/hot/audit_bank.rs`)
+  - `tape_holds_each_consumed_message_in_order`, `tape_starts_with_boot_record` and
+    `tape_ring_full_latches_one_gap_record` (`engine/tests/fitness/tape/tape_rows.rs`)
+  - `old_tape_stays_readable_after_new_variant` (`engine/tests/fitness/tape/tape_kinds.rs`)
+  - the cases of `ledger`, `link_frames` and `tape` in
+    `audit_write_fault_stops_quoting_and_research_fault_stops_one_table`
+  - `step_allocates_nothing_for_each_message_kind`, with the tee on
+  - in `lab`: `refold_halts_at_recorded_bank_message` (§12, 2026-11-19)
 - [ ] Pins: `audit_write_fault_stops_quoting_and_research_fault_stops_one_table`
   (`engine/tests/fitness/tape/writer_fault.rs`), and the case of the tape writer in
   `each_lane_full_gives_its_class`.
@@ -1102,6 +1252,9 @@ execution-safety defect, not an observability preference.
 - [ ] Same ruling binds the sibling artifacts:
   - exposure: `<strategy-id>-<te-id>-sim.json`
   - Parquet: below `<strategy>/<te>/sim/`, with an `execution_mode` footer
+    - Amended 2026-11-19, as built: below `<strategy>/<te>/sim/<run_id>/`. A live run writes below
+      `<strategy>/<te>/live/<run_id>/` (2026-11-19 section on the artifacts of each run kind,
+      below). WHY: one folder for each run. The kind folder still keeps simulated fills apart.
   - UI: mode badge (O6)
 - [ ] Amended 2026-11-16, as built: one value, `RunArtifacts` (`engine::runtime::artifacts`), gives
   each artifact of a run its name, from the mode and the identity of the run. One stem names the
@@ -1229,6 +1382,74 @@ record.
 - [ ] The exporter logs through its own thread lane, tag `otlp`. Its lines reach the collector like
   any other line.
 
+### Amended 2026-11-19: the artifacts of each run kind
+
+WHY: the boots of one engine shared one folder, and runs were paired by folder name. A re-fold and
+a backtest had no folder of their own (PT-02, PT-03, BT-17). A reader could not tell an open file
+from a file that a crash cut.
+
+- [ ] One run is one boot of an engine, one re-fold, or one backtest. It has one folder:
+  `{persistence.dir}/{strategy-id}/{te-id}/{kind}/{run_id}/`. `RunArtifacts::run_dir(root, kind,
+  run_id)` (`engine::runtime::artifacts`) gives it. Each table has a folder inside it (§6, section
+  on tape files).
+- [ ] The kinds (`RunKind`):
+
+| Kind | Run |
+| --- | --- |
+| `live` | a boot of an engine whose execution mode is `live`, `off`, or absent |
+| `sim` | a boot of an engine whose execution mode is `sim` |
+| `replay` | a re-fold of a recorded run by `lab` |
+| `backtest` | a backtest of `lab` (stage 5) |
+
+- [ ] The run id is the boot stamp in decimal µs. An engine reads it one time, in `open_run`
+  (`engine/src/runtime/assembly/persist.rs`), a permitted clock site. The folder, each file name,
+  the footer key `boot_ts_us` and `run.json` use that one value. A replay takes the first free id
+  from the id of its source run up, and reads no clock.
+- [ ] Each run folder holds `run.json` (`engine::runtime::manifest::RunManifest`). Its fields and
+  their JSON types are the `manifest` list of `contract/tables.json`. They name:
+  - the kind, the identity, the execution mode, the boot stamp, the engine version
+  - `config_digest`: FNV-1a 64 of the exact bytes of the config that the run loaded
+  - `seed`: null today, because no shipped strategy has a seed
+  - the spin interval, the seal interval in spins, the warmup, the fixed scale, each table of the
+    run
+  - `identity_lock`: the absolute path of the identity lock of the engine; null for a replay
+  - `source`: the run id, the folder and the config digest of the source run of a replay
+  - `venues`: the run nonce and the venue facts that preflight read (fees, order budget)
+  - `instruments`: the terms that preflight read from the venue, as exact mantissas
+  - `end_state`, `end_reason` and `stopped_tables`
+- [ ] The engine writes `run.json` with the durable-file writer two times: at the open, with
+  `end_state` `open`, and at the end of the drain, with the end state from `Exit`. No `Drop` writes
+  it, so a hard kill leaves `open`. Pin: `hard_kill_leaves_manifest_open`
+  (`engine/tests/fitness/runtime/manifest.rs`).
+- [ ] Runs pair by manifest, never by folder name. A replay names its source by `source.run_id`
+  and `source.config_digest`.
+- [ ] A `.part` file of a run is open only when three facts hold: `run.json` says `open`, the run is
+  the newest of its kind folder, and its engine holds the identity lock that `identity_lock` names.
+  Else the file is cut, and its rows are lost. A reader probes the lock with a shared lock that
+  does not wait, and lets it go at once, as `IdentityLocks::is_held` does.
+- [ ] Each file holds the footer of its run: 16 keys, in the order of
+  `engine/src/tape/schema/footer.rs`. They add `contract_version`, `boot_ts_us`, `run_kind`,
+  `link_slot_names`, `link_topic_names`, `sender_dictionary`, `tape_kinds` and `feature_kinds` to
+  the 8 keys before. A reader decodes each file by its own footer (defect 15). A reader skips the
+  key `ARROW:schema`, which the Parquet writer adds.
+- [ ] `contract/tables.json` is generated by `cargo run -p engine --bin contract-export`. It holds
+  each table, column, column kind, label set, footer key, manifest field and metric name, the
+  holdout root, and the tape kinds. CAUTION: Do not edit it by hand, and do not merge it by hand.
+  After a rebase, generate it again. Gate step 7 runs `contract-export --check`.
+- [ ] `cargo run -p engine --bin golden-run -- target/golden-run` writes two runs of
+  `golden/te-golden` with each table but `tape`, and `target/golden-run/expected.json`. That file
+  holds each cell and each metric as a value that a person can check by hand. No code of `lab` or
+  of `posttrade` computes it. Gate step 7 runs it, and the tests of `posttrade` read it.
+- [ ] A replay run writes the tables of the fold, `run.json` with kind `replay`, and no `tape`
+  table. It refuses a tape before its first fold, and writes no folder, when the tape has a gap row,
+  a hole in `seq`, no boot row first, `tape` in `stopped_tables`, another digest of a kind, a newer
+  contract, or another config digest. A failure after its folder opened ends `refused`. WHY: the
+  Never line of `lab` "let a replay cross a tape gap".
+- [ ] `tape-sync` (`tools/tape-sync/`) ships each sealed file of each closed or cut run to a
+  destination folder, and deletes the local file only when the checksum of the copy equals it. It
+  never touches a `.part` file or a file of an open run, and it ships `run.json` last. Its runbook
+  and its unit files are in `ops/tape-sync/`.
+
 ## 8. Code Organisation
 
 - [ ] Two lib crates hold all substance: `engine` and `lab` (2026-11-12 section below). Binaries
@@ -1271,6 +1492,8 @@ WHY: strategy implementations are customer code (§9).
 - [ ] Strategy implementations live outside the lib. Folder layout: amended 2026-07-25.
 - [ ] The lib keeps the seam: `Strategy`, `StrategyConfig`, `StrategyCtx`, the Actions bank, and
   the runner. Runner: amended 2026-07-25.
+  - Amended 2026-11-19: the seam also holds the vocabulary of a strategy, through one prelude
+    (2026-11-19 section on the vocabulary of a strategy, end of §8).
 - Replaced 2026-07-25: strategy lived in `strategies/<id>/` with main.rs (composition only) +
   strategy.rs + config.yaml. bin name = folder name = strategy id via `env!("CARGO_BIN_NAME")`.
   Runner in the seam was `run_strategy`. Breaking data-format change = new folder/id.
@@ -1508,12 +1731,25 @@ workspace clause at the top of §8.
   `lab`, `strategies/strat-micro-recorder`.
 - [ ] `engine`: each part that a live engine links. Features `mcp` and `web`. Binaries
   `polysim-mcp`, `polysim-ui`, `polysim-web`, `dom-fixture`.
-- [ ] `lab`: scoring and research over recorded history. It depends on `engine`. It holds only its
-  root file until research code arrives.
+  - Amended 2026-11-19, as built: also the tool binaries `contract-export`, `golden-run` and
+    `tape-sync`, each at `tools/<name>/main.rs` and with no feature. WHY: gate step 7 and the
+    tests run them, and Cargo gives a test the path of a binary of its own package only.
+- [ ] `lab`: scoring and research over recorded history. It depends on `engine`. Module
+  `lab::backtest` holds the replay driver, the tape reader, the whole-tape check, the re-fold, the
+  re-fold check and the command of a replay binary. Research code (stage 5) comes later.
+  - Replaced 2026-11-19: "It holds only its root file until research code arrives." WHY: stage 2
+    built the re-fold in `lab::backtest`.
 - [ ] `engine` never depends on `lab`. A crate that only `lab` needs never enters
   `engine/Cargo.toml`.
 - [ ] Each strategy is one package, `strategies/<strategy-id>/Cargo.toml`, with one `[[bin]]` for
   each TE. It depends on `engine`.
+  - Amended 2026-11-19, as built: each TE also has one replay binary,
+    `<strategy-id>-<te-id>-replay` at `strategies/<strategy-id>/<te-id>/replay.rs`, with
+    `required-features = ["replay"]`. The package has `[features] replay = ["dep:lab"]` and an
+    optional dependency on `lab`. The scan `scans::cargo_bins` holds the form. Thus a live build
+    links no `lab`: `cargo tree -p strat-micro-recorder -e normal | grep -c ' lab v'` prints 0.
+    WHY: a live engine must compile no research code (top of this section). The space before
+    `lab` matters: a bare `lab` also matches the crate `slab` of the engine.
 - [ ] A binary that a fitness test starts stays in package `engine`. WHY: Cargo gives a test the
   path of a binary of its own package only.
 - [ ] Profile tables (`[profile.deploy]`) live only in the root manifest. WHY: Cargo reads profile
@@ -2305,6 +2541,119 @@ is a concept in its own right, or has a ruling of §12.
   2026-11-18 that listed these items as findings for the verifier.
 - [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
 
+### Amended 2026-11-19: imports point one way, and `msg` is a leaf
+
+WHY: `msg`, the vocabulary that each box uses, imported six modules above it (defect 11). No test
+held the direction of an import (RS-06), so a review was the only guard.
+
+- [ ] The fitness scan `scans::import_direction::imports_point_one_way`
+  (`engine/tests/fitness/scans/import_direction.rs`) resolves each `crate::`, `$crate::` and
+  `super::` path of each library file, and each exported macro by its home box. It holds these
+  rules, each with a floor on the count of files that it scans:
+  - `msg` names no other box.
+  - `hot` names no `venues`, `operator`, `tape`, `link::actor`, `runtime::assembly` or
+    `runtime::otlp`, and no `tokio`, `async`, `.await` or wire crate (`serde_json`,
+    `tungstenite`, `tokio_tungstenite`, `reqwest`).
+  - The three venue edges (`binance`, `polymarket`, `sim`) never import each other.
+  - `venues` names no `link` or `operator`.
+  - `hot::quant` names no `tracker`, `strategy` or `dispatch`.
+- [ ] One import across edges stays: `sim` imports `binance` in 8 files, each named in the scan
+  with its reason. This is the Binance wire of the simulator (flag at `engine/src/venues/sim/mod.rs`,
+  stage 4). A new file that imports it fails the scan, and so does a listed file that no longer
+  imports it.
+- [ ] The types that `msg` took from above it live in `msg` now, and each old path re-exports
+  them:
+  - `msg/kinds.rs`: `KlineInterval`, `TableKind`, `ExecutionMode`, `FeatureKind`
+  - `msg/link.rs`: `LinkHash`, `TopicId`, `LINK_MAX_FIELDS`, `LinkPayload`, `LinkOrigin`,
+    `LinkFrame`, and the FNV fold
+  - `msg/log_value.rs`: `Spec`, `LogValue`, `fieldless_log_value!`
+  - `msg/order.rs`: `QuoteLevel`, `OrderState`, `CloseReason`, `ReadinessGap`, `RejectReason`,
+    `RejectOrigin`, `HaltReason`
+  - `msg/codec.rs`: `LayoutDigest`, the digest of a layout that the link and the tape both use
+  - `msg/persist/`: the records of the three rings and of the tape
+- [ ] The scan holds only the rules above. Two box cycles have no rule yet: `hot` and `link` import
+  each other, and `runtime` is both a low box (`config`, `registry`, `pin`) and the top box
+  (`assembly`).
+- [ ] A new rule of direction goes into the scan in the same change as this clause.
+
+### Amended 2026-11-19: the `pub` items of stage 2, each with its merit
+
+WHY: §12 (2026-07-28) forbids `pub` for a test's sake. `lab` reaches the engine only through the
+public API of `engine` (2026-11-12 section on two lib crates), and its callers are the replay
+binaries of each strategy, which are no tests. So an item that `lab::backtest` or a tool binary
+needs is `pub` on merit. Each item below names its caller.
+
+- [ ] For the re-fold of `lab` (`lab/src/backtest/`, called by each `replay.rs` binary):
+  - `engine::runtime::{build_run_fold, RunFoldSetup, RunFold, RunFoldError, FoldRings, FoldTape}`
+    (`engine/src/runtime/assembly/fold.rs`): the fold of one run on one thread, built as the start
+    builds it. The re-fold and the harness of a recorded run take this one build, so they cannot
+    build two different engines.
+  - `PersistWriter::inline` and `InlineWriter` (`engine/src/tape/drain.rs`), and
+    `WriterInputs::of_rings` (`engine/src/tape/mod.rs`): the loop body of the writer thread, run on
+    the thread of the replay. So `lab/src/backtest/` names no `tokio`.
+  - `engine::runtime::manifest`: `RunManifest`, `CONTRACT_VERSION`, `ManifestError`, and
+    `InstrumentTerms`; `Registry::stamp_terms` and `TermsMismatch`: a replay reads the venue terms
+    of `run.json`, because it cannot probe a venue.
+  - `engine::tape::{TAPE_KINDS, TapePayload, decode_payload, TapeDecodeError}` and
+    `engine::msg::persist::BootRecord`: the reader decodes each tape row.
+  - `EngineConfig::spin_interval`: a replay builds the `EngineView` of its strategy as the start
+    does.
+- [ ] For the tool binaries: `engine::tape::contract_json` (`contract-export`), and the record and
+  row types that `golden-run` writes through the real rings and writer.
+- [ ] `HotDriver::engine` and `HotDriver::with_tape` (`engine::hot::spawn`): the start code puts the
+  tee on the driver, and a recorded run of the harness of `lab` reads the digest of the engine that
+  its driver holds. By ruling of this clause: the comparison of a re-fold with its run needs the
+  state of the run, and only the driver holds it.
+
+### Amended 2026-11-19: the vocabulary of a strategy
+
+WHY: a strategy read ids, mantissas and missing inputs by hand, checked its params with a panic,
+and reset its own state at a resume (file `strategy-ergonomics.md` of the master plan, part 5).
+The seam of the 2026-07-20 section changes, so it gets its clause.
+
+- [ ] A strategy imports one module: `use engine::hot::strategy::prelude::*;`. The prelude holds
+  each word below.
+- [ ] Units (`engine/src/hot/strategy/units.rs`): `Price`, `Qty` and `Notional` are exact. `Fair`,
+  `Bps` and `Ticks` are statistics. Only the legal sums compile: `Fair ± Bps`, `Bps ± Bps`,
+  `Bps × f64`, `Qty ± Qty`, `Ticks ± Ticks`, `Notional ± Notional`, `Price × Qty = Notional`. A
+  float becomes an exact type only through a rounding verb. `Fair ± Bps` is
+  `fair · (1 ± bps / 10,000)`.
+- [ ] Nouns (`view.rs`): `Market` (from `ctx.market(id)`) with its `touch()` and its prices at or
+  below, at or above, or nearest a fair value, and `Position` (from `ctx.position(id)`).
+- [ ] Not ready (`ready.rs`): `Ready<T>` is a `Result` with `NotReady` and its named reason:
+  `Warming`, `Parked`, `BookInvalid`, `NoBid`, `NoAsk`, `NoMark`, `NoWindow`, `BelowMinimum`,
+  `OffGrid`, or `Signal(name)`. A warming market has no touch (`StrategyGate::Warming`, §2).
+- [ ] State of each market (`PerMarket<S>`, `Strategy::market_states`): the engine sizes it before
+  `register`, resets each market before `on_resume`, and resets one market at its rotation before
+  its next callback. No strategy resets this state itself.
+- [ ] `params!`: each param has a type, a default and its bounds. The value is read from the text of
+  the config, so an exact type never passes through a float. A value outside its bounds refuses
+  the start.
+- [ ] Each params type implements `StrategyParams`. The config load refuses each key below
+  `strategy.params` that the params type does not write back (`ParamError::Unknown`), whatever
+  serde attributes the type carries, and then runs `check()` (`ParamError::OutOfBounds`,
+  `ParamError::Refused`). The class is HALT (start), as `ConfigError::Param`. The refusal comes at
+  the config load, before `Preflight`, any thread and the run nonce. WHY: `from_spec` of a
+  strategy runs before `Preflight`, and the load already checks each other value of the document.
+- [ ] `signals!`: one list gives the names, the ids and the kind of each signal. `ctx.record`
+  writes one feature row for each field that the strategy assigned. A field that it did not assign
+  is `NotReady::Signal(name)`.
+- [ ] `features!` takes `name: kind` lines. Each feature is `market_only` or `execution_aware`
+  (`FeatureKind`, QF-10). A feature with no kind does not compile. The schema lock of each engine
+  folder holds `column <name> <kind>`, and a column never changes its kind
+  (`schema_lock_of_each_strategy_holds`).
+- [ ] Draws (`draws.rs`): `Draws::from_seed(Seed)` is the one seeded generator. `Seed` is a param,
+  so no draw comes from a clock or from the host (SF-10).
+- [ ] The log macros of the strategy keep their names: `note!` and `alert!`.
+- [ ] The words of the decision value (`.worth`, `.back`, `bid_at`, `get_flat`) are stage 3 (task
+  T20 of the master plan). The shipped strategies move to the vocabulary in stage 3 too.
+- [ ] Pins, in `engine/tests/fitness/hot/strategy/vocabulary.rs`:
+  `fair_becomes_price_only_by_rounding_verb`, `float_never_becomes_exact_type`,
+  `invalid_book_gives_named_reason`, `exposure_with_no_mark_is_not_ready`,
+  `engine_resets_market_state_before_next_callback`, `param_out_of_bounds_refuses_start`, and
+  `assigned_signal_is_recorded`; `unknown_param_field_refuses_start`
+  (`engine/tests/fitness/runtime/config_guards.rs`).
+
 ## 9. Naming & API Ergonomics
 
 - [ ] rex-code-ergonomics binds.
@@ -2739,6 +3088,38 @@ engine links all three.
   - Any gRPC set (`opentelemetry-otlp` with `grpc-tonic`): 13 new lock entries and 26 crates new to
     the engine build, with an HTTP/2 stack (`h2`, `tonic`).
 
+### Amended 2026-11-19: the crates of `lab`, and the Python packages of `posttrade`
+
+WHY: `lab` reads Parquet tapes and builds the rings of a fold, and `posttrade` judges runs from
+their files in Python (PT-38, PT-39). Each crate of `lab` is a crate of the allowlist already. The
+Python packages are a second allowlist, for a second language.
+
+- [ ] `lab` takes only crates of the table above, each at the version and the features of
+  `engine`: `rtrb` 0.3.4 (the rings of a fold), `parquet` 59.1.0 (`arrow`, `zstd`), `arrow-array`
+  and `arrow-schema` 59.1.0 (the tape reader), `serde_json` 1.0.150 (`run.json`), and `thiserror`
+  2.0.18 (`ReplayError`). Dev: `proptest` 1.11.0 and `serde` 1.0.228 (the strategies that its tests
+  include). `lab` takes no `tokio` (scan `backtest_names_no_async_runtime`).
+- [ ] Package `strat-micro-recorder` takes `lab` only as an optional dependency, behind feature
+  `replay` (§8, 2026-11-19).
+- [ ] Python lives in the top folder `posttrade/`, one uv project. `uv` manages it, and Git holds
+  `pyproject.toml`, `uv.lock` and `.python-version` (3.12, `requires-python = "==3.12.*"`). No
+  Python file, notebook or `uv.lock` lives below `strategies/`.
+- [ ] The Python allowlist, latest stable at adoption by `uv add`, the exact pin in `uv.lock`:
+
+| Package | Group | Role |
+| --- | --- | --- |
+| `polars` | runtime | frames of the Parquet tables |
+| `mypy` | dev | strict type check |
+| `ruff` | dev | format and lint |
+| `pytest` | dev | the tests of `posttrade` (§12, 2026-11-19) |
+| `ipykernel`, `nbformat`, `nbclient` | dev | the tests run each notebook and assert that it holds no outputs |
+
+- [ ] Not adopted: `scipy`, `pandas`, `pyarrow`, a schema library, a template library, a database.
+  `numpy` and `matplotlib` (part 6 of `post-trade.md`) wait until code uses them. To add a package:
+  amend this clause with a one-line WHY, as for a crate.
+- [ ] `posttrade` imports no `socket`, `http`, `urllib`, `asyncio` or `subprocess`. The wall test
+  `test_package_imports_no_network_or_process_module` holds it.
+
 ## 12. Testing
 
 - [ ] Two tiers only: fitness suite + live-network tests. Lanes and real funds: last section of
@@ -2757,6 +3138,9 @@ engine links all three.
   - web server guard + relay (amended 2026-10-26)
   - Amended 2026-11-12: a fitness test can be replaced. Date, WHY, and the rule: the 2026-11-12
     section on replaced fitness tests below.
+  - Amended 2026-11-19: package `lab` has its own target `fitness` (`lab/tests/fitness/`), and
+    package `posttrade` has its Python tests (`posttrade/tests/`). Date, WHY, and the rule: the
+    2026-11-19 section on the fitness of `lab`, end of §12.
 - [ ] Live-network tests: `engine/tests/integration/`, gated `#[ignore]`. Never CI. Only the
   `live-runner` role of a job runs a signed test or the probe, by a runbook and the live policy. An
   agent runs a public read only where a plan names it, by its exact name and with an empty
@@ -3304,6 +3688,43 @@ venue to a person. Thus each run against a venue needs one owner, in one table.
     start gate creates credentials when the venue derives none, a change of key settings that
     the live policy forbids. The venue refuses an order by location.
 
+### Amended 2026-11-19: the fitness of `lab`, and the tests of `posttrade`
+
+WHY: each later stage proves its redesign by a re-fold of a recorded run (decision 2 of the master
+plan). The proof sits in `lab`, which depends on `engine`, so `engine/tests/fitness/` cannot hold
+it. Python judges runs, so a wrong measure gives a wrong decision about funds.
+
+- [ ] Package `lab` has one test target, `fitness` (`[[test]] name = "fitness"`,
+  `lab/tests/fitness/main.rs`). Gate step 4 runs it plain and with `--all-features` (§14). It holds:
+  - `replay_driver_equals_hot_thread` (F10): the replay driver and `HotDriver::step` give equal
+    digests after each message, and equal commands, records and UI events.
+  - `sim_run_equals_its_refold` (X1), with three cases: a probe strategy on the recorded Binance
+    fixtures with orders and fills, the shipped recorder, and the shipped Polymarket engine with
+    execution off. The order and fill counts of case 1 are asserted first.
+  - `refold_of_run_with_boot_position_and_prior_nonce_equals_run`,
+    `refold_halts_at_recorded_bank_message`, `refold_check_takes_dropped_research_rows_by_count`,
+    `tape_reader_holds_two_row_groups_at_most`
+  - `replay_refuses_to_cross_a_gap` (X2) and `replay_refuses_other_layout` (F11)
+  - the scan `backtest_names_no_async_runtime`
+- [ ] Case 1 of X1 takes the answers of a test venue of `lab` (`lab/tests/fitness/venue.rs`), not
+  the simulator: the engine runs the simulator only inside its actor. The fold, the tape and the
+  re-fold are real. Stage 4 runs case 1 again through the simulator when VS-25 lifts its stepper.
+- [ ] A re-fold equals its run when each audit table matches cell for cell, each research table
+  holds the rows of the run in order, and the rows that only the re-fold holds are not more than
+  the drop count of that table in `metrics_drops` of the run. A float compares by its bits
+  (`lab::backtest::compare`). The state digests are equal.
+- [ ] An exact comparison folds again from the first message of the tape. A rolling float sum, and
+  a warm refit of a model, depend on the history of their inputs. A replay from a later start is
+  compared by its outcome.
+- [ ] The tests of `posttrade` (`posttrade/tests/`, pytest) are its fitness suite. They read the
+  golden run of `target/golden-run`, and fail with the command to make it when it is absent: they
+  never skip. They run each notebook with `nbclient` and assert that it holds no outputs. Python
+  gate: §14, step 7.
+- [ ] The Rust and Python halves cannot drift: each column list of the engine gives the schema of
+  each file and the contract; `contract-export --check` fails on a stale contract; the Python tests
+  hold `_generated.py` equal to the contract; each cell and each metric of the golden run equals
+  `expected.json`, whose values are literals of `tools/golden-run/`.
+
 ## 13. Performance
 
 - [ ] Design principles protect performance, not a standing benchmark mandate. Principles: zero
@@ -3332,7 +3753,7 @@ venue to a person. Thus each run against a venue needs one owner, in one table.
 - [ ] Toolchain: `1.92.0`, pinned in `rust-toolchain.toml` with `rustfmt`, `clippy`, and target
   `wasm32-unknown-unknown`. Edition 2024. Upgrades deliberate: a new toolchain = an amendment of
   this clause.
-- [ ] Gate G: gate every change with six steps, run at the workspace root. All green or no merge:
+- [ ] Gate G: gate every change with seven steps, run at the workspace root. All green or no merge:
   1. `cargo fmt --all -- --check`
   2. `cargo clippy --workspace --all-targets -- -D warnings`, then
      `cargo clippy --workspace --all-targets --all-features -- -D warnings`. Both read the clock
@@ -3340,15 +3761,44 @@ venue to a person. Thus each run against a venue needs one owner, in one table.
   3. `cargo clippy --target wasm32-unknown-unknown -p engine --lib --bin polysim-ui --bin dom-fixture -- -D warnings`
   4. For each package and each test target of its manifest:
      `cargo test -p <package> --test <target>`, then the same commands with `--all-features`.
-     Today only package `engine` has test targets:
+     Packages `engine` and `lab` have test targets:
      - `cargo test -p engine --test fitness`
      - `cargo test -p engine --test integration`
+     - `cargo test -p lab --test fitness`
      - `cargo test -p engine --all-features --test fitness`
      - `cargo test -p engine --all-features --test integration`
+     - `cargo test -p lab --all-features --test fitness`
   5. `cargo test -p engine --release --test fitness step_allocates_nothing`
   6. `(cd browser && trunk build --release) && (cd tools/dom-fixture && trunk build --release)`,
      then
      `docker buildx build --platform linux/arm64 --build-arg BIN=strat-micro-recorder-te-binance-spot-btcusdt --output type=local,dest=dist .`
+  7. The contract check, the golden run, then the Python gate in `posttrade/`:
+     - `cargo run -p engine --bin contract-export -- --check`
+     - `cargo run -p engine --bin golden-run -- target/golden-run`
+     - `cd posttrade`
+     - `uv sync --locked`
+     - `uv run ruff format --check .`
+     - `uv run ruff check .`
+     - `uv run mypy .`
+     - `uv run pytest`
+  - Amended 2026-11-19, step 7 and the test target of `lab`. WHY: the contract file, the golden run
+    and the Python reader are one seam between two languages, and only a run of all three in one
+    gate shows a drift. The re-fold of `lab` proves each later stage, so its target must run in
+    each gate.
+    - [ ] Step 4 runs the target `fitness` of `lab`, plain and with `--all-features`.
+    - [ ] Step 7 runs after steps 1 to 6. `contract-export --check` exits 1, and names the first
+      line that differs, when `contract/tables.json` is stale. `golden-run` writes the golden run
+      that the Python tests read: run it before `uv run pytest`.
+    - [ ] `uv` fetches packages and the interpreter on its first sync. IF `uv` cannot fetch, THEN
+      step 7 fails. The Python step is then `not run`, never green.
+    - [ ] The commit hooks run the Python format, lint, type check and lock check for a change below
+      `posttrade/`, and the push hook runs `golden-run`, then `pytest`
+      (`.pre-commit-config.yaml`).
+    - [ ] `AGENTS.md` takes the same lines through the hand-off of stage 2. The main checkout held
+      uncommitted edits of that file on this date, so stage 2 did not change it. Until it does,
+      this clause and `README.md` win where `AGENTS.md` differs.
+    - Replaced 2026-11-19: "six steps", and "Today only package `engine` has test targets", with
+      its four lines. WHY: stage 2 added the target of `lab` and the Python step.
   - Amended 2026-11-12, clock lint and release proof. WHY: a clock read that reaches engine state,
     and an allocation that only the release optimizer adds or removes, each passed a debug gate.
     The lint and a release run of the zero-allocation proof make each of them a red step.
@@ -3384,7 +3834,9 @@ venue to a person. Thus each run against a venue needs one owner, in one table.
     gate sees a lost suite.
     - [ ] Step 4 names each test target of each package. A change that adds a `[[test]]` target
       adds its two commands to step 4, here and in `AGENTS.md`, in the same change.
-    - [ ] Packages `lab` and `strat-micro-recorder` have no test target today.
+    - [ ] Package `strat-micro-recorder` has no test target. Package `lab` has target `fitness`.
+      - Replaced 2026-11-19: "Packages `lab` and `strat-micro-recorder` have no test target
+        today." WHY: stage 2 added the target of `lab` (§12, 2026-11-19).
     - [ ] Target `integration` only compiles in step 4: each of its tests is `#[ignore]`d (§12).
     - [ ] Step 4 runs no lib, bin or doc test. This law has no unit tier and no doc tier (§12), and
       step 2 still compiles each target. A task that writes an inline scaffold (§12, 2026-11-12)

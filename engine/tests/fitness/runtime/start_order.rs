@@ -30,6 +30,12 @@ const SENDER_CORE: usize = 7;
 const CASES_PROCESS: &str = "POLYSIM_START_ORDER_CASES";
 const PIN_CASES: &str = "pins";
 const METRICS_CASE: &str = "metrics";
+const RUNTIME_CASE: &str = "runtime";
+/// The file limit of the process of the runtime case: low enough that the case fills it in a
+/// moment, so the build of the engine runtime finds no free file descriptor.
+const RUNTIME_CASE_FILE_LIMIT: u32 = 256;
+/// The error of a process whose file descriptors are all taken.
+const TOO_MANY_OPEN_FILES: i32 = 24;
 const THIS_TEST: &str = "runtime::start_order::pin_failure_refuses_start_before_any_producer";
 
 /// The core that the stand-in refuses. Only this test pins through the stand-in, and it runs its
@@ -201,7 +207,42 @@ fn refused_start(
     refused_core: usize,
     refused_thread: Option<&'static str>,
 ) -> (StartError, Vec<(usize, String)>) {
-    let config = Config::<NoParams>::from_yaml(&document(root)).expect("the document is valid");
+    refused_start_of(
+        &document(root),
+        root,
+        refused_core,
+        refused_thread,
+        Descriptors::Free,
+    )
+}
+
+/// Whether the start finds free file descriptors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Descriptors {
+    Free,
+    AllTaken,
+}
+
+/// Opens files until the process may open no more, and holds them.
+fn take_every_descriptor() -> Vec<File> {
+    let mut held = Vec::new();
+    loop {
+        match File::open("/dev/null") {
+            Ok(file) => held.push(file),
+            Err(error) if error.raw_os_error() == Some(TOO_MANY_OPEN_FILES) => return held,
+            Err(error) => panic!("the case cannot take a file descriptor: {error}"),
+        }
+    }
+}
+
+fn refused_start_of(
+    document: &str,
+    root: &Path,
+    refused_core: usize,
+    refused_thread: Option<&'static str>,
+    descriptors: Descriptors,
+) -> (StartError, Vec<(usize, String)>) {
+    let config = Config::<NoParams>::from_yaml(document).expect("the document is valid");
     let state = root.join("state");
     let old_tape = plant_old_tape(root);
     let plan = Preflight {
@@ -228,7 +269,12 @@ fn refused_start(
         .lock()
         .expect("no case panics while it holds the refused thread") = refused_thread;
     let census_before = engine_thread_names();
+    let held = match descriptors {
+        Descriptors::Free => Vec::new(),
+        Descriptors::AllTaken => take_every_descriptor(),
+    };
     let started = Engine::start(config, Box::new(Idle), plan, stand_in_pin);
+    drop(held);
     let Err(refused) = started else {
         panic!("a refused pin on core {refused_core} must refuse the start");
     };
@@ -271,19 +317,33 @@ fn requests(expected: &[(usize, &str)]) -> Vec<(usize, String)> {
 
 /// CONTRACT: the hot thread pins as its first act and reports the result, so a refused hot pin
 /// ends the start before any other thread exists. Each pin that can refuse comes before the first
-/// writer, in the order hot, log, metrics, senders, and a refusal after the hot pin stops each
-/// thread that started before it. The cases run in a process of their own, which runs this test
-/// alone.
+/// writer, in the order hot, log, metrics, senders, and a refusal after the hot pin, or of the
+/// build of the engine runtime, stops each thread that started before it. The cases run in a
+/// process of their own, which runs this test alone.
 #[test]
 fn pin_failure_refuses_start_before_any_producer() {
     match std::env::var(CASES_PROCESS).as_deref() {
         Ok(PIN_CASES) => return each_refused_start(),
         Ok(METRICS_CASE) => return the_metrics_pin_refuses_after_the_log_pin(),
+        Ok(RUNTIME_CASE) => return the_runtime_build_refuses_after_each_pin(),
         _ => {}
     }
-    for cases in [PIN_CASES, METRICS_CASE] {
+    for cases in [PIN_CASES, METRICS_CASE, RUNTIME_CASE] {
         let suite = std::env::current_exe().expect("the suite knows the path of its own binary");
-        let run = Command::new(suite)
+        // The runtime case lowers the file limit of its own process only, through the shell,
+        // because the suite holds no unsafe call that could set it.
+        let file_limit = match cases {
+            RUNTIME_CASE => RUNTIME_CASE_FILE_LIMIT.to_string(),
+            _ => "unlimited".to_owned(),
+        };
+        let run = Command::new("sh")
+            .args([
+                "-c",
+                r#"ulimit -n "$1" 2>/dev/null || [ "$1" = unlimited ]; shift; exec "$@""#,
+            ])
+            .arg("sh")
+            .arg(&file_limit)
+            .arg(suite)
             .args(["--exact", THIS_TEST, "--test-threads=1", "--nocapture"])
             .env(CASES_PROCESS, cases)
             .output()
@@ -320,6 +380,39 @@ fn the_metrics_pin_refuses_after_the_log_pin() {
             (HOUSEKEEPING_CORE, "polysim-metrics"),
         ]),
         "the sender thread never started"
+    );
+}
+
+/// Each pin passes, and the build of the engine runtime, the last step before the writers, finds
+/// no free file descriptor: the log, the metrics thread and the hot thread, which started before
+/// it, have ended when the start returns, and no writer started.
+fn the_runtime_build_refuses_after_each_pin() {
+    let root = TempDir::new("start-order-runtime");
+    let shared_senders = document(root.path())
+        .replace(
+            &format!("  placement: pinned\n  core_id: {SENDER_CORE}\n"),
+            "  placement: shared\n",
+        )
+        .replace("otlp:\n  collector: 127.0.0.1:9\n", "");
+    let (runtime, asked) = refused_start_of(
+        &shared_senders,
+        root.path(),
+        usize::MAX,
+        None,
+        Descriptors::AllTaken,
+    );
+    assert!(
+        matches!(&runtime, StartError::Runtime(error) if error.raw_os_error() == Some(TOO_MANY_OPEN_FILES)),
+        "the engine runtime cannot be built with no free file descriptor: {runtime}"
+    );
+    assert_eq!(
+        asked,
+        requests(&[
+            (HOT_CORE, "polysim-hot"),
+            (HOUSEKEEPING_CORE, "polysim-log"),
+            (HOUSEKEEPING_CORE, "polysim-metrics"),
+        ]),
+        "each thread that pins started before the runtime build"
     );
 }
 

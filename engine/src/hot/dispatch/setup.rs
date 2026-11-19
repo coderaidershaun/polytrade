@@ -6,8 +6,11 @@ use std::num::NonZeroU64;
 
 use crate::hot::book::Book;
 use crate::hot::exec::{ExecEngineSetup, ExecSettings, ExecVenueSetup};
+use crate::hot::ingress::QueueProducer;
 use crate::hot::quant::volatility::EwmaVol;
-use crate::hot::sink::{ExecSink, PersistSink, StrategyLogSink, UiBookSink, UiEventSink};
+use crate::hot::sink::{
+    AuditSink, ExecSink, ResearchSink, StrategyLogSink, UiBookSink, UiEventSink,
+};
 use crate::hot::strategy::{Registration, Strategy};
 use crate::hot::tracker::MicroTracker;
 use crate::link::{LinkHash, TopicId, schema_hash_of_fields};
@@ -34,12 +37,26 @@ pub struct HotEngineSetup<'a> {
     pub exposure: ExposureWiring<'a>,
 }
 
-/// Persistence wiring: sink + tables (paired, never disagree). strategy.tables = authority.
+/// Persistence wiring: the two rings of the fold and the tables (paired, never disagree).
+/// strategy.tables = authority.
 pub struct PersistWiring {
-    pub sink: PersistSink,
+    pub audit: AuditSink,
+    pub research: ResearchSink,
     pub tables: RecordedTables,
     /// The fold seals every open file when a spin crosses a multiple of this count.
     pub seal_interval_spins: NonZeroU64,
+}
+
+impl PersistWiring {
+    /// The audit status queue exists only once the hot thread has built its rings, so the start
+    /// hands it to the audit sink there.
+    pub fn reporting_bank_full_to(self, status: Option<QueueProducer>) -> Self {
+        let audit = match status {
+            Some(status) => self.audit.reporting_to(status),
+            None => self.audit,
+        };
+        Self { audit, ..self }
+    }
 }
 
 pub struct ExecWiring {
@@ -98,6 +115,9 @@ impl Declarations {
         let topic_ids: Vec<TopicId> = (0..strategy.link_topics().len())
             .map(TopicId::strategy)
             .collect();
+        if let Some(states) = strategy.market_states() {
+            states.size_for(instruments.len());
+        }
         strategy.register(Registration {
             features: &feature_ids,
             feature_names: &feature_names,

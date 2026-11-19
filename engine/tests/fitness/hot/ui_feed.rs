@@ -14,7 +14,7 @@ use engine::hot::strategy::{DomQuote, Registration, Strategy, StrategyCtx};
 use engine::msg::exec::{ExecKind, Liquidity, VenueOrderStatus};
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
-use engine::msg::persist::FeatureId;
+use engine::msg::persist::{FeatureId, ResearchRecord};
 use engine::msg::time::{DurationUs, VenueTs};
 use engine::msg::ui::{UiBookSnapshot, UiBookState, UiEvent, UiHalt};
 use engine::operator::workstation::model::UiModel;
@@ -335,8 +335,8 @@ fn features_tee_to_the_ui_even_when_they_are_not_recorded() {
     );
 
     // Persistence ON but `features` unnamed: the ring exists and must stay empty, while the tee runs.
-    let (persistence, mut records) =
-        persist_ring_for(256, RecordedTables::new(&[TableKind::Trades]));
+    let (persistence, rings) = persist_ring_for(256, RecordedTables::new(&[TableKind::Trades]));
+    let mut records = rings.research;
     let (log_sink, _logs) = strategy_log_ring(64);
     let (mut engine, _books, mut events) = engine_with_ui(
         &instruments,
@@ -352,11 +352,12 @@ fn features_tee_to_the_ui_even_when_they_are_not_recorded() {
         "a table set that omits features still tees all three"
     );
     assert!(
-        records.pop().is_err(),
-        "not one unrecorded feature reaches the persist ring"
+        std::iter::from_fn(|| records.pop().ok())
+            .all(|record| !matches!(record, ResearchRecord::Feature(_))),
+        "not one unrecorded feature reaches the research ring"
     );
     assert_eq!(
-        engine.dropped_persist_records(),
+        engine.dropped_research_records().total(),
         0,
         "a tee-only row never displaces a row bound for Parquet, so it counts as no drop"
     );

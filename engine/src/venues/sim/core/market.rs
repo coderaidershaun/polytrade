@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use super::queue::{OwnFill, PriceLadder, PublicPolicy, QueueAhead, SimOrderIndex};
 use crate::hot::book::{Book, LevelState, SnapshotOutcome};
 use crate::msg::ids::{AggregateTradeId, InstrumentId, Price, Qty, RawTradeId, Side, StreamEpoch};
-use crate::msg::inbound::{BookChunk, BookChunkKind, TradeEvent, VenueMeta};
+use crate::msg::inbound::{BookChunk, BookChunkKind, TradeEvent};
 use crate::msg::time::VenueTs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -54,23 +54,12 @@ pub struct TradeEvidence {
 }
 
 impl TradeEvidence {
-    /// # Panics
-    /// If aggregate trade metadata is missing.
-    pub fn from_meta(meta: VenueMeta) -> Self {
-        let VenueMeta::Trade {
-            aggregate_id,
-            first_trade_id,
-            last_trade_id,
-            stream_epoch,
-        } = meta
-        else {
-            panic!("a tapped trade reached the venue as {meta:?}, without aggregate metadata");
-        };
+    pub fn of(trade: &TradeEvent) -> Self {
         Self {
-            aggregate_id,
-            first_trade_id,
-            last_trade_id,
-            stream_epoch,
+            aggregate_id: trade.aggregate_id,
+            first_trade_id: trade.first_trade_id,
+            last_trade_id: trade.last_trade_id,
+            stream_epoch: trade.stream_epoch,
         }
     }
 }
@@ -235,9 +224,8 @@ impl MarketFold {
         }
     }
 
-    /// # Panics
-    /// If a depth delta lacks its venue timestamp.
-    pub fn on_book_chunk(&mut self, chunk: &BookChunk, meta: VenueMeta) -> Option<ResetReason> {
+    /// A delta with no venue stamp cannot be placed among the prints, so it breaks the transaction.
+    pub fn on_book_chunk(&mut self, chunk: &BookChunk) -> Option<ResetReason> {
         assert_eq!(
             chunk.instrument, self.instrument,
             "book chunk for instrument {} reached the venue for instrument {}",
@@ -259,8 +247,9 @@ impl MarketFold {
                 }
             };
         }
-        let VenueMeta::DepthDelta { exchange_ts_us } = meta else {
-            panic!("a depth delta reached the venue as {meta:?}, without its exchange stamp");
+        let Some(exchange_ts_us) = chunk.exchange_ts_us else {
+            self.staged = None;
+            return Some(self.suspend_matching(ResetReason::DeltaTransactionBroken));
         };
         self.stage_delta(chunk, exchange_ts_us)
     }

@@ -4,24 +4,28 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use arrow_array::{
-    Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, StringArray, UInt8Array,
-    UInt16Array, UInt32Array, UInt64Array,
+    Array, ArrayRef, BinaryArray, BooleanArray, Float64Array, Int32Array, Int64Array, StringArray,
+    UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow_schema::DataType;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use rtrb::{Consumer, RingBuffer};
+use rtrb::RingBuffer;
 use tokio::sync::mpsc;
 
 use engine::msg::ids::FIXED_SCALE;
-use engine::msg::persist::{PersistRecord, RotationRow};
+use engine::msg::kinds::FeatureKind;
+use engine::msg::persist::{AuditRecord, ResearchRecord, RotationRow};
 use engine::runtime::artifacts::RunArtifacts;
 use engine::runtime::config::{ExecutionMode, RecordedTables, RunIdentity, TableKind};
 use engine::runtime::durable_file::FileSteps;
-use engine::tape::{PersistConfig, PersistError, PersistHandle, PersistWriter, RunMeta};
+use engine::runtime::manifest::RunId;
+use engine::tape::{
+    PersistConfig, PersistError, PersistHandle, PersistWriter, RunMeta, WriterInputs,
+};
 
 /// `f64` is stored as bits so cells compare exactly — deterministic replay is bit-for-bit equal.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,6 +39,7 @@ pub enum Cell {
     F64Bits(u64),
     Str(String),
     Bool(bool),
+    Bytes(Vec<u8>),
     /// A nullable column with nothing in it. Its own cell rather than a zero, because the execution
     /// tables use null for an id the venue never assigned and a zero there would read as a real id.
     Null,
@@ -159,6 +164,7 @@ fn cell_at(array: &ArrayRef, row: usize) -> Cell {
         DataType::Float64 => Cell::F64Bits(downcast::<Float64Array>(array).value(row).to_bits()),
         DataType::Utf8 => Cell::Str(downcast::<StringArray>(array).value(row).to_owned()),
         DataType::Boolean => Cell::Bool(downcast::<BooleanArray>(array).value(row)),
+        DataType::Binary => Cell::Bytes(downcast::<BinaryArray>(array).value(row).to_vec()),
         other => panic!("unexpected parquet column type {other:?}"),
     }
 }
@@ -226,26 +232,87 @@ impl Drop for TempDir {
 /// Arbitrary in-range receipt time; the partition it picks doesn't affect the assertions.
 pub(crate) const BASE_TS_US: i64 = 3_600_000_000;
 
-/// The `{strategy-id}/{te-id}` pair the writer keys the tree by — a run's own root.
+/// The folder of each live run of the identity that these tests write.
 pub(crate) fn run_dir(dir_root: &Path) -> PathBuf {
-    dir_root.join("recorder").join("te-recorder")
+    dir_root.join("recorder").join("te-recorder").join("live")
+}
+
+/// Every `.parquet` file of `table` in each run below `dir_root`, path-sorted, which within one run
+/// is seal order.
+pub(crate) fn table_files(dir_root: &Path, table: &str) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let Ok(runs) = std::fs::read_dir(run_dir(dir_root)) else {
+        return files;
+    };
+    for run in runs.flatten() {
+        files.extend(parquet_files(&run.path().join(table)));
+    }
+    files.sort();
+    files
+}
+
+/// The folder of the one run below `dir_root`.
+///
+/// # Panics
+/// When the root holds no run, or more than one.
+pub(crate) fn only_run_dir(dir_root: &Path) -> PathBuf {
+    let runs: Vec<PathBuf> = std::fs::read_dir(run_dir(dir_root))
+        .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
+        .unwrap_or_default();
+    let [run] = runs.as_slice() else {
+        panic!("{} holds one run, not {runs:?}", dir_root.display());
+    };
+    run.clone()
+}
+
+/// A record of either ring of the fold, so a test lists the rows of one writer in one vector.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Record {
+    Audit(AuditRecord),
+    Research(ResearchRecord),
+}
+
+impl From<AuditRecord> for Record {
+    fn from(record: AuditRecord) -> Self {
+        Record::Audit(record)
+    }
+}
+
+impl From<ResearchRecord> for Record {
+    fn from(record: ResearchRecord) -> Self {
+        Record::Research(record)
+    }
+}
+
+/// A boot stamp of its own for each writer a test spawns, so two writers of one test write two
+/// runs, as two boots do.
+pub(crate) fn next_run_id() -> RunId {
+    static NEXT: AtomicI64 = AtomicI64::new(1_784_000_000_000_000);
+    RunId::from_micros(NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
 /// Footer metadata for a writer these tests spawn; its feature dictionary is not asserted on.
 pub(crate) fn run_meta() -> RunMeta {
     let identity = recorder_identity();
+    let artifacts = RunArtifacts::new(Some(ExecutionMode::Live), &identity);
     RunMeta {
-        artifacts: RunArtifacts::new(Some(ExecutionMode::Live), &identity),
+        run_kind: artifacts.kind(),
+        artifacts,
+        run_id: next_run_id(),
         strategy_id: identity.strategy_id,
         te_id: identity.te_id,
         fixed_scale: FIXED_SCALE,
         engine_version: "test".into(),
         feature_names: vec!["ewma_vol".into()],
+        feature_kinds: vec![FeatureKind::MarketOnly],
         instrument_symbols: vec!["btcusdt".into()],
         asset_symbols: vec![
             ("binance".into(), "btc".into()),
             ("binance".into(), "usdt".into()),
         ],
+        link_slot_names: Vec::new(),
+        link_topic_names: Vec::new(),
+        senders: Vec::new(),
     }
 }
 
@@ -253,12 +320,12 @@ fn recorder_identity() -> RunIdentity {
     RunIdentity::new("recorder", "te-recorder").expect("valid identity")
 }
 
-/// Preloads the ring so the actor sees a producer that has already quiesced — the records are all
+/// Preloads the rings so the actor sees a producer that has already quiesced — the records are all
 /// available the moment it starts pumping.
 pub(crate) fn spawn_writer(
     dir_root: &Path,
     tables: RecordedTables,
-    records: Vec<PersistRecord>,
+    records: Vec<Record>,
 ) -> PersistHandle {
     spawn_writer_with(
         persist_config(dir_root, tables),
@@ -271,27 +338,21 @@ pub(crate) fn spawn_writer(
 pub(crate) fn spawn_writer_with(
     config: PersistConfig,
     execution_mode: Option<ExecutionMode>,
-    records: Vec<PersistRecord>,
+    records: Vec<Record>,
 ) -> PersistHandle {
-    PersistWriter::on_disk().spawn(
-        config,
-        meta_for(execution_mode),
-        preloaded(records),
-        no_rotations(),
-    )
+    PersistWriter::on_disk().spawn(config, meta_for(execution_mode), preloaded(records))
 }
 
 /// Like [`spawn_writer`] for the features table alone, but each file step goes through `steps`.
 pub(crate) fn spawn_writer_through(
     steps: Arc<dyn FileSteps>,
     dir_root: &Path,
-    records: Vec<PersistRecord>,
+    records: Vec<Record>,
 ) -> PersistHandle {
     PersistWriter::through(steps).spawn(
         persist_config(dir_root, RecordedTables::new(&[TableKind::Features])),
         meta_for(Some(ExecutionMode::Live)),
         preloaded(records),
-        no_rotations(),
     )
 }
 
@@ -299,7 +360,7 @@ pub(crate) fn spawn_writer_through(
 pub(crate) fn spawn_feature_writer(
     dir_root: &Path,
     feature_names: &[&str],
-    records: Vec<PersistRecord>,
+    records: Vec<Record>,
 ) -> PersistHandle {
     let meta = RunMeta {
         feature_names: feature_names.iter().map(|name| (*name).into()).collect(),
@@ -309,7 +370,6 @@ pub(crate) fn spawn_feature_writer(
         persist_config(dir_root, RecordedTables::new(&[TableKind::Features])),
         meta,
         preloaded(records),
-        no_rotations(),
     )
 }
 
@@ -322,25 +382,32 @@ fn persist_config(dir_root: &Path, tables: RecordedTables) -> PersistConfig {
 }
 
 fn meta_for(execution_mode: Option<ExecutionMode>) -> RunMeta {
+    let artifacts = RunArtifacts::new(execution_mode, &recorder_identity());
     RunMeta {
-        artifacts: RunArtifacts::new(execution_mode, &recorder_identity()),
+        run_kind: artifacts.kind(),
+        artifacts,
         ..run_meta()
     }
 }
 
-fn preloaded(records: Vec<PersistRecord>) -> Consumer<PersistRecord> {
-    let (mut producer, consumer) = RingBuffer::<PersistRecord>::new(records.len() + 1);
+/// The inputs of a writer, each ring holding its records and no rotation lineage: the sender
+/// drops at once, so the side channel stays empty.
+pub(crate) fn preloaded(records: Vec<Record>) -> WriterInputs {
+    let (mut audit_producer, audit) = RingBuffer::<AuditRecord>::new(records.len() + 1);
+    let (mut research_producer, research) = RingBuffer::<ResearchRecord>::new(records.len() + 1);
     for record in records {
-        producer
-            .push(record)
-            .expect("persist test ring has capacity");
+        let pushed = match record {
+            Record::Audit(record) => audit_producer.push(record).is_ok(),
+            Record::Research(record) => research_producer.push(record).is_ok(),
+        };
+        assert!(pushed, "a test ring of the writer has room for each record");
     }
-    consumer
-}
-
-/// No rotation lineage in these tests: the sender drops at once, so the side channel stays empty.
-fn no_rotations() -> mpsc::Receiver<RotationRow> {
-    mpsc::channel(1).1
+    WriterInputs {
+        audit,
+        research,
+        rollups: None,
+        rotations: mpsc::channel::<RotationRow>(1).1,
+    }
 }
 
 /// Drain exactly as the runtime does on SIGTERM.

@@ -19,16 +19,17 @@ use engine::runtime::artifacts::RunArtifacts;
 use engine::runtime::config::{
     ExecutionMode, RecordedTables, RunIdentity, StrategyId, TableKind, TradingEngineId,
 };
+use engine::runtime::manifest::RunKind;
 use engine::runtime::pin_to_core;
 use engine::runtime::shutdown::{DrainSignal, FatalSignal};
-use engine::tape::{PersistConfig, PersistWriter, RunMeta};
+use engine::tape::{PersistConfig, PersistWriter, RunMeta, WriterInputs};
 
 use crate::engine_support::{
     ALL_TABLES, NOMINAL_SPIN, engine_view, engine_without_warmup, instrument_row, persist_ring,
     recorder_spec, strategy_log_ring, tracker_spec_all,
 };
 use crate::parquet_readback::{
-    Cell, FileData, TempDir, drain_blocking, parquet_files, read_parquet_file, run_dir,
+    Cell, FileData, TempDir, drain_blocking, next_run_id, read_parquet_file, table_files,
 };
 use crate::raw_recorder::RecorderStrategy;
 use crate::tape::e2e_scenario::{HOUR_US, ROTATIONS, message_sequence};
@@ -245,7 +246,7 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
         SourceId(0),
     );
 
-    let (sink, persist_consumer) = persist_ring(4096);
+    let (sink, persist_rings) = persist_ring(4096);
     let (log_sink, _log_consumer) = strategy_log_ring(64);
 
     let instruments = [instrument_row(0, tracker_spec_all(2), 64)];
@@ -272,14 +273,20 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
             Some(ExecutionMode::Live),
             &RunIdentity::new("recorder", "te-recorder").expect("valid identity"),
         ),
+        run_kind: RunKind::Live,
+        run_id: next_run_id(),
         fixed_scale: FIXED_SCALE,
         engine_version: env!("CARGO_PKG_VERSION").into(),
         feature_names,
+        feature_kinds: Vec::new(),
         instrument_symbols: instruments
             .iter()
             .map(|row| row.venue_symbol.clone())
             .collect(),
         asset_symbols: Vec::new(),
+        link_slot_names: Vec::new(),
+        link_topic_names: Vec::new(),
+        senders: Vec::new(),
     };
     let (rotations_tx, rotations_rx) = mpsc::channel::<RotationRow>(64);
     let persistence = PersistWriter::on_disk().spawn(
@@ -289,8 +296,10 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
             retention: Duration::from_hours(6),
         },
         meta,
-        persist_consumer,
-        rotations_rx,
+        WriterInputs {
+            rotations: rotations_rx,
+            ..persist_rings.into_writer_inputs()
+        },
     );
 
     let (hot_fatal, hot_drain) = (fatal.clone(), drain.clone());
@@ -333,8 +342,7 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
 
 /// Read a table's files (path-sorted order is hour order within a run) back through the arrow reader.
 fn read_table(dir_root: &Path, table: &str) -> Vec<FileData> {
-    let dir = run_dir(dir_root).join(table);
-    parquet_files(&dir)
+    table_files(dir_root, table)
         .iter()
         .map(|path| read_parquet_file(path))
         .collect()

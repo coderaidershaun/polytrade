@@ -29,7 +29,7 @@ use crate::venues::polymarket::exec::handle::{
     self as polymarket_handle, PolymarketPreflight, PolymarketPreflightError, preflight_polymarket,
 };
 use crate::venues::polymarket::preflight as polymarket_preflight;
-use crate::venues::port::VenueScales;
+use crate::venues::port::{VenueReport, VenueScales};
 use crate::venues::sim::{self, SimPlan, SimVenueError};
 
 pub(crate) use crate::venues::polymarket::rotation::WindowAssignment;
@@ -65,7 +65,7 @@ pub(crate) async fn read_scales(registry: &Registry) -> Result<VenueScales, Venu
         Some(env) => binance_preflight::preflight_scales(registry, env).await?,
         None => VenueScales::default(),
     };
-    scales.polymarket = polymarket_preflight::preflight_poly(registry).await?;
+    scales.polymarket = polymarket_preflight::preflight_poly(registry, &mut scales.report).await?;
     Ok(scales)
 }
 
@@ -114,6 +114,15 @@ impl ExecutionVenue {
                     .map_err(VenueError::PolymarketGate)?;
                 Ok(Self::Polymarket(Box::new(gate)))
             }
+        }
+    }
+
+    /// What the probe of this venue found, for the start to log once the log runs.
+    pub(crate) fn take_report(&mut self) -> VenueReport {
+        match self {
+            Self::Simulated(_) => VenueReport::default(),
+            Self::Binance { gate, .. } => std::mem::take(&mut gate.report),
+            Self::Polymarket(gate) => std::mem::take(&mut gate.report),
         }
     }
 

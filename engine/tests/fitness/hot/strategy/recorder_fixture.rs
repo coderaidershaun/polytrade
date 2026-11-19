@@ -1,22 +1,23 @@
 //! The engine, tape and readers that the tests of the shipped recorder share. Each test file owns
 //! its price level and lot step, because those are what its claim is about.
 
-use engine::hot::dispatch::{ExecWiring, HotEngine, HotEngineSetup};
+use engine::hot::dispatch::{ExecWiring, ExposureWiring, HotEngine, HotEngineSetup};
 use engine::hot::sink::ExecSink;
 use engine::hot::strategy::StrategyConfig;
 use engine::msg::exec::{ExecCommand, ExecLaneItem};
 use engine::msg::ids::{AssetId, InstrumentId, Notional, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody};
-use engine::msg::persist::PersistRecord;
+use engine::msg::persist::ResearchRecord;
 use engine::msg::time::{DurationUs, Stamper};
 use engine::runtime::config::{IntensitySpec, KlineInterval, TableKind};
+use engine::runtime::exposure::InstrumentExposure;
 use engine::runtime::registry::InstrumentRow;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
-    ONE, account_chunk, book_reset, delta_chunk, detached_setup, engine_view, instrument_row,
-    kline, persist_ring, recorder_spec, snapshot_pair, spin, stream_ready, tracker_spec_all, trade,
-    ts, ui_event_ring,
+    ONE, account_chunk, book_reset, delta_chunk, detached_setup, engine_view, exposure_ring,
+    instrument_row, kline, persist_ring, recorder_spec, snapshot_pair, spin, stream_ready,
+    tracker_spec_all, trade, ts, ui_event_ring,
 };
 use crate::exec_support::{drain_commands, exec_settings, open_orders_snapshot};
 use crate::micro_strategy::features::FEATURE_NAMES;
@@ -55,10 +56,10 @@ pub(crate) fn drain_places(commands: &mut Consumer<ExecLaneItem>) -> Vec<PlacedO
         .collect()
 }
 
-pub(crate) fn spin_columns(persist: &mut Consumer<PersistRecord>) -> Vec<(&'static str, f64)> {
+pub(crate) fn spin_columns(persist: &mut Consumer<ResearchRecord>) -> Vec<(&'static str, f64)> {
     let mut columns = Vec::new();
     while let Ok(record) = persist.pop() {
-        if let PersistRecord::Feature(row) = record {
+        if let ResearchRecord::Feature(row) = record {
             columns.push((FEATURE_NAMES[usize::from(row.feature.0)], row.value));
         }
     }
@@ -74,8 +75,17 @@ pub(crate) fn column_value(columns: &[(&'static str, f64)], name: &str) -> Optio
 
 pub(crate) fn recorder_engine(
     instruments: &[InstrumentRow],
-) -> (HotEngine, Consumer<PersistRecord>, Consumer<ExecLaneItem>) {
-    let (persistence, persist) = persist_ring(8_192);
+) -> (HotEngine, Consumer<ResearchRecord>, Consumer<ExecLaneItem>) {
+    recorder_engine_holding(instruments, &[])
+}
+
+/// [`recorder_engine`] that boots holding `restored`, as a restart with inventory does.
+pub(crate) fn recorder_engine_holding(
+    instruments: &[InstrumentRow],
+    restored: &[InstrumentExposure],
+) -> (HotEngine, Consumer<ResearchRecord>, Consumer<ExecLaneItem>) {
+    let (persistence, rings) = persist_ring(8_192);
+    let persist = rings.research;
     let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(256);
     let spec = recorder_spec::<MicroRecorderParams>(vec![TableKind::Features]);
     let strategy = Box::new(MicroRecorder::from_spec(&spec, engine_view(SPIN_INTERVAL)));
@@ -87,6 +97,10 @@ pub(crate) fn recorder_engine(
             settings: exec_settings(),
             run_nonce: 0,
         }],
+        exposure: ExposureWiring {
+            restored,
+            sink: exposure_ring(64, instruments.len()).0,
+        },
         ..detached_setup(instruments, strategy)
     });
     (engine, persist, commands)

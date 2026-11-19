@@ -3,7 +3,7 @@
 
 use engine::hot::strategy::StrategyConfig;
 use engine::msg::inbound::{InboundMessage, MessageBody};
-use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::msg::persist::{FeatureId, ResearchRecord};
 use engine::msg::time::DurationUs;
 use engine::runtime::config::{KlineInterval, TableKind};
 
@@ -29,7 +29,8 @@ fn egarch_seeds_from_backfill_absorbed_during_warmup() {
     let egarch_vol_lt = recorder_feature_id("egarch_vol_lt");
     let instruments = [instrument_row(0, tracker_spec_all(100), 128)];
 
-    let (sink, mut consumer) = persist_ring(4096);
+    let (sink, rings) = persist_ring(4096);
+    let mut consumer = rings.research;
     let (log_sink, _log_consumer) = strategy_log_ring(64);
     let strategy = Box::new(MicroRecorder::from_spec(
         &recorder_spec(vec![TableKind::Features]),
@@ -71,7 +72,7 @@ fn egarch_seeds_from_backfill_absorbed_during_warmup() {
 
     let emitted: std::collections::HashSet<FeatureId> = std::iter::from_fn(|| consumer.pop().ok())
         .filter_map(|record| match record {
-            PersistRecord::Feature(row) => Some(row.feature),
+            ResearchRecord::Feature(row) => Some(row.feature),
             _ => None,
         })
         .collect();

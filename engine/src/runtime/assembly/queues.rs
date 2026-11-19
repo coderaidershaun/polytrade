@@ -18,8 +18,8 @@ use crate::runtime::shutdown::FatalSignal;
 /// the engine after a short pause of the hot thread.
 const MIN_TIMER_CAPACITY: usize = 16;
 
-/// Each file writer sends at most one message in a run, so this ring cannot fill. A full one would
-/// still halt the engine, as each ring that the engine fills does.
+/// Each file writer and the audit sink send at most one message in a run, so this ring cannot fill.
+/// A full one would still halt the engine, as each ring that the engine fills does.
 const WRITER_STATUS_CAPACITY: usize = 4;
 
 /// The ring capacity of each kind of input queue, with the default of each key that is absent.
@@ -63,6 +63,7 @@ pub(super) struct RingPlan {
     writer_status: Option<(QueueId, SourceId)>,
     control: Option<QueueId>,
     tape_status: Option<(QueueId, SourceId)>,
+    audit_status: Option<(QueueId, SourceId)>,
     capacities: QueueCapacities,
 }
 
@@ -83,6 +84,9 @@ pub(super) struct InputProducers {
     pub(super) control: Option<ControlQueueProducer>,
     /// `None` with no `persistence:` block. The tape writer sends its one message here.
     pub(super) tape_status: Option<QueueProducer>,
+    /// `None` with no `persistence:` block. The audit sink of the hot thread sends its one message
+    /// here, so this producer stays on the hot thread.
+    pub(super) audit_status: Option<QueueProducer>,
 }
 
 impl RingPlan {
@@ -95,8 +99,8 @@ impl RingPlan {
                 .iter()
                 .map(|group| (group.queue_id, group.source_id))
                 .collect(),
-            // The timer, the execution edge and the file writers are no producer groups, so their
-            // source ids are the four after the last group.
+            // The timer, the execution edge, the file writers and the audit sink are no producer
+            // groups, so their source ids are the five after the last group.
             timer: (registry.timer_queue_id(), SourceId(group_count)),
             link: registry.link_queue_id(),
             exec: registry
@@ -110,6 +114,9 @@ impl RingPlan {
             tape_status: registry
                 .tape_status_queue_id()
                 .map(|queue_id| (queue_id, SourceId(group_count + 3))),
+            audit_status: registry
+                .audit_status_queue_id()
+                .map(|queue_id| (queue_id, SourceId(group_count + 4))),
             capacities: QueueCapacities::of(config),
         }
     }
@@ -157,6 +164,10 @@ impl RingPlan {
             let producer = ring(queue_id, WRITER_STATUS_CAPACITY);
             QueueProducer::new(producer, fatal.clone(), queue_id, source_id)
         });
+        let audit_status = self.audit_status.map(|(queue_id, source_id)| {
+            let producer = ring(queue_id, WRITER_STATUS_CAPACITY);
+            QueueProducer::new(producer, fatal.clone(), queue_id, source_id)
+        });
         let consumers = consumers
             .into_iter()
             .map(|slot| slot.expect("every queue id assigned a ring"))
@@ -169,6 +180,7 @@ impl RingPlan {
             writer_status,
             control,
             tape_status,
+            audit_status,
         };
         (IngressQueues::new(consumers), producers)
     }

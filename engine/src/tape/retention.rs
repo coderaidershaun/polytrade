@@ -9,16 +9,17 @@ use std::time::{Duration, SystemTime};
 use super::table::{DATE_FOLDER_PREFIX, FILE_EXTENSION, UNFINISHED_EXTENSION};
 
 pub(super) struct Retention {
-    run_dir: PathBuf,
+    /// The folder of each run of one kind: `{strategy}/{te}/{kind}` below the root.
+    kind_dir: PathBuf,
     max_age: Duration,
     /// The boot stamp in the names of this writer's own files, which are never unfinished leftovers.
     boot_ts_us: i64,
 }
 
 impl Retention {
-    pub(super) fn new(run_dir: PathBuf, max_age: Duration, boot_ts_us: i64) -> Self {
+    pub(super) fn new(kind_dir: PathBuf, max_age: Duration, boot_ts_us: i64) -> Self {
         Self {
-            run_dir,
+            kind_dir,
             max_age,
             boot_ts_us,
         }
@@ -30,7 +31,7 @@ impl Retention {
         crate::info!(
             "persist retention {} h under {}",
             self.max_age.as_secs() / 3_600,
-            self.run_dir.display()
+            self.kind_dir.display()
         );
     }
 
@@ -39,9 +40,9 @@ impl Retention {
     /// footer. A file that this writer has open is unfinished and has its boot stamp, so the walk
     /// never deletes it.
     ///
-    /// The walk enters only date folders inside table folders, so a live run never reaches into
-    /// `sim/`, whose children are table folders. It never follows a symlink, so it stays inside the
-    /// run's own folder.
+    /// The walk enters only date folders inside the table folders of the runs of one kind, so a
+    /// live run never reaches into `sim/`. It never follows a symlink, so it stays inside the
+    /// folder of its kind. A run folder keeps its `run.json` after its files expire.
     #[expect(
         clippy::disallowed_methods,
         reason = "a writer stamps and paces its own files, which are never engine state"
@@ -51,9 +52,12 @@ impl Retention {
             return;
         };
         let mut unfinished = 0_u32;
-        for table in subdirectories(&self.run_dir, |_| true) {
-            for date_dir in subdirectories(&table, |name| name.starts_with(DATE_FOLDER_PREFIX)) {
-                unfinished += self.prune_date_dir(&date_dir, cutoff);
+        for run in subdirectories(&self.kind_dir, |_| true) {
+            for table in subdirectories(&run, |_| true) {
+                for date_dir in subdirectories(&table, |name| name.starts_with(DATE_FOLDER_PREFIX))
+                {
+                    unfinished += self.prune_date_dir(&date_dir, cutoff);
+                }
             }
         }
         if unfinished > 0 {

@@ -43,7 +43,7 @@ pub struct EngineConfig {
 }
 
 impl EngineConfig {
-    pub(crate) fn spin_interval(&self) -> DurationUs {
+    pub fn spin_interval(&self) -> DurationUs {
         DurationUs::from_micros(self.spin_interval_us as i64)
     }
 

@@ -7,15 +7,16 @@
 //! one moment and read at another can.
 
 use crate::hot::digest::digest_by_hash;
-use crate::msg::exec::{Liquidity, RejectClass};
+use crate::msg::exec::Liquidity;
 use crate::msg::ids::{
     AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, TradeId, VenueOrderId,
 };
 use crate::msg::time::LocalTs;
 
+pub use crate::msg::order::RejectOrigin;
+
 use super::desired::QuoteLevel;
 use super::order::OrderState;
-use super::reconcile::RejectReason;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OrderView {
@@ -92,12 +93,6 @@ pub struct OrderUpdate {
     pub qty: Qty,
     pub filled: Qty,
     pub event_ts_us: LocalTs,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum RejectOrigin {
-    Local(RejectReason),
-    Venue { class: RejectClass, code: i32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

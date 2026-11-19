@@ -1,0 +1,1677 @@
+{
+  "contract_version": 1,
+  "fixed_scale": 100000000,
+  "notional_rounding": "truncate_toward_zero",
+  "holdout_root": "data/holdout",
+  "path_form": "{persistence_dir}/{strategy_id}/{te_id}/{kind}/{run_id}/{table}/date=YYYY-MM-DD/{HH}-{run_id}-{seq:06}.parquet",
+  "unfinished_suffix": ".part",
+  "manifest": {
+    "file": "run.json",
+    "fields": [
+      {
+        "name": "contract_version",
+        "type": "integer",
+        "nullable": false
+      },
+      {
+        "name": "run_id",
+        "type": "string",
+        "nullable": false
+      },
+      {
+        "name": "kind",
+        "type": "string",
+        "nullable": false
+      },
+      {
+        "name": "strategy_id",
+        "type": "string",
+        "nullable": false
+      },
+      {
+        "name": "te_id",
+        "type": "string",
+        "nullable": false
+      },
+      {
+        "name": "execution_mode",
+        "type": "string",
+        "nullable": false
+      },
+      {
+        "name": "boot_ts_us",
+        "type": "integer",
+        "nullable": false
+      },
+      {
+        "name": "engine_version",
+        "type": "string",
+        "nullable": false
+      },
+      {
+        "name": "config_digest",
+        "type": "string",
+        "nullable": false
+      },
+      {
+        "name": "seed",
+        "type": "integer",
+        "nullable": true
+      },
+      {
+        "name": "spin_interval_us",
+        "type": "integer",
+        "nullable": false
+      },
+      {
+        "name": "seal_interval_spins",
+        "type": "integer",
+        "nullable": false
+      },
+      {
+        "name": "warmup_us",
+        "type": "integer",
+        "nullable": false
+      },
+      {
+        "name": "fixed_scale",
+        "type": "integer",
+        "nullable": false
+      },
+      {
+        "name": "tables",
+        "type": "array",
+        "nullable": false
+      },
+      {
+        "name": "identity_lock",
+        "type": "string",
+        "nullable": true
+      },
+      {
+        "name": "source",
+        "type": "object",
+        "nullable": true
+      },
+      {
+        "name": "venues",
+        "type": "array",
+        "nullable": false
+      },
+      {
+        "name": "instruments",
+        "type": "array",
+        "nullable": false
+      },
+      {
+        "name": "end_state",
+        "type": "string",
+        "nullable": false
+      },
+      {
+        "name": "end_reason",
+        "type": "string",
+        "nullable": true
+      },
+      {
+        "name": "stopped_tables",
+        "type": "array",
+        "nullable": false
+      }
+    ]
+  },
+  "footer_keys": [
+    {
+      "key": "strategy_id",
+      "form": "text"
+    },
+    {
+      "key": "te_id",
+      "form": "text"
+    },
+    {
+      "key": "execution_mode",
+      "form": "label:execution_mode"
+    },
+    {
+      "key": "fixed_scale",
+      "form": "integer"
+    },
+    {
+      "key": "feature_dictionary",
+      "form": "json_string_array"
+    },
+    {
+      "key": "instrument_dictionary",
+      "form": "json_string_array"
+    },
+    {
+      "key": "asset_dictionary",
+      "form": "json_pair_array"
+    },
+    {
+      "key": "engine_version",
+      "form": "text"
+    },
+    {
+      "key": "contract_version",
+      "form": "integer"
+    },
+    {
+      "key": "boot_ts_us",
+      "form": "integer"
+    },
+    {
+      "key": "run_kind",
+      "form": "label:run_kind"
+    },
+    {
+      "key": "link_slot_names",
+      "form": "json_string_array"
+    },
+    {
+      "key": "link_topic_names",
+      "form": "json_string_array"
+    },
+    {
+      "key": "sender_dictionary",
+      "form": "json_object"
+    },
+    {
+      "key": "tape_kinds",
+      "form": "json_object_array"
+    },
+    {
+      "key": "feature_kinds",
+      "form": "json_label_array:feature_kind"
+    }
+  ],
+  "tables": [
+    {
+      "name": "orders",
+      "ring": "audit",
+      "fault_class": "halt_quoting",
+      "switch": "orders",
+      "partition_column": "received_ts_us",
+      "seals": "border_rows_hour",
+      "columns": [
+        {
+          "name": "exchange_ts_us",
+          "kind": "ts_venue",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "received_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "instrument_id",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        },
+        {
+          "name": "client_order_id",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        },
+        {
+          "name": "quote_level",
+          "kind": "quote_level",
+          "arrow": "uint8",
+          "nullable": true
+        },
+        {
+          "name": "venue_order_id",
+          "kind": "venue_id",
+          "arrow": "int64",
+          "nullable": true
+        },
+        {
+          "name": "transition",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "order_transition"
+        },
+        {
+          "name": "state",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "order_lifecycle"
+        },
+        {
+          "name": "previous_state",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "order_lifecycle"
+        },
+        {
+          "name": "provenance",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "provenance"
+        },
+        {
+          "name": "side",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "side"
+        },
+        {
+          "name": "style",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "order_style"
+        },
+        {
+          "name": "price",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "qty",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "filled_qty",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "filled_quote",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "reject_class",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "reject_class"
+        },
+        {
+          "name": "reject_code",
+          "kind": "i32",
+          "arrow": "int32",
+          "nullable": false
+        },
+        {
+          "name": "depth_ahead",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "fills",
+      "ring": "audit",
+      "fault_class": "halt_quoting",
+      "switch": "fills",
+      "partition_column": "received_ts_us",
+      "seals": "border_rows_hour",
+      "columns": [
+        {
+          "name": "exchange_ts_us",
+          "kind": "ts_venue",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "received_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "instrument_id",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        },
+        {
+          "name": "trade_id",
+          "kind": "venue_id",
+          "arrow": "int64",
+          "nullable": true
+        },
+        {
+          "name": "venue_order_id",
+          "kind": "venue_id",
+          "arrow": "int64",
+          "nullable": true
+        },
+        {
+          "name": "client_order_id",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        },
+        {
+          "name": "quote_level",
+          "kind": "quote_level",
+          "arrow": "uint8",
+          "nullable": true
+        },
+        {
+          "name": "provenance",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "provenance"
+        },
+        {
+          "name": "side",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "side"
+        },
+        {
+          "name": "liquidity",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "liquidity"
+        },
+        {
+          "name": "last_price",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "last_qty",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "booked_qty",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "booked_quote",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "commission",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "commission_asset_id",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "incidents",
+      "ring": "audit",
+      "fault_class": "halt_quoting",
+      "switch": null,
+      "partition_column": "received_ts_us",
+      "seals": "border_rows_hour",
+      "columns": [
+        {
+          "name": "exchange_ts_us",
+          "kind": "ts_venue",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "received_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "incident_kind"
+        },
+        {
+          "name": "instrument_id",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        },
+        {
+          "name": "client_order_id",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": true
+        },
+        {
+          "name": "trade_id",
+          "kind": "venue_id",
+          "arrow": "int64",
+          "nullable": true
+        },
+        {
+          "name": "qty",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "amount",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "window_close_ts_us",
+          "kind": "ts_venue",
+          "arrow": "int64",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "ledger",
+      "ring": "audit",
+      "fault_class": "halt_quoting",
+      "switch": null,
+      "partition_column": "received_ts_us",
+      "seals": "border_rows_hour",
+      "columns": [
+        {
+          "name": "received_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "ledger_kind"
+        },
+        {
+          "name": "instrument_id",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        },
+        {
+          "name": "position_base",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "cash_quote",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "basis_quote",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "realised_quote",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "mark",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": true
+        },
+        {
+          "name": "exposure_quote",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "pnl_quote",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "client_order_id",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": true
+        },
+        {
+          "name": "trade_id",
+          "kind": "venue_id",
+          "arrow": "int64",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "rotations",
+      "ring": "rotations",
+      "fault_class": "halt_quoting",
+      "switch": null,
+      "partition_column": "received_ts_us",
+      "seals": "border_rows_hour",
+      "columns": [
+        {
+          "name": "received_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "instrument_id",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        },
+        {
+          "name": "window_open_ts_us",
+          "kind": "ts_venue",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "window_close_ts_us",
+          "kind": "ts_venue",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "token_id_up",
+          "kind": "text",
+          "arrow": "utf8",
+          "nullable": false
+        },
+        {
+          "name": "token_id_down",
+          "kind": "text",
+          "arrow": "utf8",
+          "nullable": false
+        },
+        {
+          "name": "condition_id",
+          "kind": "text",
+          "arrow": "utf8",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "features",
+      "ring": "research",
+      "fault_class": "reject",
+      "switch": "features",
+      "partition_column": "event_ts_us",
+      "seals": "border_rows_hour",
+      "columns": [
+        {
+          "name": "event_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "instrument_id",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        },
+        {
+          "name": "feature_id",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        },
+        {
+          "name": "value",
+          "kind": "f64",
+          "arrow": "float64",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "trades",
+      "ring": "research",
+      "fault_class": "reject",
+      "switch": "trades",
+      "partition_column": "received_ts_us",
+      "seals": "border_rows_hour",
+      "columns": [
+        {
+          "name": "exchange_ts_us",
+          "kind": "ts_venue",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "received_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "instrument_id",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        },
+        {
+          "name": "price",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "qty",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "side",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "side"
+        }
+      ]
+    },
+    {
+      "name": "book_events",
+      "ring": "research",
+      "fault_class": "reject",
+      "switch": "book_events",
+      "partition_column": "received_ts_us",
+      "seals": "border_rows_hour",
+      "columns": [
+        {
+          "name": "received_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "instrument_id",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "book_event_kind"
+        },
+        {
+          "name": "side",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "book_side"
+        },
+        {
+          "name": "price",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "qty",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "update_id",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "klines",
+      "ring": "research",
+      "fault_class": "reject",
+      "switch": "klines",
+      "partition_column": "received_ts_us",
+      "seals": "border_rows_hour",
+      "columns": [
+        {
+          "name": "exchange_ts_us",
+          "kind": "ts_venue",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "received_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "instrument_id",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        },
+        {
+          "name": "interval",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "kline_interval"
+        },
+        {
+          "name": "open_ts_us",
+          "kind": "ts_venue",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "open",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "high",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "low",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "close",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "base_volume",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "quote_volume",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "trade_count",
+          "kind": "u32",
+          "arrow": "uint32",
+          "nullable": false
+        },
+        {
+          "name": "is_closed",
+          "kind": "bool",
+          "arrow": "bool",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "link_frames",
+      "ring": "research",
+      "fault_class": "reject",
+      "switch": "link_frames",
+      "partition_column": "received_ts_us",
+      "seals": "border_rows_hour",
+      "columns": [
+        {
+          "name": "received_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "event_ts_us",
+          "kind": "ts_venue",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "link_row_kind"
+        },
+        {
+          "name": "sender_te_hash",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        },
+        {
+          "name": "topic",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        },
+        {
+          "name": "seq",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        },
+        {
+          "name": "slot",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        },
+        {
+          "name": "count",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        },
+        {
+          "name": "value",
+          "kind": "f64",
+          "arrow": "float64",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "mids",
+      "ring": "research",
+      "fault_class": "reject",
+      "switch": null,
+      "partition_column": "event_ts_us",
+      "seals": "border_rows_hour",
+      "columns": [
+        {
+          "name": "event_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "spin_seq",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        },
+        {
+          "name": "instrument_id",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        },
+        {
+          "name": "bid",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": true
+        },
+        {
+          "name": "ask",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": true
+        },
+        {
+          "name": "mid",
+          "kind": "mantissa",
+          "arrow": "int64",
+          "nullable": true
+        }
+      ]
+    },
+    {
+      "name": "no_quotes",
+      "ring": "research",
+      "fault_class": "reject",
+      "switch": null,
+      "partition_column": "event_ts_us",
+      "seals": "border_rows_hour",
+      "columns": [
+        {
+          "name": "event_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "spin_seq",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        },
+        {
+          "name": "instrument_id",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        },
+        {
+          "name": "side",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "side"
+        },
+        {
+          "name": "reason",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "no_quote_reason"
+        }
+      ]
+    },
+    {
+      "name": "tape",
+      "ring": "tape",
+      "fault_class": "reject",
+      "switch": null,
+      "partition_column": "received_ts_us",
+      "seals": "border",
+      "columns": [
+        {
+          "name": "seq",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "kind": "u16",
+          "arrow": "uint16",
+          "nullable": false
+        },
+        {
+          "name": "queue_id",
+          "kind": "u8",
+          "arrow": "uint8",
+          "nullable": true
+        },
+        {
+          "name": "received_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "queued_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "payload",
+          "kind": "bytes",
+          "arrow": "binary",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "metrics_latency",
+      "ring": "rollup",
+      "fault_class": "reject",
+      "switch": null,
+      "partition_column": "interval_end_ts_us",
+      "seals": "border_rows_hour",
+      "columns": [
+        {
+          "name": "interval_start_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "interval_end_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "category",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "latency_category"
+        },
+        {
+          "name": "stage",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "latency_stage"
+        },
+        {
+          "name": "count",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        },
+        {
+          "name": "dropped",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        },
+        {
+          "name": "backward",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        },
+        {
+          "name": "negative",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        },
+        {
+          "name": "p50_ns",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        },
+        {
+          "name": "p99_ns",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        },
+        {
+          "name": "p999_ns",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        },
+        {
+          "name": "max_ns",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        },
+        {
+          "name": "budget_p99_ns",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": true
+        },
+        {
+          "name": "budget_p999_ns",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": true
+        },
+        {
+          "name": "is_over_budget",
+          "kind": "bool",
+          "arrow": "bool",
+          "nullable": false
+        },
+        {
+          "name": "clock_source",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "clock_source"
+        }
+      ]
+    },
+    {
+      "name": "metrics_drops",
+      "ring": "rollup",
+      "fault_class": "reject",
+      "switch": null,
+      "partition_column": "interval_end_ts_us",
+      "seals": "border_rows_hour",
+      "columns": [
+        {
+          "name": "interval_end_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "sink",
+          "kind": "label",
+          "arrow": "utf8",
+          "nullable": false,
+          "labels": "sink_kind"
+        },
+        {
+          "name": "dropped_total",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "metrics_sender_drops",
+      "ring": "rollup",
+      "fault_class": "reject",
+      "switch": null,
+      "partition_column": "interval_end_ts_us",
+      "seals": "border_rows_hour",
+      "columns": [
+        {
+          "name": "interval_end_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "sender",
+          "kind": "text",
+          "arrow": "utf8",
+          "nullable": false
+        },
+        {
+          "name": "queue_full_total",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        },
+        {
+          "name": "over_rate_total",
+          "kind": "u64",
+          "arrow": "uint64",
+          "nullable": false
+        }
+      ]
+    },
+    {
+      "name": "metrics_backlog",
+      "ring": "rollup",
+      "fault_class": "reject",
+      "switch": null,
+      "partition_column": "interval_end_ts_us",
+      "seals": "border_rows_hour",
+      "columns": [
+        {
+          "name": "interval_end_ts_us",
+          "kind": "ts_local",
+          "arrow": "int64",
+          "nullable": false
+        },
+        {
+          "name": "queue_id",
+          "kind": "u8",
+          "arrow": "uint8",
+          "nullable": false
+        },
+        {
+          "name": "max",
+          "kind": "u32",
+          "arrow": "uint32",
+          "nullable": false
+        },
+        {
+          "name": "ema",
+          "kind": "f64",
+          "arrow": "float64",
+          "nullable": false
+        }
+      ]
+    }
+  ],
+  "label_sets": {
+    "order_transition": [
+      "placed",
+      "cancel_sent",
+      "amend_sent",
+      "send_abandoned",
+      "timeout",
+      "sweep_closed",
+      "stream_reset",
+      "ack_placed",
+      "ack_canceled",
+      "ack_amended",
+      "ack_failed",
+      "report_new",
+      "report_trade",
+      "report_canceled",
+      "report_expired",
+      "report_rejected",
+      "report_amended",
+      "snapshot_order"
+    ],
+    "order_lifecycle": [
+      "free",
+      "pending_new",
+      "live",
+      "cancel_in_flight",
+      "amend_in_flight",
+      "unknown",
+      "closed_filled",
+      "closed_canceled",
+      "closed_rejected",
+      "closed_expired",
+      "closed_reconciled_gone"
+    ],
+    "incident_kind": [
+      "fee_gap",
+      "stranded_position",
+      "orphan_fill",
+      "unbooked_fee"
+    ],
+    "link_row_kind": [
+      "payload",
+      "run_running",
+      "run_idle"
+    ],
+    "side": [
+      "buy",
+      "sell"
+    ],
+    "provenance": [
+      "mine",
+      "prior_run",
+      "foreign"
+    ],
+    "order_style": [
+      "post_only",
+      "immediate",
+      "unknown"
+    ],
+    "reject_class": [
+      "still_live",
+      "refused",
+      "gone",
+      "ambiguous",
+      "fatal",
+      "none"
+    ],
+    "liquidity": [
+      "maker",
+      "taker",
+      "none"
+    ],
+    "kline_interval": [
+      "1m",
+      "3m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "4h",
+      "6h",
+      "8h",
+      "12h",
+      "1d",
+      "3d",
+      "1w",
+      "1M"
+    ],
+    "book_event_kind": [
+      "delta",
+      "snapshot",
+      "reset"
+    ],
+    "book_side": [
+      "buy",
+      "sell",
+      "none"
+    ],
+    "ledger_kind": [
+      "boot",
+      "fill",
+      "interval",
+      "rotation"
+    ],
+    "no_quote_reason": [
+      "qty_below_min",
+      "notional_below_min",
+      "notional_above_max",
+      "would_cross",
+      "outside_band",
+      "underfunded",
+      "not_ready_stream",
+      "not_ready_balances",
+      "not_ready_open_orders",
+      "halted",
+      "session_reducing_only",
+      "exposure_ceiling",
+      "no_quote_declared",
+      "book_not_quotable",
+      "duplicate_price",
+      "order_limit",
+      "rate_budget",
+      "outside_window",
+      "warming",
+      "ids_spent"
+    ],
+    "latency_category": [
+      "trade",
+      "book_delta",
+      "book_snapshot",
+      "kline",
+      "spin",
+      "exec",
+      "command"
+    ],
+    "latency_stage": [
+      "venue_to_engine",
+      "venue_internal",
+      "wire_to_message",
+      "message_to_decision",
+      "queue_wait",
+      "processing",
+      "decision_to_wire",
+      "bank_and_lane_wait",
+      "send",
+      "order_round_trip"
+    ],
+    "clock_source": [
+      "tsc",
+      "cntvct_el0",
+      "monotonic"
+    ],
+    "sink_kind": [
+      "stage_samples",
+      "counter_samples",
+      "wire_samples",
+      "latency_reports",
+      "ui_books",
+      "ui_events",
+      "link",
+      "bank_features",
+      "bank_persist",
+      "bank_logs",
+      "bank_link",
+      "exposure_superseded",
+      "research_features",
+      "research_trades",
+      "research_book_events",
+      "research_klines",
+      "research_link_frames",
+      "research_mids",
+      "research_no_quotes",
+      "audit_lost",
+      "tape_lost",
+      "rollup_rows"
+    ],
+    "execution_mode": [
+      "absent",
+      "off",
+      "sim",
+      "live"
+    ],
+    "run_kind": [
+      "live",
+      "sim",
+      "replay",
+      "backtest"
+    ],
+    "end_state": [
+      "open",
+      "graceful",
+      "halted",
+      "drain_failed",
+      "deadline_passed",
+      "start_refused",
+      "refused"
+    ],
+    "feature_kind": [
+      "market_only",
+      "execution_aware"
+    ]
+  },
+  "tape_kinds": [
+    {
+      "kind": 1,
+      "name": "trade",
+      "digest": "0xd9f5e759f485c22a"
+    },
+    {
+      "kind": 2,
+      "name": "book",
+      "digest": "0x47b19438672919af"
+    },
+    {
+      "kind": 3,
+      "name": "book_reset",
+      "digest": "0x883341dca027a90f"
+    },
+    {
+      "kind": 4,
+      "name": "market_rotation",
+      "digest": "0x42c4ce3e84f9469b"
+    },
+    {
+      "kind": 5,
+      "name": "kline",
+      "digest": "0x1d794aa14067acdc"
+    },
+    {
+      "kind": 6,
+      "name": "spin_tick",
+      "digest": "0x75ecdae3fe4fafdd"
+    },
+    {
+      "kind": 7,
+      "name": "link",
+      "digest": "0x7a0596b16f41607f"
+    },
+    {
+      "kind": 8,
+      "name": "run_control",
+      "digest": "0xffdaaaa08cca816d"
+    },
+    {
+      "kind": 9,
+      "name": "exec",
+      "digest": "0x4eafb4153cfa8fe0"
+    },
+    {
+      "kind": 10,
+      "name": "account",
+      "digest": "0x454a8eac509a26a7"
+    },
+    {
+      "kind": 11,
+      "name": "writer_failed",
+      "digest": "0x7527ab672a682cc1"
+    },
+    {
+      "kind": 12,
+      "name": "audit_bank_full",
+      "digest": "0x3d6204b011d2bf5e"
+    },
+    {
+      "kind": 256,
+      "name": "boot",
+      "digest": "0x127e9e717c6249e9"
+    },
+    {
+      "kind": 257,
+      "name": "book_snapshot",
+      "digest": "0x0bbbcd0e480737b4"
+    },
+    {
+      "kind": 258,
+      "name": "gap",
+      "digest": "0x5935435ae8161727"
+    }
+  ],
+  "metrics": [
+    {
+      "name": "orders.placed",
+      "type": "integer",
+      "unit": "count"
+    },
+    {
+      "name": "orders.canceled",
+      "type": "integer",
+      "unit": "count"
+    },
+    {
+      "name": "orders.rejected",
+      "type": "integer",
+      "unit": "count"
+    },
+    {
+      "name": "orders.filled",
+      "type": "integer",
+      "unit": "count"
+    },
+    {
+      "name": "orders.ack_round_trip_us",
+      "type": "object",
+      "unit": "us"
+    },
+    {
+      "name": "fills.count",
+      "type": "integer",
+      "unit": "count"
+    },
+    {
+      "name": "fills.base_bought",
+      "type": "mantissa",
+      "unit": "base"
+    },
+    {
+      "name": "fills.base_sold",
+      "type": "mantissa",
+      "unit": "base"
+    },
+    {
+      "name": "fills.fill_rate",
+      "type": "float",
+      "unit": "ratio"
+    },
+    {
+      "name": "fees.quote",
+      "type": "mantissa",
+      "unit": "quote"
+    },
+    {
+      "name": "fees.other_asset_fills",
+      "type": "integer",
+      "unit": "count"
+    },
+    {
+      "name": "pnl.session_quote",
+      "type": "mantissa",
+      "unit": "quote"
+    },
+    {
+      "name": "pnl.spread_quote",
+      "type": "mantissa",
+      "unit": "quote"
+    },
+    {
+      "name": "pnl.unpriced_fills",
+      "type": "integer",
+      "unit": "count"
+    },
+    {
+      "name": "pnl.inventory_quote",
+      "type": "mantissa",
+      "unit": "quote"
+    },
+    {
+      "name": "pnl.fees_quote",
+      "type": "mantissa",
+      "unit": "quote"
+    },
+    {
+      "name": "pnl.remainder_quote",
+      "type": "mantissa",
+      "unit": "quote"
+    },
+    {
+      "name": "risk.max_abs_position_base",
+      "type": "mantissa",
+      "unit": "base"
+    },
+    {
+      "name": "risk.max_drawdown_quote",
+      "type": "mantissa",
+      "unit": "quote"
+    },
+    {
+      "name": "markout.1s.mean_bps",
+      "type": "float",
+      "unit": "bps"
+    },
+    {
+      "name": "markout.5s.mean_bps",
+      "type": "float",
+      "unit": "bps"
+    },
+    {
+      "name": "markout.30s.mean_bps",
+      "type": "float",
+      "unit": "bps"
+    },
+    {
+      "name": "markout.60s.mean_bps",
+      "type": "float",
+      "unit": "bps"
+    },
+    {
+      "name": "markout.dropped",
+      "type": "integer",
+      "unit": "count"
+    },
+    {
+      "name": "quoting.quoting_side_spins",
+      "type": "integer",
+      "unit": "count"
+    },
+    {
+      "name": "quoting.not_quoting_spins",
+      "type": "object",
+      "unit": "count"
+    },
+    {
+      "name": "latency",
+      "type": "object",
+      "unit": "ns"
+    }
+  ]
+}

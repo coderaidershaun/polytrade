@@ -7,14 +7,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use engine::msg::ids::InstrumentId;
-use engine::msg::persist::{FeatureId, FeatureRow, PersistRecord};
+use engine::msg::persist::{FeatureId, FeatureRow, ResearchRecord};
 use engine::msg::time::LocalTs;
 use engine::runtime::config::{RecordedTables, TableKind};
 use engine::runtime::durable_file::{DiskFiles, FileSteps, StepFile};
 
 use crate::parquet_readback::{
-    BASE_TS_US, Cell, TempDir, drain_blocking, parquet_files, read_parquet_file, run_dir,
-    spawn_writer, spawn_writer_through,
+    BASE_TS_US, Cell, Record, TempDir, drain_blocking, parquet_files, read_parquet_file, run_dir,
+    spawn_writer, spawn_writer_through, table_files,
 };
 
 /// Fewer rows than the row cap, all in one hour, so they make one file, and enough bytes that
@@ -63,7 +63,8 @@ fn steps_of_one_file() -> Vec<Step> {
 
 fn assert_a_kill_leaves_no_file_without_footer(steps: &[Step], allowed: usize) {
     let dir = TempDir::new("tape-kill");
-    let features = run_dir(dir.path()).join("features");
+    // The only table of these runs, so each file below the runs is one of its files.
+    let features = run_dir(dir.path());
     let stopped = write_one_file(dir.path(), &EndsAfter::steps(allowed));
     let taken = &steps[..allowed];
     let last = taken.last().expect("the kill comes after a step");
@@ -114,8 +115,7 @@ fn assert_a_kill_leaves_no_file_without_footer(steps: &[Step], allowed: usize) {
 /// The writer seals a file at the row cap, and a reader opens it while the run goes on.
 fn assert_sealed_files_read_back_mid_run() {
     let dir = TempDir::new("tape-midrun");
-    let tape = run_dir(dir.path());
-    let features = tape.join("features");
+    let features = run_dir(dir.path());
     let records = (0..MID_RUN_ROWS).map(feature_record).collect();
     let handle = spawn_writer(dir.path(), features_and_trades(), records);
 
@@ -135,7 +135,7 @@ fn assert_sealed_files_read_back_mid_run() {
         );
     }
     assert!(
-        parquet_files(&tape.join("trades")).is_empty(),
+        table_files(dir.path(), "trades").is_empty(),
         "a table with no rows never opens a file"
     );
 
@@ -220,13 +220,13 @@ fn feature_value(index: usize) -> f64 {
     (index as f64).sin()
 }
 
-fn feature_record(index: usize) -> PersistRecord {
-    PersistRecord::Feature(FeatureRow {
+fn feature_record(index: usize) -> Record {
+    Record::from(ResearchRecord::Feature(FeatureRow {
         instrument: InstrumentId(0),
         feature: FeatureId(0),
         value: feature_value(index),
         event_ts_us: LocalTs::from_micros(BASE_TS_US + index as i64),
-    })
+    }))
 }
 
 fn features_only() -> RecordedTables {

@@ -101,7 +101,7 @@ pub enum ExecKind {
     UnprovenOrder,
 }
 
-crate::log::fieldless_log_value!(ExecKind {
+crate::msg::log_value::fieldless_log_value!(ExecKind {
     AckPlaced,
     PlaceNotSent,
     AmendNotSent,

@@ -35,13 +35,14 @@ digest_fields! {
 digest_fields! {
     HotState {
         books, derived, windows, ledger, published_exposure, spin_seq, fold_time, gates,
-        exec, desired, actions, seal_borders, declared_link_topics,
+        exec, desired, actions, seal_borders, ledger_borders, is_booted, declared_link_topics,
     }
     not_state {
         // Its pending snapshot and its count of superseded ones depend on how fast the writer
         // reads.
         exposure,
-        // Its drop count and its pending seal depend on how fast the writer reads.
+        // The research ring: its drop counts and its pending seal depend on how fast the writer
+        // reads.
         sink,
     }
 }

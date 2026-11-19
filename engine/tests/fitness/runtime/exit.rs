@@ -12,6 +12,7 @@ use engine::msg::ids::{ClientOrderId, InstrumentId, Price, Qty, QueueId, Side, S
 use engine::msg::time::LocalTs;
 use engine::runtime::config::{Config, ConfigError, NoParams, RunIdentity};
 use engine::runtime::exposure::ExposureError;
+use engine::runtime::manifest::ManifestError;
 #[cfg(feature = "otlp")]
 use engine::runtime::otlp::OtlpError;
 use engine::runtime::shutdown::{AnswerPart, FatalReason, FatalSignal};
@@ -185,6 +186,10 @@ fn each_start_refusal() -> Vec<StartError> {
             venue: "polymarket",
             other: "binance",
         },
+        StartError::Manifest(ManifestError::Write {
+            path: path(),
+            source: io(),
+        }),
     ];
     #[cfg(feature = "otlp")]
     let refusals = refusals
@@ -223,8 +228,9 @@ fn start_variant_index(error: &StartError) -> usize {
         StartError::ExecutionHttpTimeout { .. } => 20,
         StartError::ExecutionOnSeveralSources { .. } => 21,
         StartError::ExecutionWithSeveralVenues { .. } => 22,
+        StartError::Manifest(_) => 23,
         #[cfg(feature = "otlp")]
-        StartError::Otlp(_) => 23,
+        StartError::Otlp(_) => 24,
     }
 }
 
@@ -586,7 +592,7 @@ fn fatal_is_never_a_graceful_exit() {
     let start_indexes: Vec<usize> = refusals.iter().map(start_variant_index).collect();
     assert_eq!(
         start_indexes,
-        (0..23 + usize::from(cfg!(feature = "otlp"))).collect::<Vec<_>>(),
+        (0..24 + usize::from(cfg!(feature = "otlp"))).collect::<Vec<_>>(),
         "one refusal of each variant, once"
     );
     for refusal in &refusals {

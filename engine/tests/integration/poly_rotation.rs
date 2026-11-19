@@ -18,17 +18,18 @@ use engine::hot::spawn::QueueProducer;
 use engine::log::{self, LogConfig};
 use engine::msg::ids::FIXED_SCALE;
 use engine::msg::inbound::InboundMessage;
-use engine::msg::persist::{PersistRecord, RotationRow};
+use engine::msg::persist::{AuditRecord, ResearchRecord, RotationRow};
 use engine::msg::time::EngineClock;
 use engine::runtime::artifacts::RunArtifacts;
 use engine::runtime::config::PolySeries;
 use engine::runtime::config::{
     Config, ExecutionMode, RecordedTables, RunIdentity, StrategyId, TradingEngineId, VenueMarket,
 };
+use engine::runtime::manifest::{RunId, RunKind};
 use engine::runtime::pin_to_core;
 use engine::runtime::registry::Registry;
 use engine::runtime::shutdown::{FatalSignal, RunStateHandles};
-use engine::tape::{PersistConfig, PersistWriter, RunMeta};
+use engine::tape::{PersistConfig, PersistWriter, RunMeta, WriterInputs};
 use engine::venues::edge::backoff::BackoffCaps;
 use engine::venues::polymarket::actor::{PolymarketAdapter, PolymarketAdapterContext};
 use engine::venues::polymarket::rest::PolyRest;
@@ -115,8 +116,8 @@ async fn poly_rotation_capture_spans_two_rotations_with_zero_gap_handover() {
     // Real persistence: the adapter's rotations side-channel feeds a live PersistWriter so the
     // lineage parquet lands and reads back. The POD record ring stays empty (no hot thread here),
     // and no strategy table is named — venue lineage is engine-emitted, so it lands regardless.
-    let (_persist_producer, persist_consumer) =
-        RingBuffer::<PersistRecord>::new(PERSIST_RING_CAPACITY);
+    let (_research_producer, research) = RingBuffer::<ResearchRecord>::new(PERSIST_RING_CAPACITY);
+    let (_audit_producer, audit) = RingBuffer::<AuditRecord>::new(PERSIST_RING_CAPACITY);
     let (rotations_tx, rotations_rx) = mpsc::channel::<RotationRow>(ROTATIONS_CHANNEL_CAPACITY);
     let persistence = PersistWriter::on_disk().spawn(
         PersistConfig {
@@ -125,8 +126,12 @@ async fn poly_rotation_capture_spans_two_rotations_with_zero_gap_handover() {
             retention: Duration::from_hours(6),
         },
         run_meta(&registry),
-        persist_consumer,
-        rotations_rx,
+        WriterInputs {
+            audit,
+            research,
+            rollups: None,
+            rotations: rotations_rx,
+        },
     );
 
     let context = PolymarketAdapterContext {
@@ -181,7 +186,13 @@ async fn poly_rotation_capture_spans_two_rotations_with_zero_gap_handover() {
         .drain()
         .await
         .expect("persistence drains and closes the rotations parquet");
-    let persisted = rotation_instruments(&output_dir.path().join(STRATEGY_ID).join(TE_ID));
+    let run_dir = output_dir
+        .path()
+        .join(STRATEGY_ID)
+        .join(TE_ID)
+        .join(RunKind::Live.as_str())
+        .join(RUN_ID.to_string());
+    let persisted = rotation_instruments(&run_dir);
 
     observer.finalize();
     observer.print_report();
@@ -234,14 +245,23 @@ fn run_meta(registry: &Registry) -> RunMeta {
         fixed_scale: FIXED_SCALE,
         engine_version: env!("CARGO_PKG_VERSION").into(),
         feature_names: Vec::new(),
+        feature_kinds: Vec::new(),
         instrument_symbols: registry
             .instruments()
             .iter()
             .map(|row| row.venue_symbol.clone())
             .collect(),
         asset_symbols: registry.asset_symbols(),
+        run_kind: RunKind::Live,
+        run_id: RunId::from_micros(RUN_ID),
+        link_slot_names: Vec::new(),
+        link_topic_names: Vec::new(),
+        senders: Vec::new(),
     }
 }
+
+/// The folder of the one run of this capture; no other run writes below its scratch root.
+const RUN_ID: i64 = 1;
 
 fn assert_zero_gap_handover(observer: &RotationObserver) {
     let handovers = observer.zero_gap_handovers();

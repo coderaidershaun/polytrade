@@ -1,50 +1,92 @@
 //! The records that the hot thread hands the tape writer: fixed-size copies with exact mantissas and
 //! stamps, so a push never allocates. A rotation row carries text, so it travels apart.
 
-use crate::hot::exec::QuoteLevel;
+mod quoting;
+mod tape;
+
+pub use quoting::{LedgerEntry, LedgerKind, MidRow, NoQuoteReason, NoQuoteRow};
+pub use tape::{BootExposure, BootRecord, BootVenue, TapeGap, TapeRecord};
+
 use crate::msg::exec::{Liquidity, OrderStyle, Provenance, RejectClass};
 use crate::msg::ids::{
     AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId,
 };
 use crate::msg::inbound::BookChunkKind;
+use crate::msg::kinds::{KlineInterval, TableKind};
 use crate::msg::labelled_enum::labelled_enum;
+use crate::msg::order::QuoteLevel;
 use crate::msg::time::{LocalTs, VenueTs};
-use crate::runtime::config::{KlineInterval, TableKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FeatureId(pub u16);
 
-/// A copy of fixed size, because the ring to the tape writer holds its records by value.
+/// A record of what the engine did with money. Its ring never drops one: a full ring banks it, and
+/// a full bank halts quoting first.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PersistRecord {
-    Feature(FeatureRow),
-    Trade(TradeRow),
-    BookEvent(BookEventRow),
-    Kline(KlineRow),
-    LinkFrame(LinkFrameRow),
+pub enum AuditRecord {
     Order(OrderRow),
     Fill(FillRow),
     /// Written whenever the tape exists: no config can switch off the record of money that the
     /// engine could not place in its state.
     Incident(IncidentRow),
-    /// Seal each file. It travels in the ring, so each record banked before it is in the files.
+    Ledger(LedgerEntry),
+    /// Seal each audit file. It travels behind each record banked before it.
     SealAll,
 }
 
-impl PersistRecord {
+impl AuditRecord {
     /// The table that `strategy.tables` names for this record, and `None` for a record that no
     /// config can switch off.
     #[inline]
     pub fn table(&self) -> Option<TableKind> {
         match self {
-            PersistRecord::Feature(_) => Some(TableKind::Features),
-            PersistRecord::Trade(_) => Some(TableKind::Trades),
-            PersistRecord::BookEvent(_) => Some(TableKind::BookEvents),
-            PersistRecord::Kline(_) => Some(TableKind::Klines),
-            PersistRecord::LinkFrame(_) => Some(TableKind::LinkFrames),
-            PersistRecord::Order(_) => Some(TableKind::Orders),
-            PersistRecord::Fill(_) => Some(TableKind::Fills),
-            PersistRecord::Incident(_) | PersistRecord::SealAll => None,
+            AuditRecord::Order(_) => Some(TableKind::Orders),
+            AuditRecord::Fill(_) => Some(TableKind::Fills),
+            AuditRecord::Incident(_) | AuditRecord::Ledger(_) | AuditRecord::SealAll => None,
+        }
+    }
+
+    /// The stamp of the message that wrote the row, and `None` for a seal.
+    #[inline]
+    pub fn received_ts_us(&self) -> Option<LocalTs> {
+        match self {
+            AuditRecord::Order(row) => Some(row.received_ts_us),
+            AuditRecord::Fill(row) => Some(row.received_ts_us),
+            AuditRecord::Incident(row) => Some(row.received_ts_us),
+            AuditRecord::Ledger(row) => Some(row.received_ts_us),
+            AuditRecord::SealAll => None,
+        }
+    }
+}
+
+/// A record that research reads. A full ring drops it and counts it by table, so research pressure
+/// never costs an audit row.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ResearchRecord {
+    Feature(FeatureRow),
+    Trade(TradeRow),
+    BookEvent(BookEventRow),
+    Kline(KlineRow),
+    LinkFrame(LinkFrameRow),
+    Mid(MidRow),
+    NoQuote(NoQuoteRow),
+    /// Seal each research file. It travels in the ring, so each record banked before it is in the
+    /// files.
+    SealAll,
+}
+
+impl ResearchRecord {
+    /// The table that `strategy.tables` names for this record, and `None` for a record that no
+    /// config can switch off.
+    #[inline]
+    pub fn table(&self) -> Option<TableKind> {
+        match self {
+            ResearchRecord::Feature(_) => Some(TableKind::Features),
+            ResearchRecord::Trade(_) => Some(TableKind::Trades),
+            ResearchRecord::BookEvent(_) => Some(TableKind::BookEvents),
+            ResearchRecord::Kline(_) => Some(TableKind::Klines),
+            ResearchRecord::LinkFrame(_) => Some(TableKind::LinkFrames),
+            ResearchRecord::Mid(_) | ResearchRecord::NoQuote(_) | ResearchRecord::SealAll => None,
         }
     }
 }
@@ -68,12 +110,15 @@ pub struct TradeRow {
     pub received_ts_us: LocalTs,
 }
 
-/// What the book applied, and its reset, rather than the venue's wire kinds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BookEventKind {
-    Delta,
-    Snapshot,
-    Reset,
+labelled_enum! {
+    /// What the book applied, and its reset, rather than the venue's wire kinds.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum BookEventKind {
+        Delta = "delta",
+        Snapshot = "snapshot",
+        Reset = "reset",
+    }
+    pub fn as_str;
 }
 
 impl From<BookChunkKind> for BookEventKind {
@@ -215,6 +260,10 @@ pub struct OrderRow {
     pub reject_code: i32,
     pub exchange_ts_us: VenueTs,
     pub received_ts_us: LocalTs,
+    /// The visible quantity at the order's own price on its side when the place is banked: what
+    /// stands ahead of it in the queue. Set on rows of transition `placed` only, and absent there
+    /// when the price lies past the depth that the book holds.
+    pub depth_ahead: Option<Qty>,
 }
 
 /// One fill: the line that a venue statement is reconciled against, with its quantity, price and

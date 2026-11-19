@@ -1,0 +1,17 @@
+# Starts tape-sync.service every 15 minutes, and once 5 minutes after boot. A run that is still
+# open is left for a later start, so the interval only sets how soon a closed run ships.
+#
+# Install: ops/tape-sync/README.md.
+
+[Unit]
+Description=Start tape-sync every 15 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=15min
+# One sync at a time: the timer starts the service again only after the last run has ended.
+AccuracySec=1min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

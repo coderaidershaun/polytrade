@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use crate::hot::strategy::ParamError;
 use crate::msg::failure::{FailureClass, Halt};
 
 #[derive(thiserror::Error, Debug)]
@@ -15,6 +16,8 @@ pub enum ConfigError {
     },
     #[error("config parse failed: {detail}")]
     Parse { detail: Box<str> },
+    #[error(transparent)]
+    Param(#[from] ParamError),
     #[error("{kind} {raw:?} invalid: {reason}")]
     Identifier {
         kind: &'static str,
@@ -118,6 +121,7 @@ impl ConfigError {
         match self {
             ConfigError::Read { .. }
             | ConfigError::Parse { .. }
+            | ConfigError::Param(_)
             | ConfigError::Identifier { .. }
             | ConfigError::SpinWithoutHotCore
             | ConfigError::LogDeadline { .. }

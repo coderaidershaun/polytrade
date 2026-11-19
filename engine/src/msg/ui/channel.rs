@@ -3,9 +3,7 @@
 
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
-use rtrb::{Consumer, RingBuffer};
-
-use crate::hot::sink::{UiBookSink, UiEventSink};
+use rtrb::{Consumer, Producer, RingBuffer};
 
 use super::{UI_BOOK_RING_CAPACITY, UI_EVENT_RING_CAPACITY, UiBookSnapshot, UiCatalog, UiEvent};
 
@@ -21,11 +19,12 @@ pub enum UiLifecycle {
     Draining,
 }
 
-/// The engine's end of the workstation feed.
+/// The engine's end of the workstation feed. The hot thread wraps each ring in the sink of its
+/// policy on a full ring.
 pub struct UiWiring {
     pub lifecycle: SyncSender<UiLifecycle>,
-    pub books: UiBookSink,
-    pub events: UiEventSink,
+    pub books: Producer<UiBookSnapshot>,
+    pub events: Producer<UiEvent>,
 }
 
 /// The link actor's end of the workstation feed.
@@ -43,8 +42,8 @@ pub fn ui_channel() -> (UiWiring, UiChannels) {
     (
         UiWiring {
             lifecycle: lifecycle_tx,
-            books: UiBookSink::new(book_producer),
-            events: UiEventSink::new(event_producer),
+            books: book_producer,
+            events: event_producer,
         },
         UiChannels {
             lifecycle: lifecycle_rx,

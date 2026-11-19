@@ -10,7 +10,7 @@ use engine::hot::strategy::{Fill, Strategy, StrategyCtx};
 use engine::msg::exec::{ExecEvent, ExecKind, ExecLaneItem, VenueOrderStatus};
 use engine::msg::ids::{AssetId, InstrumentId, Notional, Price, Qty, Side, TradeId};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
-use engine::msg::persist::{IncidentKind, IncidentRow, PersistRecord};
+use engine::msg::persist::{AuditRecord, IncidentKind, IncidentRow};
 use engine::msg::time::Stamper;
 use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
@@ -73,8 +73,9 @@ impl Strategy for FillProbe {
 fn engine_with_resting_buy(
     instruments: &[InstrumentRow],
     strategy: Box<dyn Strategy>,
-) -> (HotEngine, Consumer<PersistRecord>, ExecEvent) {
-    let (persistence, rows) = persist_ring_for(4_096, RecordedTables::new(&[TableKind::Fills]));
+) -> (HotEngine, Consumer<AuditRecord>, ExecEvent) {
+    let (persistence, rings) = persist_ring_for(4_096, RecordedTables::new(&[TableKind::Fills]));
+    let rows = rings.audit;
     let (log_sink, _logs) = strategy_log_ring(64);
     let mut engine = engine_without_warmup(instruments, strategy, persistence, log_sink);
     dispatch_all(&mut engine, &reseat_book(0, 99 * ONE, 101 * ONE, 0));
@@ -139,7 +140,7 @@ fn fold_reports(steps: &[i64], copies: &[(usize, usize)]) -> Result<(), TestCase
         }
     }
     let fill_rows = std::iter::from_fn(|| rows.pop().ok())
-        .filter(|row| matches!(row, PersistRecord::Fill(_)))
+        .filter(|row| matches!(row, AuditRecord::Fill(_)))
         .count();
     prop_assert_eq!(
         fills.lock().expect("fills mutex poisoned").clone(),
@@ -194,7 +195,7 @@ fn redelivered_and_reordered_reports_move_money_once() {
 /// the position and cash that a spin reads.
 struct FeeRun {
     engine: HotEngine,
-    rows: Consumer<PersistRecord>,
+    rows: Consumer<AuditRecord>,
     order: ExecEvent,
     at_spin: Arc<Mutex<Option<(Qty, i64)>>>,
     when: i64,
@@ -261,13 +262,38 @@ impl FeeRun {
     fn incidents(&mut self) -> Vec<IncidentRow> {
         incidents(&mut self.rows)
     }
+
+    /// The fill, ledger and incident rows on the tape since the last read, each as its table, its
+    /// trade, its quantity (booked, held or counted) and its money (fee, cash or amount).
+    fn money_rows(&mut self) -> Vec<(&'static str, Option<TradeId>, i64, i64)> {
+        std::iter::from_fn(|| self.rows.pop().ok())
+            .filter_map(|record| match record {
+                AuditRecord::Fill(row) => Some((
+                    "fill",
+                    row.trade_id,
+                    row.booked_qty.mantissa(),
+                    row.commission,
+                )),
+                AuditRecord::Ledger(row) => Some((
+                    "ledger",
+                    row.trade_id,
+                    row.position_base.mantissa(),
+                    row.cash_quote.mantissa(),
+                )),
+                AuditRecord::Incident(row) => {
+                    Some(("incident", row.trade_id, row.qty.mantissa(), row.amount))
+                }
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 /// The incident rows on the tape since the last read. The other rows go.
-fn incidents(rows: &mut Consumer<PersistRecord>) -> Vec<IncidentRow> {
+fn incidents(rows: &mut Consumer<AuditRecord>) -> Vec<IncidentRow> {
     std::iter::from_fn(|| rows.pop().ok())
         .filter_map(|record| match record {
-            PersistRecord::Incident(row) => Some(row),
+            AuditRecord::Incident(row) => Some(row),
             _ => None,
         })
         .collect()
@@ -324,6 +350,15 @@ fn a_lost_trade_leaves_a_gap_that_its_late_report_closes() {
     assert_eq!(run.engine.counters().fee_gaps, 1);
 
     run.fold(r2);
+    assert_eq!(
+        run.money_rows(),
+        [
+            ("fill", Some(TradeId(102)), 0, 3 * FEE),
+            ("ledger", Some(TradeId(102)), ONE, -(100 * ONE) - 10 * FEE),
+        ],
+        "the late R2 moves the cash by its fee alone, so a fill row of no quantity holds the fee \
+         and a ledger row holds the cash it left: with neither, no table explains that money"
+    );
     run.fold(r1);
     assert_eq!(
         run.read(),
@@ -680,7 +715,8 @@ fn orphan_fill_halts_and_keeps_state() {
     .encode(12, 3);
     for (cumulative, is_halted) in [(5 * TENTH, true), (0, false)] {
         let instruments = [instrument_row(0, TrackerSpec::default(), 64)];
-        let (persistence, mut rows) = persist_ring_for(1_024, RecordedTables::default());
+        let (persistence, rings) = persist_ring_for(1_024, RecordedTables::default());
+        let mut rows = rings.audit;
         let (commands_producer, mut commands) = RingBuffer::<ExecLaneItem>::new(256);
         let (ui_event_sink, mut ui_events) = ui_event_ring(1_024);
         let position = Arc::new(Mutex::new(None));

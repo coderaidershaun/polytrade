@@ -158,19 +158,25 @@ pub struct CounterSample {
 }
 
 const _: () = {
-    assert!(size_of::<CounterSample>() == 320 && align_of::<CounterSample>() == 64);
+    assert!(size_of::<CounterSample>() == 384 && align_of::<CounterSample>() == 64);
     assert!(offset_of!(CounterSample, spin_ts_us) == 0);
     assert!(offset_of!(CounterSample, spin_seq) == 8);
     assert!(offset_of!(CounterSample, backlog) == 16);
     assert!(offset_of!(CounterSample, counters) == 96);
-    assert!(offset_of!(CounterSample, idle_parks) == 256);
+    assert!(offset_of!(CounterSample, idle_parks) == 336);
 };
 
 /// The drop and event counts of the fold since the start of the run, carried in each counter
 /// sample.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EngineCounters {
-    pub persist_dropped: u64,
+    pub research_dropped: ResearchDrops,
+    /// The most audit rows the bank held at once since the start of the run.
+    pub audit_banked_peak: u64,
+    /// Audit rows lost because the bank was at capacity. Quoting halted before the first one.
+    pub audit_lost: u64,
+    pub tape_lost: u64,
+    pub tape_gaps: u64,
     pub book_trimmed: u64,
     pub book_remove_missing: u64,
     pub klines_unconfigured: u64,
@@ -191,6 +197,33 @@ pub struct EngineCounters {
     pub unbooked_fees: u64,
     /// Events of this run's own orders that held no slot and no fill: refused, with no record.
     pub orphan_events_without_fill: u64,
+}
+
+/// Research rows that a full research ring dropped, by table.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct ResearchDrops {
+    pub features: u64,
+    pub trades: u64,
+    pub book_events: u64,
+    pub klines: u64,
+    pub link_frames: u64,
+    pub mids: u64,
+    pub no_quotes: u64,
+}
+
+impl ResearchDrops {
+    pub fn total(&self) -> u64 {
+        let ResearchDrops {
+            features,
+            trades,
+            book_events,
+            klines,
+            link_frames,
+            mids,
+            no_quotes,
+        } = *self;
+        features + trades + book_events + klines + link_frames + mids + no_quotes
+    }
 }
 
 /// Records that each lane of the strategy bank dropped because it was full. A full output lane

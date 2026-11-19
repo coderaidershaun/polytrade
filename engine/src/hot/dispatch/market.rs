@@ -5,13 +5,15 @@ use crate::hot::book::{BookState, SnapshotOutcome};
 use crate::hot::exec::RotationFacts;
 use crate::hot::strategy::WindowInfo;
 use crate::log::hot_warn;
-use crate::msg::ids::{InstrumentId, Price};
+use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::{
     BookChunk, BookChunkKind, BookReset, KlineEvent, MarketRotation, TradeEvent,
 };
+use crate::msg::persist::LedgerKind;
 use crate::msg::time::LocalTs;
 
 use super::HotEngine;
+use super::records::exact_mid;
 
 impl HotEngine {
     pub(super) fn on_trade(&mut self, event: &TradeEvent, received_ts_us: LocalTs) {
@@ -105,13 +107,9 @@ impl HotEngine {
     /// Mid = bid + half-spread (no overflow). Crossed books accepted (warned anomaly already).
     #[inline]
     fn mark_ledger(&mut self, instrument: InstrumentId) {
-        let book = &self.state.books[usize::from(instrument.0)];
-        let Some((bid, ask)) = book.best_bid().zip(book.best_ask()) else {
+        let Some(mid) = exact_mid(&self.state.books[usize::from(instrument.0)]) else {
             return;
         };
-        let mid = Price::from_mantissa(
-            bid.price.mantissa() + (ask.price.mantissa() - bid.price.mantissa()) / 2,
-        );
         self.state.ledger.set_mark(instrument, mid);
     }
 
@@ -163,7 +161,15 @@ impl HotEngine {
         self.state
             .exec
             .on_market_rotation(&self.state.ledger, facts, &mut self.state.actions);
+        if self.state.ledger.row(rotation.instrument).holds_money() {
+            let instrument = rotation.instrument;
+            self.state
+                .bank_ledger_row(LedgerKind::Rotation, instrument, received_ts_us);
+        }
         self.state.ledger.reset_instrument(rotation.instrument);
+        if let Some(states) = self.strategy.market_states() {
+            states.reset(rotation.instrument);
+        }
         if let Some(ewma) = self.state.derived.ewma[index].as_mut() {
             ewma.reset();
         }

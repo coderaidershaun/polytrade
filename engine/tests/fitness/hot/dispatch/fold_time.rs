@@ -14,7 +14,7 @@ use engine::msg::exec::{
 };
 use engine::msg::ids::{InstrumentId, Price, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick, TradeEvent};
-use engine::msg::persist::{FeatureId, OrderTransition, PersistRecord};
+use engine::msg::persist::{AuditRecord, FeatureId, OrderTransition, ResearchRecord};
 use engine::msg::time::{LocalTs, Stamper};
 use engine::runtime::config::{RecordedTables, TableKind};
 use proptest::prelude::{any, prop};
@@ -22,8 +22,8 @@ use proptest::test_runner::{Config, TestCaseError, TestRunner};
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::engine_support::{
-    ONE, detached_setup, exec_event, instrument_row, persist_ring_for, snapshot_pair, spin,
-    tracker_spec_all, trade, ts,
+    ONE, PersistRings, detached_setup, exec_event, instrument_row, persist_ring_for, snapshot_pair,
+    spin, tracker_spec_all, trade, ts,
 };
 use crate::exec_support::{QUOTE_QTY, drain_commands, exec_settings, make_ready};
 
@@ -91,7 +91,7 @@ struct Folds {
     driver: HotDriver,
     market: Producer<InboundMessage>,
     timer: Producer<InboundMessage>,
-    persist: Consumer<PersistRecord>,
+    persist: PersistRings,
     commands: Consumer<ExecLaneItem>,
     seen: Arc<Mutex<Vec<Seen>>>,
 }
@@ -166,9 +166,11 @@ impl Folds {
 
     /// The stamp of each feature row on the tape.
     fn row_stamps(&mut self) -> Vec<LocalTs> {
-        std::iter::from_fn(|| self.persist.pop().ok())
+        self.persist
+            .research()
+            .into_iter()
             .filter_map(|record| match record {
-                PersistRecord::Feature(row) => Some(row.event_ts_us),
+                ResearchRecord::Feature(row) => Some(row.event_ts_us),
                 _ => None,
             })
             .collect()
@@ -263,21 +265,21 @@ enum Row {
     Fill(LocalTs),
 }
 
-/// The order and fill rows that reached the tape while one message folded. The rows that the
-/// execution pass of a spin writes wait in the bank and reach the tape with the next message.
+/// The order and fill rows that reached the tape while one message folded. An audit row passes no
+/// lane, so the rows that the execution pass of a spin writes reach the tape in that spin.
 fn rows_after(
     engine: &mut HotEngine,
-    persist: &mut Consumer<PersistRecord>,
+    persist: &mut Consumer<AuditRecord>,
     message: &InboundMessage,
 ) -> Vec<Row> {
     engine.dispatch(message);
     std::iter::from_fn(|| persist.pop().ok())
         .filter_map(|record| match record {
-            PersistRecord::Order(row) if row.transition == OrderTransition::Placed => {
+            AuditRecord::Order(row) if row.transition == OrderTransition::Placed => {
                 Some(Row::Placed(row.received_ts_us))
             }
-            PersistRecord::Order(row) => Some(Row::Order(row.received_ts_us)),
-            PersistRecord::Fill(row) => Some(Row::Fill(row.received_ts_us)),
+            AuditRecord::Order(row) => Some(Row::Order(row.received_ts_us)),
+            AuditRecord::Fill(row) => Some(Row::Fill(row.received_ts_us)),
             _ => None,
         })
         .collect()
@@ -313,9 +315,9 @@ fn execution_rows_keep_the_stamp_of_their_message() {
         ts(2_000_000),
         MessageBody::Trade(newer),
     ));
-    while persist.pop().is_ok() {}
+    persist.audit();
 
-    let mut rows = rows_after(&mut engine, &mut persist, &spin(1, 1_500_000));
+    let mut rows = rows_after(&mut engine, &mut persist.audit, &spin(1, 1_500_000));
     let client_id = drain_commands(&mut commands)
         .into_iter()
         .find_map(|command| match command {
@@ -347,7 +349,7 @@ fn execution_rows_keep_the_stamp_of_their_message() {
     };
     for (event, when) in [(ack, 1_600_000), (refused, 1_700_000), (fill, 1_800_000)] {
         let message = InboundMessage::new(ts(when), MessageBody::Exec(event));
-        let answered = rows_after(&mut engine, &mut persist, &message);
+        let answered = rows_after(&mut engine, &mut persist.audit, &message);
         for row in &answered {
             let is_kept = match row {
                 Row::Placed(stamp) => *stamp == ts(1_500_000),

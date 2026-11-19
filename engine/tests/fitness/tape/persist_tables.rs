@@ -88,7 +88,8 @@ impl Strategy for EmitsEveryTable {
 fn only_the_tables_the_config_names_receive_rows() {
     for configured in CONFIGURATIONS {
         let instruments = [instrument_row(0, TrackerSpec::default(), 32)];
-        let (persistence, mut consumer) = persist_ring_for(64, RecordedTables::new(configured));
+        let (persistence, rings) = persist_ring_for(64, RecordedTables::new(configured));
+        let mut consumer = rings.research;
         let (log_sink, _logs) = strategy_log_ring(64);
         let mut engine = engine_without_warmup(
             &instruments,
@@ -114,7 +115,7 @@ fn only_the_tables_the_config_names_receive_rows() {
             "a strategy emitting into every table lands rows in exactly the configured ones"
         );
         assert_eq!(
-            engine.dropped_persist_records(),
+            engine.dropped_research_records().total(),
             0,
             "a gated row is discarded, never counted as a full-ring drop"
         );
@@ -139,7 +140,7 @@ fn rows_without_a_persistence_ring_count_as_no_drop() {
         ));
     }
     assert_eq!(
-        engine.dropped_persist_records(),
+        engine.dropped_research_records().total(),
         0,
         "with no ring there is nothing to drop into — the rows never exist"
     );

@@ -32,7 +32,7 @@ use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
 };
 use engine::msg::inbound::{BookChunk, InboundMessage, MessageBody};
-use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::msg::persist::{FeatureId, ResearchRecord};
 use engine::msg::time::{DurationUs, Stamper};
 use engine::msg::ui::{DomQuote, UiEvent};
 use engine::runtime::config::{
@@ -775,8 +775,8 @@ fn feature_id(names: &[&str], wanted: &str) -> FeatureId {
 
 fn drain_features(linked: &mut crate::engine_support::LinkedEngine) -> Vec<(FeatureId, f64)> {
     let mut values = Vec::new();
-    while let Ok(record) = linked.persist.pop() {
-        if let PersistRecord::Feature(row) = record {
+    while let Ok(record) = linked.persist.research.pop() {
+        if let ResearchRecord::Feature(row) = record {
             values.push((row.feature, row.value));
         }
     }

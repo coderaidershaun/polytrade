@@ -8,13 +8,13 @@ use engine::hot::quant::pricing::{GueantParams, Objective};
 use engine::hot::quant::toxicity::{MarkoutSide, vpin};
 use engine::hot::quant::volatility::Returns;
 use engine::hot::strategy::{
-    BookState, DesiredQuote, EngineView, FeatureId, LinkFrame, QuoteLevel, Registration, Strategy,
-    StrategyConfig, StrategyCtx, VolumeBar, resolve_filter,
+    BookState, DesiredQuote, EngineView, FeatureId, FeatureKind, LinkFrame, QuoteLevel,
+    Registration, Strategy, StrategyConfig, StrategyCtx, VolumeBar, resolve_filter,
 };
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Side};
 use engine::msg::inbound::{BookChunk, KlineEvent, SpinTick, TradeEvent};
 use engine::msg::time::{DurationUs, LocalTs};
-use engine::runtime::config::{Instruments, StrategySpec, TableKind};
+use engine::runtime::config::{Instruments, StrategySpec};
 
 #[path = "features.rs"]
 pub(crate) mod features;
@@ -61,7 +61,6 @@ const VPIN_BUCKETS_ST: usize = 5;
 const VPIN_BUCKETS_LT: usize = 60;
 
 pub struct MicroRecorder {
-    has_features_table: bool,
     /// Sampling cadence: scales all derived window lengths + buffer sizes.
     spin_interval: DurationUs,
     features: Option<Features>,
@@ -90,7 +89,6 @@ impl StrategyConfig for MicroRecorder {
 
     fn from_spec(spec: &StrategySpec<MicroRecorderParams>, engine: EngineView) -> Self {
         Self {
-            has_features_table: spec.tables.contains(&TableKind::Features),
             spin_interval: engine.spin_interval,
             features: None,
             filter: spec.instruments.clone(),
@@ -108,6 +106,10 @@ impl Strategy for MicroRecorder {
         FEATURE_NAMES
     }
 
+    fn feature_kinds(&self) -> &'static [FeatureKind] {
+        Features::KINDS
+    }
+
     fn link_fields(&self) -> &'static [&'static str] {
         &link_schema::LINK_FIELDS
     }
@@ -119,9 +121,7 @@ impl Strategy for MicroRecorder {
 
     fn register(&mut self, registration: Registration<'_>) {
         self.poly_features = Some(registration.feature_ids_of(&link_schema::LINK_FIELDS));
-        self.features = self
-            .has_features_table
-            .then(|| Features::from_ids(registration.features));
+        self.features = Some(Features::from_ids(registration.features));
         let instruments = registration.instruments;
         let recorded = resolve_filter(&self.filter, instruments);
         self.link_target = instruments
@@ -165,9 +165,6 @@ impl Strategy for MicroRecorder {
     }
 
     fn on_spin(&mut self, ctx: &mut StrategyCtx<'_>, _tick: &SpinTick) {
-        // SMELL: the recorder quotes only when the `features` table is recorded, because its
-        // features exist only then, so turning a research table off also stops the trading. The run
-        // markers of the engine likewise need the `link_frames` table.
         let Some(features) = self.features else {
             return;
         };

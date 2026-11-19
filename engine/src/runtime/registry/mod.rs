@@ -2,8 +2,10 @@
 //! Its submodules are stages of that one build, so callers never name a stage.
 
 mod assets;
+mod catalog;
 mod grouping;
 mod rows;
+mod terms;
 mod validate;
 
 use crate::msg::ids::{AssetId, InstrumentId, Notional, Price, Qty, QueueId, VenueId};
@@ -14,6 +16,7 @@ use crate::runtime::config::{
 
 pub use assets::AssetDictionary;
 pub use grouping::{ConnectionCategory, ProducerGroup};
+pub use terms::TermsMismatch;
 
 use assets::intern_assets;
 use grouping::group_producers;
@@ -142,6 +145,9 @@ pub struct Registry {
     /// `None` with no `persistence:` block. The tape writer reports a fault of an audit table here,
     /// on a queue of its own, because each input queue has one producer.
     tape_status_queue_id: Option<QueueId>,
+    /// `None` with no `persistence:` block. The audit sink of the hot thread reports a full bank
+    /// here, so the halt is a message of the input.
+    audit_status_queue_id: Option<QueueId>,
     input_queue_count: usize,
 }
 
@@ -169,8 +175,9 @@ impl Registry {
             .map(|_| queue_id_at(timer_queue_id.index() + 1))
             .transpose()?;
         // The queue of each venue that takes orders, in venue order, then the writer status, the
-        // control queue of the link and the status of the tape writer are appended last: queue ids are recorded on messages, and
-        // shifting one would re-attribute an entire recorded tape.
+        // control queue of the link, the status of the tape writer and the audit status are
+        // appended last: queue ids are recorded on messages, and shifting one would re-attribute an
+        // entire recorded tape.
         let mut last_queue_id = link_queue_id.unwrap_or(timer_queue_id);
         let mut exec_queue_ids = Vec::new();
         let mut venue_names = Vec::new();
@@ -202,7 +209,13 @@ impl Registry {
             .as_ref()
             .map(|_| queue_id_at(last_queue_id.index() + 1))
             .transpose()?;
-        let input_queue_count = tape_status_queue_id.unwrap_or(last_queue_id).index() + 1;
+        let last_queue_id = tape_status_queue_id.unwrap_or(last_queue_id);
+        let audit_status_queue_id = config
+            .persistence
+            .as_ref()
+            .map(|_| queue_id_at(last_queue_id.index() + 1))
+            .transpose()?;
+        let input_queue_count = audit_status_queue_id.unwrap_or(last_queue_id).index() + 1;
 
         Ok(Registry {
             instruments,
@@ -220,6 +233,7 @@ impl Registry {
             writer_status_queue_id,
             control_queue_id,
             tape_status_queue_id,
+            audit_status_queue_id,
             input_queue_count,
         })
     }
@@ -342,6 +356,10 @@ impl Registry {
 
     pub fn tape_status_queue_id(&self) -> Option<QueueId> {
         self.tape_status_queue_id
+    }
+
+    pub fn audit_status_queue_id(&self) -> Option<QueueId> {
+        self.audit_status_queue_id
     }
 }
 

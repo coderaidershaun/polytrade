@@ -1,0 +1,69 @@
+[project]
+name = "posttrade"
+version = "0.1.0"
+description = "Judges trading runs from the files that they record"
+requires-python = "==3.12.*"
+dependencies = [
+    "polars>=2.1.0",
+]
+
+[project.scripts]
+posttrade = "posttrade.cli:run"
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9"]
+build-backend = "uv_build"
+
+[tool.mypy]
+strict = true
+warn_unreachable = true
+disallow_any_unimported = true
+enable_error_code = [
+  "ignore-without-code",
+  "redundant-expr",
+  "truthy-bool",
+  "possibly-undefined",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+  "E", "W", "F",      # pycodestyle + pyflakes: E722 bare except
+  "I",                # import order
+  "B",                # bugbear: B006 mutable default argument
+  "BLE",              # blind except Exception
+  "S110", "S112",     # try-except-pass, try-except-continue
+  "SIM",              # SIM115 open() with no with
+  "SLF",              # private member access
+  "ANN",              # absent annotations, ANN401 explicit Any
+  "DTZ",              # naive datetime
+  "TRY",              # exception style
+  "PGH",              # blanket type: ignore and noqa
+  "NPY",              # NPY002 global NumPy generator
+  "PLW0603",          # global statement
+  "RUF",              # RUF012 mutable class default, RUF100 unused noqa
+  "UP",               # modern syntax: X | None
+]
+
+[tool.ruff.lint.isort]
+known-local-folder = ["conftest"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN", "S"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers", "-W", "error"]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.4.0",
+    "mypy>=2.4.1",
+    "nbclient>=0.11.0",
+    "nbformat>=5.11.1",
+    "pytest>=9.2.0",
+    "ruff>=0.17.5",
+]

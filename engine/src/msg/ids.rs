@@ -88,6 +88,16 @@ impl StreamEpoch {
     pub fn next(self) -> Option<Self> {
         self.0.checked_add(1).map(Self)
     }
+
+    /// The epoch as the tape stores it.
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    /// An epoch read back from the tape, which stored [`Self::get`].
+    pub(crate) const fn from_stored(epoch: u64) -> Self {
+        Self(epoch)
+    }
 }
 
 labelled_enum! {

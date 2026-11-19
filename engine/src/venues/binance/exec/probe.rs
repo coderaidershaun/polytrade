@@ -3,12 +3,12 @@
 
 use std::path::Path;
 
-use crate::info;
 use crate::runtime::secrets::{Credentials, EnvFile, SecretError};
 use crate::venues::binance::rest::{
     AccountInfo, BinanceEnv, RestError, SignedRestClient, SignedRestConfig,
 };
 use crate::venues::edge::rest_quiet::SharedRestQuiet;
+use crate::venues::port::VenueReport;
 
 use super::BINANCE_CREDENTIAL_VARIABLES;
 
@@ -42,6 +42,8 @@ pub struct ExecutionPreflight {
     /// Second key copy (WS=param signer, REST=header). One read, no Clone secret.
     pub credentials: Credentials,
     pub probe: AccountInfo,
+    /// The clock offset and the account, for the start to log once the log runs.
+    pub report: VenueReport,
 }
 
 /// Load creds, clock offset, prove key can trade. BEFORE spawning (not for recorders).
@@ -70,15 +72,18 @@ pub async fn preflight_execution(
         .sync_clock()
         .await
         .map_err(|source| ProbeError::Unreachable { source })?;
-    info!(
+    let mut report = VenueReport::default();
+    report.info(format!(
         "binance venue clock offset {}us",
         offset.correction().micros()
-    );
+    ));
     let probe = probe_account(&mut client).await?;
+    write_account(&probe, &mut report);
     Ok(ExecutionPreflight {
         rest: client,
         credentials,
         probe,
+        report,
     })
 }
 
@@ -101,29 +106,29 @@ async fn probe_account(client: &mut SignedRestClient) -> Result<AccountInfo, Pro
         });
     }
 
-    report(&account);
     Ok(account)
 }
 
-/// Fees logged at INFO every run (maker rate is economically decisive, read not inferred).
-fn report(account: &AccountInfo) {
+/// The fees go into the report of every run: the maker rate is economically decisive, so it is read
+/// from the venue, not inferred.
+fn write_account(account: &AccountInfo, report: &mut VenueReport) {
     let rates = &account.commission_rates;
-    info!(
+    report.info(format!(
         "binance account ok: spot, can trade, permissions {:?}",
         account.permissions
-    );
-    info!(
+    ));
+    report.info(format!(
         "binance commission: maker {} ({}), taker {} ({})",
         rates.maker,
         basis_points(&rates.maker),
         rates.taker,
         basis_points(&rates.taker)
-    );
+    ));
     for balance in account.funded_balances() {
-        info!(
+        report.info(format!(
             "binance balance {}: {} free, {} locked",
             balance.asset, balance.free, balance.locked
-        );
+        ));
     }
 }
 

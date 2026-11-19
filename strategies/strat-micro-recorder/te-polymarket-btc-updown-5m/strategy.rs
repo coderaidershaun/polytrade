@@ -7,14 +7,15 @@
 
 use engine::hot::quant::intensity::{PacedIntensity, SideEstimate};
 use engine::hot::strategy::{
-    BookState, DesiredQuote, EngineView, InstrumentRow, QuoteLevel, Registration, Strategy,
-    StrategyConfig, StrategyCtx, TickGrid, TopicId, WindowInfo,
+    BookState, DesiredQuote, EngineView, InstrumentRow, ParamError, ParamValue, QuoteLevel,
+    Registration, Strategy, StrategyConfig, StrategyCtx, StrategyParams, TickGrid, TopicId,
+    WindowInfo,
 };
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{MarketRotation, SpinTick, TradeEvent};
 use engine::msg::time::{DurationUs, LocalTs};
 use engine::runtime::config::StrategySpec;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[path = "../link_schema.rs"]
 pub(crate) mod link_schema;
@@ -31,8 +32,8 @@ const DEFAULT_QUOTE_STOP_LEAD_MS: u32 = 3_500;
 
 /// Operator knobs. Quoting needs `enabled` AND `execution.mode`, so a config that arms execution for
 /// another reason does not start a market maker by omission.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
-#[serde(deny_unknown_fields, default)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
 pub struct PolyUpParams {
     pub enabled: bool,
     /// Order size in outcome shares.
@@ -51,6 +52,26 @@ impl Default for PolyUpParams {
             edge_ticks: DEFAULT_EDGE_TICKS,
             quote_stop_lead_ms: DEFAULT_QUOTE_STOP_LEAD_MS,
         }
+    }
+}
+
+impl StrategyParams for PolyUpParams {
+    fn check(&self) -> Result<(), ParamError> {
+        if !(self.order_shares.is_finite() && self.order_shares > 0.0) {
+            return Err(ParamError::Refused {
+                field: "order_shares",
+                seen: ParamValue::Float(self.order_shares),
+                expected: "a positive number of outcome shares",
+            });
+        }
+        if self.quote_stop_lead_ms == 0 {
+            return Err(ParamError::Refused {
+                field: "quote_stop_lead_ms",
+                seen: ParamValue::Integer(0),
+                expected: "above 0, to leave time to get out before the window closes",
+            });
+        }
+        Ok(())
     }
 }
 
@@ -218,15 +239,6 @@ impl PolyUpPublisher {
 
 impl Maker {
     fn new(params: PolyUpParams) -> Self {
-        assert!(
-            params.order_shares.is_finite() && params.order_shares > 0.0,
-            "order_shares must be a positive number of outcome shares, got {}",
-            params.order_shares
-        );
-        assert!(
-            params.quote_stop_lead_ms > 0,
-            "quote_stop_lead_ms must leave time to get out before the window closes"
-        );
         Self {
             order_qty: Qty::from_mantissa((params.order_shares * FIXED_SCALE as f64).round() as i64),
             edge_ticks: i64::from(params.edge_ticks),

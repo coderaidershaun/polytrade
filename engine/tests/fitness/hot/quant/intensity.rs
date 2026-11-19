@@ -7,7 +7,7 @@ use engine::hot::quant::intensity::{IntensityFit, PacedIntensity, SideEstimate};
 use engine::hot::quant::optimise::NelderMead;
 use engine::hot::quant::pricing::{GueantParams, Objective, SideRates, Ticks};
 use engine::hot::tracker::MicroTracker;
-use engine::msg::ids::{InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{AggregateTradeId, InstrumentId, Price, Qty, RawTradeId, Side, StreamEpoch};
 use engine::msg::inbound::{BookChunk, BookChunkKind, Level, TradeEvent};
 use engine::runtime::config::{IntensitySpec, TrackerSpec};
 
@@ -58,6 +58,10 @@ fn ev(side: Side, price: Price, when: i64) -> TradeEvent {
         side,
         exchange_ts_us: venue_ts(when),
         exchange_sent_ts_us: None,
+        aggregate_id: AggregateTradeId(0),
+        first_trade_id: RawTradeId(0),
+        last_trade_id: RawTradeId(0),
+        stream_epoch: StreamEpoch::default(),
     }
 }
 

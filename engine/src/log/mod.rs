@@ -34,7 +34,6 @@ pub(crate) use lane::{hot_ring, register_external_ring, register_hot_lane, tag_t
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use record::TEXT_CAPACITY;
 pub(crate) use record::set_message_time;
-pub(crate) use render::fieldless_log_value;
 
 #[cfg(target_arch = "wasm32")]
 #[doc(hidden)]

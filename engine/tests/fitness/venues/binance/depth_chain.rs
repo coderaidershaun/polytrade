@@ -6,9 +6,8 @@ use std::ops::Range;
 
 use engine::hot::book::{Book, SnapshotOutcome as BookSnapshotOutcome};
 use engine::msg::ids::{Price, Qty, Side};
-use engine::msg::inbound::{
-    BOOK_CHUNK_LEVELS, BookChunkKind, InboundMessage, Level, MessageBody, VenueMeta,
-};
+use engine::msg::inbound::{BOOK_CHUNK_LEVELS, BookChunkKind, InboundMessage, Level, MessageBody};
+use engine::msg::time::VenueTs;
 use engine::venues::binance::depth::{ChainRule, DepthSequencer, DiffOutcome, SnapshotOutcome};
 use engine::venues::binance::parse::{
     DepthDiff, DepthSnapshot, parse_combined_frame, parse_perp_depth_diff, parse_spot_depth_diff,
@@ -28,7 +27,7 @@ const CAPACITY: usize = 16;
 /// Room for each price the recordings touch, so the book trims nothing.
 const BOOK_CAPACITY: usize = 16_384;
 
-type Emitted = Vec<(InboundMessage, VenueMeta)>;
+type Emitted = Vec<InboundMessage>;
 
 fn recorded(rule: ChainRule) -> Vec<DepthDiff> {
     let fixture = match rule {
@@ -124,8 +123,8 @@ impl Replay<'_> {
         let mut sequencer = DepthSequencer::new(self.rule, INSTRUMENT, CAPACITY);
         for index in self.window.clone() {
             let mut emitted = Emitted::new();
-            let outcome = sequencer.on_diff(self.diffs[index].clone(), &mut |message, meta| {
-                emitted.push((message, meta))
+            let outcome = sequencer.on_diff(self.diffs[index].clone(), &mut |message| {
+                emitted.push(message)
             });
             prop_assert_eq!(outcome, DiffOutcome::Buffered, "diff {}", index);
             prop_assert!(emitted.is_empty(), "a buffered diff emits nothing");
@@ -135,14 +134,12 @@ impl Replay<'_> {
         let snapshot_id = self.snapshot.last_update_id;
         let (bid_levels, ask_levels) = (self.snapshot.bids.len(), self.snapshot.asks.len());
         let mut emitted = Emitted::new();
-        let outcome = sequencer.apply_snapshot(self.snapshot, &mut |message, meta| {
-            emitted.push((message, meta))
-        });
+        let outcome = sequencer.apply_snapshot(self.snapshot, &mut |message| emitted.push(message));
         prop_assert_eq!(outcome, SnapshotOutcome::Applied);
         prop_assert!(sequencer.is_live());
         let snapshot_chunks = emitted
             .iter()
-            .take_while(|(message, _)| chunk_kind(message) == Some(BookChunkKind::Snapshot))
+            .take_while(|message| chunk_kind(message) == Some(BookChunkKind::Snapshot))
             .count();
         let (snapshot, mut deltas) = emitted.split_at(snapshot_chunks);
         check_event(
@@ -150,13 +147,13 @@ impl Replay<'_> {
             BookChunkKind::Snapshot,
             snapshot_id,
             (bid_levels, ask_levels),
-            VenueMeta::None,
+            None,
         )?;
         for &index in &self.kept {
             let diff = &self.diffs[index];
             let chunks = deltas
                 .iter()
-                .take_while(|(message, _)| chunk_update_id(message) == Some(diff.final_update_id))
+                .take_while(|message| chunk_update_id(message) == Some(diff.final_update_id))
                 .count();
             check_delta(&deltas[..chunks], diff)?;
             deltas = &deltas[chunks..];
@@ -170,9 +167,7 @@ impl Replay<'_> {
 
         for diff in &self.diffs[self.window.end..] {
             let mut emitted = Emitted::new();
-            let outcome = sequencer.on_diff(diff.clone(), &mut |message, meta| {
-                emitted.push((message, meta))
-            });
+            let outcome = sequencer.on_diff(diff.clone(), &mut |message| emitted.push(message));
             prop_assert_eq!(
                 outcome,
                 DiffOutcome::Applied,
@@ -206,32 +201,27 @@ fn chunk_update_id(message: &InboundMessage) -> Option<u64> {
     }
 }
 
-fn check_delta(
-    emitted: &[(InboundMessage, VenueMeta)],
-    diff: &DepthDiff,
-) -> Result<(), TestCaseError> {
+fn check_delta(emitted: &[InboundMessage], diff: &DepthDiff) -> Result<(), TestCaseError> {
     check_event(
         emitted,
         BookChunkKind::Delta,
         diff.final_update_id,
         (diff.bids.len(), diff.asks.len()),
-        VenueMeta::DepthDelta {
-            exchange_ts_us: diff.exchange_ts_us,
-        },
+        Some(diff.exchange_ts_us),
     )
 }
 
 /// One event of the sequencer: chunks of one kind and one update id that hold each level of the
-/// event once, with one last-chunk flag on the final chunk, each stamped with `meta`.
+/// event once, with one last-chunk flag on the final chunk, each with the venue stamp `stamp`.
 fn check_event(
-    emitted: &[(InboundMessage, VenueMeta)],
+    emitted: &[InboundMessage],
     kind: BookChunkKind,
     update_id: u64,
     (bid_levels, ask_levels): (usize, usize),
-    meta: VenueMeta,
+    stamp: Option<VenueTs>,
 ) -> Result<(), TestCaseError> {
     let (mut buy, mut sell, mut last_flags) = (0usize, 0usize, 0usize);
-    for (message, stamp) in emitted {
+    for message in emitted {
         let MessageBody::Book(chunk) = &message.body else {
             return Err(TestCaseError::fail(format!(
                 "expected a book chunk, got {message:?}"
@@ -240,7 +230,7 @@ fn check_event(
         prop_assert_eq!(chunk.kind, kind);
         prop_assert_eq!(chunk.update_id, update_id);
         prop_assert!(chunk.active_levels().len() <= BOOK_CHUNK_LEVELS);
-        prop_assert_eq!(*stamp, meta, "update id {}", update_id);
+        prop_assert_eq!(chunk.exchange_ts_us, stamp, "update id {}", update_id);
         match chunk.side {
             Side::Buy => buy += chunk.active_levels().len(),
             Side::Sell => sell += chunk.active_levels().len(),
@@ -271,14 +261,14 @@ fn check_event(
     );
     let is_last = matches!(
         emitted.last(),
-        Some((InboundMessage { body: MessageBody::Book(chunk), .. }, _)) if chunk.is_last_chunk
+        Some(InboundMessage { body: MessageBody::Book(chunk), .. }) if chunk.is_last_chunk
     );
     prop_assert!(is_last, "the last-chunk flag sits on the final chunk");
     Ok(())
 }
 
-fn fold(book: &mut Book, emitted: &[(InboundMessage, VenueMeta)]) -> Result<(), TestCaseError> {
-    for (message, _) in emitted {
+fn fold(book: &mut Book, emitted: &[InboundMessage]) -> Result<(), TestCaseError> {
+    for message in emitted {
         match &message.body {
             MessageBody::Book(chunk) if chunk.kind == BookChunkKind::Snapshot => {
                 let outcome = book.apply_snapshot_chunk(chunk);
@@ -372,10 +362,10 @@ fn the_border_of_each_market_holds() {
     let boundary = 500;
     for (rule, prev, kept_chunks) in [(ChainRule::Spot, None, 0), (ChainRule::Perp, Some(400), 1)] {
         let mut sequencer = DepthSequencer::new(rule, INSTRUMENT, 8);
-        sequencer.on_diff(synthetic_diff(490, boundary, prev), &mut |_, _| {});
+        sequencer.on_diff(synthetic_diff(490, boundary, prev), &mut |_| {});
         let mut emitted = Vec::new();
         assert_eq!(
-            sequencer.apply_snapshot(synthetic_snapshot(boundary), &mut |message, _| {
+            sequencer.apply_snapshot(synthetic_snapshot(boundary), &mut |message| {
                 emitted.push(message)
             }),
             SnapshotOutcome::Applied,
@@ -391,18 +381,17 @@ fn the_border_of_each_market_holds() {
 
 fn the_highest_spot_id_resets() {
     let mut sequencer = DepthSequencer::new(ChainRule::Spot, INSTRUMENT, 8);
-    sequencer.on_diff(synthetic_diff(u64::MAX, u64::MAX, None), &mut |_, _| {});
+    sequencer.on_diff(synthetic_diff(u64::MAX, u64::MAX, None), &mut |_| {});
     assert_eq!(
-        sequencer.apply_snapshot(synthetic_snapshot(u64::MAX - 1), &mut |_, _| {}),
+        sequencer.apply_snapshot(synthetic_snapshot(u64::MAX - 1), &mut |_| {}),
         SnapshotOutcome::Applied,
         "the final representable diff can bridge a snapshot"
     );
     let mut emitted = Vec::new();
     assert_eq!(
-        sequencer.on_diff(
-            synthetic_diff(u64::MAX, u64::MAX, None),
-            &mut |message, _| { emitted.push(message) }
-        ),
+        sequencer.on_diff(synthetic_diff(u64::MAX, u64::MAX, None), &mut |message| {
+            emitted.push(message)
+        }),
         DiffOutcome::Resync,
         "there is no sequence id after u64::MAX"
     );
@@ -433,8 +422,8 @@ fn a_snapshot_past_the_highest_spot_id_is_stale() {
         Case {
             name: "buffered_chain_cannot_wrap_its_successor_to_zero",
             prime: |sequencer| {
-                sequencer.on_diff(synthetic_diff(u64::MAX - 1, u64::MAX, None), &mut |_, _| {});
-                sequencer.on_diff(synthetic_diff(u64::MAX, u64::MAX, None), &mut |_, _| {});
+                sequencer.on_diff(synthetic_diff(u64::MAX - 1, u64::MAX, None), &mut |_| {});
+                sequencer.on_diff(synthetic_diff(u64::MAX, u64::MAX, None), &mut |_| {});
             },
             snapshot_at: u64::MAX - 2,
         },
@@ -443,7 +432,7 @@ fn a_snapshot_past_the_highest_spot_id_is_stale() {
         let mut sequencer = DepthSequencer::new(ChainRule::Spot, INSTRUMENT, 8);
         (case.prime)(&mut sequencer);
         assert_eq!(
-            sequencer.apply_snapshot(synthetic_snapshot(case.snapshot_at), &mut |_, _| {}),
+            sequencer.apply_snapshot(synthetic_snapshot(case.snapshot_at), &mut |_| {}),
             SnapshotOutcome::Stale,
             "{}: a snapshot with no successor id cannot start a live chain",
             case.name
@@ -454,14 +443,14 @@ fn a_snapshot_past_the_highest_spot_id_is_stale() {
 
 fn a_diff_that_comes_again_is_not_applied() {
     let mut sequencer = DepthSequencer::new(ChainRule::Spot, INSTRUMENT, 8);
-    sequencer.on_diff(synthetic_diff(490, 500, None), &mut |_, _| {});
+    sequencer.on_diff(synthetic_diff(490, 500, None), &mut |_| {});
     assert_eq!(
-        sequencer.apply_snapshot(synthetic_snapshot(490), &mut |_, _| {}),
+        sequencer.apply_snapshot(synthetic_snapshot(490), &mut |_| {}),
         SnapshotOutcome::Applied
     );
     assert!(sequencer.is_live());
     let mut emitted = Vec::new();
-    let outcome = sequencer.on_diff(synthetic_diff(495, 500, None), &mut |message, _| {
+    let outcome = sequencer.on_diff(synthetic_diff(495, 500, None), &mut |message| {
         emitted.push(message)
     });
     assert!(
@@ -521,8 +510,7 @@ fn spanned_by(rule: ChainRule, id: u64) -> DepthSnapshot {
 fn feed(sequencer: &mut DepthSequencer, rule: ChainRule, ids: Range<u64>, expected: DiffOutcome) {
     for id in ids {
         let mut emitted = Vec::new();
-        let outcome =
-            sequencer.on_diff(numbered(rule, id), &mut |message, _| emitted.push(message));
+        let outcome = sequencer.on_diff(numbered(rule, id), &mut |message| emitted.push(message));
         assert_eq!(outcome, expected, "{rule:?}: diff {id}");
         assert!(
             emitted.is_empty(),
@@ -559,8 +547,7 @@ fn depth_buffer_overflow_resets_and_keeps_newest_diff() {
         feed(&mut sequencer, rule, 109..110, DiffOutcome::Overflow);
         let mut emitted = Vec::new();
         assert_eq!(
-            sequencer.apply_snapshot(spanned_by(rule, 109), &mut |message, _| emitted
-                .push(message)),
+            sequencer.apply_snapshot(spanned_by(rule, 109), &mut |message| emitted.push(message)),
             SnapshotOutcome::Applied,
             "{rule:?}"
         );
@@ -573,8 +560,7 @@ fn depth_buffer_overflow_resets_and_keeps_newest_diff() {
         let mut sequencer = overflowed_twice(rule);
         let mut emitted = Vec::new();
         assert_eq!(
-            sequencer.apply_snapshot(spanned_by(rule, 117), &mut |message, _| emitted
-                .push(message)),
+            sequencer.apply_snapshot(spanned_by(rule, 117), &mut |message| emitted.push(message)),
             SnapshotOutcome::Applied,
             "{rule:?}"
         );
@@ -598,7 +584,7 @@ fn depth_buffer_overflow_resets_and_keeps_newest_diff() {
 
         let mut sequencer = overflowed_twice(rule);
         assert_eq!(
-            sequencer.apply_snapshot(synthetic_snapshot(100), &mut |_, _| {}),
+            sequencer.apply_snapshot(synthetic_snapshot(100), &mut |_| {}),
             SnapshotOutcome::Stale,
             "{rule:?}: diff 117 does not span a snapshot at 100"
         );
@@ -607,13 +593,13 @@ fn depth_buffer_overflow_resets_and_keeps_newest_diff() {
         let mut sequencer = DepthSequencer::new(rule, INSTRUMENT, 8);
         feed(&mut sequencer, rule, 101..102, DiffOutcome::Buffered);
         assert_eq!(
-            sequencer.apply_snapshot(spanned_by(rule, 101), &mut |_, _| {}),
+            sequencer.apply_snapshot(spanned_by(rule, 101), &mut |_| {}),
             SnapshotOutcome::Applied,
             "{rule:?}"
         );
         let mut emitted = Vec::new();
         assert_eq!(
-            sequencer.on_diff(numbered(rule, 200), &mut |message, _| emitted.push(message)),
+            sequencer.on_diff(numbered(rule, 200), &mut |message| emitted.push(message)),
             DiffOutcome::Resync,
             "{rule:?}: diff 200 breaks the chain"
         );

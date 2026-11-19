@@ -1,0 +1,25 @@
+# One run of tape-sync: it ships each sealed tape file of each closed run to the destination,
+# and deletes the local file only after the checksum of the copy is equal. The timer starts it.
+#
+# Install: ops/tape-sync/README.md. Set the user and the two folders there, never in this file.
+
+[Unit]
+Description=Ship the sealed tape files of closed runs (tape-sync)
+After=local-fs.target remote-fs.target
+
+[Service]
+Type=oneshot
+# The user that runs the engines: it owns the tape and can delete a shipped file.
+User=polytrade
+Group=polytrade
+# TAPE_SYNC_SOURCE = the persistence.dir of the engines. TAPE_SYNC_DESTINATION = the folder
+# that receives the files.
+EnvironmentFile=/etc/default/tape-sync
+ExecStart=/usr/local/bin/tape-sync --source ${TAPE_SYNC_SOURCE} --destination ${TAPE_SYNC_DESTINATION}
+# Exit 1: a file or a run was refused, and a person reads the journal. Exit 2: the command or
+# the source is wrong. Both mark the unit failed.
+# The identity lock of each engine is a file in the temporary folder of the host. A private
+# temporary folder hides each lock, and then an open run reads as cut. So keep this line.
+PrivateTmp=no
+Nice=10
+IOSchedulingClass=idle

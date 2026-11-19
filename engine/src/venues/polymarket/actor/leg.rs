@@ -84,6 +84,7 @@ impl Leg {
                     now,
                     MessageBody::BookReset(BookReset {
                         instrument: self.instrument,
+                        exchange_ts_us: book.exchange_ts_us,
                     }),
                 ));
                 self.normaliser.emit_snapshot(book, emit);

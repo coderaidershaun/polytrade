@@ -12,6 +12,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use crate::hot::spawn::SimTapGate;
 use crate::msg::ui::channel::UiLifecycle;
 use crate::runtime::shutdown::{FatalReason, FatalSignal, TaskHandle, panic_text};
+use crate::tape::PersistHandle;
 use crate::venues::exec::{EdgeHandle, SweepFailure};
 use crate::{error, info, warn};
 
@@ -35,6 +36,7 @@ impl Engine {
             timer,
             link,
             persistence,
+            run,
             exposure,
             exec,
             exec_tap_gate,
@@ -58,6 +60,7 @@ impl Engine {
 
         let watchdog = DrainWatchdog::arm(drain_deadline, forced_exit);
 
+        let stopped = persistence.as_ref().map(PersistHandle::stopped_tables);
         let (sweep_result, exposure_result, persist_result) = runtime.block_on(async {
             let sweep = stop_edge_producers(exec, exec_tap_gate, timer, adapters, link).await;
             drain.request();
@@ -65,6 +68,9 @@ impl Engine {
             // Position is drained before research data: closing Parquet takes time, and
             // running out of it still leaves a recoverable position.
             let exposure = exposure.drain().await;
+            // The last interval of the metrics thread closes here, so its rows reach the tape
+            // before the writer seals.
+            metrics.stop();
             let persist = match persistence {
                 Some(handle) => handle.drain().await,
                 None => Ok(()),
@@ -73,7 +79,6 @@ impl Engine {
         });
         // Each edge and the link actor that ran on the pinned senders' thread has stopped above.
         drop(senders);
-        metrics.stop();
         #[cfg(feature = "otlp")]
         if let Some(exporter) = otlp {
             info!("{}", exporter.stop());
@@ -101,6 +106,9 @@ impl Engine {
             deadline: watchdog.deadline(),
         });
 
+        if let Some(run) = run {
+            run.close(&exit, stopped.as_ref());
+        }
         info!(
             "drain complete ({})",
             if exit.code() == 0 { "graceful" } else { "fatal" }

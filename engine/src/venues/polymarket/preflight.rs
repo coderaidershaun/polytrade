@@ -1,11 +1,11 @@
 //! The start check of Polymarket scales: the current and next windows must quote on a tick the
 //! engine accepts, and their grid and limits go onto the registry. A failure refuses the start.
 
-use crate::info;
 use crate::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty};
 use crate::msg::time::EngineClock;
 use crate::runtime::config::{MAX_QUOTE_LEVELS, PolySeries, VenueMarket};
 use crate::runtime::registry::{PolyLimits, Registry};
+use crate::venues::port::VenueReport;
 
 use super::rest::{GammaError, GammaMarket, PolyRest};
 
@@ -64,7 +64,10 @@ pub enum ScaleError {
     clippy::disallowed_methods,
     reason = "a start preflight reads the wall clock once, before any message exists"
 )]
-pub(crate) async fn preflight_poly(registry: &Registry) -> Result<Option<GammaMarket>, ScaleError> {
+pub(crate) async fn preflight_poly(
+    registry: &Registry,
+    report: &mut VenueReport,
+) -> Result<Option<GammaMarket>, ScaleError> {
     let Some(series) = poly_series(registry) else {
         return Ok(None);
     };
@@ -76,12 +79,12 @@ pub(crate) async fn preflight_poly(registry: &Registry) -> Result<Option<GammaMa
         .map_err(|error| classify_poly_resolve(series, error))?;
     check_poly_market(&current)?;
     check_poly_market(&next)?;
-    info!(
+    report.info(format!(
         "polymarket preflight ok — {} current tick {} next tick {} (current grid stamped on all slots)",
         series.as_str(),
         current.tick_size.to_f64(),
         next.tick_size.to_f64()
-    );
+    ));
     Ok(Some(current))
 }
 

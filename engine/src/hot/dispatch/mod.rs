@@ -6,6 +6,7 @@ mod digest;
 mod exposure;
 mod gate;
 mod market;
+mod records;
 mod seal;
 mod setup;
 mod telemetry;
@@ -23,12 +24,14 @@ use crate::hot::exec::{
     SpinInput,
 };
 use crate::hot::ledger::PositionLedger;
-use crate::hot::sink::{ExposureSink, LinkSink, PersistSink, StrategyLogSink};
+use crate::hot::sink::{ExposureSink, LinkSink, ResearchSink, StrategyLogSink};
 use crate::hot::strategy::{Actions, ActionsSetup, DrainSinks, Strategy, StrategyCtx, WindowInfo};
 use crate::log::hot_error;
 use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
-use crate::msg::inbound::{FileWriter, InboundMessage, MessageBody, SpinTick, WriterFailure};
+use crate::msg::inbound::{
+    AuditBankFull, FileWriter, InboundMessage, MessageBody, SpinTick, WriterFailure,
+};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{FoldTime, LocalTs};
 use crate::msg::ui::{DomQuote, UI_QUOTE_LEVELS};
@@ -63,24 +66,19 @@ struct HotState {
     /// Outside the execution engine, because a callback writes it while it reads the engine.
     desired: DesiredBook,
     actions: Actions,
-    /// None if no persistence configured.
-    sink: Option<PersistSink>,
+    /// The research ring. None if no persistence configured; the audit sink lives in `actions`.
+    sink: Option<ResearchSink>,
     /// None if no persistence configured.
     seal_borders: Option<SealBorders>,
+    /// `None` until the run names the interval of its ledger rows.
+    ledger_borders: Option<SealBorders>,
+    /// Whether the first message has written the boot rows of the ledger.
+    is_booted: bool,
     /// Bound `StrategyCtx::link_send` refuses a topic past.
     declared_link_topics: usize,
 }
 
 impl HotState {
-    fn persist_dropped(&self) -> u64 {
-        self.sink.as_ref().map_or(0, PersistSink::dropped)
-    }
-
-    /// The count of tries, at the one spin where the seal is first past its cap.
-    fn retry_pending_seal(&mut self) -> Option<u32> {
-        self.sink.as_mut()?.retry_pending_seal()
-    }
-
     fn ctx(&mut self, event_ts: LocalTs) -> StrategyCtx<'_> {
         StrategyCtx {
             books: &self.books,
@@ -128,17 +126,19 @@ impl HotEngine {
         } = setup;
         let (books, trackers, ewma) = per_instrument_state(instruments);
         let declarations = Declarations::resolve(strategy.as_mut(), instruments);
-        let (persist_sink, seal_borders, tables) = match persistence {
+        let (research_sink, audit_sink, seal_borders, tables) = match persistence {
             Some(PersistWiring {
-                sink,
+                audit,
+                research,
                 tables,
                 seal_interval_spins,
             }) => (
-                Some(sink),
+                Some(research),
+                Some(audit),
                 Some(SealBorders::every(seal_interval_spins)),
                 tables,
             ),
-            None => (None, None, RecordedTables::default()),
+            None => (None, None, None, RecordedTables::default()),
         };
         let (link_sink, run_report) = match link {
             Some(LinkWiring { sink, acknowledged }) => (Some(sink), Some(acknowledged)),
@@ -163,9 +163,12 @@ impl HotEngine {
                 actions: Actions::new(ActionsSetup {
                     tables,
                     link_schema_hash: declarations.link_schema_hash,
+                    audit: audit_sink,
                 }),
-                sink: persist_sink,
+                sink: research_sink,
                 seal_borders,
+                ledger_borders: None,
+                is_booted: false,
                 declared_link_topics: declarations.link_topics,
             },
             strategy,
@@ -189,6 +192,7 @@ impl HotEngine {
         let received_ts_us = message.header.received_ts_us;
         self.state.fold_time = self.state.fold_time.advanced_to(received_ts_us);
         crate::log::set_message_time(received_ts_us);
+        self.state.write_boot_rows(received_ts_us);
         self.state
             .gates
             .observe(&message.body, self.state.fold_time);
@@ -212,6 +216,7 @@ impl HotEngine {
             MessageBody::Exec(event) => self.on_exec(event, received_ts_us),
             MessageBody::Account(chunk) => self.on_account(chunk),
             MessageBody::WriterFailed(failure) => self.halt_on_writer_failure(failure),
+            MessageBody::AuditBankFull(full) => self.halt_on_full_audit_bank(full),
         }
         if moves_position(message) {
             self.state.publish_exposure(received_ts_us);
@@ -228,9 +233,11 @@ impl HotEngine {
         self.sample_trackers();
         self.retry_latched_writes();
         self.state.seal_at_border(tick.seq);
+        self.state.write_spin_rows(tick.seq, received_ts_us);
         self.spin_strategy(tick, received_ts_us);
         self.drain_actions();
         self.run_execution_pass(tick, received_ts_us);
+        self.state.write_no_quote_rows(tick.seq, received_ts_us);
         self.emit_refusals();
         self.emit_execution_state(tick, received_ts_us);
         self.emit_positions(received_ts_us);
@@ -254,7 +261,7 @@ impl HotEngine {
             return;
         }
         self.state.actions.drain(DrainSinks {
-            persist: self.state.sink.as_mut(),
+            research: self.state.sink.as_mut(),
             log_sink: &mut self.strategy_log_sink,
             event_sink: &mut self.ui.event_sink,
             event_seq: &mut self.ui.event_seq,
@@ -350,6 +357,18 @@ impl HotEngine {
         }
         let at = self.state.fold_time.as_local();
         self.state.exec.halt(HaltReason::WriterFailed, at);
+    }
+
+    /// The message sits at one point of the input, so a re-fold of the tape halts at it too.
+    #[cold]
+    fn halt_on_full_audit_bank(&mut self, full: &AuditBankFull) {
+        hot_error!(
+            "the audit bank holds {} of {} rows behind a stalled tape writer, so quoting halts before an order or fill row is lost",
+            full.banked,
+            full.capacity
+        );
+        let at = self.state.fold_time.as_local();
+        self.state.exec.halt(HaltReason::AuditBankFull, at);
     }
 
     fn spin_strategy(&mut self, tick: &SpinTick, received_ts_us: LocalTs) {

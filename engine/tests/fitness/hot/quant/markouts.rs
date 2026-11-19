@@ -4,7 +4,9 @@
 use engine::hot::quant::toxicity::{
     ForwardHorizon, MarkoutFill, MarkoutSide, MarkoutSpec, MarkoutTracker, ReverseHorizon,
 };
-use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
+use engine::msg::ids::{
+    AggregateTradeId, FIXED_SCALE, InstrumentId, Price, Qty, RawTradeId, Side, StreamEpoch,
+};
 use engine::msg::inbound::TradeEvent;
 use engine::msg::time::DurationUs;
 
@@ -39,6 +41,10 @@ fn print(side: Side, units: f64, when: i64) -> TradeEvent {
         side,
         exchange_ts_us: venue_ts(when - 7),
         exchange_sent_ts_us: None,
+        aggregate_id: AggregateTradeId(0),
+        first_trade_id: RawTradeId(0),
+        last_trade_id: RawTradeId(0),
+        stream_epoch: StreamEpoch::default(),
     }
 }
 

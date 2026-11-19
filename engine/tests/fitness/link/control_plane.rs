@@ -12,7 +12,7 @@ use engine::hot::strategy::{Registration, Strategy as EngineStrategy, StrategyCt
 use engine::link::{AssertionVerdict, ControlPlane};
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, RunControl, SpinTick, TradeEvent};
-use engine::msg::persist::{FeatureId, LinkRowKind, PersistRecord};
+use engine::msg::persist::{FeatureId, LinkRowKind, ResearchRecord};
 use engine::msg::run_state::{ControllerEpoch, RunAssertion, RunState};
 use engine::msg::time::{DurationUs, LocalTs};
 use engine::runtime::config::{ControllerLoss, RecordedTables, TableKind};
@@ -150,21 +150,21 @@ enum Step {
     },
 }
 
-fn link_kinds(records: &[PersistRecord]) -> Vec<LinkRowKind> {
+fn link_kinds(records: &[ResearchRecord]) -> Vec<LinkRowKind> {
     records
         .iter()
         .filter_map(|record| match record {
-            PersistRecord::LinkFrame(row) => Some(row.kind),
+            ResearchRecord::LinkFrame(row) => Some(row.kind),
             _ => None,
         })
         .collect()
 }
 
-fn link_markers(records: &[PersistRecord]) -> Vec<RunAssertion> {
+fn link_markers(records: &[ResearchRecord]) -> Vec<RunAssertion> {
     records
         .iter()
         .filter_map(|record| match record {
-            PersistRecord::LinkFrame(row) => Some(RunAssertion {
+            ResearchRecord::LinkFrame(row) => Some(RunAssertion {
                 state: match row.kind {
                     LinkRowKind::RunIdle => RunState::Idle,
                     _ => RunState::Running,
@@ -176,10 +176,10 @@ fn link_markers(records: &[PersistRecord]) -> Vec<RunAssertion> {
         .collect()
 }
 
-fn seal_count(records: &[PersistRecord]) -> usize {
+fn seal_count(records: &[ResearchRecord]) -> usize {
     records
         .iter()
-        .filter(|record| matches!(record, PersistRecord::SealAll))
+        .filter(|record| matches!(record, ResearchRecord::SealAll))
         .count()
 }
 

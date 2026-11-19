@@ -10,16 +10,14 @@ use super::lanes::SimLane;
 use crate::hot::spawn::{QueueProducer, SimTapGate};
 use crate::info;
 use crate::msg::ids::QueueId;
-use crate::msg::inbound::{
-    BookChunkKind, InboundMessage, MarketTapItem, MessageBody, TappedMessage, VenueMeta,
-};
+use crate::msg::inbound::{InboundMessage, MarketTapItem};
 use crate::msg::time::LocalTs;
 use crate::runtime::config::{BinanceMarket, VenueMarket};
 use crate::runtime::registry::{ConnectionCategory, Registry};
 
 pub struct MarketTapLane {
     consumer: Consumer<MarketTapItem>,
-    drained: Vec<TappedMessage>,
+    drained: Vec<InboundMessage>,
     watermark_ts_us: LocalTs,
     lane: SimLane,
 }
@@ -36,23 +34,13 @@ impl MarketTapLane {
 
     /// The batch never escapes: leaving it with the caller is how the reusable buffer gets lost and
     /// every later drain allocates a fresh one.
-    pub(super) fn drain(&mut self, visit: impl FnOnce(&[TappedMessage])) {
+    pub(super) fn drain(&mut self, visit: impl FnOnce(&[InboundMessage])) {
         self.drained.clear();
         while let Ok(item) = self.consumer.pop() {
             let proof = match item {
                 MarketTapItem::Watermark { received_ts_us } => received_ts_us,
-                MarketTapItem::Event(tapped) => {
-                    let TappedMessage {
-                        message,
-                        venue_meta,
-                    } = tapped;
-                    assert!(
-                        has_required_evidence(&message, venue_meta),
-                        "{} lane event {message:?} arrived with venue metadata {venue_meta:?} — \
-                         its continuity evidence was lost",
-                        self.lane
-                    );
-                    self.drained.push(tapped);
+                MarketTapItem::Event(message) => {
+                    self.drained.push(message);
                     message.header.received_ts_us
                 }
             };
@@ -74,18 +62,6 @@ impl MarketTapLane {
 
     pub fn is_producer_gone(&self) -> bool {
         self.consumer.is_abandoned()
-    }
-}
-
-fn has_required_evidence(message: &InboundMessage, venue_meta: VenueMeta) -> bool {
-    match &message.body {
-        MessageBody::Trade(_) => matches!(venue_meta, VenueMeta::Trade { .. }),
-        MessageBody::BookReset(_) => matches!(venue_meta, VenueMeta::DepthReset { .. }),
-        MessageBody::Book(chunk) => match chunk.kind {
-            BookChunkKind::Delta => matches!(venue_meta, VenueMeta::DepthDelta { .. }),
-            BookChunkKind::Snapshot => venue_meta == VenueMeta::None,
-        },
-        _ => venue_meta == VenueMeta::None,
     }
 }
 

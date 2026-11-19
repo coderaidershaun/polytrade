@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use crate::msg::ids::InstrumentId;
-use crate::msg::inbound::TappedMessage;
+use crate::msg::inbound::InboundMessage;
 use crate::venues::binance::parse::ParseContext;
 use crate::venues::binance::rest::RestRequest;
 
@@ -15,11 +15,10 @@ impl Actor {
         clippy::disallowed_methods,
         reason = "an edge actor stamps received and queued time on each message and paces its own I/O"
     )]
-    pub(super) fn flush_tapped(&mut self, out: Vec<TappedMessage>) {
-        for tapped in out {
-            let mut message = tapped.message;
+    pub(super) fn flush_tapped(&mut self, out: Vec<InboundMessage>) {
+        for mut message in out {
             message.header.queued_ts_us = self.clock.now();
-            self.producer.push_tapped(message, tapped.venue_meta);
+            self.producer.push_tapped(message);
         }
     }
 

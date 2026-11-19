@@ -181,7 +181,8 @@ impl RotationObserver {
             | MessageBody::RunControl(_)
             | MessageBody::Exec(_)
             | MessageBody::Account(_)
-            | MessageBody::WriterFailed(_) => {}
+            | MessageBody::WriterFailed(_)
+            | MessageBody::AuditBankFull(_) => {}
         }
     }
 

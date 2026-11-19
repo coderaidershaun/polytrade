@@ -1,23 +1,6 @@
 //! Parquet table kinds; bitmask gates hot-path emissions.
 
-use serde::Deserialize;
-
-use crate::msg::labelled_enum::labelled_enum;
-
-labelled_enum! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
-    #[serde(rename_all = "snake_case")]
-    pub enum TableKind {
-        Trades = "trades",
-        BookEvents = "book_events",
-        Klines = "klines",
-        Features = "features",
-        LinkFrames = "link_frames",
-        Orders = "orders",
-        Fills = "fills",
-    }
-    pub fn as_str;
-}
+pub use crate::msg::kinds::TableKind;
 
 impl TableKind {
     #[inline]

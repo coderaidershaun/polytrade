@@ -8,7 +8,7 @@ use engine::hot::spawn::{ControlQueueProducer, LinkQueueProducer, touched_input_
 use engine::link::{AssertionVerdict, LinkFrame, LinkHash, LinkOrigin, LinkPayload, TopicId};
 use engine::msg::ids::QueueId;
 use engine::msg::inbound::{InboundMessage, MessageBody};
-use engine::msg::persist::{LinkRowKind, PersistRecord};
+use engine::msg::persist::{LinkRowKind, ResearchRecord};
 use engine::msg::run_state::RunState;
 use engine::msg::time::DurationUs;
 use engine::runtime::config::{ControllerLoss, RecordedTables, TableKind};
@@ -39,11 +39,11 @@ fn payload(seq: u64, when: i64) -> InboundMessage {
     InboundMessage::new(ts(when), MessageBody::Link(frame))
 }
 
-fn link_kinds(records: &[PersistRecord]) -> Vec<LinkRowKind> {
+fn link_kinds(records: &[ResearchRecord]) -> Vec<LinkRowKind> {
     records
         .iter()
         .filter_map(|record| match record {
-            PersistRecord::LinkFrame(row) => Some(row.kind),
+            ResearchRecord::LinkFrame(row) => Some(row.kind),
             _ => None,
         })
         .collect()
@@ -126,7 +126,7 @@ fn payload_flood_never_delays_a_marker_past_its_next_pop() {
     assert!(
         records
             .iter()
-            .any(|record| matches!(record, PersistRecord::SealAll)),
+            .any(|record| matches!(record, ResearchRecord::SealAll)),
         "the park sealed the tape"
     );
 }

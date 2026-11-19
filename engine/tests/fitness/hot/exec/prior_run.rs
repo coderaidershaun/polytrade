@@ -14,7 +14,7 @@ use engine::msg::exec::{
 };
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side, TradeId};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
-use engine::msg::persist::{IncidentKind, IncidentRow, PersistRecord};
+use engine::msg::persist::{AuditRecord, IncidentKind, IncidentRow};
 use engine::msg::time::Stamper;
 use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
@@ -76,7 +76,7 @@ impl Strategy for LedgerProbe {
 
 struct Fixture {
     engine: HotEngine,
-    records: Consumer<PersistRecord>,
+    records: Consumer<AuditRecord>,
     commands: Consumer<ExecLaneItem>,
     ui_events: Consumer<UiEvent>,
     latest: Readings,
@@ -91,10 +91,11 @@ fn fixture() -> Fixture {
 fn fixture_of(lane_capacity: usize, restored: &[InstrumentExposure]) -> Fixture {
     let instruments: [InstrumentRow; 1] = [instrument_row(0, TrackerSpec::default(), 64)];
     let latest: Readings = Arc::new(Mutex::new(None));
-    let (persistence, records) = persist_ring_for(
+    let (persistence, rings) = persist_ring_for(
         1_024,
         RecordedTables::new(&[TableKind::Orders, TableKind::Fills]),
     );
+    let records = rings.audit;
     let (commands_producer, commands) = RingBuffer::<ExecLaneItem>::new(lane_capacity);
     let (ui_event_sink, ui_events) = ui_event_ring(4_096);
     let strategy = Box::new(LedgerProbe {
@@ -204,10 +205,10 @@ fn halt_reason(ui_events: &mut Consumer<UiEvent>) -> Option<HaltReason> {
     }
 }
 
-fn incidents(records: &mut Consumer<PersistRecord>) -> Vec<IncidentRow> {
+fn incidents(records: &mut Consumer<AuditRecord>) -> Vec<IncidentRow> {
     std::iter::from_fn(|| records.pop().ok())
         .filter_map(|record| match record {
-            PersistRecord::Incident(row) => Some(row),
+            AuditRecord::Incident(row) => Some(row),
             _ => None,
         })
         .collect()
@@ -430,10 +431,11 @@ fn fold_earlier_orders(
     let instruments: Vec<InstrumentRow> = (0..2)
         .map(|id| instrument_row(id, TrackerSpec::default(), 64))
         .collect();
-    let (persistence, mut records) = persist_ring_for(
+    let (persistence, rings) = persist_ring_for(
         4_096,
         RecordedTables::new(&[TableKind::Orders, TableKind::Fills]),
     );
+    let mut records = rings.audit;
     let (commands_producer, mut commands) = RingBuffer::<ExecLaneItem>::new(1_024);
     let probe = TwoInstrumentProbe::default();
     let latest = Arc::clone(&probe.latest);
@@ -744,14 +746,12 @@ fn with_fee(report: InboundMessage, trade: i64, fee: i64) -> InboundMessage {
 }
 
 /// The incident records and the booked quantity of each fill row that the engine banked so far.
-fn incidents_and_booked_fills(
-    records: &mut Consumer<PersistRecord>,
-) -> (Vec<IncidentRow>, Vec<Qty>) {
+fn incidents_and_booked_fills(records: &mut Consumer<AuditRecord>) -> (Vec<IncidentRow>, Vec<Qty>) {
     let mut banked = (Vec::new(), Vec::new());
     while let Ok(record) = records.pop() {
         match record {
-            PersistRecord::Incident(row) => banked.0.push(row),
-            PersistRecord::Fill(row) => banked.1.push(row.booked_qty),
+            AuditRecord::Incident(row) => banked.0.push(row),
+            AuditRecord::Fill(row) => banked.1.push(row.booked_qty),
             _ => {}
         }
     }

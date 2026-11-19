@@ -18,6 +18,7 @@ pub use actor::{
     LinkCountsHandle, PeerFeed, RefusedAssertions,
 };
 
+pub use crate::msg::link::LINK_MAX_FIELDS;
 pub use control::{
     CatalogFeature, CatalogInstrument, LINK_MAX_TOPICS, Lifecycle, RunPhase, Subscribe, TopicSet,
     TopicSetError,
@@ -28,8 +29,7 @@ pub use envelope::{
     LinkIdentity, TopicId, WireName,
 };
 pub use frame::{
-    LINK_LAYOUT, LINK_MAX_FIELDS, LinkBody, LinkDatagram, LinkFrame, LinkOrigin, LinkPayload,
-    OutboundLink,
+    LINK_LAYOUT, LinkBody, LinkDatagram, LinkFrame, LinkOrigin, LinkPayload, OutboundLink,
 };
 pub use senders::{LINK_MAX_SENDERS, SenderCount, SenderCounts};
 pub use subscribers::{

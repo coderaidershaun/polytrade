@@ -5,38 +5,15 @@ use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::hot::ledger::{PositionLedger, narrow_quote, wide};
 use crate::log::hot_warn;
 use crate::msg::ids::{AssetId, InstrumentId, Notional, Price, Qty, Side};
-use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::time::LocalTs;
+
+pub use crate::msg::order::{HaltReason, ReadinessGap};
 
 use super::capacity::ExecCapacity;
 use super::engine::ExecEngine;
 use super::reconcile::RejectReason;
 use super::spin::SpinInput;
 use super::view::{OrderReject, RejectOrigin};
-
-labelled_enum! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub enum HaltReason {
-        RejectStreak = "reject streak",
-        RealisedLoss = "realised loss",
-        FatalReject = "fatal reject",
-        SlotLeak = "slot leak",
-        FilterViolation = "filter violation",
-        DuplicateResting = "duplicate resting order",
-        CommandBankOverflow = "command bank overflow",
-        SealNotAccepted = "persistence seal not accepted",
-        OrphanFill = "fill on an order with no slot",
-        PriorRunOverflow = "prior-run order table full",
-        StatusProbesSpent = "order status probes spent",
-        StreamSilent = "order stream silent",
-        WriterFailed = "file writer failed",
-        PriorRunFillUnbooked = "prior-run fill not booked",
-        UnprovenOrderResting = "an order the engine cannot prove its own rests on its market",
-    }
-    /// Operator words for the halt banner: a halted engine's reason is read under pressure, and the
-    /// table sits beside the variants so a new reason cannot ship as a bare Rust identifier.
-    pub fn label;
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ExecHalt {
@@ -247,20 +224,6 @@ impl Readiness {
     }
 }
 
-labelled_enum! {
-    /// The fact an unready engine is still waiting for.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub enum ReadinessGap {
-        /// Stream not subscribed or reset invalidated it.
-        Stream = "account stream",
-        /// No balance snapshot consumed.
-        Balances = "balances",
-        /// Open-order snapshot not landed.
-        OpenOrders = "open orders",
-    }
-    pub fn label;
-}
-
 const SIDES: usize = 2;
 
 /// Why a side is not quoting, reported when the answer CHANGES rather than every spin. A refusal
@@ -314,6 +277,11 @@ impl RefusalLatch {
             event_ts_us: at,
         });
         refusal_warning(instrument, side, reason);
+    }
+
+    /// The reason that the latest pass recorded for one side, `None` once it quotes.
+    pub(super) fn current(&self, instrument: InstrumentId, side: Side) -> Option<RejectReason> {
+        self.current.get(usize::from(instrument.0))?[side.index()]
     }
 
     pub fn drain_into(&mut self, sink: &mut impl FnMut(&OrderReject)) {

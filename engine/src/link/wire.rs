@@ -6,7 +6,9 @@ use crate::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty};
 use crate::msg::persist::FeatureId;
 use crate::msg::time::{DurationUs, LocalTs, VenueTs};
 
-use super::envelope::{ByteReader, ByteWriter, LinkDecodeError, LinkHash, TopicId, fnv_fold};
+pub(super) use crate::msg::codec::LayoutDigest;
+
+use super::envelope::{ByteReader, ByteWriter, LinkDecodeError, LinkHash, TopicId};
 
 /// Reading is fallible for every type so one declaration form serves plain fields and tagged ones
 /// alike; the plain cases return `Ok` unconditionally.
@@ -21,42 +23,6 @@ pub(super) trait WireField: Sized {
     const DIGEST: u64;
     fn write(&self, writer: &mut ByteWriter<'_>);
     fn read(reader: &mut ByteReader<'_>) -> Result<Self, LinkDecodeError>;
-}
-
-/// Folds the parts of a layout into one digest at compile time.
-#[derive(Clone, Copy)]
-pub(super) struct LayoutDigest(u64);
-
-impl LayoutDigest {
-    pub(super) const START: Self = Self(super::envelope::FNV_OFFSET_BASIS);
-
-    /// ASCII whitespace is skipped, so the spacing that `stringify!` gives cannot move the digest. A
-    /// zero byte ends each text, so two names cannot run into one.
-    pub(super) const fn text(self, text: &str) -> Self {
-        let bytes = text.as_bytes();
-        let mut hash = self.0;
-        let mut index = 0;
-        while index < bytes.len() {
-            if !bytes[index].is_ascii_whitespace() {
-                hash = fnv_fold(hash, &[bytes[index]]);
-            }
-            index += 1;
-        }
-        Self(fnv_fold(hash, &[0]))
-    }
-
-    pub(super) const fn number(self, value: u64) -> Self {
-        Self(fnv_fold(self.0, &value.to_le_bytes()))
-    }
-
-    /// One part of the layout: its width and its own digest.
-    pub(super) const fn part(self, width: usize, digest: u64) -> Self {
-        self.number(width as u64).number(digest)
-    }
-
-    pub(super) const fn finish(self) -> u64 {
-        self.0
-    }
 }
 
 /// The width of a field that a macro names without its type. The function is never called: the

@@ -48,9 +48,14 @@ macro_rules! labelled_enum {
                     $( $ty::$variant => $label ),+
                 }
             }
+
+            /// Each label, in declaration order: the set that the tape contract exports.
+            // A set that no contract exports is never read, and that is no fault of its enum.
+            #[allow(dead_code)]
+            $fn_vis const LABELS: &'static [&'static str] = &[$( $label ),+];
         }
 
-        $crate::log::fieldless_log_value!($ty { $( $variant ),+ }, label = $accessor);
+        $crate::msg::log_value::fieldless_log_value!($ty { $( $variant ),+ }, label = $accessor);
     };
 }
 

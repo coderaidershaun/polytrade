@@ -9,9 +9,9 @@ use crate::msg::failure::FailureClass;
 use crate::msg::inbound::{FileWriter, InboundMessage, MessageBody, WriterFailure};
 use crate::msg::time::EngineClock;
 
-use super::PersistError;
 use super::schema::TableRow;
 use super::table::TableWriter;
+use super::{PersistError, TapeTable};
 
 /// Where the tape writer reports a fault of an audit table: its own input queue of the hot thread.
 pub struct TapeStatus {
@@ -37,17 +37,29 @@ impl TapeStatus {
     }
 }
 
-/// The count of tables that the writer stopped after a fault, readable from outside its thread.
+/// The tables that the writer stopped after a fault, readable from outside its thread: one bit
+/// for each table, by its place in the contract.
 #[derive(Debug, Clone, Default)]
 pub struct StoppedTables(Arc<AtomicU32>);
 
+const _: () = assert!(TapeTable::ALL.len() <= u32::BITS as usize);
+
 impl StoppedTables {
     pub fn count(&self) -> u32 {
-        self.0.load(Ordering::Acquire)
+        self.0.load(Ordering::Acquire).count_ones()
     }
 
-    pub(super) fn add_one(&self) {
-        self.0.fetch_add(1, Ordering::AcqRel);
+    /// In the order of the contract, as `run.json` names them.
+    pub fn tables(&self) -> Vec<TapeTable> {
+        let bits = self.0.load(Ordering::Acquire);
+        TapeTable::ALL
+            .into_iter()
+            .filter(|table| bits & (1 << *table as u32) != 0)
+            .collect()
+    }
+
+    pub(super) fn add(&self, table: TapeTable) {
+        self.0.fetch_or(1 << table as u32, Ordering::AcqRel);
     }
 }
 
@@ -112,11 +124,13 @@ impl Faults {
     }
 
     fn table_stopped(&mut self, error: PersistError) {
-        self.stopped.add_one();
+        if let Some(table) = error.table() {
+            self.stopped.add(table);
+        }
         match error.failure_class() {
             FailureClass::Reject => {
                 crate::error!(
-                    "persistence stopped a research table, and each later row of it is lost: {error}"
+                    "persistence stopped a table that trading does not need, and each later row of it is lost: {error}"
                 );
             }
             // A tape error has no retry and no reset, so those two take the higher class.

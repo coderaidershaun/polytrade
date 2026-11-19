@@ -4,6 +4,13 @@
 mod actions;
 mod ctx;
 mod declare;
+mod draws;
+mod params;
+pub mod prelude;
+mod ready;
+mod signals;
+mod units;
+mod view;
 
 use std::collections::HashSet;
 
@@ -33,16 +40,30 @@ pub use crate::hot::book::BookState;
 pub use crate::hot::dispatch::StrategyGate;
 pub use crate::hot::quant::toxicity::VolumeBar;
 pub use crate::link::{LinkFrame, TopicId};
+pub use crate::msg::kinds::FeatureKind;
 pub use crate::msg::persist::FeatureId;
 pub use crate::runtime::registry::InstrumentRow;
 
 pub use actions::ClientOrderId;
 pub(crate) use actions::{Actions, ActionsSetup, DrainSinks};
+pub use draws::{Draws, Seed};
+pub use params::{ParamError, ParamUnit, ParamValue, StrategyParams, check_bounds, param_literal};
+pub use ready::{NotReady, Ready};
+pub use signals::{SignalList, SignalSet, SignalValue};
+pub use units::{Bps, Fair, Notional, Price, Qty, Ticks};
+pub use view::{Market, MarketStates, PerMarket, Position, Touch};
 
 /// Callbacks default no-ops; override only events of interest. State pre-applied; read via ctx, don't re-derive.
 pub trait Strategy: Send {
     /// Feature names in index order; engine assigns dense FeatureIds in same order.
     fn features(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// The kind of each feature of [`Self::features`], in the same order. The `features!` macro
+    /// gives both lists from one declaration; a strategy that lists its names by hand and no kinds
+    /// leaves this empty, and the schema lock of each shipped strategy holds its kinds.
+    fn feature_kinds(&self) -> &'static [FeatureKind] {
         &[]
     }
 
@@ -59,6 +80,13 @@ pub trait Strategy: Send {
 
     /// Resolved declarations (once at construction, before callbacks).
     fn register(&mut self, _registration: Registration<'_>) {}
+
+    /// The state this strategy keeps for each market, which the engine sizes before
+    /// [`Self::register`] and resets before the next callback on each resume and rotation. Return
+    /// the field that holds it: `Some(&mut self.markets)`.
+    fn market_states(&mut self) -> Option<&mut dyn MarketStates> {
+        None
+    }
 
     /// Peer frame (gated at edge, recorded). **STATE only, never deltas/events**: ring drops not kill-engine.
     fn on_link(&mut self, _ctx: &mut StrategyCtx<'_>, _frame: &LinkFrame) {}
@@ -126,10 +154,9 @@ pub struct EngineView {
 
 /// Config-to-strategy construction (off Strategy trait for dyn-compat).
 pub trait StrategyConfig: Sized {
-    // SMELL: unknown fields in a params block pass unless each strategy author remembers
-    // `deny_unknown_fields`, and params that fail to parse panic instead of refusing the start.
-    /// strategy.params mapping (define w/ deny_unknown_fields; derive Default). Clone+Debug required.
-    type Params: serde::de::DeserializeOwned + Default + Clone + std::fmt::Debug;
+    /// The `strategy.params` mapping. The config refuses a key it does not read and a value out of
+    /// its bounds, so `from_spec` sees only params that passed [`StrategyParams::check`].
+    type Params: StrategyParams;
 
     fn from_spec(spec: &StrategySpec<Self::Params>, engine: EngineView) -> Self;
 }

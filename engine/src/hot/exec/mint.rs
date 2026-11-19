@@ -1,13 +1,14 @@
 //! Turns a decision into a command: claim the slot, reserve the money, bank the command, and record
 //! the change, so that each path leaves the slot, the reservation and the audit rows agreeing.
 
+use crate::hot::book::LevelState;
 use crate::hot::strategy::Actions;
 use crate::msg::exec::ExecCommand;
-use crate::msg::ids::{ClientOrderId, InstrumentId, Side};
-use crate::msg::persist::{OrderLifecycle, OrderTransition};
+use crate::msg::ids::{ClientOrderId, InstrumentId, Qty, Side};
+use crate::msg::persist::OrderTransition;
 use crate::msg::time::LocalTs;
 
-use super::audit::bank_engine_driven;
+use super::audit::{bank_engine_driven, bank_placed};
 use super::budget::QuotePermit;
 use super::desired::QuoteLevel;
 use super::engine::{ExecEngine, FoldStamps};
@@ -35,7 +36,7 @@ impl ExecEngine {
                     Err(reason) => return Some(reason),
                 };
                 let kind = PlacementKind::Quote { level, permit };
-                return self.place(instrument, side, intent, kind, stamps, input.bank);
+                return self.place(instrument, side, intent, kind, input);
             }
             ReconcileOutcome::Cancel => {
                 if let Some(index) = self.resting_index(instrument, side, level) {
@@ -119,9 +120,9 @@ impl ExecEngine {
         side: Side,
         intent: PlaceIntent,
         kind: PlacementKind,
-        stamps: FoldStamps,
-        bank: &mut Actions,
+        input: &mut SpinInput<'_>,
     ) -> Option<RejectReason> {
+        let (stamps, bank) = (input.stamps(), &mut *input.bank);
         let at = stamps.fold;
         let level = match kind {
             PlacementKind::Quote { level, .. } => level,
@@ -156,11 +157,16 @@ impl ExecEngine {
             }
             PlacementKind::Flatten => self.venue_mut(instrument).budget.spend_flatten(),
         }
-        bank_engine_driven(
-            bank,
+        let depth_ahead =
+            match input.books[usize::from(instrument.0)].level_state(side, intent.price) {
+                LevelState::Present(qty) => Some(qty),
+                LevelState::Absent => Some(Qty::from_mantissa(0)),
+                LevelState::BeyondDepth => None,
+            };
+        bank_placed(
+            input.bank,
             self.orders.slot(index),
-            OrderTransition::Placed,
-            OrderLifecycle::Free,
+            depth_ahead,
             stamps.received,
         );
         None

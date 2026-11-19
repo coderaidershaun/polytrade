@@ -7,8 +7,7 @@ use engine::msg::ids::{
     StreamEpoch,
 };
 use engine::msg::inbound::{
-    BookChunk, BookChunkKind, InboundMessage, Level, MessageBody, TappedMessage, TradeEvent,
-    VenueMeta,
+    BookChunk, BookChunkKind, InboundMessage, Level, MessageBody, TradeEvent,
 };
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::runtime::config::FeeBps;
@@ -103,17 +102,11 @@ impl LiveVenue {
                 },
             )
             .expect("each recorded line is an aggregate trade");
+            let recorded = recorded.trade;
             live.aggregate_id = recorded.aggregate_id.0;
             live.trade_id = recorded.last_trade_id.0;
-            live.venue_us = live.venue_us.max(recorded.trade.exchange_ts_us.micros());
-            let fills = own_fill(&live.trade(
-                recorded.trade,
-                (
-                    recorded.aggregate_id,
-                    recorded.first_trade_id,
-                    recorded.last_trade_id,
-                ),
-            ));
+            live.venue_us = live.venue_us.max(recorded.exchange_ts_us.micros());
+            let fills = own_fill(&live.trade(recorded));
             assert_eq!(
                 fills, 0,
                 "no recorded print reaches an order before one rests"
@@ -164,27 +157,21 @@ impl LiveVenue {
             side,
             exchange_ts_us: VenueTs::from_micros(venue_us),
             exchange_sent_ts_us: None,
+            aggregate_id: AggregateTradeId(aggregate_id),
+            first_trade_id: RawTradeId(trade_id),
+            last_trade_id: RawTradeId(trade_id),
+            stream_epoch: StreamEpoch::default(),
         };
-        let ids = (
-            AggregateTradeId(aggregate_id),
-            RawTradeId(trade_id),
-            RawTradeId(trade_id),
-        );
-        self.trade(event, ids)
+        self.trade(event)
     }
 
-    fn trade(
-        &mut self,
-        event: TradeEvent,
-        (aggregate_id, first_trade_id, last_trade_id): (AggregateTradeId, RawTradeId, RawTradeId),
-    ) -> Vec<SimEmission> {
-        let meta = VenueMeta::Trade {
-            aggregate_id,
-            first_trade_id,
-            last_trade_id,
+    /// The trade as the actor of the stream sends it: with the epoch of this connection.
+    fn trade(&mut self, event: TradeEvent) -> Vec<SimEmission> {
+        let event = TradeEvent {
             stream_epoch: self.epoch,
+            ..event
         };
-        self.deliver(&[(MessageBody::Trade(event), meta)])
+        self.deliver(&[MessageBody::Trade(event)])
     }
 
     /// A delta that sets one level, committed at a venue stamp after the last one.
@@ -207,34 +194,22 @@ impl LiveVenue {
             self.update_id,
             Some(venue),
         );
-        let meta = VenueMeta::DepthDelta {
-            exchange_ts_us: venue,
-        };
-        let tapped: Vec<_> = chunks
-            .into_iter()
-            .map(|chunk| (MessageBody::Book(chunk), meta))
-            .collect();
+        let tapped: Vec<_> = chunks.into_iter().map(MessageBody::Book).collect();
         self.deliver(&tapped)
     }
 
     fn snapshot(&mut self, bids: &[Level], asks: &[Level]) -> Vec<SimEmission> {
         let chunks = chunks(BookChunkKind::Snapshot, bids, asks, self.update_id, None);
-        let tapped: Vec<_> = chunks
-            .into_iter()
-            .map(|chunk| (MessageBody::Book(chunk), VenueMeta::None))
-            .collect();
+        let tapped: Vec<_> = chunks.into_iter().map(MessageBody::Book).collect();
         self.deliver(&tapped)
     }
 
-    fn deliver(&mut self, messages: &[(MessageBody, VenueMeta)]) -> Vec<SimEmission> {
+    fn deliver(&mut self, messages: &[MessageBody]) -> Vec<SimEmission> {
         self.received_us += 1_000;
         let received = LocalTs::from_micros(self.received_us);
-        let tapped: Vec<TappedMessage> = messages
+        let tapped: Vec<InboundMessage> = messages
             .iter()
-            .map(|&(body, venue_meta)| TappedMessage {
-                message: InboundMessage::new(received, body),
-                venue_meta,
-            })
+            .map(|&body| InboundMessage::new(received, body))
             .collect();
         self.venue
             .on_market_batch(&tapped, NO_LATENCY)
@@ -488,6 +463,25 @@ fn trade_id_gap_suspends_matching_until_snapshot() {
         own_fill(&after),
         print_qty.mantissa(),
         "once matching is restored, a print through the bid fills it again"
+    );
+}
+
+/// A delta that carries no venue stamp cannot be ordered among the prints, so the venue suspends
+/// matching as for a broken transaction instead of folding it at a guessed time.
+#[test]
+fn a_delta_with_no_venue_stamp_suspends_matching() {
+    let mut live = LiveVenue::start();
+    live.update_id += 1;
+    let level = [Level {
+        price: BEST_BID,
+        qty: OWN_QTY,
+    }];
+    let unstamped = chunks(BookChunkKind::Delta, &level, &[], live.update_id, None);
+    let tapped: Vec<_> = unstamped.into_iter().map(MessageBody::Book).collect();
+    assert_eq!(
+        market_resets(&live.deliver(&tapped)),
+        vec![ResetReason::DeltaTransactionBroken],
+        "a delta with no venue stamp resets the market once"
     );
 }
 

@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use engine::msg::ids::InstrumentId;
-use engine::msg::persist::{FeatureId, FeatureRow, PersistRecord};
+use engine::msg::persist::{FeatureId, FeatureRow, ResearchRecord};
 use engine::msg::time::LocalTs;
 use engine::runtime::ExecutionLease;
 use engine::runtime::artifacts::RunArtifacts;
@@ -32,7 +32,7 @@ fn identity() -> RunIdentity {
 struct Marks {
     log_stem: String,
     exposure_file: String,
-    /// The folder of the tape, below its root.
+    /// The folder of the run on the tape, below its root, with its boot stamp masked.
     tape_dir: String,
     footer_mode: String,
     nonce_file: String,
@@ -78,27 +78,28 @@ fn tape_of(mode: Option<ExecutionMode>) -> (String, String) {
         tables: RecordedTables::new(&[TableKind::Features]),
         retention: Duration::from_hours(6),
     };
-    let record = PersistRecord::Feature(FeatureRow {
+    let record = ResearchRecord::Feature(FeatureRow {
         instrument: InstrumentId(0),
         feature: FeatureId(0),
         value: 1.0,
         event_ts_us: LocalTs::from_micros(BASE_TS_US),
     });
-    drain_blocking(spawn_writer_with(config, mode, vec![record])).expect("the drain is clean");
+    drain_blocking(spawn_writer_with(config, mode, vec![record.into()]))
+        .expect("the drain is clean");
     let files = parquet_files(root.path());
     let [file] = files.as_slice() else {
         panic!("one file of one feature row: {files:?}");
     };
-    let table_dir = file
+    let run_dir = file
         .parent()
         .and_then(Path::parent)
         .and_then(Path::parent)
-        .expect("a file sits below its table and its date folder");
-    let tape_dir = table_dir
-        .strip_prefix(root.path())
-        .expect("the tape is below its root")
-        .to_string_lossy()
-        .into_owned();
+        .expect("a file sits below its run, its table and its date folder");
+    let kind_dir = run_dir
+        .parent()
+        .and_then(|kind_dir| kind_dir.strip_prefix(root.path()).ok())
+        .expect("the run is below the folder of its kind, below the root");
+    let tape_dir = format!("{}/<boot>", kind_dir.to_string_lossy());
     let footer = read_parquet_file(file).footer;
     let footer_mode = footer
         .iter()
@@ -175,7 +176,7 @@ fn each_artifact_of_a_simulated_run_carries_the_mark_and_a_live_run_carries_none
         Marks {
             log_stem: "recorder-te-recorder".into(),
             exposure_file: "recorder-te-recorder.json".into(),
-            tape_dir: "recorder/te-recorder".into(),
+            tape_dir: "recorder/te-recorder/live/<boot>".into(),
             footer_mode: "live".into(),
             nonce_file: ".exec-production-c0ae9aaf-fc164f8250803ea8.nonce".into(),
             badge: "LIVE",
@@ -191,7 +192,7 @@ fn each_artifact_of_a_simulated_run_carries_the_mark_and_a_live_run_carries_none
         Marks {
             log_stem: "recorder-te-recorder-sim".into(),
             exposure_file: "recorder-te-recorder-sim.json".into(),
-            tape_dir: "recorder/te-recorder/sim".into(),
+            tape_dir: "recorder/te-recorder/sim/<boot>".into(),
             footer_mode: "sim".into(),
             nonce_file: ".exec-sim-c0ae9aaf.nonce".into(),
             badge: "SIM",

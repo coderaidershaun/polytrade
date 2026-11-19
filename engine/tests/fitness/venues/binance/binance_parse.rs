@@ -210,12 +210,13 @@ mod recorded_agg_trade {
         let mut saw_sell = false;
         for line in fixture.lines().filter(|line| !line.trim().is_empty()) {
             let frame = parse_combined_frame(line).expect("combined envelope");
-            let parsed = parse_agg_trade(&frame.data, context).expect("recorded aggTrade parses");
+            let event = parse_agg_trade(&frame.data, context)
+                .expect("recorded aggTrade parses")
+                .trade;
             assert!(
-                parsed.first_trade_id <= parsed.last_trade_id,
+                event.first_trade_id <= event.last_trade_id,
                 "recorded aggregate covers a forward raw range"
             );
-            let event = parsed.trade;
             assert!(event.price.mantissa() > 0, "price mantissa positive");
             assert!(event.qty.mantissa() > 0, "qty mantissa positive");
             assert!(

@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use crate::msg::ids::InstrumentId;
+use crate::msg::ids::{AggregateTradeId, InstrumentId, RawTradeId, StreamEpoch};
 use crate::msg::inbound::{BookReset, InboundMessage, MarketRotation, MessageBody, TradeEvent};
 use crate::msg::persist::RotationRow;
 use crate::msg::time::{LocalTs, VenueTs};
@@ -229,7 +229,10 @@ impl PolyDriverCore {
                 let instrument = leg.instrument();
                 emit(DriverEffect::Emit(InboundMessage::new(
                     now,
-                    MessageBody::BookReset(BookReset { instrument }),
+                    MessageBody::BookReset(BookReset {
+                        instrument,
+                        exchange_ts_us: now.as_venue_calendar(),
+                    }),
                 )));
             }
         }
@@ -348,7 +351,10 @@ impl PolyDriverCore {
             SlotAction::BookReset(instrument) => {
                 emit(DriverEffect::Emit(InboundMessage::new(
                     now,
-                    MessageBody::BookReset(BookReset { instrument }),
+                    MessageBody::BookReset(BookReset {
+                        instrument,
+                        exchange_ts_us: now.as_venue_calendar(),
+                    }),
                 )));
             }
             SlotAction::Unsubscribe(tokens) => {
@@ -436,6 +442,10 @@ impl PolyDriverCore {
                 side: trade.side,
                 exchange_ts_us: trade.exchange_ts_us,
                 exchange_sent_ts_us: None,
+                aggregate_id: AggregateTradeId(0),
+                first_trade_id: RawTradeId(0),
+                last_trade_id: RawTradeId(0),
+                stream_epoch: StreamEpoch::default(),
             }),
         )));
     }

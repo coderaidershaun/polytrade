@@ -2,9 +2,10 @@
 //!
 //! Identity is two-part, so the "folder == bin == id" invariant needs enforcing rather than
 //! hoping: every trading-engine `[[bin]]` must be named `<strategy-id>-<te-id>` and live at
-//! `strategies/<strategy-id>/<te-id>/main.rs`. That makes bin-name uniqueness structural, keeps the
-//! `--config`-less default path resolvable from the bin name alone, and stops a trading engine from
-//! silently writing into a sibling's data tree.
+//! `strategies/<strategy-id>/<te-id>/main.rs`, and its replay `<strategy-id>-<te-id>-replay` at
+//! `replay.rs` beside it, behind feature `replay`, the only path that links `lab`. That makes
+//! bin-name uniqueness structural, keeps the `--config`-less default path resolvable from the bin
+//! name alone, and stops a trading engine from silently writing into a sibling's data tree.
 //!
 //! And no native build may link the GUI. `eframe` is declared only under the wasm32 target table,
 //! so a trading engine never builds a renderer, winit or X11. Moving it into the plain
@@ -59,16 +60,26 @@ fn every_trading_engine_bin_is_named_and_placed_by_its_two_part_identity() {
 
     for engine in &engines {
         let (strategy_id, te_id) = split_identity(&engine.path);
+        let (suffix, file, features) = match engine.path.ends_with("/replay.rs") {
+            true => ("-replay", "replay.rs", r#"["replay"]"#),
+            false => ("", "main.rs", ""),
+        };
         assert_eq!(
             engine.name,
-            format!("{strategy_id}-{te_id}"),
-            "bin name must be <strategy-id>-<te-id> for path {}",
+            format!("{strategy_id}-{te_id}{suffix}"),
+            "bin name must be <strategy-id>-<te-id>, or that and -replay for its replay.rs, for \
+             path {}",
             engine.path
         );
         assert_eq!(
             engine.path,
-            format!("strategies/{strategy_id}/{te_id}/main.rs"),
-            "bin {} must live at strategies/<strategy-id>/<te-id>/main.rs",
+            format!("strategies/{strategy_id}/{te_id}/{file}"),
+            "bin {} must live at strategies/<strategy-id>/<te-id>/{file}",
+            engine.name
+        );
+        assert_eq!(
+            engine.required_features, features,
+            "bin {} must declare required-features = {features:?}: only a replay links lab",
             engine.name
         );
         assert!(
@@ -80,6 +91,20 @@ fn every_trading_engine_bin_is_named_and_placed_by_its_two_part_identity() {
         assert!(
             te_id.starts_with("te-"),
             "te id {te_id} must be prefixed te- so a strategy folder listing reads as its engines"
+        );
+    }
+    for (strategy_id, manifest) in strategy_manifests() {
+        if !manifest.contains("required-features = [\"replay\"]") {
+            continue;
+        }
+        assert!(
+            dependency_line(&manifest, "lab").contains("optional = true"),
+            "lab must stay optional in strategies/{strategy_id}, or each trading engine links it"
+        );
+        assert_eq!(
+            feature_definition(&manifest, "replay"),
+            r#"["dep:lab"]"#,
+            "feature replay of strategies/{strategy_id} must map to lab alone"
         );
     }
 }

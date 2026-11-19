@@ -7,7 +7,7 @@ use crate::link::{LinkFrame, TopicId};
 use crate::log::hot_info;
 use crate::msg::ids::InstrumentId;
 use crate::msg::inbound::{MessageBody, RunControl};
-use crate::msg::persist::{LinkFrameRow, LinkRowKind, PersistRecord};
+use crate::msg::persist::{LinkFrameRow, LinkRowKind, ResearchRecord};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, FoldTime, LocalTs};
@@ -153,7 +153,8 @@ fn opened_market(body: &MessageBody) -> Option<InstrumentId> {
         | MessageBody::RunControl(_)
         | MessageBody::Exec(_)
         | MessageBody::Account(_)
-        | MessageBody::WriterFailed(_) => None,
+        | MessageBody::WriterFailed(_)
+        | MessageBody::AuditBankFull(_) => None,
     }
 }
 
@@ -185,7 +186,7 @@ impl HotEngine {
         for (slot, value) in values.iter().enumerate() {
             self.state
                 .actions
-                .push_persist(PersistRecord::LinkFrame(LinkFrameRow {
+                .push_research(ResearchRecord::LinkFrame(LinkFrameRow {
                     kind: LinkRowKind::Payload,
                     sender_te_hash: origin.sender_te_hash.0,
                     topic: origin.topic.0,
@@ -219,7 +220,7 @@ impl HotEngine {
         };
         self.state
             .actions
-            .push_persist(PersistRecord::LinkFrame(LinkFrameRow {
+            .push_research(ResearchRecord::LinkFrame(LinkFrameRow {
                 kind,
                 sender_te_hash: 0,
                 topic: TopicId::SUBSCRIBE.0,
@@ -254,9 +255,7 @@ impl HotEngine {
         );
         self.drain_actions();
         self.state.gates.park();
-        if let Some(sink) = self.state.sink.as_mut() {
-            sink.request_seal();
-        }
+        self.state.request_seal();
     }
 
     /// A value derived before the gap describes a market that the run did not see, so the fold
@@ -269,6 +268,9 @@ impl HotEngine {
             self.run.epoch.get()
         );
         self.state.derived.reset_for_gap();
+        if let Some(states) = self.strategy.market_states() {
+            states.reset_all();
+        }
         let mut ctx = self.state.ctx(received_ts);
         self.strategy.on_resume(&mut ctx);
         self.state.gates.rearm();

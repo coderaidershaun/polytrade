@@ -9,7 +9,7 @@ use crate::msg::ids::{Notional, Qty};
 use crate::msg::persist::{IncidentKind, IncidentRow};
 use crate::msg::time::LocalTs;
 
-use super::audit::bank_incident;
+use super::audit::{bank_fill, bank_fill_ledger_row, bank_incident};
 use super::engine::{ExecEngine, FoldStamps};
 use super::gates::HaltReason;
 use super::order::{Applied, FeeFold, OrderSlot};
@@ -79,6 +79,9 @@ impl ExecEngine {
     /// The quantity of a report moves by the venue's running totals, and its fee by the fee memory
     /// of its order. A step that the report's own trade does not explain, and a fee that the ledger
     /// cannot book, each leave a record.
+    /// The ledger row of a booked fill follows its fee, so it holds the cash that the fee left. A
+    /// late report books only its fee: a fill row of no quantity holds that fee, and a ledger row
+    /// the cash it left, so each move of the cash has its row.
     pub(super) fn book_report(
         &mut self,
         slot: &OrderSlot,
@@ -88,6 +91,26 @@ impl ExecEngine {
         bank: &mut Actions,
         received: LocalTs,
     ) {
+        let is_fee_booked = self.book_fill_and_fee(slot, event, applied, ledger, bank, received);
+        if applied.fill.is_empty() {
+            if !is_fee_booked {
+                return;
+            }
+            bank_fill(bank, slot, event, applied.fill, received);
+        }
+        bank_fill_ledger_row(bank, ledger, slot, event, received);
+    }
+
+    /// Answers whether the ledger booked the report's fee.
+    fn book_fill_and_fee(
+        &mut self,
+        slot: &OrderSlot,
+        event: &ExecEvent,
+        applied: Applied,
+        ledger: &mut PositionLedger,
+        bank: &mut Actions,
+        received: LocalTs,
+    ) -> bool {
         if !applied.fill.is_empty() {
             ledger.apply_fill(&LedgerFill {
                 instrument: slot.instrument(),
@@ -110,17 +133,17 @@ impl ExecEngine {
             );
         }
         if event.commission == 0 {
-            return;
+            return false;
         }
         let is_booked = match applied.fee.fold {
             FeeFold::Book => ledger
                 .book_fee(slot.instrument(), self.fee_of(slot, event))
                 .is_ok(),
-            FeeFold::AlreadyBooked => return,
+            FeeFold::AlreadyBooked => return false,
             FeeFold::Unbookable => false,
         };
         if is_booked {
-            return;
+            return true;
         }
         unbooked_fee_warning(slot, event);
         let row = report_incident(IncidentKind::UnbookedFee, slot, event, received);
@@ -130,6 +153,7 @@ impl ExecEngine {
             ..row
         };
         bank_incident(bank, &mut self.incidents, unbooked);
+        false
     }
 
     fn fee_of(&self, slot: &OrderSlot, event: &ExecEvent) -> FillFee {

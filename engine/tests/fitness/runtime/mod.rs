@@ -9,6 +9,7 @@ mod exposure;
 mod exposure_state;
 mod identity;
 mod latency_probe;
+mod manifest;
 pub(crate) mod metrics;
 #[cfg(feature = "otlp")]
 mod otlp;

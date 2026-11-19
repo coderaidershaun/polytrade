@@ -97,6 +97,7 @@ wire_enum! {
     (HaltReason::WriterFailed) = 13,
     (HaltReason::PriorRunFillUnbooked) = 14,
     (HaltReason::UnprovenOrderResting) = 15,
+    (HaltReason::AuditBankFull) = 16,
 }
 
 const REJECT_LOCAL: u8 = 1;

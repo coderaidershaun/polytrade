@@ -9,14 +9,12 @@
 use serde::Deserialize;
 
 use crate::msg::ids::fixed_mantissa;
-use crate::msg::labelled_enum::labelled_enum;
+pub use crate::msg::kinds::ExecutionMode;
+pub use crate::msg::order::MAX_QUOTE_LEVELS;
 
 use super::simulated::{CheckedSimBlock, SimConfig, SimProofs};
 use super::{ConfigError, MAX_OPERATIONAL_DURATION_MS};
 
-/// The declarative ladder is fixed-size so quote publication, reconciliation and the UI all share
-/// one compile-time bound. Configuration chooses how much of it is active, never its allocation.
-pub const MAX_QUOTE_LEVELS: usize = 8;
 // The refusal text spells this bound out, so changing it must fail here until the text changes too.
 const _: () = assert!(MAX_QUOTE_LEVELS == 8);
 /// Named because bring-up compares against it: a venue whose markets never close reads a margin
@@ -25,52 +23,6 @@ pub(crate) const DEFAULT_QUOTE_STOP_MARGIN_MS: u64 = 3_000;
 const MAX_FLATTEN_SLACK_TICKS: u32 = 100;
 const MAX_EXECUTION_DURATION_SECS: u64 = MAX_OPERATIONAL_DURATION_MS / 1_000;
 const MAX_EXECUTION_DURATION_US: u128 = MAX_OPERATIONAL_DURATION_MS as u128 * 1_000;
-
-labelled_enum! {
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
-    #[cfg_attr(
-        feature = "mcp",
-        derive(rmcp::schemars::JsonSchema),
-        schemars(crate = "rmcp::schemars")
-    )]
-    #[serde(rename_all = "snake_case")]
-    pub enum ExecutionMode {
-        Off = "off",
-        Sim = "sim",
-        Live = "live",
-    }
-    pub fn as_str;
-}
-
-impl ExecutionMode {
-    #[inline]
-    pub fn needs_credentials(self) -> bool {
-        self == ExecutionMode::Live
-    }
-
-    #[inline]
-    pub fn is_enabled(self) -> bool {
-        matches!(self, ExecutionMode::Sim | ExecutionMode::Live)
-    }
-
-    #[inline]
-    pub fn is_simulated(self) -> bool {
-        self == ExecutionMode::Sim
-    }
-
-    /// Keeps an absent execution block distinct from `off` in recorded metadata.
-    pub fn footer_value(mode: Option<Self>) -> &'static str {
-        mode.map_or("absent", Self::as_str)
-    }
-
-    pub fn badge(mode: Option<Self>) -> &'static str {
-        match mode {
-            None | Some(ExecutionMode::Off) => "OFF",
-            Some(ExecutionMode::Sim) => "SIM",
-            Some(ExecutionMode::Live) => "LIVE",
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

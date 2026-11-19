@@ -1,23 +1,40 @@
-//! Arrow schema + footer metadata: one [`TableRow`] impl per row type; mantissas as `i64`, enums as
-//! strings. Split by subject: `market` (what venue did), `exec` (what engine did).
+//! Arrow schema, contract and footer of each table: one [`TableRow`] impl per row type; mantissas
+//! as `i64`, labels as strings of a named set. Split by subject: `market` (what venue did), `exec`
+//! (what engine did), `metrics` (how the engine ran).
 
 mod column;
 mod exec;
+mod footer;
+mod labels;
 mod market;
+mod metrics;
+mod tape;
 
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, SchemaRef};
 
+use crate::msg::labelled_enum::labelled_enum;
 use crate::msg::time::LocalTs;
 
-use self::column::Column;
-use super::{RunMeta, TapeTable};
+pub(super) use column::{Column, ColumnInfo};
+pub(super) use footer::{FooterKey, footer_metadata};
+pub(super) use labels::{LABEL_SETS, LabelSet};
+pub(super) use tape::TapeRow;
+
+use super::TapeTable;
 
 pub(super) trait TableRow: Sized + 'static {
     const TABLE: TapeTable;
     const COLUMNS: &'static [Column<Self>];
+    /// The column of [`TableRow::partition_ts`], which the contract names.
+    const PARTITION_COLUMN: &'static str;
 
-    /// Record's local-receipt time (hour rotation + date/HH partitioning key).
+    /// When a file of the table closes besides the end of the run.
+    const SEALS: Seals = Seals::BorderRowsHour;
+    /// The rows of one row group, or `None` for the default of the Parquet writer.
+    const ROW_GROUP_ROWS: Option<usize> = None;
+
+    /// The stamp that picks the date folder and the hour of the file of a row.
     fn partition_ts(&self) -> LocalTs;
 
     fn schema() -> SchemaRef {
@@ -30,46 +47,20 @@ pub(super) trait TableRow: Sized + 'static {
     fn to_batch(rows: &[Self], schema: &SchemaRef) -> Result<RecordBatch, ArrowError> {
         Column::batch(Self::COLUMNS, rows, schema)
     }
+
+    fn columns() -> Vec<ColumnInfo> {
+        Self::COLUMNS.iter().map(Column::info).collect()
+    }
 }
 
-// SMELL: the footer names the features, instruments and assets, but not the link fields or the
-// boot, so a reader cannot decode the link frames of a run or join a run that spans two boots. The
-// reader also trusts only the newest footer it finds.
-/// Footer metadata: fixed-point scale + id-to-name dicts for mantissa/index interpretation.
-pub(super) fn footer_metadata(meta: &RunMeta) -> Vec<(String, String)> {
-    vec![
-        (
-            "strategy_id".to_owned(),
-            meta.strategy_id.as_str().to_owned(),
-        ),
-        ("te_id".to_owned(), meta.te_id.as_str().to_owned()),
-        // `absent` covers missing configuration and legacy files.
-        (
-            "execution_mode".to_owned(),
-            meta.artifacts.footer_mode().to_owned(),
-        ),
-        ("fixed_scale".to_owned(), meta.fixed_scale.to_string()),
-        (
-            "feature_dictionary".to_owned(),
-            json_string_array(&meta.feature_names),
-        ),
-        (
-            "instrument_dictionary".to_owned(),
-            json_string_array(&meta.instrument_symbols),
-        ),
-        (
-            "asset_dictionary".to_owned(),
-            json_array(&meta.asset_symbols),
-        ),
-        ("engine_version".to_owned(), meta.engine_version.to_string()),
-    ]
-}
-
-fn json_string_array(items: &[Box<str>]) -> String {
-    json_array(items)
-}
-
-fn json_array<T: serde::Serialize>(items: &[T]) -> String {
-    serde_json::to_string(items)
-        .expect("a slice of strings or of string pairs always serialises to json")
+labelled_enum! {
+    /// When a file of a table closes, besides the end of the run.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub(in crate::tape) enum Seals {
+        /// At each seal border of the fold, at the row cap, and at the cross of an hour.
+        BorderRowsHour = "border_rows_hour",
+        /// At each seal border of the fold only, so a file border is a point of the input.
+        Border = "border",
+    }
+    pub(in crate::tape) fn as_str;
 }

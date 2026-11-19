@@ -121,7 +121,8 @@ fn body_stamps(body: &MessageBody) -> Option<BodyStamps> {
         | MessageBody::Link(_)
         | MessageBody::RunControl(_)
         | MessageBody::Account(_)
-        | MessageBody::WriterFailed(_) => return None,
+        | MessageBody::WriterFailed(_)
+        | MessageBody::AuditBankFull(_) => return None,
     };
     Some(stamps)
 }

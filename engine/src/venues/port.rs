@@ -22,6 +22,38 @@ pub struct VenueScales {
     pub order_rate_limits: Vec<OrderRateLimit>,
     /// The current window of a Polymarket series, whose grid each Polymarket row takes.
     pub polymarket: Option<GammaMarket>,
+    pub report: VenueReport,
+}
+
+/// What a venue read of preflight has to tell the operator. Preflight runs before the log exists,
+/// so the read writes its lines here, and the start logs them once the log runs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VenueReport {
+    lines: Vec<ReportLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReportLine {
+    Info(String),
+    Warn(String),
+}
+
+impl VenueReport {
+    pub(crate) fn info(&mut self, line: String) {
+        self.lines.push(ReportLine::Info(line));
+    }
+
+    pub(crate) fn warn(&mut self, line: String) {
+        self.lines.push(ReportLine::Warn(line));
+    }
+
+    pub(crate) fn append(&mut self, mut other: VenueReport) {
+        self.lines.append(&mut other.lines);
+    }
+
+    pub(crate) fn lines(&self) -> &[ReportLine] {
+        &self.lines
+    }
 }
 
 impl VenueScales {

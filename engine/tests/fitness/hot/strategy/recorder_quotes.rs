@@ -13,12 +13,13 @@
 //! This drives the REAL `MicroRecorder` against the real engine, because both halves of the
 //! agreement are only present when the real strategy meets the real reconciler.
 
-use engine::msg::ids::{FIXED_SCALE, Price, Side};
+use engine::msg::ids::{FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side};
+use engine::runtime::exposure::InstrumentExposure;
 
 use crate::engine_support::ONE;
 use crate::hot::strategy::recorder_fixture::{
     STEP_US, STEPS, column_value, drain_places, make_ready, recorded_row, recorder_engine,
-    seed_book, spin_columns, step_messages,
+    recorder_engine_holding, seed_book, spin_columns, step_messages,
 };
 
 const BASE: i64 = 100 * ONE;
@@ -88,4 +89,42 @@ fn the_recorded_quote_is_the_order_that_gets_placed() {
             order.qty.mantissa(),
         );
     }
+}
+
+/// FITNESS: the shipped recorder that holds its whole exposure ceiling places no order that would
+/// add to the position, and still places the one that unwinds it. Its own budget and the engine's
+/// ceiling both refuse the adding side today; a recorder without its own budget leans on the
+/// engine alone, and this tape must stay green then.
+#[test]
+fn the_recorder_at_its_exposure_ceiling_places_no_adding_order() {
+    let mut row = recorded_row(STEP);
+    row.max_exposure_quote = Notional::from_mantissa(BASE + ORDER_NOTIONAL / 2);
+    let restored = [InstrumentExposure {
+        instrument: InstrumentId(0),
+        position_base: Qty::from_mantissa(ONE),
+        cash_quote: -BASE,
+        basis_quote: BASE,
+    }];
+    let instruments = [row];
+    let (mut engine, mut persist, mut commands) = recorder_engine_holding(&instruments, &restored);
+    make_ready(&mut engine, 0);
+    seed_book(&mut engine, BASE, 0);
+
+    let mut placed = Vec::new();
+    for index in 0..STEPS {
+        for message in step_messages(BASE, index, index * STEP_US) {
+            engine.dispatch(&message);
+        }
+        spin_columns(&mut persist);
+        placed.extend(drain_places(&mut commands));
+    }
+    assert!(
+        placed.iter().any(|order| order.side == Side::Sell),
+        "the side that unwinds the position must quote, or this tape never reached the quoting \
+         path: {placed:?}"
+    );
+    assert!(
+        placed.iter().all(|order| order.side == Side::Sell),
+        "a position at the ceiling may only shrink: {placed:?}"
+    );
 }

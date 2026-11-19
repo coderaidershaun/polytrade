@@ -4,7 +4,7 @@
 use crate::msg::time::{DurationUs, LocalTs, VenueTs, wall_clock_now};
 use crate::runtime::secrets::{EnvFile, SecretError};
 use crate::venues::edge::http::TransportError;
-use crate::{info, warn};
+use crate::venues::port::VenueReport;
 
 use super::assess::{AccountStanding, ProbeFacts, WalletConfig, assess};
 use super::codec::{PROTOCOL_VERSION, collateral_balance, open_orders_page};
@@ -24,6 +24,8 @@ pub struct PolymarketPreflight {
     pub wallet: WalletIdentity,
     /// Added to the local clock so `POLY_TIMESTAMP` is stamped in venue time.
     pub venue_clock_offset: DurationUs,
+    /// The clock offset, the wallet and the account, for the start to log once the log runs.
+    pub report: VenueReport,
 }
 
 /// Prove this wallet may trade before any thread spawns. Each check that needs no signed request
@@ -62,10 +64,11 @@ pub async fn preflight_polymarket(
     };
     let admitted = assess(&facts, &wallet_config, local)?;
     let venue_clock_offset = admitted.venue_clock_offset();
-    info!(
+    let mut report = VenueReport::default();
+    report.info(format!(
         "polymarket venue clock offset {}us, protocol v{PROTOCOL_VERSION}",
         venue_clock_offset.micros()
-    );
+    ));
 
     let credentials = probe.api_credentials(server_time_secs).await?.0;
     let signer = RequestSigner::new(&credentials, admitted.signer())
@@ -73,19 +76,20 @@ pub async fn preflight_polymarket(
     let is_closed_only = probe.is_closed_only(&signer, server_time_secs).await?;
     let standing = if is_closed_only { AccountStanding::ClosedOnly } else { AccountStanding::Open };
     let wallet = admitted.assess_account(standing)?;
-    info!(
+    report.info(format!(
         "polymarket account ok: may open positions, maker {} signing as {} (signatureType {})",
         wallet.maker.to_checksum_hex(),
         wallet.signer.to_checksum_hex(),
         wallet.signature_type.code()
-    );
-    report_account(probe.http(), &signer, wallet, server_time_secs).await;
+    ));
+    report_account(probe.http(), &signer, wallet, server_time_secs, &mut report).await;
 
     Ok(PolymarketPreflight {
         credentials,
         key: probe.into_key(),
         wallet,
         venue_clock_offset,
+        report,
     })
 }
 
@@ -173,33 +177,32 @@ async fn report_account(
     signer: &RequestSigner,
     wallet: WalletIdentity,
     timestamp_secs: i64,
+    report: &mut VenueReport,
 ) {
-    report_read(
-        "collateral",
-        http.send_signed(
+    let collateral = http
+        .send_signed(
             signer,
             &collateral_balance(wallet.signature_type.into()),
             timestamp_secs,
         )
-        .await,
-    );
-    report_read(
-        "open orders",
-        http.send_signed(signer, &open_orders_page(None), timestamp_secs)
-            .await,
-    );
+        .await;
+    report_read("collateral", collateral, report);
+    let open_orders = http
+        .send_signed(signer, &open_orders_page(None), timestamp_secs)
+        .await;
+    report_read("open orders", open_orders, report);
 }
 
-fn report_read(what: &str, answer: Result<ClobResponse, TransportError>) {
+fn report_read(what: &str, answer: Result<ClobResponse, TransportError>, report: &mut VenueReport) {
     match answer {
         Ok(response) if response.is_success() => {
-            info!("polymarket {what} before arming: {}", response.excerpt());
+            report.info(format!("polymarket {what} before arming: {}", response.excerpt()));
         }
-        Ok(response) => warn!(
+        Ok(response) => report.warn(format!(
             "polymarket {what} read answered http {} — arming against a number it could not confirm: {}",
             response.status,
             response.excerpt()
-        ),
-        Err(error) => warn!("polymarket {what} read failed: {error}"),
+        )),
+        Err(error) => report.warn(format!("polymarket {what} read failed: {error}")),
     }
 }

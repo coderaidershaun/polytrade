@@ -26,7 +26,7 @@ use engine::msg::exec::{
 };
 use engine::msg::ids::{AssetId, InstrumentId, Notional, Price, Qty, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
-use engine::msg::persist::{IncidentKind, IncidentRow, PersistRecord};
+use engine::msg::persist::{AuditRecord, IncidentKind, IncidentRow};
 use engine::msg::time::{DurationUs, LocalTs, Stamper, VenueTs};
 use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::{RecordedTables, TrackerSpec};
@@ -539,7 +539,7 @@ const USDC: AssetId = AssetId(2);
 
 /// Three instruments, the last one quoted in USDC, under a loss budget of `budget`, with the
 /// command lane and the tape lane.
-fn three_markets(budget: i64) -> (HotEngine, Consumer<ExecLaneItem>, Consumer<PersistRecord>) {
+fn three_markets(budget: i64) -> (HotEngine, Consumer<ExecLaneItem>, Consumer<AuditRecord>) {
     let rows = [
         instrument_row(0, TrackerSpec::default(), 64),
         instrument_row(1, TrackerSpec::default(), 64),
@@ -548,7 +548,8 @@ fn three_markets(budget: i64) -> (HotEngine, Consumer<ExecLaneItem>, Consumer<Pe
             ..instrument_row(2, TrackerSpec::default(), 64)
         },
     ];
-    let (persistence, records) = persist_ring_for(1_024, RecordedTables::new(&ALL_TABLES));
+    let (persistence, rings) = persist_ring_for(1_024, RecordedTables::new(&ALL_TABLES));
+    let records = rings.audit;
     let (producer, commands) = RingBuffer::new(1_024);
     let engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),
@@ -565,10 +566,10 @@ fn three_markets(budget: i64) -> (HotEngine, Consumer<ExecLaneItem>, Consumer<Pe
     (engine, commands, records)
 }
 
-fn stranded(records: &mut Consumer<PersistRecord>) -> Vec<IncidentRow> {
+fn stranded(records: &mut Consumer<AuditRecord>) -> Vec<IncidentRow> {
     let mut incidents = Vec::new();
     while let Ok(record) = records.pop() {
-        if let PersistRecord::Incident(row) = record {
+        if let AuditRecord::Incident(row) = record {
             incidents.push(row);
         }
     }

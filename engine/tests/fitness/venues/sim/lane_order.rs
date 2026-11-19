@@ -8,8 +8,7 @@ use engine::msg::ids::{
     StreamEpoch,
 };
 use engine::msg::inbound::{
-    BookChunk, BookChunkKind, InboundMessage, Level, MessageBody, TappedMessage, TradeEvent,
-    VenueMeta,
+    BookChunk, BookChunkKind, InboundMessage, Level, MessageBody, TradeEvent,
 };
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::runtime::config::FeeBps;
@@ -91,17 +90,13 @@ pub(super) fn live_venue(inbox_capacity: usize) -> SimVenue {
         book_chunk(BookChunkKind::Snapshot, Side::Sell, &asks, None),
     ];
     snapshot[1].is_last_chunk = true;
-    let mut tapped: Vec<TappedMessage> = snapshot
+    let mut tapped: Vec<InboundMessage> = snapshot
         .into_iter()
-        .map(|chunk| tap(at_ms(0), MessageBody::Book(chunk), VenueMeta::None))
+        .map(|chunk| tap(at_ms(0), MessageBody::Book(chunk)))
         .collect();
     let mut bridge = book_chunk(BookChunkKind::Delta, Side::Buy, &bids[1..], Some(at_ms(1)));
     bridge.is_last_chunk = true;
-    tapped.push(tap(
-        at_ms(1),
-        MessageBody::Book(bridge),
-        depth_meta(at_ms(1)),
-    ));
+    tapped.push(tap(at_ms(1), MessageBody::Book(bridge)));
     tapped.push(print(at_ms(2), 0, Side::Buy, cents(10_100), milli_btc(1)));
     venue
         .on_market_batch(&tapped, LATENCY)
@@ -127,17 +122,8 @@ fn book_chunk(
     chunk
 }
 
-fn depth_meta(venue_us: i64) -> VenueMeta {
-    VenueMeta::DepthDelta {
-        exchange_ts_us: VenueTs::from_micros(venue_us),
-    }
-}
-
-fn tap(received_us: i64, body: MessageBody, venue_meta: VenueMeta) -> TappedMessage {
-    TappedMessage {
-        message: InboundMessage::new(stamp(received_us), body),
-        venue_meta,
-    }
+fn tap(received_us: i64, body: MessageBody) -> InboundMessage {
+    InboundMessage::new(stamp(received_us), body)
 }
 
 /// A print with trade ids `id`, stamped by the venue at its receipt.
@@ -147,7 +133,7 @@ pub(super) fn print(
     side: Side,
     price: Price,
     qty: Qty,
-) -> TappedMessage {
+) -> InboundMessage {
     let trade = TradeEvent {
         instrument: INSTRUMENT,
         price,
@@ -155,17 +141,15 @@ pub(super) fn print(
         side,
         exchange_ts_us: VenueTs::from_micros(received_us),
         exchange_sent_ts_us: None,
-    };
-    let meta = VenueMeta::Trade {
         aggregate_id: AggregateTradeId(1_000 + id),
         first_trade_id: RawTradeId(5_000 + id),
         last_trade_id: RawTradeId(5_000 + id),
         stream_epoch: StreamEpoch::default(),
     };
-    tap(received_us, MessageBody::Trade(trade), meta)
+    tap(received_us, MessageBody::Trade(trade))
 }
 
-fn level_delta(received_us: i64, side: Side, price: Price, qty: Qty) -> TappedMessage {
+fn level_delta(received_us: i64, side: Side, price: Price, qty: Qty) -> InboundMessage {
     let mut chunk = book_chunk(
         BookChunkKind::Delta,
         side,
@@ -173,11 +157,7 @@ fn level_delta(received_us: i64, side: Side, price: Price, qty: Qty) -> TappedMe
         Some(received_us),
     );
     chunk.is_last_chunk = true;
-    tap(
-        received_us,
-        MessageBody::Book(chunk),
-        depth_meta(received_us),
-    )
+    tap(received_us, MessageBody::Book(chunk))
 }
 
 fn place_buy(client: u64, price: Price, qty: Qty) -> ExecRequest {
@@ -200,7 +180,7 @@ enum LaneEvent {
     },
     Market {
         lane: SimLane,
-        tapped: Box<TappedMessage>,
+        tapped: Box<InboundMessage>,
     },
     Watermark {
         lane: SimLane,
@@ -272,7 +252,7 @@ fn depth() -> Vec<LaneEvent> {
 fn stamp_of(event: &LaneEvent) -> i64 {
     match event {
         LaneEvent::Command { issued_us, .. } => *issued_us,
-        LaneEvent::Market { tapped, .. } => tapped.message.header.received_ts_us.micros(),
+        LaneEvent::Market { tapped, .. } => tapped.header.received_ts_us.micros(),
         LaneEvent::Watermark { at_us, .. } => *at_us,
     }
 }
@@ -293,7 +273,7 @@ fn replay(arrivals: &[LaneEvent]) -> Vec<SimEmission> {
                 venue
                     .on_market_batch(std::slice::from_ref(tapped.as_ref()), LATENCY)
                     .expect("the inbox holds each event of the lanes");
-                horizon.observe(*lane, tapped.message.header.received_ts_us);
+                horizon.observe(*lane, tapped.header.received_ts_us);
             }
             LaneEvent::Watermark { lane, at_us } => horizon.observe(*lane, stamp(*at_us)),
         }

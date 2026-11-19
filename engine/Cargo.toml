@@ -23,6 +23,18 @@ required-features = ["web"]
 name = "dom-fixture"
 path = "../tools/dom-fixture/main.rs"
 
+[[bin]]
+name = "contract-export"
+path = "../tools/contract-export/main.rs"
+
+[[bin]]
+name = "golden-run"
+path = "../tools/golden-run/main.rs"
+
+[[bin]]
+name = "tape-sync"
+path = "../tools/tape-sync/main.rs"
+
 [[example]]
 name = "poly-probe"
 path = "../tools/poly-probe/main.rs"

@@ -5,6 +5,8 @@
 use crate::hot::digest::{digest_by_hash, digest_fields};
 use crate::hot::exec::ExecCapacity;
 use crate::msg::ids::{AssetId, InstrumentId, Notional, Price, Qty, Side};
+use crate::msg::persist::{LedgerEntry, LedgerKind};
+use crate::msg::time::LocalTs;
 use crate::runtime::exposure::InstrumentExposure;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -80,6 +82,37 @@ impl LedgerRow {
             wide(self.realised_quote()) - wide(self.realised_at_boot),
             "session_realised_quote",
         )
+    }
+
+    /// Whether the row holds money: a position, cash or a basis. A mark alone is no money.
+    #[inline]
+    pub(crate) fn holds_money(&self) -> bool {
+        self.position_base.mantissa() != 0
+            || self.cash_quote != Notional::ZERO
+            || self.basis_quote != Notional::ZERO
+    }
+
+    /// The row as the ledger table records it, with no order and no trade.
+    pub(crate) fn entry(
+        &self,
+        kind: LedgerKind,
+        instrument: InstrumentId,
+        received_ts_us: LocalTs,
+    ) -> LedgerEntry {
+        LedgerEntry {
+            kind,
+            instrument,
+            position_base: self.position_base,
+            cash_quote: self.cash_quote,
+            basis_quote: self.basis_quote,
+            realised_quote: self.realised_quote(),
+            mark: self.mark,
+            exposure_quote: self.exposure_quote(),
+            pnl_quote: self.pnl_quote(),
+            client_id: None,
+            trade_id: None,
+            received_ts_us,
+        }
     }
 
     #[inline]

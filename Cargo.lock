@@ -1849,7 +1849,15 @@ dependencies = [
 name = "lab"
 version = "0.1.0"
 dependencies = [
+ "arrow-array",
+ "arrow-schema",
  "engine",
+ "parquet",
+ "proptest",
+ "rtrb",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3481,6 +3489,7 @@ name = "strat-micro-recorder"
 version = "0.1.0"
 dependencies = [
  "engine",
+ "lab",
  "serde",
 ]
 

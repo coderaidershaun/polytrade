@@ -6,3 +6,5 @@
 //! Never: let a replay cross a tape gap.
 
 #![forbid(unsafe_code)]
+
+pub mod backtest;

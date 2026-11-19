@@ -8,7 +8,7 @@ use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx}
 use engine::log::HotRecord;
 use engine::msg::ids::{InstrumentId, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
-use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::msg::persist::{FeatureId, ResearchRecord};
 use engine::msg::time::DurationUs;
 use engine::runtime::config::{SpinField, TableKind};
 use rtrb::Consumer;
@@ -52,14 +52,14 @@ impl Strategy for SpinProbe {
 
 fn spin_state(
     engine: &mut HotEngine,
-    consumer: &mut Consumer<PersistRecord>,
+    consumer: &mut Consumer<ResearchRecord>,
     tick: InboundMessage,
 ) -> (usize, Option<f64>) {
     engine.dispatch(&tick);
     let mut len = 0;
     let mut last = None;
     while let Ok(record) = consumer.pop() {
-        if let PersistRecord::Feature(row) = record {
+        if let ResearchRecord::Feature(row) = record {
             if row.feature == FeatureId(0) {
                 len = row.value as usize;
             } else if row.feature == FeatureId(1) {
@@ -70,7 +70,7 @@ fn spin_state(
     (len, last)
 }
 
-fn apply(engine: &mut HotEngine, consumer: &mut Consumer<PersistRecord>, message: InboundMessage) {
+fn apply(engine: &mut HotEngine, consumer: &mut Consumer<ResearchRecord>, message: InboundMessage) {
     engine.dispatch(&message);
     while consumer.pop().is_ok() {}
 }
@@ -126,13 +126,13 @@ impl Strategy for SidedProbe {
 
 fn sided_state(
     engine: &mut HotEngine,
-    consumer: &mut Consumer<PersistRecord>,
+    consumer: &mut Consumer<ResearchRecord>,
     tick: InboundMessage,
 ) -> [Option<f64>; 4] {
     engine.dispatch(&tick);
     let mut sampled = [None; 4];
     while let Ok(record) = consumer.pop() {
-        if let PersistRecord::Feature(row) = record {
+        if let ResearchRecord::Feature(row) = record {
             sampled[usize::from(row.feature.0)] = Some(row.value);
         }
     }
@@ -145,7 +145,8 @@ fn sided_state(
 #[test]
 fn mid_and_sided_trade_counts_sample_per_tick() {
     let instruments = [instrument_row(0, tracker_spec_all(1), 64)];
-    let (sink, mut consumer) = persist_ring(256);
+    let (sink, rings) = persist_ring(256);
+    let mut consumer = rings.research;
     let (log_sink, _log_consumer) = strategy_log_ring(64);
     let mut engine = engine_without_warmup(
         &instruments,
@@ -224,7 +225,8 @@ fn mid_and_sided_trade_counts_sample_per_tick() {
 #[test]
 fn spin_samples_committed_state_only() {
     let instruments = [instrument_row(0, tracker_spec_all(1), 64)];
-    let (sink, mut consumer) = persist_ring(256);
+    let (sink, rings) = persist_ring(256);
+    let mut consumer = rings.research;
     let (log_sink, _log_consumer) = strategy_log_ring(64);
     let mut engine =
         engine_without_warmup(&instruments, Box::new(SpinProbe::default()), sink, log_sink);
@@ -337,7 +339,7 @@ const TICK: i64 = ONE / 1000;
 /// becomes the committed touch, then a spin tick lands one interval later.
 struct SpinDriver {
     engine: HotEngine,
-    persist: Consumer<PersistRecord>,
+    persist: Consumer<ResearchRecord>,
     logs: Consumer<HotRecord>,
     realised_vol_st: FeatureId,
     spin_interval: DurationUs,
@@ -348,7 +350,8 @@ struct SpinDriver {
 impl SpinDriver {
     fn new(spin_interval: DurationUs) -> Self {
         let instruments = [instrument_row(0, tracker_spec_all(1), 64)];
-        let (sink, persist) = persist_ring(64);
+        let (sink, rings) = persist_ring(64);
+        let persist = rings.research;
         let (log_sink, logs) = strategy_log_ring(64);
         let strategy = Box::new(MicroRecorder::from_spec(
             &recorder_spec(vec![TableKind::Features]),
@@ -384,7 +387,7 @@ impl SpinDriver {
         self.engine.dispatch(&spin(self.seq, self.now));
         let mut realised = None;
         while let Ok(record) = self.persist.pop() {
-            if let PersistRecord::Feature(row) = record
+            if let ResearchRecord::Feature(row) = record
                 && row.feature == self.realised_vol_st
             {
                 realised = Some(row.value);

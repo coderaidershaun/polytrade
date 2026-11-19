@@ -21,7 +21,7 @@ use engine::link::{
 };
 use engine::msg::ids::QueueId;
 use engine::msg::inbound::{InboundMessage, MessageBody};
-use engine::msg::persist::{LinkRowKind, PersistRecord};
+use engine::msg::persist::{LinkRowKind, ResearchRecord};
 use engine::msg::run_state::{ControllerEpoch, RunState};
 use engine::msg::time::{DurationUs, EngineClock, LocalTs, VenueTs};
 use engine::msg::ui::LatencyReport;
@@ -370,12 +370,12 @@ async fn start_then_stop_from_a_tab_parks_the_fold() {
     assert!(
         records
             .iter()
-            .any(|record| matches!(record, PersistRecord::SealAll)),
+            .any(|record| matches!(record, ResearchRecord::SealAll)),
         "the park seals the tape: {records:?}"
     );
     assert!(
         records.iter().any(|record| matches!(record,
-            PersistRecord::LinkFrame(row) if row.kind == LinkRowKind::RunIdle && row.seq == 6)),
+            ResearchRecord::LinkFrame(row) if row.kind == LinkRowKind::RunIdle && row.seq == 6)),
         "the tape records the marker it consumed"
     );
     read_until(&mut session, &mut tab, stop_at, ControlVerdict::Applied).await;

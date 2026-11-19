@@ -69,6 +69,13 @@ pub(super) struct ExecPlan {
     te_tag: TeTag,
 }
 
+impl ExecPlan {
+    /// The run nonce and what the venue does, which the manifest records.
+    pub(super) fn manifest_terms(&self) -> (u32, &VenueCapabilities) {
+        (self.lease.run_nonce(), &self.capabilities)
+    }
+}
+
 pub(super) struct ExecCheck<'a> {
     /// The venue that sends orders, with its execution block. `None` when no source does.
     pub(super) armed: Option<(VenueId, &'a ExecutionConfig)>,
@@ -346,7 +353,10 @@ fn check_execution_against_venue(
     Ok(())
 }
 
-fn settings(execution: &ExecutionConfig, capabilities: &VenueCapabilities) -> ExecSettings {
+pub(super) fn settings(
+    execution: &ExecutionConfig,
+    capabilities: &VenueCapabilities,
+) -> ExecSettings {
     ExecSettings {
         limits: ExecLimits {
             requote_threshold_ticks: execution.requote_threshold_ticks,

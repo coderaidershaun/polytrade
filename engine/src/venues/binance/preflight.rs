@@ -2,7 +2,6 @@
 //! limits and order budget go onto the registry. A value out of range refuses the start.
 
 use crate::hot::exec::{MAX_ORDER_BUDGET_WINDOWS, OrderBudget, OrderBudgetWindow};
-use crate::info;
 use crate::msg::ids::{DecimalError, Notional, Price, Qty};
 use crate::msg::time::DurationUs;
 use crate::runtime::config::{BinanceMarket, VenueMarket};
@@ -121,10 +120,10 @@ pub(crate) async fn preflight_scales(
             found.order_rate_limits = check_order_rate_limits(binance_market, &info)?;
         }
     }
-    info!(
+    found.report.info(format!(
         "scale preflight ok on binance {} — every instrument fits the i64 1e-8 range",
         env.as_str()
-    );
+    ));
     Ok(found)
 }
 

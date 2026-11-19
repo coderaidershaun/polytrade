@@ -19,7 +19,7 @@ use engine::msg::ids::{
     AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, TradeId, VenueId,
 };
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
-use engine::msg::persist::{OrderRow, OrderTransition, PersistRecord};
+use engine::msg::persist::{AuditRecord, OrderRow, OrderTransition};
 use engine::msg::time::{DurationUs, Stamper};
 use engine::runtime::config::{RecordedTables, TableKind, TrackerSpec};
 use engine::runtime::registry::InstrumentRow;
@@ -116,7 +116,7 @@ struct Venues {
     engine: HotEngine,
     rows: Vec<InstrumentRow>,
     lanes: Vec<Consumer<ExecLaneItem>>,
-    persist: Consumer<PersistRecord>,
+    persist: Consumer<AuditRecord>,
     seen: Arc<Mutex<Vec<Seen>>>,
 }
 
@@ -128,8 +128,9 @@ impl Venues {
     /// One venue for each pair of settings and run nonce, in venue order.
     fn new(venues: Vec<(ExecSettings, u32)>) -> Self {
         let rows = rows(venues.len());
-        let (persistence, persist) =
+        let (persistence, rings) =
             persist_ring_for(4_096, RecordedTables::new(&[TableKind::Orders]));
+        let persist = rings.audit;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let mut lanes = Vec::new();
         let exec = venues
@@ -298,7 +299,7 @@ impl Venues {
     fn order_rows(&mut self) -> Vec<OrderRow> {
         std::iter::from_fn(|| self.persist.pop().ok())
             .filter_map(|record| match record {
-                PersistRecord::Order(row) => Some(row),
+                AuditRecord::Order(row) => Some(row),
                 _ => None,
             })
             .collect()

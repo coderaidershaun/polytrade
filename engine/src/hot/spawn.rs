@@ -8,7 +8,9 @@ use std::time::Duration;
 use super::dispatch::HotEngine;
 use super::ingress::IngressQueues;
 use super::metrics::{DriverSamples, Folded};
-use crate::msg::inbound::MessageBody;
+use super::sink::TapeSink;
+use crate::msg::ids::QueueId;
+use crate::msg::inbound::{InboundMessage, MessageBody};
 use crate::msg::latency::CounterSample;
 use crate::runtime::PinRefused;
 use crate::runtime::pin::{PinCall, spawn_pinned};
@@ -52,6 +54,9 @@ pub struct HotDriver {
     queues: IngressQueues,
     engine: HotEngine,
     samples: Option<DriverSamples>,
+    /// The tee of each popped message, before the fold handles it. `None` for a driver that records
+    /// no tape.
+    tape: Option<TapeSink>,
     pops: u32,
     parks: u64,
 }
@@ -66,9 +71,23 @@ impl HotDriver {
             queues,
             engine,
             samples,
+            tape: None,
             pops: 0,
             parks: 0,
         }
+    }
+
+    /// Tees each popped message onto the tape, with the queue it came from.
+    pub fn with_tape(self, tape: TapeSink) -> HotDriver {
+        HotDriver {
+            tape: Some(tape),
+            ..self
+        }
+    }
+
+    /// The fold this driver steps, for a replay to compare its state with.
+    pub fn engine(&self) -> &HotEngine {
+        &self.engine
     }
 
     #[inline]
@@ -76,12 +95,12 @@ impl HotDriver {
         let Some((queue, message)) = self.queues.pop_next() else {
             return Step::Idle;
         };
-        let Some(samples) = self.samples.as_mut() else {
-            self.engine.dispatch(&message);
+        let pop_tick = self.samples.as_mut().map(|samples| samples.stamp());
+        self.tee(queue, &message);
+        self.engine.dispatch(&message);
+        let (Some(samples), Some(pop_tick)) = (self.samples.as_mut(), pop_tick) else {
             return Step::Folded;
         };
-        let pop_tick = samples.stamp();
-        self.engine.dispatch(&message);
         let done_tick = samples.stamp();
         samples.record_stage(&Folded {
             message: &message,
@@ -92,15 +111,36 @@ impl HotDriver {
         });
         self.pops = self.pops.wrapping_add(1);
         if let MessageBody::SpinTick(tick) = &message.body {
+            let mut counters = self.engine.counters();
+            if let Some(tape) = &self.tape {
+                counters.tape_lost = tape.lost();
+                counters.tape_gaps = tape.gaps();
+            }
             samples.counters.push(CounterSample {
                 spin_ts_us: message.header.received_ts_us,
                 spin_seq: tick.seq,
                 backlog: self.queues.backlog_by_queue(),
-                counters: self.engine.counters(),
+                counters,
                 idle_parks: self.parks,
             });
         }
         Step::Folded
+    }
+
+    /// The tape seals at the spin where the fold seals, before the record of that spin, so the next
+    /// tape file opens with each book as the fold held it.
+    #[inline]
+    fn tee(&mut self, queue: QueueId, message: &InboundMessage) {
+        let Some(tape) = self.tape.as_mut() else {
+            return;
+        };
+        let books = self.engine.books();
+        if let MessageBody::SpinTick(tick) = &message.body
+            && self.engine.seals_at(tick.seq)
+        {
+            tape.seal_with_snapshots(books, message.header.received_ts_us);
+        }
+        tape.record(queue, message, books);
     }
 
     /// Sleeps while every queue is empty, and counts it: each counter sample carries the count.

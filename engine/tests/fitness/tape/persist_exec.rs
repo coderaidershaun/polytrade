@@ -15,13 +15,13 @@ use engine::msg::exec::{Liquidity, OrderStyle, Provenance, RejectClass};
 use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Price, Qty, Side, TradeId, VenueOrderId,
 };
-use engine::msg::persist::{FillRow, OrderLifecycle, OrderRow, OrderTransition, PersistRecord};
+use engine::msg::persist::{AuditRecord, FillRow, OrderLifecycle, OrderRow, OrderTransition};
 use engine::msg::time::{LocalTs, VenueTs};
 use engine::runtime::config::{RecordedTables, TableKind};
 
 use crate::parquet_readback::{
-    BASE_TS_US, Cell, FileData, TempDir, drain_blocking, parquet_files, read_parquet_file, run_dir,
-    spawn_writer,
+    BASE_TS_US, Cell, FileData, Record, TempDir, drain_blocking, only_run_dir, parquet_files,
+    read_parquet_file, run_dir, spawn_writer,
 };
 
 const QUOTE_ASSET: AssetId = AssetId(1);
@@ -62,6 +62,7 @@ fn order_rows() -> Vec<OrderRow> {
         reject_code: 0,
         exchange_ts_us: VenueTs::from_micros(0),
         received_ts_us: ts(1),
+        depth_ahead: Some(Qty::from_mantissa(3 * QTY.mantissa())),
     };
     vec![
         sent,
@@ -72,6 +73,7 @@ fn order_rows() -> Vec<OrderRow> {
             previous_state: OrderLifecycle::PendingNew,
             exchange_ts_us: venue_ts(2),
             received_ts_us: ts(3),
+            depth_ahead: None,
             ..sent
         },
         OrderRow {
@@ -83,6 +85,7 @@ fn order_rows() -> Vec<OrderRow> {
             filled_quote: (PRICE.notional(Qty::from_mantissa(QTY.mantissa() / 2))).mantissa(),
             exchange_ts_us: venue_ts(4),
             received_ts_us: ts(5),
+            depth_ahead: None,
             ..sent
         },
         OrderRow {
@@ -101,6 +104,7 @@ fn order_rows() -> Vec<OrderRow> {
             reject_code: -2011,
             exchange_ts_us: venue_ts(6),
             received_ts_us: ts(7),
+            depth_ahead: None,
             ..sent
         },
     ]
@@ -166,8 +170,8 @@ fn orders_and_fills_round_trip_through_the_arrow_reader() {
     let records = orders
         .iter()
         .copied()
-        .map(PersistRecord::Order)
-        .chain(fills.iter().copied().map(PersistRecord::Fill))
+        .map(|row| AuditRecord::Order(row).into())
+        .chain(fills.iter().map(|row| AuditRecord::Fill(*row).into()))
         .collect();
     drain(root.path(), RecordedTables::new(&EXEC_TABLES), records);
 
@@ -193,6 +197,7 @@ fn orders_and_fills_round_trip_through_the_arrow_reader() {
             "filled_quote",
             "reject_class",
             "reject_code",
+            "depth_ahead",
         ]
     );
     assert_eq!(
@@ -369,10 +374,10 @@ fn assert_distinct(spellings: &[&'static str]) {
 
 const EXEC_TABLES: [TableKind; 2] = [TableKind::Orders, TableKind::Fills];
 
-fn both_kinds() -> Vec<PersistRecord> {
+fn both_kinds() -> Vec<Record> {
     vec![
-        PersistRecord::Order(order_rows()[0]),
-        PersistRecord::Fill(fill_rows()[0]),
+        AuditRecord::Order(order_rows()[0]).into(),
+        AuditRecord::Fill(fill_rows()[0]).into(),
     ]
 }
 
@@ -397,6 +402,8 @@ fn order_cells(row: &OrderRow) -> Vec<Cell> {
         Cell::I64(row.filled_quote),
         Cell::Str(reject_str(row.reject).to_owned()),
         Cell::I32(row.reject_code),
+        row.depth_ahead
+            .map_or(Cell::Null, |qty| Cell::I64(qty.mantissa())),
     ]
 }
 
@@ -466,7 +473,7 @@ fn side_str(side: Side) -> &'static str {
 
 /// Spawn the real actor over preloaded records and drain it exactly as the runtime does, so the only
 /// variable between cases is the configured table set.
-fn drain(dir_root: &Path, tables: RecordedTables, records: Vec<PersistRecord>) {
+fn drain(dir_root: &Path, tables: RecordedTables, records: Vec<Record>) {
     drain_blocking(spawn_writer(dir_root, tables, records))
         .expect("a row with no sink to land in is a drop, never a drain failure");
 }
@@ -490,5 +497,5 @@ fn footer_value(footer: &[(String, Option<String>)], key: &str) -> String {
 }
 
 fn table_dir(dir_root: &Path, table: TableKind) -> PathBuf {
-    run_dir(dir_root).join(table.as_str())
+    only_run_dir(dir_root).join(table.as_str())
 }

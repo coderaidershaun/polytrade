@@ -10,7 +10,7 @@ use engine::hot::exec::{DesiredQuote, QuoteLevel};
 use engine::hot::ingress::IngressQueues;
 use engine::hot::metrics::DriverSamples;
 use engine::hot::quant::intensity::IntensityFit;
-use engine::hot::sink::{ExecSink, LinkSink};
+use engine::hot::sink::{ExecSink, LinkSink, TapeSink};
 use engine::hot::spawn::{HotDriver, Step};
 use engine::hot::strategy::{Registration, Strategy, StrategyConfig, StrategyCtx};
 use engine::hot::tracker::MicroTracker;
@@ -22,8 +22,10 @@ use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrd
 use engine::msg::ids::{
     AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
 };
-use engine::msg::inbound::{FileWriter, InboundMessage, MessageBody, SpinTick, WriterFailure};
-use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::msg::inbound::{
+    AuditBankFull, FileWriter, InboundMessage, MessageBody, SpinTick, WriterFailure,
+};
+use engine::msg::persist::{FeatureId, ResearchRecord, TapeRecord};
 use engine::msg::time::{DurationUs, LocalTs, Stamper, VenueTs};
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
 use engine::runtime::config::{
@@ -37,8 +39,8 @@ use engine::venues::exec::open_orders_snapshot_end;
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::engine_support::{
-    ExposureLane, ONE, account_chunk, book_reset, delta_chunk, detached_setup, engine_view,
-    exec_event, exposure_ring, idle_at, instrument_row, kline, persist_ring_for,
+    ExposureLane, ONE, PersistRings, account_chunk, book_reset, delta_chunk, detached_setup,
+    engine_view, exec_event, exposure_ring, idle_at, instrument_row, kline, persist_ring_for,
     recorder_feature_id, recorder_spec, rotation, run_control, running_at, snapshot_pair, spin,
     strategy_log_ring, tracker_spec_all, trade, ts, ui_book_ring, ui_event_ring,
 };
@@ -482,7 +484,7 @@ const STAGE_RING: u64 = 4_096;
 const EXTRAS_EVERY: i64 = 50;
 
 /// One name for each kind of message, in the order of [`kind_of`].
-const KINDS: [&str; 11] = [
+const KINDS: [&str; 12] = [
     "trade",
     "book",
     "book reset",
@@ -494,6 +496,7 @@ const KINDS: [&str; 11] = [
     "exec",
     "account",
     "writer failed",
+    "audit bank full",
 ];
 
 /// No arm catches the rest, so a new kind of message stops this file compiling until the mix sends
@@ -511,6 +514,7 @@ fn kind_of(message: &InboundMessage) -> usize {
         MessageBody::Exec(_) => 8,
         MessageBody::Account(_) => 9,
         MessageBody::WriterFailed(_) => 10,
+        MessageBody::AuditBankFull(_) => 11,
     }
 }
 
@@ -558,6 +562,14 @@ fn writer_failed(when: i64) -> InboundMessage {
         consecutive_failures: 3,
     };
     InboundMessage::new(ts(when), MessageBody::WriterFailed(failure))
+}
+
+fn audit_bank_full(when: i64) -> InboundMessage {
+    let full = AuditBankFull {
+        banked: 49_152,
+        capacity: 65_536,
+    };
+    InboundMessage::new(ts(when), MessageBody::AuditBankFull(full))
 }
 
 fn when_of(i: i64) -> i64 {
@@ -1062,7 +1074,9 @@ fn strategy_of(case: Case) -> Box<dyn Strategy> {
 
 /// The readers of each lane that the engine and its thread write, drained after each step.
 struct Readers {
-    persist: Option<Consumer<PersistRecord>>,
+    persist: Option<PersistRings>,
+    /// The tee of the driver, on for each case.
+    tape: Consumer<TapeRecord>,
     commands: Consumer<ExecLaneItem>,
     ui_books: Consumer<UiBookSnapshot>,
     ui_events: Consumer<UiEvent>,
@@ -1076,7 +1090,11 @@ struct Readers {
 
 /// The engine of `case` over `rows`, armed with execution and the link. The recorder writes each
 /// table, and the publisher and the probe record nothing.
-fn armed_at_capacity(case: Case, rows: &[InstrumentRow], stamper: Stamper) -> (HotEngine, Readers) {
+fn armed_at_capacity(
+    case: Case,
+    rows: &[InstrumentRow],
+    stamper: Stamper,
+) -> (HotEngine, TapeSink, Readers) {
     let (persistence, persist) = match case {
         Case::Shipped(Shipped::Recorder) => {
             let (wiring, reader) = persist_ring_for(OUTPUT_RING, every_table());
@@ -1091,6 +1109,7 @@ fn armed_at_capacity(case: Case, rows: &[InstrumentRow], stamper: Stamper) -> (H
     let (exposure_sink, exposure) = exposure_ring(EXPOSURE_RING, rows.len());
     let (command_producer, commands) = RingBuffer::<ExecLaneItem>::new(OUTPUT_RING);
     let (link_producer, link) = RingBuffer::<OutboundLink>::new(OUTPUT_RING);
+    let (tape_producer, tape) = RingBuffer::<TapeRecord>::new(OUTPUT_RING);
     let engine = HotEngine::new(HotEngineSetup {
         persistence,
         strategy_log_sink,
@@ -1113,6 +1132,7 @@ fn armed_at_capacity(case: Case, rows: &[InstrumentRow], stamper: Stamper) -> (H
     });
     let readers = Readers {
         persist,
+        tape,
         commands,
         ui_books,
         ui_events,
@@ -1123,7 +1143,7 @@ fn armed_at_capacity(case: Case, rows: &[InstrumentRow], stamper: Stamper) -> (H
         hot_log: open_hot_lane(OUTPUT_RING),
         text_log: open_text_lane(OUTPUT_RING),
     };
-    (engine, readers)
+    (engine, TapeSink::new(tape_producer), readers)
 }
 
 fn every_table() -> RecordedTables {
@@ -1149,6 +1169,8 @@ struct Window {
     /// One bit for each instrument that an order was placed on.
     placed: u64,
     tape_rows: u64,
+    /// Records of the tee: one for each popped message.
+    teed: u64,
     link_frames: u64,
     hot_records: u64,
     strategy_records: u64,
@@ -1171,12 +1193,17 @@ impl Readers {
         when: i64,
     ) {
         if let Some(persist) = self.persist.as_mut() {
-            while let Ok(record) = persist.pop() {
+            window.tape_rows += persist.audit().len() as u64;
+            while let Ok(record) = persist.research.pop() {
                 window.tape_rows += 1;
-                if let PersistRecord::Feature(row) = record {
+                if let ResearchRecord::Feature(row) = record {
                     window.emissions.count(columns, row.feature, row.value);
                 }
             }
+        }
+        while let Ok(record) = self.tape.pop() {
+            std::hint::black_box(record);
+            window.teed += 1;
         }
         while let Ok(item) = self.commands.pop() {
             let ExecLaneItem::Command(stamped) = item else {
@@ -1234,7 +1261,8 @@ fn drive_on_this_thread(case: Case) -> Window {
         })
         .collect();
     let clock = quanta::Clock::new();
-    let (engine, mut readers) = armed_at_capacity(case, &rows, Stamper::Counter(clock.clone()));
+    let (engine, tape, mut readers) =
+        armed_at_capacity(case, &rows, Stamper::Counter(clock.clone()));
     let Harness {
         mut metrics,
         samples,
@@ -1250,7 +1278,7 @@ fn drive_on_this_thread(case: Case) -> Window {
         counters,
     };
     let (mut inputs, queues) = Inputs::new(case.input_ring());
-    let mut driver = HotDriver::new(queues, engine, Some(samples));
+    let mut driver = HotDriver::new(queues, engine, Some(samples)).with_tape(tape);
     let columns = RecorderColumns::resolve();
     let peers = PeerFrames::new();
     let mut venue = Venue::default();
@@ -1328,6 +1356,7 @@ fn drive_on_this_thread(case: Case) -> Window {
         }
         if !has_writer_failed && window.steps >= WRITER_FAILED_AT_STEP {
             inputs.push(Queue::WriterStatus, writer_failed(when));
+            inputs.push(Queue::WriterStatus, audit_bank_full(when));
             has_writer_failed = true;
         }
         loop {
@@ -1386,6 +1415,10 @@ impl Window {
             "the {case:?} command sink banked commands"
         );
         assert!(self.hot_records > 0, "the {case:?} hot lane took records");
+        assert!(
+            self.teed > 0,
+            "the {case:?} tee recorded the popped messages"
+        );
         assert!(
             self.stage_drops > 0,
             "the {case:?} stage sample ring was full"

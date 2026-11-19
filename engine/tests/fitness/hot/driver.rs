@@ -24,7 +24,6 @@ use engine::msg::exec::{
 use engine::msg::ids::{AssetId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, QueueId, Side};
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick, TradeEvent};
 use engine::msg::latency::{Category, CommandKind, Stage, WireSample};
-use engine::msg::persist::PersistRecord;
 use engine::msg::time::{DurationUs, Stamper};
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
 use engine::runtime::config::{
@@ -49,9 +48,9 @@ use engine::venues::polymarket::rotation::{OutcomeLeg, TokenId, WindowAssignment
 use rtrb::{Consumer, RingBuffer};
 
 use crate::engine_support::{
-    ExposureLane, Idle, ONE, account_chunk, detached_setup, engine_view, exec_event, exposure_ring,
-    instrument_row, level, persist_ring_for, snapshot_pair, spin, strategy_log_ring, stream_ready,
-    tracker_spec_all, ts, ui_book_ring, ui_event_ring, venue_ts,
+    ExposureLane, Idle, ONE, PersistRings, account_chunk, detached_setup, engine_view, exec_event,
+    exposure_ring, instrument_row, level, persist_ring_for, snapshot_pair, spin, strategy_log_ring,
+    stream_ready, tracker_spec_all, ts, ui_book_ring, ui_event_ring, venue_ts,
 };
 use crate::micro_strategy::{MicroRecorder, MicroRecorderParams};
 use crate::poly_strategy::{PolyUpParams, PolyUpPublisher};
@@ -220,7 +219,7 @@ fn recorded_exposure_text(snapshot: &ExposureSnapshot) -> String {
 
 /// The readers of every output of one engine, drained after each message so no ring fills.
 struct Lanes {
-    persist: Consumer<PersistRecord>,
+    persist: PersistRings,
     commands: Consumer<ExecLaneItem>,
     ui_books: Consumer<UiBookSnapshot>,
     ui_events: Consumer<UiEvent>,
@@ -231,7 +230,12 @@ struct Lanes {
 
 impl Lanes {
     fn drain_fold_into(&mut self, outputs: &mut Outputs) {
-        while let Ok(record) = self.persist.pop() {
+        // Each audit row of a message reached its ring when it was written, and each research row
+        // at the drain after the callbacks, so the audit rows of a message come first.
+        for record in self.persist.audit() {
+            outputs.tape_rows.push(format!("{record:?}"));
+        }
+        for record in self.persist.research() {
             outputs.tape_rows.push(format!("{record:?}"));
         }
         while let Ok(item) = self.commands.pop() {
@@ -537,7 +541,7 @@ fn recorder_tape() -> Vec<InboundMessage> {
             asks: vec![level(64_690 * ONE, ONE), level(64_700 * ONE, 2 * ONE)],
             received_ts_us: ts(start),
         },
-        &mut |message, _| market.push(message),
+        &mut |message| market.push(message),
     );
     assert_eq!(
         outcome,
@@ -550,7 +554,7 @@ fn recorder_tape() -> Vec<InboundMessage> {
                 market.push(InboundMessage::new(ts(at), MessageBody::Trade(trade)));
             }
             Frame::Depth(diff) => {
-                let outcome = sequencer.on_diff(diff, &mut |message, _| market.push(message));
+                let outcome = sequencer.on_diff(diff, &mut |message| market.push(message));
                 assert_eq!(
                     outcome,
                     DiffOutcome::Applied,
@@ -789,14 +793,16 @@ fn drive_on_this_thread(shipped: Shipped, observation: Observation) -> (Outputs,
 }
 
 /// The outputs of each tape, recorded once. A change to the fold that moves one byte of one lane
-/// fails here.
+/// fails here. The tape rows were recorded again when the fold began to write the mid of each book
+/// at each spin, the sides that hold no quote, and the ledger rows; each other lane is the one
+/// recorded at the entry state.
 const RECORDED: [(Shipped, [Digest; 8]); 2] = [
     (Shipped::Recorder, RECORDER_OUTPUTS),
     (Shipped::Publisher, PUBLISHER_OUTPUTS),
 ];
 
 const RECORDER_OUTPUTS: [Digest; 8] = [
-    recorded("tape rows", 46_306, 0x5176_2a02_3d64_55ec),
+    recorded("tape rows", 47_026, 0xc1d5_0735_ab81_512e),
     recorded("commands", 241, 0x60ea_828f_819b_c86e),
     recorded("ui books", 601, 0xd1ca_5f6f_2e33_bab2),
     recorded("ui events", 48_170, 0x2e25_a188_bc16_09f1),
@@ -807,7 +813,7 @@ const RECORDER_OUTPUTS: [Digest; 8] = [
 ];
 
 const PUBLISHER_OUTPUTS: [Digest; 8] = [
-    recorded("tape rows", 13, 0xea9c_15a1_1af3_ebe3),
+    recorded("tape rows", 752, 0x97b5_20db_c0d2_4522),
     recorded("commands", 80, 0xc4c1_7609_303b_edd7),
     recorded("ui books", 1_734, 0x4116_b312_52d1_9732),
     recorded("ui events", 1_245, 0xc5fe_6b6d_338d_87c0),

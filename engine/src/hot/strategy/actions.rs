@@ -1,12 +1,13 @@
 //! What the callbacks of one message bank, in lanes of a fixed size, drained after the callbacks in
-//! a fixed order. A strategy declares quotes into engine state, so no lane carries an order.
+//! a fixed order. A strategy declares quotes into engine state, so no lane carries an order, and an
+//! audit row passes no lane at all: it goes straight to the audit sink, which never drops one.
 
 use crate::hot::digest::digest_fields;
-use crate::hot::sink::{LinkSink, PersistSink, StrategyLogSink, UiEventSink};
+use crate::hot::sink::{AuditSink, LinkSink, ResearchSink, StrategyLogSink, UiEventSink};
 use crate::link::{LinkHash, LinkPayload, OutboundLink, TopicId};
 use crate::log::HotRecord;
 use crate::msg::latency::LaneDrops;
-use crate::msg::persist::{FeatureRow, PersistRecord};
+use crate::msg::persist::{AuditRecord, FeatureRow, ResearchRecord};
 use crate::msg::time::LocalTs;
 use crate::msg::ui::UiEvent;
 use crate::runtime::config::{RecordedTables, TableKind};
@@ -17,9 +18,9 @@ pub use crate::msg::ids::ClientOrderId;
 /// cannot swamp it. About 96 KB.
 pub(crate) const FEATURE_LANE_CAPACITY: usize = 4096;
 
-/// Raw rows of trades, book events and klines, and the incidents of the execution engine. A book
-/// chunk is the widest callback. About 384 KB.
-pub(crate) const PERSIST_LANE_CAPACITY: usize = 4096;
+/// Raw rows of trades, book events and klines, link frames, mids and the sides that did not quote.
+/// A book chunk is the widest callback. About 384 KB.
+pub(crate) const RESEARCH_LANE_CAPACITY: usize = 4096;
 
 /// Log records that one callback can bank before the drain: 64 of 64 bytes, 4 KB.
 pub(crate) const LOG_LANE_CAPACITY: usize = 64;
@@ -28,17 +29,18 @@ pub(crate) const LOG_LANE_CAPACITY: usize = 64;
 /// nothing. About 9 KB.
 pub(crate) const LINK_LANE_CAPACITY: usize = 32;
 
-/// The tables that the config lets the bank write, and the hash of the strategy's link fields that
-/// each payload carries.
+/// The tables that the config lets the bank write, the hash of the strategy's link fields that
+/// each payload carries, and the audit sink. `None` with no `persistence:` block.
 pub(crate) struct ActionsSetup {
     pub tables: RecordedTables,
     pub link_schema_hash: LinkHash,
+    pub audit: Option<AuditSink>,
 }
 
 /// Where the drain sends each lane.
 pub(crate) struct DrainSinks<'a> {
     /// `None` with no `persistence:` block configured.
-    pub persist: Option<&'a mut PersistSink>,
+    pub research: Option<&'a mut ResearchSink>,
     pub log_sink: &'a mut StrategyLogSink,
     pub event_sink: &'a mut UiEventSink,
     pub event_seq: &'a mut u64,
@@ -50,33 +52,41 @@ pub(crate) struct Actions {
     /// Features only, each also sent to the workstation. A lane of its own, so a feature that only
     /// the workstation reads never takes the place of a row for the tape.
     features: Vec<FeatureRow>,
-    persist: Vec<PersistRecord>,
+    research: Vec<ResearchRecord>,
     logs: Vec<HotRecord>,
     link: Vec<OutboundLink>,
-    /// The tables of the persist lane that the config names. Empty with persistence off.
+    /// The tables that the config names. Empty with persistence off.
     tables: RecordedTables,
     link_schema_hash: LinkHash,
     dropped: LaneDrops,
+    audit: Option<AuditSink>,
 }
 
 // The lanes hold what the execution pass banked after the last drain, until the next message.
-digest_fields! { Actions { features, persist, logs, link, tables, link_schema_hash, dropped } }
+digest_fields! {
+    Actions { features, research, logs, link, tables, link_schema_hash, dropped }
+    not_state {
+        // What its bank holds and what it posts depend on how fast the writer reads.
+        audit,
+    }
+}
 
 impl Actions {
     pub(crate) fn new(setup: ActionsSetup) -> Self {
         Self {
             features: Vec::with_capacity(FEATURE_LANE_CAPACITY),
-            persist: Vec::with_capacity(PERSIST_LANE_CAPACITY),
+            research: Vec::with_capacity(RESEARCH_LANE_CAPACITY),
             logs: Vec::with_capacity(LOG_LANE_CAPACITY),
             link: Vec::with_capacity(LINK_LANE_CAPACITY),
             tables: setup.tables,
             link_schema_hash: setup.link_schema_hash,
             dropped: LaneDrops::default(),
+            audit: setup.audit,
         }
     }
 
     /// Not filtered here: the drain decides whether the tape takes it. A feature row comes only
-    /// through here, because through the persist lane it would never reach the workstation.
+    /// through here, because through the research lane it would never reach the workstation.
     #[inline]
     pub(crate) fn push_feature(&mut self, row: FeatureRow) {
         if self.features.len() == FEATURE_LANE_CAPACITY {
@@ -87,21 +97,44 @@ impl Actions {
     }
 
     /// A row of a table that `strategy.tables` does not name is filtered, which is not a drop and is
-    /// not counted. An incident passes whatever the config names.
+    /// not counted. A mid and a side that did not quote pass whatever the config names.
     #[inline]
-    pub(crate) fn push_persist(&mut self, record: PersistRecord) {
-        let is_recorded = match record.table() {
-            Some(table) => self.tables.contains(table),
-            None => matches!(record, PersistRecord::Incident(_)),
-        };
-        if !is_recorded {
+    pub(crate) fn push_research(&mut self, record: ResearchRecord) {
+        if !self.records(record.table()) {
             return;
         }
-        if self.persist.len() == PERSIST_LANE_CAPACITY {
+        if self.research.len() == RESEARCH_LANE_CAPACITY {
             self.dropped.persist += 1;
             return;
         }
-        self.persist.push(record);
+        self.research.push(record);
+    }
+
+    /// Straight to the audit sink, with no lane between that could drop it. An order or a fill row
+    /// is filtered as a research row is; an incident and a ledger row pass whatever the config
+    /// names.
+    #[inline]
+    pub(crate) fn push_audit(&mut self, record: AuditRecord) {
+        if !self.records(record.table()) {
+            return;
+        }
+        if let Some(audit) = self.audit.as_mut() {
+            audit.push(record);
+        }
+    }
+
+    #[inline]
+    fn records(&self, table: Option<TableKind>) -> bool {
+        table.is_none_or(|table| self.tables.contains(table))
+    }
+
+    /// The audit sink, `None` with no `persistence:` block.
+    pub(crate) fn audit(&self) -> Option<&AuditSink> {
+        self.audit.as_ref()
+    }
+
+    pub(crate) fn audit_mut(&mut self) -> Option<&mut AuditSink> {
+        self.audit.as_mut()
     }
 
     #[inline]
@@ -130,7 +163,7 @@ impl Actions {
     #[inline]
     pub(crate) fn is_empty(&self) -> bool {
         self.features.is_empty()
-            && self.persist.is_empty()
+            && self.research.is_empty()
             && self.logs.is_empty()
             && self.link.is_empty()
     }
@@ -144,7 +177,7 @@ impl Actions {
     /// tape only when the config names the features table.
     pub(crate) fn drain(&mut self, sinks: DrainSinks<'_>) {
         let DrainSinks {
-            persist: mut sink,
+            research: mut sink,
             log_sink,
             event_sink,
             event_seq,
@@ -160,10 +193,10 @@ impl Actions {
                 value: row.value,
             });
             if records_features && let Some(sink) = sink.as_mut() {
-                sink.push(PersistRecord::Feature(row));
+                sink.push(ResearchRecord::Feature(row));
             }
         }
-        for record in self.persist.drain(..) {
+        for record in self.research.drain(..) {
             if let Some(sink) = sink.as_mut() {
                 sink.push(record);
             }

@@ -1,5 +1,5 @@
 //! Builders that many tests share, so that each builds its messages, its instrument row, and its
-//! persistence ring wired to a `PersistSink` the same way.
+//! audit and research rings wired to their sinks the same way.
 
 use std::net::IpAddr;
 use std::num::{NonZeroU32, NonZeroU64};
@@ -12,8 +12,8 @@ use engine::hot::exec::{
     side_base,
 };
 use engine::hot::sink::{
-    ExecSink, ExposureReceiver, ExposureSink, LinkSink, PersistSink, StrategyLogSink, UiBookSink,
-    UiEventSink,
+    AuditBank, AuditSink, ExecSink, ExposureReceiver, ExposureSink, LinkSink, ResearchSink,
+    StrategyLogSink, UiBookSink, UiEventSink,
 };
 use engine::hot::strategy::{EngineView, Strategy, StrategyConfig};
 use engine::link::ControlPlane;
@@ -25,13 +25,14 @@ use engine::msg::exec::{
 };
 use engine::msg::ids::VenueId;
 use engine::msg::ids::{
-    AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty, Side,
+    AggregateTradeId, AssetId, ClientOrderId, FIXED_SCALE, InstrumentId, Notional, Price, Qty,
+    RawTradeId, Side, StreamEpoch,
 };
 use engine::msg::inbound::{
     BookChunk, BookChunkKind, BookReset, InboundMessage, KlineEvent, Level, MarketRotation,
     MessageBody, RunControl, SpinTick, TradeEvent,
 };
-use engine::msg::persist::{FeatureId, FillRow, OrderRow, PersistRecord};
+use engine::msg::persist::{AuditRecord, FeatureId, FillRow, OrderRow, ResearchRecord};
 use engine::msg::run_state::RunState;
 use engine::msg::run_state::{ControllerEpoch, RunAssertion};
 use engine::msg::time::{DurationUs, LocalTs, Stamper, VenueTs};
@@ -46,6 +47,7 @@ use engine::runtime::config::{
 use engine::runtime::exposure::ExposureSnapshot;
 use engine::runtime::registry::InstrumentRow;
 use engine::runtime::shutdown::{DesiredWriter, RunStateHandles};
+use engine::tape::WriterInputs;
 use rtrb::{Consumer, RingBuffer};
 
 use crate::micro_strategy::MicroRecorder;
@@ -68,6 +70,10 @@ pub fn trade(instrument: u16, price: i64, qty: i64, side: Side, when: i64) -> Tr
         side,
         exchange_ts_us: venue_ts(when),
         exchange_sent_ts_us: None,
+        aggregate_id: AggregateTradeId(0),
+        first_trade_id: RawTradeId(0),
+        last_trade_id: RawTradeId(0),
+        stream_epoch: StreamEpoch::default(),
     }
 }
 
@@ -166,6 +172,7 @@ pub fn partial_delta_chunk(
 pub fn book_reset(instrument: u16, when: i64) -> InboundMessage {
     let reset = BookReset {
         instrument: InstrumentId(instrument),
+        exchange_ts_us: venue_ts(when),
     };
     InboundMessage::new(ts(when), MessageBody::BookReset(reset))
 }
@@ -456,7 +463,7 @@ fn ui_engine(
 /// takes.
 pub struct LinkedEngine {
     pub engine: HotEngine,
-    pub persist: Consumer<PersistRecord>,
+    pub persist: PersistRings,
     pub outbound: Consumer<OutboundLink>,
     desired_writer: Option<DesiredWriter>,
 }
@@ -555,7 +562,7 @@ pub fn running_at(epoch: u64) -> RunAssertion {
 /// Persistence on with every table recorded, so a test asserting on an emit lane sees it land.
 /// [`persist_ring_for`] drives the gate itself. Neither seals on a spin: a seal record in the ring
 /// would change what each test reads there.
-pub fn persist_ring(capacity: usize) -> (PersistWiring, Consumer<PersistRecord>) {
+pub fn persist_ring(capacity: usize) -> (PersistWiring, PersistRings) {
     persist_ring_for(capacity, RecordedTables::new(&ALL_TABLES))
 }
 
@@ -566,17 +573,58 @@ pub const ALL_TABLES: [TableKind; 4] = [
     TableKind::Klines,
 ];
 
-pub fn persist_ring_for(
+pub fn persist_ring_for(capacity: usize, tables: RecordedTables) -> (PersistWiring, PersistRings) {
+    sealing_persist_rings(capacity, tables, NonZeroU64::MAX)
+}
+
+/// Both rings of `capacity` slots, and an audit bank of as many rows that halts at its last one, so
+/// a test sees each row that the fold writes. The fold seals each `seal_interval_spins` spins.
+pub fn sealing_persist_rings(
     capacity: usize,
     tables: RecordedTables,
-) -> (PersistWiring, Consumer<PersistRecord>) {
-    let (producer, consumer) = RingBuffer::<PersistRecord>::new(capacity);
-    let wiring = PersistWiring {
-        sink: PersistSink::new(producer, NonZeroU32::MAX),
-        tables,
-        seal_interval_spins: NonZeroU64::MAX,
+    seal_interval_spins: NonZeroU64,
+) -> (PersistWiring, PersistRings) {
+    let (research_producer, research) = RingBuffer::<ResearchRecord>::new(capacity);
+    let (audit_producer, audit) = RingBuffer::<AuditRecord>::new(capacity);
+    let bank = AuditBank {
+        rows: capacity,
+        high_mark: capacity,
     };
-    (wiring, consumer)
+    let wiring = PersistWiring {
+        audit: AuditSink::new(audit_producer, bank, NonZeroU32::MAX),
+        research: ResearchSink::new(research_producer, NonZeroU32::MAX),
+        tables,
+        seal_interval_spins,
+    };
+    (wiring, PersistRings { audit, research })
+}
+
+/// The read ends of the two rings of the fold: the record of money, and research data.
+pub struct PersistRings {
+    pub audit: Consumer<AuditRecord>,
+    pub research: Consumer<ResearchRecord>,
+}
+
+impl PersistRings {
+    /// Each research record written since the last drain.
+    pub fn research(&mut self) -> Vec<ResearchRecord> {
+        std::iter::from_fn(|| self.research.pop().ok()).collect()
+    }
+
+    /// Each audit record written since the last drain.
+    pub fn audit(&mut self) -> Vec<AuditRecord> {
+        std::iter::from_fn(|| self.audit.pop().ok()).collect()
+    }
+
+    /// The read ends of a writer thread that drains both rings while the fold runs.
+    pub fn into_writer_inputs(self) -> WriterInputs {
+        WriterInputs {
+            audit: self.audit,
+            research: self.research,
+            rollups: None,
+            rotations: tokio::sync::mpsc::channel(1).1,
+        }
+    }
 }
 
 /// The strategy log lane, mirroring [`persist_ring`]. Keep the consumer to drain the banked log
@@ -836,13 +884,15 @@ pub struct Banked {
     pub fills: Vec<FillRow>,
 }
 
-pub fn drain_orders_and_fills(records: &mut Consumer<PersistRecord>) -> Banked {
+pub fn drain_orders_and_fills(records: &mut Consumer<AuditRecord>) -> Banked {
     let mut banked = Banked::default();
     while let Ok(record) = records.pop() {
         match record {
-            PersistRecord::Order(row) => banked.orders.push(row),
-            PersistRecord::Fill(row) => banked.fills.push(row),
-            other => panic!("only orders and fills are recorded here, got {other:?}"),
+            AuditRecord::Order(row) => banked.orders.push(row),
+            AuditRecord::Fill(row) => banked.fills.push(row),
+            // The ledger after each fill rides the same ring.
+            AuditRecord::Ledger(_) => {}
+            other => panic!("only orders, fills and the ledger are recorded here, got {other:?}"),
         }
     }
     banked
@@ -890,21 +940,17 @@ pub struct Idle;
 
 impl Strategy for Idle {}
 
-/// Everything the engine has persisted since the last drain.
-pub fn drain_persist(linked: &mut LinkedEngine) -> Vec<PersistRecord> {
-    let mut records = Vec::new();
-    while let Ok(record) = linked.persist.pop() {
-        records.push(record);
-    }
-    records
+/// Each research record the engine has written since the last drain.
+pub fn drain_persist(linked: &mut LinkedEngine) -> Vec<ResearchRecord> {
+    linked.persist.research()
 }
 
 /// The values a probe strategy recorded under its first feature, in order.
-pub fn call_codes(records: &[PersistRecord]) -> Vec<f64> {
+pub fn call_codes(records: &[ResearchRecord]) -> Vec<f64> {
     records
         .iter()
         .filter_map(|record| match record {
-            PersistRecord::Feature(row) if row.feature == FeatureId(0) => Some(row.value),
+            ResearchRecord::Feature(row) if row.feature == FeatureId(0) => Some(row.value),
             _ => None,
         })
         .collect()

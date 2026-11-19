@@ -224,8 +224,17 @@ impl LatencyRollup {
             idle_parks: sample.idle_parks,
         };
         let counters = &sample.counters;
+        let research = &counters.research_dropped;
         for (sink, total) in [
-            (SinkKind::Persist, counters.persist_dropped),
+            (SinkKind::ResearchFeatures, research.features),
+            (SinkKind::ResearchTrades, research.trades),
+            (SinkKind::ResearchBookEvents, research.book_events),
+            (SinkKind::ResearchKlines, research.klines),
+            (SinkKind::ResearchLinkFrames, research.link_frames),
+            (SinkKind::ResearchMids, research.mids),
+            (SinkKind::ResearchNoQuotes, research.no_quotes),
+            (SinkKind::AuditLost, counters.audit_lost),
+            (SinkKind::TapeLost, counters.tape_lost),
             (SinkKind::UiBooks, counters.ui_books_dropped),
             (SinkKind::UiEvents, counters.ui_events_dropped),
             (SinkKind::Link, counters.link_dropped),
@@ -249,6 +258,10 @@ impl LatencyRollup {
 
     pub(super) fn note_report_drops(&mut self, total: u64) {
         self.drop_totals[SinkKind::LatencyReports as usize] = total;
+    }
+
+    pub(super) fn note_rollup_drops(&mut self, total: u64) {
+        self.drop_totals[SinkKind::RollupRows as usize] = total;
     }
 
     /// Moves the clock to `now`, closing each interval that ends on the way. Only the first of

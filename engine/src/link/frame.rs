@@ -1,7 +1,10 @@
 //! The strategy payload frame, the datagram, and the table of topics with the body of each. The
 //! digest of the wire layout folds that table, so each topic and each body width is in it.
 
+use crate::msg::link::LINK_MAX_FIELDS;
 use crate::msg::time::VenueTs;
+
+pub use crate::msg::link::{LinkFrame, LinkOrigin, LinkPayload};
 use crate::msg::ui::{LatencyReport, UiBookSnapshot, UiEvent};
 
 use super::control::{CatalogFeature, CatalogInstrument, Lifecycle, Subscribe};
@@ -10,9 +13,6 @@ use super::envelope::{
     LinkHash, TopicId,
 };
 use super::wire::{LayoutDigest, WireField, wire_array};
-
-/// The most slots that fit the 384-byte input message. Its size assert fails on a 39th.
-pub const LINK_MAX_FIELDS: usize = 38;
 
 /// One engine topic: the name a config gives it, its id, and the width and digest of its body.
 #[derive(Clone, Copy)]
@@ -87,19 +87,6 @@ const fn fits_one_datagram() -> bool {
 // Each frame, a payload with every slot filled included, fits one datagram.
 const _: () = assert!(fits_one_datagram());
 
-/// `schema_hash` is a digest of the sender's ordered `link_fields()`. A mismatch drops the frame
-/// and counts the drop.
-///
-/// The count and its slot array stay private: they are one invariant, and a frame handed to
-/// strategy code with a count past the array would slice out of bounds on the hot thread.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct LinkPayload {
-    pub schema_hash: LinkHash,
-    pub event_ts_us: VenueTs,
-    count: u8,
-    values: [f64; LINK_MAX_FIELDS],
-}
-
 impl LinkPayload {
     const WIDTH: usize =
         LinkHash::WIDTH + VenueTs::WIDTH + u8::WIDTH + <[f64; LINK_MAX_FIELDS]>::WIDTH;
@@ -118,36 +105,12 @@ impl LinkPayload {
         )
         .finish();
 
-    /// # Panics
-    /// When `values` is longer than `LINK_MAX_FIELDS`. The field list is a code-level fact, so
-    /// exceeding it is a bug rather than a runtime condition.
-    pub fn new(schema_hash: LinkHash, event_ts_us: VenueTs, values: &[f64]) -> Self {
-        assert!(
-            values.len() <= LINK_MAX_FIELDS,
-            "link payload carries {} values, capacity {LINK_MAX_FIELDS}",
-            values.len()
-        );
-        let mut slots = [0.0; LINK_MAX_FIELDS];
-        slots[..values.len()].copy_from_slice(values);
-        Self {
-            schema_hash,
-            event_ts_us,
-            count: values.len() as u8,
-            values: slots,
-        }
-    }
-
-    #[inline]
-    pub fn values(&self) -> &[f64] {
-        debug_assert!(self.count as usize <= LINK_MAX_FIELDS);
-        &self.values[..self.count as usize]
-    }
-
     fn write(&self, writer: &mut ByteWriter<'_>) {
+        let (count, values) = self.wire_parts();
         self.schema_hash.write(writer);
         self.event_ts_us.write(writer);
-        self.count.write(writer);
-        self.values.write(writer);
+        count.write(writer);
+        values.write(writer);
     }
 
     fn read(reader: &mut ByteReader<'_>, guard: &FrameGuard) -> Result<Self, LinkDecodeError> {
@@ -167,25 +130,12 @@ impl LinkPayload {
             });
         }
         let values = WireField::read(reader)?;
-        Ok(Self {
-            schema_hash,
-            event_ts_us,
-            count,
-            values,
-        })
+        Ok(Self::from_wire(schema_hash, event_ts_us, count, values)
+            .expect("the count was checked against the slots above"))
     }
 }
 
 wire_array! { f64; LINK_MAX_FIELDS; 0.0 }
-
-/// Sender identity + position in stream (envelope residue after FrameGuard::check). Omit magic/layout/hashes/mac to save budget.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LinkOrigin {
-    pub sender_te_hash: LinkHash,
-    pub boot_ts_us: VenueTs,
-    pub topic: TopicId,
-    pub seq: u64,
-}
 
 impl From<&Envelope> for LinkOrigin {
     fn from(envelope: &Envelope) -> Self {
@@ -196,14 +146,6 @@ impl From<&Envelope> for LinkOrigin {
             seq: envelope.seq,
         }
     }
-}
-
-/// The sender's `event_ts_us` stays data and never orders the fold, because clock skew between
-/// regions would reorder the stream.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct LinkFrame {
-    pub origin: LinkOrigin,
-    pub payload: LinkPayload,
 }
 
 /// Carries no envelope, because the actor owns the sequence and the identity. A replay therefore

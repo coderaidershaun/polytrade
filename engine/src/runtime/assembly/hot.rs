@@ -6,7 +6,8 @@ use std::thread::JoinHandle;
 
 use crate::hot::dispatch::HotEngine;
 use crate::hot::metrics::DriverSamples;
-use crate::hot::spawn::{HotDriver, HotLoop, IdleWait, PinnedHotThread};
+use crate::hot::sink::TapeSink;
+use crate::hot::spawn::{HotDriver, HotLoop, IdleWait, PinnedHotThread, QueueProducer};
 use crate::runtime::config::{EngineConfig, IdleMode};
 use crate::runtime::shutdown::{DrainSignal, FatalSignal};
 
@@ -16,9 +17,12 @@ pub(super) struct HotBringUpSetup<'a, E> {
     pub(super) thread: PinnedHotThread,
     pub(super) rings: RingPlan,
     /// Runs on the hot thread after its rings are built, so the engine's memory is first touched
-    /// on the hot core too.
+    /// on the hot core too. It takes the producer of the audit status queue, which stays on the
+    /// hot thread.
     pub(super) engine: E,
     pub(super) samples: DriverSamples,
+    /// `None` with no persistence: the run records no tape.
+    pub(super) tape: Option<TapeSink>,
     pub(super) config: &'a EngineConfig,
     pub(super) fatal: &'a FatalSignal,
     pub(super) drain: &'a DrainSignal,
@@ -33,13 +37,14 @@ pub(super) struct HotBringUp {
 /// whose reader exists.
 pub(super) fn hot_bring_up<E>(setup: HotBringUpSetup<'_, E>) -> HotBringUp
 where
-    E: FnOnce() -> HotEngine + Send + 'static,
+    E: FnOnce(Option<QueueProducer>) -> HotEngine + Send + 'static,
 {
     let HotBringUpSetup {
         thread,
         rings,
         engine,
         samples,
+        tape,
         config,
         fatal,
         drain,
@@ -51,13 +56,17 @@ where
     let (fatal, drain) = (fatal.clone(), drain.clone());
     let (ready, producers) = sync_channel(1);
     let thread = thread.start(move || {
-        let (ingress, input_producers) = rings.build(&fatal);
-        let engine = engine();
+        let (ingress, mut input_producers) = rings.build(&fatal);
+        let engine = engine(input_producers.audit_status.take());
         ready
             .send(input_producers)
             .expect("the start waits for the producers until the hot thread sends them");
+        let driver = HotDriver::new(ingress, engine, Some(samples));
         HotLoop {
-            driver: HotDriver::new(ingress, engine, Some(samples)),
+            driver: match tape {
+                Some(tape) => driver.with_tape(tape),
+                None => driver,
+            },
             idle,
             fatal,
             drain,

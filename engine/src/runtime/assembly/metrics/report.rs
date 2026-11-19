@@ -218,10 +218,13 @@ fn warn_ring_drops(drops: &[(SinkKind, u64)]) {
 fn emit_counters(drops: &[(SinkKind, u64)], counts: &RunCounts, budget_breaches: u64) {
     let counters = &counts.counters;
     let mut line = CappedLine::new("metrics counters".to_owned());
-    // Always written, zero or not: these three are what "the engine lost nothing" is read off.
+    // Always written, zero or not: these four are what "the engine lost nothing" is read off.
     line.push(&format!(
-        " persist_dropped={} book_trimmed={} book_remove_missing={}",
-        counters.persist_dropped, counters.book_trimmed, counters.book_remove_missing
+        " research_dropped={} audit_lost={} book_trimmed={} book_remove_missing={}",
+        counters.research_dropped.total(),
+        counters.audit_lost,
+        counters.book_trimmed,
+        counters.book_remove_missing
     ));
     line.push_count("orders_submitted", counters.orders_submitted);
     line.push_group(

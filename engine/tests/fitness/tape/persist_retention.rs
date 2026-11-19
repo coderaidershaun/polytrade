@@ -6,17 +6,19 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use engine::msg::ids::InstrumentId;
-use engine::msg::persist::{FeatureId, FeatureRow, PersistRecord};
+use engine::msg::persist::{FeatureId, FeatureRow, ResearchRecord};
 use engine::msg::time::LocalTs;
 use engine::runtime::config::{ExecutionMode, RecordedTables, TableKind};
 use engine::tape::PersistConfig;
 
 use crate::parquet_readback::{
-    BASE_TS_US, TempDir, drain_blocking, parquet_files, run_dir, spawn_writer_with,
+    BASE_TS_US, Record, TempDir, drain_blocking, parquet_files, spawn_writer_with,
 };
 
 const RETENTION: Duration = Duration::from_hours(6);
 const STALE_AGE: Duration = Duration::from_hours(7);
+/// The folder of a run that an earlier boot left, whose files the new run prunes.
+const EARLIER_RUN: &str = "1700000000000000";
 
 struct Seeds {
     old_in_written_folder: PathBuf,
@@ -66,21 +68,21 @@ fn plant_file(path: &Path, age: Duration) {
         .expect("backdate seed");
 }
 
-fn feature_record() -> PersistRecord {
-    PersistRecord::Feature(FeatureRow {
+fn feature_record() -> Record {
+    Record::from(ResearchRecord::Feature(FeatureRow {
         instrument: InstrumentId(0),
         feature: FeatureId(0),
         value: 1.0,
         event_ts_us: LocalTs::from_micros(BASE_TS_US),
-    })
+    }))
 }
 
 fn run_retention(mode: ExecutionMode) {
     let dir = TempDir::new("persist-retention");
-    let live_dir = run_dir(dir.path());
-    let sim_dir = live_dir.join("sim");
-    let live_seeds = Seeds::plant(&live_dir);
-    let sim_seeds = Seeds::plant(&sim_dir);
+    let identity_dir = dir.path().join("recorder").join("te-recorder");
+    let (live_dir, sim_dir) = (identity_dir.join("live"), identity_dir.join("sim"));
+    let live_seeds = Seeds::plant(&live_dir.join(EARLIER_RUN));
+    let sim_seeds = Seeds::plant(&sim_dir.join(EARLIER_RUN));
     let (own_dir, own, other) = match mode {
         ExecutionMode::Sim => (&sim_dir, &sim_seeds, &live_seeds),
         _ => (&live_dir, &live_seeds, &sim_seeds),
@@ -109,15 +111,15 @@ fn run_retention(mode: ExecutionMode) {
     );
     assert!(own.fresh.exists(), "{mode:?}: fresh file kept");
     assert!(own.old_not_parquet.exists(), "{mode:?}: non-parquet kept");
-    let features = parquet_files(&own_dir.join("features/date=1970-01-01"));
+    let earlier = own_dir.join(EARLIER_RUN);
+    let written: Vec<PathBuf> = parquet_files(own_dir)
+        .into_iter()
+        .filter(|path| !path.starts_with(&earlier))
+        .collect();
     assert_eq!(
-        features.len(),
+        written.len(),
         1,
-        "{mode:?}: only the new file is left there"
-    );
-    assert_ne!(
-        features[0], own.old_in_written_folder,
-        "{mode:?}: the file left there is the new one"
+        "{mode:?}: the new run writes its own file in its own folder: {written:?}"
     );
 
     for path in other.all() {

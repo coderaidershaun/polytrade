@@ -10,7 +10,7 @@ use engine::hot::strategy::{Registration, Strategy, StrategyCtx, StrategyGate};
 use engine::msg::exec::{ExecCommand, ExecLaneItem};
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BookChunk, InboundMessage, MessageBody, SpinTick, TradeEvent};
-use engine::msg::persist::{FeatureId, PersistRecord};
+use engine::msg::persist::{FeatureId, ResearchRecord};
 use engine::msg::time::{DurationUs, Stamper};
 use engine::msg::ui::UiEvent;
 use engine::runtime::registry::InstrumentRow;
@@ -68,13 +68,14 @@ impl Strategy for Probe {
     }
 }
 
-fn rows(consumer: &mut Consumer<PersistRecord>) -> Vec<PersistRecord> {
+fn rows(consumer: &mut Consumer<ResearchRecord>) -> Vec<ResearchRecord> {
     std::iter::from_fn(|| consumer.pop().ok()).collect()
 }
 
-fn engine(warmup: DurationUs) -> (HotEngine, Consumer<PersistRecord>, Consumer<UiEvent>) {
+fn engine(warmup: DurationUs) -> (HotEngine, Consumer<ResearchRecord>, Consumer<UiEvent>) {
     let instruments = [instrument_row(0, tracker_spec_all(1), 64)];
-    let (persistence, persist) = persist_ring(256);
+    let (persistence, rings) = persist_ring(256);
+    let persist = rings.research;
     let (log_sink, _logs) = strategy_log_ring(256);
     let (engine, _books, events) = engine_with_ui(
         &instruments,
@@ -101,7 +102,7 @@ fn idle_engine() -> (HotEngine, Consumer<UiEvent>) {
     (engine, events)
 }
 
-fn fold(sequence: &[InboundMessage], warmup: DurationUs) -> Vec<PersistRecord> {
+fn fold(sequence: &[InboundMessage], warmup: DurationUs) -> Vec<ResearchRecord> {
     let (mut engine, mut persist, _events) = engine(warmup);
     for message in sequence {
         engine.dispatch(message);
@@ -165,7 +166,7 @@ fn warmup_holds_callbacks_by_message_time() {
         "state advanced identically under suppression — same records, values included"
     );
     let ewma = warmed.iter().find_map(|record| match record {
-        PersistRecord::Feature(row) if row.feature == FeatureId(1) => Some(row.value),
+        ResearchRecord::Feature(row) if row.feature == FeatureId(1) => Some(row.value),
         _ => None,
     });
     assert!(
@@ -181,7 +182,7 @@ fn warmup_holds_callbacks_by_message_time() {
     let positions: Vec<f64> = fold(&filled, WARMUP_SPAN)
         .iter()
         .filter_map(|record| match record {
-            PersistRecord::Feature(row) if row.feature == FeatureId(2) => Some(row.value),
+            ResearchRecord::Feature(row) if row.feature == FeatureId(2) => Some(row.value),
             _ => None,
         })
         .collect();
@@ -287,7 +288,7 @@ impl Strategy for LateProbe {
 /// stream is up, balances are known and the open orders have landed, all at 0.
 struct LateEngine {
     engine: HotEngine,
-    persist: Consumer<PersistRecord>,
+    persist: Consumer<ResearchRecord>,
     commands: Consumer<ExecLaneItem>,
     ui_events: Consumer<UiEvent>,
     reads: GateReads,
@@ -301,7 +302,8 @@ fn late_engine() -> LateEngine {
             ..instrument_row(market.0, tracker_spec_all(1), 64)
         })
         .collect();
-    let (persistence, persist) = persist_ring(256);
+    let (persistence, rings) = persist_ring(256);
+    let persist = rings.research;
     let (ui_event_sink, ui_events) = ui_event_ring(1_024);
     let (producer, commands) = RingBuffer::<ExecLaneItem>::new(256);
     let reads = GateReads::default();
@@ -380,11 +382,11 @@ fn is_warming_since(gate: StrategyGate, when: i64) -> bool {
 }
 
 /// The callbacks of one market, each as its code and the stamp of its message.
-fn market_calls(records: &[PersistRecord], market: InstrumentId) -> Vec<(f64, i64)> {
+fn market_calls(records: &[ResearchRecord], market: InstrumentId) -> Vec<(f64, i64)> {
     records
         .iter()
         .filter_map(|record| match record {
-            PersistRecord::Feature(row)
+            ResearchRecord::Feature(row)
                 if row.feature == FeatureId(0) && row.instrument == market =>
             {
                 Some((row.value, row.event_ts_us.micros()))
@@ -459,7 +461,7 @@ fn late_market_waits_for_its_own_span() {
         "the spin after 70 s reads both markets live"
     );
 
-    let records: Vec<PersistRecord> = std::iter::from_fn(|| late.persist.pop().ok()).collect();
+    let records: Vec<ResearchRecord> = std::iter::from_fn(|| late.persist.pop().ok()).collect();
     assert_eq!(
         market_calls(&records, MARKET_0),
         vec![(2.0, 10_000_000), (1.0, 62_000_000)],

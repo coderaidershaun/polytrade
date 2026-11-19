@@ -16,7 +16,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::hot::spawn::QueueProducer;
 use crate::msg::ids::{InstrumentId, StreamEpoch};
-use crate::msg::inbound::{InboundMessage, MessageBody, TappedMessage, VenueMeta};
+use crate::msg::inbound::{InboundMessage, MessageBody, TradeEvent};
 use crate::msg::run_state::RunState;
 use crate::msg::time::{EngineClock, LocalTs};
 use crate::runtime::config::{BinanceMarket, KlineInterval};
@@ -244,15 +244,14 @@ impl Actor {
 
     fn handle_trade(&mut self, data: &str, ctx: ParseContext) {
         let Some(event) = self.parsed(parse_agg_trade(data, ctx)) else { return };
-        self.flush_tapped(vec![TappedMessage {
-            message: InboundMessage::new(ctx.received_ts_us, MessageBody::Trade(event.trade)),
-            venue_meta: VenueMeta::Trade {
-                aggregate_id: event.aggregate_id,
-                first_trade_id: event.first_trade_id,
-                last_trade_id: event.last_trade_id,
-                stream_epoch: self.stream_epoch,
-            },
-        }]);
+        let trade = TradeEvent {
+            stream_epoch: self.stream_epoch,
+            ..event.trade
+        };
+        self.flush_tapped(vec![InboundMessage::new(
+            ctx.received_ts_us,
+            MessageBody::Trade(trade),
+        )]);
     }
 
     // Klines are not simulator inputs.

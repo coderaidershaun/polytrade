@@ -2,7 +2,7 @@
 //! resets the book, and it stays reset until a snapshot that the buffered diffs carry on from.
 
 use crate::msg::ids::InstrumentId;
-use crate::msg::inbound::{BookChunkKind, BookReset, InboundMessage, MessageBody, VenueMeta};
+use crate::msg::inbound::{BookChunkKind, BookReset, InboundMessage, MessageBody};
 use crate::msg::time::LocalTs;
 use crate::venues::edge::chunk::{ChunkEmitter, ChunkPlan};
 use crate::warn;
@@ -128,11 +128,11 @@ impl DepthSequencer {
         self.chunks.note_emit_floor(floor_ts_us);
     }
 
-    /// Emits each message with its originating venue metadata.
+    /// Emits each message with the venue stamp of the diff that made it.
     pub fn on_diff(
         &mut self,
         diff: DepthDiff,
-        emit: &mut impl FnMut(InboundMessage, VenueMeta),
+        emit: &mut impl FnMut(InboundMessage),
     ) -> DiffOutcome {
         match self.state {
             SeqState::Live => self.on_diff_live(diff, emit),
@@ -143,7 +143,7 @@ impl DepthSequencer {
     fn on_diff_live(
         &mut self,
         diff: DepthDiff,
-        emit: &mut impl FnMut(InboundMessage, VenueMeta),
+        emit: &mut impl FnMut(InboundMessage),
     ) -> DiffOutcome {
         if !self.rule.has_successor(self.book_update_id) {
             self.begin_resync(diff, emit);
@@ -179,19 +179,15 @@ impl DepthSequencer {
         DiffOutcome::Buffered
     }
 
-    fn begin_resync(&mut self, diff: DepthDiff, emit: &mut impl FnMut(InboundMessage, VenueMeta)) {
+    fn begin_resync(&mut self, diff: DepthDiff, emit: &mut impl FnMut(InboundMessage)) {
         let received_ts_us = self.chunks.clamp_emit_ts(diff.received_ts_us);
-        emit(
-            InboundMessage::new(
-                received_ts_us,
-                MessageBody::BookReset(BookReset {
-                    instrument: self.chunks.instrument(),
-                }),
-            ),
-            VenueMeta::DepthReset {
+        emit(InboundMessage::new(
+            received_ts_us,
+            MessageBody::BookReset(BookReset {
+                instrument: self.chunks.instrument(),
                 exchange_ts_us: diff.exchange_ts_us,
-            },
-        );
+            }),
+        ));
         self.state = SeqState::AwaitingSnapshot;
         self.buffer.clear();
         self.overflow_warned = false;
@@ -203,7 +199,7 @@ impl DepthSequencer {
     pub fn apply_snapshot(
         &mut self,
         snapshot: DepthSnapshot,
-        emit: &mut impl FnMut(InboundMessage, VenueMeta),
+        emit: &mut impl FnMut(InboundMessage),
     ) -> SnapshotOutcome {
         if snapshot.bids.is_empty() && snapshot.asks.is_empty() {
             return SnapshotOutcome::Stale;
@@ -226,10 +222,10 @@ impl DepthSequencer {
         // A snapshot replaces the book, so it chains onto nothing.
         self.chunks
             .emit_book(plan, &snapshot.bids, &snapshot.asks, &mut |chunk| {
-                emit(
-                    InboundMessage::new(plan.received_ts_us, MessageBody::Book(chunk)),
-                    VenueMeta::None,
-                );
+                emit(InboundMessage::new(
+                    plan.received_ts_us,
+                    MessageBody::Book(chunk),
+                ));
             });
         self.book_update_id = last_update_id;
         let buffered: Vec<DepthDiff> = self.buffer.drain(..).collect();
@@ -262,22 +258,19 @@ impl DepthSequencer {
         true
     }
 
-    fn emit_delta(&mut self, diff: &DepthDiff, emit: &mut impl FnMut(InboundMessage, VenueMeta)) {
+    fn emit_delta(&mut self, diff: &DepthDiff, emit: &mut impl FnMut(InboundMessage)) {
         let plan = ChunkPlan {
             kind: BookChunkKind::Delta,
             update_id: diff.final_update_id,
             exchange_ts_us: Some(diff.exchange_ts_us),
             received_ts_us: self.chunks.clamp_emit_ts(diff.received_ts_us),
         };
-        let venue_meta = VenueMeta::DepthDelta {
-            exchange_ts_us: diff.exchange_ts_us,
-        };
         self.chunks
             .emit_book(plan, &diff.bids, &diff.asks, &mut |chunk| {
-                emit(
-                    InboundMessage::new(plan.received_ts_us, MessageBody::Book(chunk)),
-                    venue_meta,
-                );
+                emit(InboundMessage::new(
+                    plan.received_ts_us,
+                    MessageBody::Book(chunk),
+                ));
             });
     }
 }

@@ -7,15 +7,15 @@ use crate::link::{LinkHash, LinkPayload, OutboundLink, TopicId};
 use crate::log::HotRecord;
 use crate::msg::exec::{Liquidity, OrderStyle, Provenance, RejectClass};
 use crate::msg::ids::{
-    AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, Side, Spend, TradeId, VenueId,
-    VenueOrderId,
+    AggregateTradeId, AssetId, ClientOrderId, InstrumentId, Notional, Price, Qty, RawTradeId, Side,
+    Spend, StreamEpoch, TradeId, VenueId, VenueOrderId,
 };
 use crate::msg::inbound::{Level, TradeEvent};
 use crate::msg::latency::LaneDrops;
 use crate::msg::persist::{
     BookEventKind, BookEventRow, FeatureId, FeatureRow, FillRow, IncidentKind, IncidentRow,
-    KlineRow, LinkFrameRow, LinkRowKind, OrderLifecycle, OrderRow, OrderTransition, PersistRecord,
-    TradeRow,
+    KlineRow, LinkFrameRow, LinkRowKind, MidRow, NoQuoteReason, NoQuoteRow, OrderLifecycle,
+    OrderRow, OrderTransition, ResearchRecord, TradeRow,
 };
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{DurationUs, FoldTime, LocalTs, VenueTs};
@@ -236,6 +236,9 @@ digest_by_hash!(
     ClientOrderId,
     VenueOrderId,
     TradeId,
+    AggregateTradeId,
+    RawTradeId,
+    StreamEpoch,
     Level,
     RunAssertion,
     OrderStyle,
@@ -254,11 +257,15 @@ digest_by_hash!(
     OrderTransition,
     OrderLifecycle,
     IncidentKind,
+    NoQuoteReason,
     InstrumentExposure,
 );
 
 digest_fields! {
-    TradeEvent { instrument, price, qty, side, exchange_ts_us, exchange_sent_ts_us }
+    TradeEvent {
+        instrument, price, qty, side, exchange_ts_us, exchange_sent_ts_us, aggregate_id,
+        first_trade_id, last_trade_id, stream_epoch,
+    }
 }
 digest_fields! { FeatureRow { instrument, feature, value, event_ts_us } }
 digest_fields! { TradeRow { instrument, price, qty, side, exchange_ts_us, received_ts_us } }
@@ -278,7 +285,7 @@ digest_fields! {
     OrderRow {
         instrument, client_id, quote_level, venue_order_id, transition, state, previous_state,
         provenance, side, style, price, qty, filled_qty, filled_quote, reject, reject_code,
-        exchange_ts_us, received_ts_us,
+        exchange_ts_us, received_ts_us, depth_ahead,
     }
 }
 digest_fields! {
@@ -294,20 +301,21 @@ digest_fields! {
         received_ts_us,
     }
 }
+digest_fields! { MidRow { instrument, spin_seq, bid, ask, mid, event_ts_us } }
+digest_fields! { NoQuoteRow { instrument, spin_seq, side, reason, event_ts_us } }
 digest_fields! { OutboundLink { topic, payload } }
 
-impl Digest for PersistRecord {
+impl Digest for ResearchRecord {
     fn digest(&self, digester: &mut Digester) {
         match self {
-            PersistRecord::Feature(row) => digester.variant(0, row),
-            PersistRecord::Trade(row) => digester.variant(1, row),
-            PersistRecord::BookEvent(row) => digester.variant(2, row),
-            PersistRecord::Kline(row) => digester.variant(3, row),
-            PersistRecord::LinkFrame(row) => digester.variant(4, row),
-            PersistRecord::Order(row) => digester.variant(5, row),
-            PersistRecord::Fill(row) => digester.variant(6, row),
-            PersistRecord::SealAll => digester.variant(7, &()),
-            PersistRecord::Incident(row) => digester.variant(8, row),
+            ResearchRecord::Feature(row) => digester.variant(0, row),
+            ResearchRecord::Trade(row) => digester.variant(1, row),
+            ResearchRecord::BookEvent(row) => digester.variant(2, row),
+            ResearchRecord::Kline(row) => digester.variant(3, row),
+            ResearchRecord::LinkFrame(row) => digester.variant(4, row),
+            ResearchRecord::SealAll => digester.variant(7, &()),
+            ResearchRecord::Mid(row) => digester.variant(9, row),
+            ResearchRecord::NoQuote(row) => digester.variant(10, row),
         }
     }
 }

@@ -19,7 +19,6 @@ labelled_enum! {
         CounterSamples = "counter_samples",
         WireSamples = "wire_samples",
         LatencyReports = "latency_reports",
-        Persist = "persist",
         UiBooks = "ui_books",
         UiEvents = "ui_events",
         Link = "link",
@@ -28,6 +27,16 @@ labelled_enum! {
         BankLogs = "bank_logs",
         BankLink = "bank_link",
         ExposureSuperseded = "exposure_superseded",
+        ResearchFeatures = "research_features",
+        ResearchTrades = "research_trades",
+        ResearchBookEvents = "research_book_events",
+        ResearchKlines = "research_klines",
+        ResearchLinkFrames = "research_link_frames",
+        ResearchMids = "research_mids",
+        ResearchNoQuotes = "research_no_quotes",
+        AuditLost = "audit_lost",
+        TapeLost = "tape_lost",
+        RollupRows = "rollup_rows",
     }
     pub fn label;
     pub const ALL;

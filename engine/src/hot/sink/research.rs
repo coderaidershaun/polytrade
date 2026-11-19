@@ -1,18 +1,19 @@
-//! The one record that must never drop: the seal waits until the persistence ring accepts it, and
-//! the config caps the tries before the fold halts quoting.
+//! The research ring: a full ring drops a row and counts it by table, so research pressure never
+//! stalls the fold, while the seal waits until the ring accepts it, up to a cap of tries.
 
 use std::num::NonZeroU32;
 
 use rtrb::Producer;
 
 use crate::msg::failure::{FailureClass, Halt};
-use crate::msg::persist::PersistRecord;
+use crate::msg::latency::ResearchDrops;
+use crate::msg::persist::ResearchRecord;
 
 /// A dropped seal leaves Parquet unsealed and the run's research data unreadable, so SealAll
 /// waits until the ring accepts it. Ordinary rows are still dropped and counted on a full ring.
-pub struct PersistSink {
-    producer: Producer<PersistRecord>,
-    dropped: u64,
+pub struct ResearchSink {
+    producer: Producer<ResearchRecord>,
+    dropped: ResearchDrops,
     seal: Seal,
     seal_try_limit: NonZeroU32,
 }
@@ -33,7 +34,7 @@ enum Seal {
     },
 }
 
-impl PersistSink {
+impl ResearchSink {
     /// A full ring drops a row and counts it.
     pub const ROW_WHEN_FULL: FailureClass = FailureClass::Reject;
     /// A full ring keeps the seal and tries it again, up to the cap.
@@ -41,26 +42,40 @@ impl PersistSink {
     /// A seal past its cap halts quoting.
     pub const SEAL_PAST_CAP: FailureClass = FailureClass::Halt(Halt::Quoting);
 
-    pub fn new(producer: Producer<PersistRecord>, seal_try_limit: NonZeroU32) -> Self {
+    pub fn new(producer: Producer<ResearchRecord>, seal_try_limit: NonZeroU32) -> Self {
         Self {
             producer,
-            dropped: 0,
+            dropped: ResearchDrops::default(),
             seal: Seal::Sent,
             seal_try_limit,
         }
     }
 
-    // SMELL: a full ring drops an order or a fill row and counts it, as it does a research row, so
-    // the audit trail can miss a row while the engine trades on. An audit row needs a ring that
-    // never drops it.
-    pub(crate) fn push(&mut self, record: PersistRecord) {
+    pub(crate) fn push(&mut self, record: ResearchRecord) {
         if self.can_push_seal() {
             self.send_seal();
         }
         // A row pushed ahead of a pending seal lands in the wrong file, so the seal goes first.
         if self.is_seal_pending() || self.producer.push(record).is_err() {
-            self.dropped += 1;
+            self.count_drop(&record);
         }
+    }
+
+    #[cold]
+    fn count_drop(&mut self, record: &ResearchRecord) {
+        let drops = &mut self.dropped;
+        let count = match record {
+            ResearchRecord::Feature(_) => &mut drops.features,
+            ResearchRecord::Trade(_) => &mut drops.trades,
+            ResearchRecord::BookEvent(_) => &mut drops.book_events,
+            ResearchRecord::Kline(_) => &mut drops.klines,
+            ResearchRecord::LinkFrame(_) => &mut drops.link_frames,
+            ResearchRecord::Mid(_) => &mut drops.mids,
+            ResearchRecord::NoQuote(_) => &mut drops.no_quotes,
+            // A seal never comes through here: it waits in the latch.
+            ResearchRecord::SealAll => return,
+        };
+        *count += 1;
     }
 
     /// Closes and rolls every open file, ordered after any records already banked this spin. A
@@ -92,7 +107,7 @@ impl PersistSink {
         self.take_past_cap()
     }
 
-    pub fn dropped(&self) -> u64 {
+    pub fn dropped(&self) -> ResearchDrops {
         self.dropped
     }
 
@@ -135,7 +150,7 @@ impl PersistSink {
 
     #[cold]
     fn send_seal(&mut self) {
-        if self.producer.push(PersistRecord::SealAll).is_ok() {
+        if self.producer.push(ResearchRecord::SealAll).is_ok() {
             self.seal = Seal::Sent;
         }
     }

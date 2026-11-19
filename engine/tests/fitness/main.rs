@@ -31,6 +31,7 @@ macro_rules! assert_lacks {
 
 mod engine_support;
 mod exec_support;
+mod golden;
 mod hot;
 mod link;
 mod log;

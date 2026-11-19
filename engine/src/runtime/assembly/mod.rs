@@ -1,16 +1,17 @@
 //! Engine assembly and lifecycle: wired in dependency order, torn down via one drain
 //! under a watchdog deadline.
 //!
-//! Every submodule is either a PHASE of one run — `preflight`, `run`, `drain`, in that order — or the
-//! bring-up of ONE subsystem, named for it: `hot`, `exec`, `link`, `persist`, `metrics`, `senders`,
-//! `timer`, `queues`. The rest are leaves those two lean on: `error`, `exec_identity`, `exit`. Which
-//! venue a run talks to is decided by the adapters, never here.
+//! Every submodule is a PHASE of one run (`preflight`, `run`, `drain`), the bring-up of ONE subsystem
+//! (`hot`, `exec`, `link`, `persist`, `metrics`, `senders`, `timer`, `queues`), `fold`, the same build
+//! on one thread for a re-fold, or a leaf (`error`, `exec_identity`, `exit`). Which venue a run talks
+//! to is decided by the adapters, never here.
 
 mod drain;
 mod error;
 mod exec;
 mod exec_identity;
 mod exit;
+pub(super) mod fold;
 mod hot;
 mod link;
 pub mod metrics;
@@ -25,13 +26,12 @@ use std::sync::Arc;
 use std::sync::mpsc::SyncSender;
 use std::thread::JoinHandle;
 use std::time::Duration;
-
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
 use crate::hot::dispatch::{ExposureWiring, HotEngine, HotEngineSetup};
 use crate::hot::metrics::DriverSamples;
-use crate::hot::sink::StrategyLogSink;
+use crate::hot::sink::{StrategyLogSink, UiBookSink, UiEventSink};
 use crate::hot::spawn::{HotThreadConfig, SimTapGate, spawn_hot_thread};
 use crate::hot::strategy::Strategy;
 use crate::link::LinkCountsHandle;
@@ -52,26 +52,29 @@ use crate::venues::venue::{MarketDataWiring, WindowAssignment, spawn_market_data
 use crate::{info, warn};
 
 use drain::install_panic_hook;
+pub use drain::{DrainWatchdog, ForcedExit};
+pub use error::StartError;
 use error::refuse;
+#[cfg(feature = "otlp")]
+pub(crate) use exec::SWEEP_SHARE_OF_DRAIN;
 use exec::{CommandLane, ExecBringUp, ExecBringUpSetup, exec_bring_up, open_command_lane};
+pub use exec_identity::{ExecutionLease, IdentityLock, IdentityLocks};
+pub use exit::{DrainDeadline, DrainFailure, DrainOutcome, Exit, Trigger};
 use hot::{HotBringUp, HotBringUpSetup, hot_bring_up};
 use link::LinkStart;
 use metrics::{
-    MetricsBringUp, MetricsBringUpSetup, MetricsThread, SampleProducers, metrics_bring_up,
+    MetricsBringUp, MetricsBringUpSetup, MetricsThread, RollupOutputs, SampleProducers,
+    metrics_bring_up,
 };
-use persist::{PersistBringUp, PersistBringUpSetup, persist_bring_up};
-use queues::{InputProducers, RingPlan};
-use timer::spawn_timer;
-
-pub use drain::{DrainWatchdog, ForcedExit};
-pub use error::StartError;
-#[cfg(feature = "otlp")]
-pub(crate) use exec::SWEEP_SHARE_OF_DRAIN;
-pub use exec_identity::{ExecutionLease, IdentityLock, IdentityLocks};
-pub use exit::{DrainDeadline, DrainFailure, DrainOutcome, Exit, Trigger};
+use persist::{
+    OpenRun, PersistBringUp, PersistBringUpSetup, open_run, persist_bring_up, rollup_ring_of,
+};
 pub use preflight::{Preflight, StartPlan};
+use queues::{InputProducers, RingPlan};
+use run::build_runtime;
 pub use run::run_trading_engine;
 pub use senders::PinnedSenders;
+use timer::spawn_timer;
 
 const ROTATIONS_CHANNEL_CAPACITY: usize = 256;
 
@@ -90,6 +93,8 @@ pub struct Engine {
     link: Option<TaskHandle>,
     /// `None` when the config carries no `persistence:` block.
     persistence: Option<PersistHandle>,
+    /// The manifest of the run, closed after the drain. `None` with no `persistence:` block.
+    run: Option<OpenRun>,
     /// Always present, since position outlives any single run.
     exposure: ExposureHandle,
     /// `None` with execution off. Stopped first, so cancels go out before anything else stops.
@@ -117,7 +122,7 @@ impl Engine {
     /// [`StartError::HotPin`], [`StartError::HousekeepingPin`] or [`StartError::SenderPin`] for a
     /// thread that cannot pin on Linux, and [`StartError::Runtime`] for a runtime that cannot be
     /// built. Each thread that started before the refusal has stopped when this returns, and no
-    /// writer has started.
+    /// writer has started. [`StartError::Manifest`] when the run folder cannot be opened.
     #[expect(
         clippy::disallowed_methods,
         reason = "the one clock of the process, started before any producer of message stamps"
@@ -150,9 +155,11 @@ impl Engine {
         let (wiring, ui_channels) = ui_channel();
         let UiWiring {
             lifecycle,
-            books: ui_book_sink,
-            events: ui_event_sink,
+            books,
+            events,
         } = wiring;
+        let ui_book_sink = UiBookSink::new(books);
+        let ui_event_sink = UiEventSink::new(events);
 
         let identity = plan.identity.clone();
         let artifacts = plan.artifacts.clone();
@@ -176,6 +183,7 @@ impl Engine {
         };
         #[cfg(feature = "otlp")]
         let (otlp_rows, otlp) = plan.otlp.as_ref().map(OtlpPlan::open).unzip();
+        let (tape_rows, rollup_rows) = rollup_ring_of(&config);
         log::register_thread("main");
         info!("polysim starting — trading engine {identity}");
         match latency_clock {
@@ -204,8 +212,11 @@ impl Engine {
             core_id: config.engine.housekeeping_core_id,
             pin,
             link_counts: config.link.is_some().then(|| link_counts.clone()),
-            #[cfg(feature = "otlp")]
-            rows: otlp_rows,
+            outputs: RollupOutputs {
+                tape: tape_rows,
+                #[cfg(feature = "otlp")]
+                otlp: otlp_rows,
+            },
         }) {
             Ok(brought_up) => brought_up,
             Err(error) => return Err(refuse(error, log_handle, || hot_thread.abandon())),
@@ -222,8 +233,11 @@ impl Engine {
                 }
             },
         };
-        let runtime = match build_runtime(config.engine.tokio_workers) {
-            Ok(runtime) => runtime,
+        // The manifest opens last, so no run folder holds a run whose start was refused.
+        let built = build_runtime(config.engine.tokio_workers)
+            .and_then(|runtime| Ok((runtime, open_run(&config, &plan)?)));
+        let (runtime, run) = match built {
+            Ok(built) => built,
             Err(error) => {
                 return Err(refuse(error, log_handle, || {
                     drop(senders);
@@ -268,13 +282,16 @@ impl Engine {
             mpsc::channel::<WindowAssignment>(exec::ASSIGNMENTS_CHANNEL_CAPACITY);
         let PersistBringUp {
             wiring: persist_wiring,
+            tee,
             tape,
         } = persist_bring_up(PersistBringUpSetup {
             config: &config,
             identity: &identity,
             artifacts: &artifacts,
             registry: &registry,
-            feature_names: &feature_names,
+            strategy: strategy.as_ref(),
+            run: run.as_ref(),
+            rollups: rollup_rows,
             rotations: rotations_rx,
         });
 
@@ -314,18 +331,20 @@ impl Engine {
         let restored = restored_exposure.instruments().to_vec();
         let (exposure_sink, exposure_lane) = ExposureWriter::lane(instruments.len());
         let warmup = DurationUs::from_secs(config.engine.warmup_secs as i64);
+        let ledger_interval = config.ledger_interval_spins();
         let HotBringUp {
             thread: hot,
             producers,
         } = hot_bring_up(HotBringUpSetup {
             thread: hot_thread,
             rings: RingPlan::of(&registry, &config),
-            engine: move || {
+            engine: move |audit_status| {
                 HotEngine::new(HotEngineSetup {
                     exec: exec_wiring.into_iter().collect(),
                     instruments: &instruments,
                     strategy,
-                    persistence: persist_wiring,
+                    persistence: persist_wiring
+                        .map(|wiring| wiring.reporting_bank_full_to(audit_status)),
                     strategy_log_sink,
                     ui_book_sink,
                     ui_event_sink,
@@ -336,12 +355,14 @@ impl Engine {
                     },
                     warmup,
                 })
+                .writing_ledger_every(ledger_interval)
             },
             samples: DriverSamples {
                 stamper: stamper.clone(),
                 stages,
                 counters,
             },
+            tape: tee,
             config: &config.engine,
             fatal: &fatal,
             drain: &drain,
@@ -354,6 +375,7 @@ impl Engine {
             writer_status,
             control: control_producer,
             tape_status,
+            audit_status: _,
         } = producers;
         let persistence = tape.map(|tape| {
             tape.spawn(tape_status.map(|queue| TapeStatus {
@@ -460,6 +482,7 @@ impl Engine {
             timer,
             link,
             persistence,
+            run,
             exposure,
             exec,
             exec_tap_gate,
@@ -473,13 +496,4 @@ impl Engine {
             drain_deadline,
         })
     }
-}
-
-fn build_runtime(workers: usize) -> Result<Runtime, StartError> {
-    tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(workers.max(1))
-        .enable_all()
-        .thread_name("polysim-tokio")
-        .build()
-        .map_err(StartError::Runtime)
 }

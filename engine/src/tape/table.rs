@@ -15,7 +15,7 @@ use crate::info;
 use crate::msg::time::LocalTs;
 use crate::runtime::durable_file::{FileSteps, Staging, StepFile, WriteError};
 
-use super::schema::TableRow;
+use super::schema::{Seals, TableRow};
 use super::{PersistError, TapeTable};
 
 const ROWS_PER_WRITE: usize = 1000;
@@ -27,13 +27,13 @@ const US_PER_HOUR: i64 = 3_600_000_000;
 pub(super) const DATE_FOLDER_PREFIX: &str = "date=";
 pub(super) const FILE_EXTENSION: &str = "parquet";
 /// Added to the name of a file that has no footer yet. Each reader keeps `.parquet` names only.
-pub(super) const UNFINISHED_EXTENSION: &str = "part";
+pub(in crate::tape) const UNFINISHED_EXTENSION: &str = "part";
 
 /// What each table writer of one run shares: where its files go, the boot stamp in their names,
 /// their footer, and the steps that write them.
 #[derive(Clone)]
 pub(super) struct TableFiles {
-    /// `{persistence.dir}/{strategy-id}/{te-id}`.
+    /// `{persistence.dir}/{strategy-id}/{te-id}/{kind}/{run_id}`.
     pub(super) run_dir: PathBuf,
     pub(super) boot_ts_us: i64,
     pub(super) footer: Vec<(String, String)>,
@@ -66,14 +66,16 @@ impl<R: TableRow> TableWriter<R> {
         }
     }
 
-    /// Buffer a row, sealing on hour cross or [`ROWS_PER_SEAL`] rows. Records older than open hour land in current file.
+    /// Buffer a row, sealing on hour cross or [`ROWS_PER_SEAL`] rows when the table seals there.
+    /// Records older than open hour land in current file.
     ///
     /// # Errors
     /// File, encode, or write failure.
     pub(super) fn push(&mut self, row: R) -> Result<(), PersistError> {
         let hour_bucket = hour_bucket(row.partition_ts());
+        let rolls = R::SEALS == Seals::BorderRowsHour;
         let needs_new_file = match &self.open {
-            Some(open) => hour_bucket > open.hour_bucket,
+            Some(open) => rolls && hour_bucket > open.hour_bucket,
             None => true,
         };
         if needs_new_file {
@@ -84,7 +86,7 @@ impl<R: TableRow> TableWriter<R> {
         if self.pending.len() >= ROWS_PER_WRITE {
             self.write_pending()?;
         }
-        if self.rows_since_seal() >= ROWS_PER_SEAL {
+        if rolls && self.rows_since_seal() >= ROWS_PER_SEAL {
             self.seal()?;
         }
         Ok(())
@@ -193,12 +195,15 @@ impl<R: TableRow> TableWriter<R> {
             .iter()
             .map(|(key, value)| KeyValue::new(key.clone(), value.clone()))
             .collect();
-        WriterProperties::builder()
+        let properties = WriterProperties::builder()
             .set_compression(Compression::ZSTD(
                 ZstdLevel::try_new(ZSTD_LEVEL).expect("zstd level 3 is valid"),
             ))
-            .set_key_value_metadata(Some(metadata))
-            .build()
+            .set_key_value_metadata(Some(metadata));
+        match R::ROW_GROUP_ROWS {
+            Some(rows) => properties.set_max_row_group_row_count(Some(rows)).build(),
+            None => properties.build(),
+        }
     }
 
     /// Zero-padded sequence -> path sort = seal order.

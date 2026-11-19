@@ -3,7 +3,7 @@
 
 use serde::Deserialize;
 
-use crate::msg::ids::{AggregateTradeId, InstrumentId, RawTradeId, Side};
+use crate::msg::ids::{AggregateTradeId, InstrumentId, RawTradeId, Side, StreamEpoch};
 use crate::msg::inbound::{KlineEvent, Level, TradeEvent};
 use crate::msg::time::{LocalTs, VenueTs};
 use crate::runtime::config::KlineInterval;
@@ -48,13 +48,11 @@ pub struct CombinedFrame {
     pub data: String,
 }
 
-/// A normalized trade plus its aggregate and raw sequence identities.
+/// A normalized trade with its aggregate and raw sequence identities. The parser cannot know the
+/// connection, so its epoch is the default until the actor that read the frame sets its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AggTradeEvent {
     pub trade: TradeEvent,
-    pub aggregate_id: AggregateTradeId,
-    pub first_trade_id: RawTradeId,
-    pub last_trade_id: RawTradeId,
 }
 
 /// # Errors
@@ -80,10 +78,11 @@ pub fn parse_agg_trade(json: &str, ctx: ParseContext) -> Result<AggTradeEvent, P
             exchange_sent_ts_us: raw
                 .event_ts_ms
                 .map(|ms| clamp_exchange_ts(ms, ctx.received_ts_us)),
+            aggregate_id: AggregateTradeId(aggregate_id),
+            first_trade_id: RawTradeId(first_trade_id),
+            last_trade_id: RawTradeId(last_trade_id),
+            stream_epoch: StreamEpoch::default(),
         },
-        aggregate_id: AggregateTradeId(aggregate_id),
-        first_trade_id: RawTradeId(first_trade_id),
-        last_trade_id: RawTradeId(last_trade_id),
     })
 }
 

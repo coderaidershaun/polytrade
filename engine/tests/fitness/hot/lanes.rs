@@ -5,7 +5,8 @@ use engine::hot::dispatch::{HotEngine, PersistWiring};
 use engine::hot::exec::HaltReason;
 use engine::hot::ingress::IngressQueues;
 use engine::hot::sink::{
-    ExposureSink, LinkSink, PersistSink, SampleSink, StrategyLogSink, UiBookSink, UiEventSink,
+    AuditBank, AuditSink, ExposureSink, LinkSink, ResearchSink, SampleSink, StrategyLogSink,
+    UiBookSink, UiEventSink,
 };
 use engine::hot::spawn::spawn_hot_thread;
 use engine::hot::spawn::{
@@ -16,10 +17,10 @@ use engine::log::open_hot_lane;
 use engine::msg::failure::{FailureClass, Halt};
 use engine::msg::ids::{QueueId, Side, SourceId};
 use engine::msg::inbound::{
-    FileWriter, InboundMessage, MarketTapItem, MessageBody, SpinTick, VenueMeta, WriterFailure,
+    AuditBankFull, FileWriter, InboundMessage, MarketTapItem, MessageBody, SpinTick, WriterFailure,
 };
 use engine::msg::latency::StageSample;
-use engine::msg::persist::PersistRecord;
+use engine::msg::persist::{AuditRecord, ResearchRecord};
 use engine::msg::ui::{UiEvent, UiHalt};
 use engine::runtime::config::{Config, RecordedTables, TableKind, TrackerSpec};
 use engine::runtime::registry::Registry;
@@ -32,8 +33,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::engine_support::{
-    Idle, detached_setup, engine_with_ui_and_exec, idle_at, instrument_row, run_control,
-    running_at, strategy_log_ring, trade, ts,
+    FillPen, Idle, ONE, detached_setup, engine_with_ui_and_exec, idle_at, instrument_row,
+    run_control, running_at, strategy_log_ring, trade, ts,
 };
 use crate::micro_strategy::MicroRecorderParams;
 
@@ -45,7 +46,9 @@ fn spin_at(seq: u64, when: i64) -> InboundMessage {
 /// queue, which an untrusted peer fills, drops the frame and counts it. A full input queue that
 /// dropped would fold a hole in the order of messages, and a full link queue that halted would let
 /// any peer stop the engine. The writer-status queues are ones that the engine feeds: its own file
-/// writers fill them, the exposure writer one and the tape writer the other. The control queue drops and counts too: its sender is outside the engine, and
+/// writers fill them, the exposure writer one and the tape writer the other, and so is the audit
+/// status queue, which the audit sink of the hot thread fills. The control queue drops and counts
+/// too: its sender is outside the engine, and
 /// the link actor pushes the pending marker again at its next heartbeat.
 #[test]
 fn each_lane_full_gives_its_class() {
@@ -67,6 +70,14 @@ fn each_lane_full_gives_its_class() {
         }),
     );
     full_engine_fed_queue_halts(shipped_tape_status_queue(), [tape_failed; 2]);
+    let bank_full = InboundMessage::new(
+        ts(1_000),
+        MessageBody::AuditBankFull(AuditBankFull {
+            banked: 49_152,
+            capacity: 65_536,
+        }),
+    );
+    full_engine_fed_queue_halts(shipped_audit_status_queue(), [bank_full; 2]);
 
     let (producer, _peer_frames) = RingBuffer::<InboundMessage>::new(1);
     let mut link = LinkQueueProducer::new(producer, QueueId::new(1).unwrap());
@@ -102,7 +113,7 @@ fn each_lane_full_gives_its_class() {
         ts(1_000),
         MessageBody::Trade(trade(0, 100, 1, Side::Buy, 1_000)),
     );
-    tapped.push_tapped(message, VenueMeta::None);
+    tapped.push_tapped(message);
     let reason = fatal.reason().expect("a full tap trips the fatal latch");
     assert_eq!(reason, FatalReason::MarketTapFull { queue, capacity: 1 });
     assert_eq!(reason.failure_class(), QueueProducer::WHEN_FULL);
@@ -121,16 +132,21 @@ fn each_lane_full_gives_its_class() {
         ("strategy log", StrategyLogSink::WHEN_FULL),
         ("latency samples", SampleSink::<StageSample>::WHEN_FULL),
         ("exposure, older snapshot", ExposureSink::WHEN_FULL),
-        ("tape rows", PersistSink::ROW_WHEN_FULL),
+        ("research rows", ResearchSink::ROW_WHEN_FULL),
+        ("audit rows past the bank", AuditSink::BANK_FULL),
     ];
     for (lane, class) in state_lanes {
         assert_eq!(class, FailureClass::Reject, "{lane}");
     }
-    assert_eq!(PersistSink::SEAL_WHEN_FULL, FailureClass::Retry);
-    assert_eq!(
-        PersistSink::SEAL_PAST_CAP,
-        FailureClass::Halt(Halt::Quoting)
-    );
+    assert_eq!(ResearchSink::SEAL_WHEN_FULL, FailureClass::Retry);
+    assert_eq!(AuditSink::WHEN_FULL, FailureClass::Retry);
+    for halts_quoting in [
+        ResearchSink::SEAL_PAST_CAP,
+        AuditSink::SEAL_PAST_CAP,
+        AuditSink::BANK_AT_HIGH_MARK,
+    ] {
+        assert_eq!(halts_quoting, FailureClass::Halt(Halt::Quoting));
+    }
 }
 
 /// Pushes two messages into an input queue of one slot that the engine feeds. The second trips the
@@ -208,10 +224,21 @@ fn shipped_tape_status_queue() -> QueueId {
         .expect("an engine with a tape has a tape status queue")
 }
 
+fn shipped_audit_status_queue() -> QueueId {
+    let config = Config::<MicroRecorderParams>::load(Path::new(
+        "../strategies/strat-micro-recorder/te-binance-spot-btcusdt/config.yaml",
+    ))
+    .expect("the shipped binance config loads");
+    Registry::build(&config)
+        .expect("the shipped binance registry builds")
+        .audit_status_queue_id()
+        .expect("an engine with a tape has an audit status queue")
+}
+
 /// A tape that records the link-frame table, so that each run-control message writes one row.
 struct Parked {
     engine: HotEngine,
-    tape: Consumer<PersistRecord>,
+    tape: Consumer<ResearchRecord>,
     ui_events: Consumer<UiEvent>,
 }
 
@@ -223,16 +250,24 @@ impl Parked {
     }
 
     fn with_seal_borders(limit: u32, interval_spins: NonZeroU64) -> Parked {
-        let (producer, tape) = RingBuffer::<PersistRecord>::new(2);
+        let (producer, tape) = RingBuffer::<ResearchRecord>::new(2);
+        // The audit ring has room for its seals, so each halt here is the research seal's.
+        let (audit_producer, _audit) = RingBuffer::<AuditRecord>::new(64);
+        let limit = NonZeroU32::new(limit).unwrap();
+        let bank = AuditBank {
+            rows: 64,
+            high_mark: 64,
+        };
         let persistence = PersistWiring {
-            sink: PersistSink::new(producer, NonZeroU32::new(limit).unwrap()),
+            audit: AuditSink::new(audit_producer, bank, limit),
+            research: ResearchSink::new(producer, limit),
             tables: RecordedTables::new(&[TableKind::LinkFrames]),
             seal_interval_spins: interval_spins,
         };
         Parked::parked_with(persistence, tape)
     }
 
-    fn parked_with(persistence: PersistWiring, tape: Consumer<PersistRecord>) -> Parked {
+    fn parked_with(persistence: PersistWiring, tape: Consumer<ResearchRecord>) -> Parked {
         let instruments = [instrument_row(0, TrackerSpec::default(), 64)];
         let (mut engine, _ui_books, ui_events, _commands) = engine_with_ui_and_exec(
             &instruments,
@@ -266,9 +301,54 @@ impl Parked {
         halt
     }
 
-    fn tape(&mut self) -> Vec<PersistRecord> {
+    fn tape(&mut self) -> Vec<ResearchRecord> {
         std::iter::from_fn(|| self.tape.pop().ok()).collect()
     }
+}
+
+/// An audit ring of two slots and a bank behind it, with room in the research ring. A fill banks
+/// its rows past the first two, and the park after it asks for a seal that waits behind them.
+fn audit_parked(limit: u32) -> (Parked, Consumer<AuditRecord>) {
+    let (research_producer, tape) = RingBuffer::<ResearchRecord>::new(64);
+    let (audit_producer, audit) = RingBuffer::<AuditRecord>::new(2);
+    let limit = NonZeroU32::new(limit).unwrap();
+    let bank = AuditBank {
+        rows: 64,
+        high_mark: 64,
+    };
+    let persistence = PersistWiring {
+        audit: AuditSink::new(audit_producer, bank, limit),
+        research: ResearchSink::new(research_producer, limit),
+        tables: RecordedTables::new(&[TableKind::Orders, TableKind::Fills]),
+        seal_interval_spins: NonZeroU64::MAX,
+    };
+    let instruments = [instrument_row(0, TrackerSpec::default(), 64)];
+    let (mut engine, _ui_books, ui_events, _commands) = engine_with_ui_and_exec(
+        &instruments,
+        Box::new(Idle),
+        persistence,
+        strategy_log_ring(64).0,
+        0,
+    );
+    engine.dispatch(&run_control(running_at(1), 1_000));
+    for message in FillPen::new(0).fill(Side::Buy, 100 * ONE, ONE, 1_500) {
+        engine.dispatch(&message);
+    }
+    assert!(
+        engine.banked_audit_rows() > 0,
+        "the fill banks rows past the two slots of the ring"
+    );
+    engine.dispatch(&run_control(idle_at(5), 3_000));
+    let parked = Parked {
+        engine,
+        tape,
+        ui_events,
+    };
+    (parked, audit)
+}
+
+fn audit_rows(audit: &mut Consumer<AuditRecord>) -> Vec<AuditRecord> {
+    std::iter::from_fn(|| audit.pop().ok()).collect()
 }
 
 /// CONTRACT: a seal that waits goes first once the writer makes room, ahead of each row after it,
@@ -278,12 +358,12 @@ impl Parked {
 fn pending_seal_goes_first_when_room_returns() {
     let mut parked = Parked::with_seal_try_limit(3);
     assert_eq!(
-        parked.engine.dropped_persist_records(),
+        parked.engine.dropped_research_records().total(),
         1,
         "the row of the park found the ring full and was dropped and counted"
     );
     let first = parked.tape.pop().expect("the writer takes one row");
-    assert!(matches!(first, PersistRecord::LinkFrame(_)), "{first:?}");
+    assert!(matches!(first, ResearchRecord::LinkFrame(_)), "{first:?}");
 
     let halt = parked.spin(1, 4_000);
     assert_eq!(
@@ -295,7 +375,7 @@ fn pending_seal_goes_first_when_room_returns() {
     assert!(
         matches!(
             tape.as_slice(),
-            [PersistRecord::LinkFrame(_), PersistRecord::SealAll]
+            [ResearchRecord::LinkFrame(_), ResearchRecord::SealAll]
         ),
         "the second row, then the seal at the next spin: {tape:?}"
     );
@@ -311,6 +391,31 @@ fn pending_seal_goes_first_when_room_returns() {
         halt.map(UiHalt::is_halted),
         Some(false),
         "the next seal counts its tries from 1 again, so its second try halts nothing: {halt:?}"
+    );
+
+    // The audit seal waits behind the rows that the bank held when it was asked for, and reaches
+    // the writer after each of them and before any row after it.
+    let (mut parked, mut audit) = audit_parked(3);
+    let banked = parked.engine.banked_audit_rows();
+    let mut written = audit_rows(&mut audit);
+    let halt = parked.spin(1, 4_000);
+    assert_eq!(
+        halt.map(UiHalt::is_halted),
+        Some(false),
+        "try 2 of 3 of the audit seal: {halt:?}"
+    );
+    written.extend(audit_rows(&mut audit));
+    parked.spin(2, 5_000);
+    written.extend(audit_rows(&mut audit));
+    let seal_at = written
+        .iter()
+        .position(|record| matches!(record, AuditRecord::SealAll))
+        .unwrap_or_else(|| panic!("the audit seal reaches the writer: {written:?}"));
+    assert_eq!(
+        seal_at,
+        2 + banked - 1,
+        "the seal comes after the two rows of the ring and the rows of the bank, as the last of \
+         the {banked} records that the bank held: {written:?}"
     );
 }
 
@@ -340,7 +445,7 @@ fn seal_retry_reaches_cap_then_halts() {
 
     parked.engine.dispatch(&run_control(idle_at(5), 6_000));
     assert_eq!(
-        parked.engine.dropped_persist_records(),
+        parked.engine.dropped_research_records().link_frames,
         2,
         "the row of the park and the row that came while the seal waited are dropped and counted"
     );
@@ -348,7 +453,7 @@ fn seal_retry_reaches_cap_then_halts() {
     assert!(
         matches!(
             tape.as_slice(),
-            [PersistRecord::LinkFrame(_), PersistRecord::LinkFrame(_)]
+            [ResearchRecord::LinkFrame(_), ResearchRecord::LinkFrame(_)]
         ),
         "no row lands behind a seal that was not sent: {tape:?}"
     );
@@ -358,7 +463,7 @@ fn seal_retry_reaches_cap_then_halts() {
     let mut hot_log = open_hot_lane(64);
     let mut parked = Parked::with_seal_try_limit(1);
     let first = parked.tape.pop().expect("the writer takes one row");
-    assert!(matches!(first, PersistRecord::LinkFrame(_)), "{first:?}");
+    assert!(matches!(first, ResearchRecord::LinkFrame(_)), "{first:?}");
     let halt = parked.spin(1, 4_000);
     assert!(
         matches!(
@@ -370,10 +475,16 @@ fn seal_retry_reaches_cap_then_halts() {
         ),
         "try 1 of 1 failed at the request, so the next spin halts: {halt:?}"
     );
-    let tape = parked.tape();
+    // The spin halts before it writes its own rows, and the first of them, the mid of the book,
+    // then sends the seal into the room that the writer made: a seal past the halt is no try.
+    let after_halt = parked.tape();
     assert!(
-        matches!(tape.as_slice(), [PersistRecord::LinkFrame(_)]),
-        "no seal is pushed between its cap and the halt: {tape:?}"
+        matches!(
+            after_halt.as_slice(),
+            [ResearchRecord::LinkFrame(_)]
+                | [ResearchRecord::LinkFrame(_), ResearchRecord::SealAll]
+        ),
+        "no seal is pushed between its cap and the halt: {after_halt:?}"
     );
     let refusals: Vec<String> = std::iter::from_fn(|| hot_log.pop())
         .map(|record| {
@@ -390,10 +501,15 @@ fn seal_retry_reaches_cap_then_halts() {
         "one log record, with the true count of tries: {refusals:?}"
     );
     parked.spin(2, 5_000);
-    let tape = parked.tape();
-    assert!(
-        matches!(tape.as_slice(), [PersistRecord::SealAll]),
-        "after the halt the seal still goes when room returns: {tape:?}"
+    let later = parked.tape();
+    let seals = after_halt
+        .iter()
+        .chain(&later)
+        .filter(|record| matches!(record, ResearchRecord::SealAll))
+        .count();
+    assert_eq!(
+        seals, 1,
+        "after the halt the seal still goes, once, when room returns: {later:?}"
     );
 
     // A seal border at each spin asks for a seal while one waits. The waiting seal closes each
@@ -410,5 +526,33 @@ fn seal_retry_reaches_cap_then_halts() {
             })
         ),
         "a border keeps the count of the waiting seal: {halt:?}"
+    );
+
+    // An audit ring that the writer never drains, beside a research ring with room: the research
+    // seal goes at the request, so the halt at try 3 of 3 is the audit seal's.
+    let (mut parked, _audit) = audit_parked(3);
+    assert!(
+        parked
+            .tape()
+            .iter()
+            .any(|record| matches!(record, ResearchRecord::SealAll)),
+        "the research seal is sent at the request"
+    );
+    let halt = parked.spin(1, 4_000);
+    assert_eq!(
+        halt.map(UiHalt::is_halted),
+        Some(false),
+        "try 2 of 3 of the audit seal fails: {halt:?}"
+    );
+    let halt = parked.spin(2, 5_000);
+    assert!(
+        matches!(
+            halt,
+            Some(UiHalt::Halted {
+                reason: HaltReason::SealNotAccepted,
+                ..
+            })
+        ),
+        "try 3 of 3 of the audit seal fails, and quoting halts: {halt:?}"
     );
 }

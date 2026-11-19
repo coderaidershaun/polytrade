@@ -8,7 +8,7 @@ use engine::link::{
 };
 use engine::msg::ids::InstrumentId;
 use engine::msg::inbound::{InboundMessage, MessageBody, SpinTick};
-use engine::msg::persist::{FeatureId, LinkFrameRow, LinkRowKind, PersistRecord};
+use engine::msg::persist::{FeatureId, LinkFrameRow, LinkRowKind, ResearchRecord};
 use engine::msg::time::{DurationUs, VenueTs};
 use engine::runtime::config::{RecordedTables, TableKind};
 
@@ -134,21 +134,21 @@ impl Edge {
     }
 }
 
-fn link_rows(records: &[PersistRecord]) -> Vec<LinkFrameRow> {
+fn link_rows(records: &[ResearchRecord]) -> Vec<LinkFrameRow> {
     records
         .iter()
         .filter_map(|record| match record {
-            PersistRecord::LinkFrame(row) => Some(*row),
+            ResearchRecord::LinkFrame(row) => Some(*row),
             _ => None,
         })
         .collect()
 }
 
-fn features(records: &[PersistRecord]) -> Vec<f64> {
+fn features(records: &[ResearchRecord]) -> Vec<f64> {
     records
         .iter()
         .filter_map(|record| match record {
-            PersistRecord::Feature(row) => Some(row.value),
+            ResearchRecord::Feature(row) => Some(row.value),
             _ => None,
         })
         .collect()

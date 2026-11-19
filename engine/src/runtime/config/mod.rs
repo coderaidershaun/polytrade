@@ -17,12 +17,15 @@ mod sources;
 mod tables;
 mod tracker;
 
+use std::collections::BTreeMap;
 use std::num::{NonZeroU32, NonZeroU64};
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::de::IgnoredAny;
+use serde::{Deserialize, Serialize};
 
+use crate::hot::strategy::{ParamError, StrategyParams};
 use source_list::check_execution_source;
 
 pub use engine::{EngineConfig, IdleMode};
@@ -55,6 +58,8 @@ pub(crate) use tracker::TARGET_WINDOW_CANDLES;
 const MAX_OPERATIONAL_DURATION_MS: u64 = 24 * 60 * 60 * 1_000;
 /// The seal interval of the tape when the config names none: five minutes of message time.
 const DEFAULT_SEAL_INTERVAL_US: u64 = 300 * 1_000_000;
+/// A ledger row of each open position each minute of message time.
+const LEDGER_INTERVAL_US: u64 = 60 * 1_000_000;
 
 /// `P` is the strategy's own `params:` type, deserialized in the same single pass so
 /// `deny_unknown_fields` holds inside it too; it defaults to [`NoParams`] for a knob-free strategy.
@@ -80,9 +85,21 @@ pub struct Config<P = NoParams> {
     pub senders: SendersConfig,
     #[cfg(feature = "otlp")]
     pub otlp: Option<OtlpConfig>,
+    /// Where the config came from: never a key of the file.
+    #[serde(skip)]
+    pub source: ConfigSource,
 }
 
-impl<P: serde::de::DeserializeOwned + Default> Config<P> {
+/// The digest of the exact text that a config was parsed from, and the folder of its file, which
+/// a run records so that a replay can prove it folds with the same config.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfigSource {
+    pub digest: String,
+    /// `None` for a config that came from text, not from a file.
+    pub folder: Option<PathBuf>,
+}
+
+impl<P: StrategyParams> Config<P> {
     /// # Errors
     /// [`ConfigError::Read`] or errors from [`from_yaml`].
     ///
@@ -92,16 +109,22 @@ impl<P: serde::de::DeserializeOwned + Default> Config<P> {
             path: path.to_path_buf(),
             source,
         })?;
-        Config::from_yaml(&contents)
+        let mut config = Config::from_yaml(&contents)?;
+        config.source.folder = path.parent().map(Path::to_path_buf);
+        Ok(config)
     }
 
     /// # Errors
-    /// [`ConfigError::Parse`] for malformed YAML or unknown/misspelt fields.
+    /// [`ConfigError::Parse`] for malformed YAML or unknown/misspelt fields, and
+    /// [`ConfigError::Param`] for a key of `strategy.params` that the strategy does not read or a
+    /// value out of its bounds.
     pub fn from_yaml(contents: &str) -> Result<Config<P>, ConfigError> {
         let mut config: Config<P> =
             serde_saphyr::from_str(contents).map_err(|error| ConfigError::Parse {
                 detail: error.to_string().into_boxed_str(),
             })?;
+        check_params(contents, &config.strategy.params)?;
+        config.source.digest = crate::runtime::manifest::config_digest(contents);
         let proofs = config.validate()?;
         for (source, proofs) in config.sources.iter_mut().zip(proofs) {
             if let (Some(execution), Some(proofs)) = (source.execution.as_mut(), proofs) {
@@ -213,6 +236,13 @@ impl<P> Config<P> {
         NonZeroU32::new(limit).unwrap_or(NonZeroU32::MIN)
     }
 
+    /// The spins between two ledger rows of an open position: one minute of spins, rounded up. A
+    /// re-fold of the run takes the same value from the same config.
+    pub fn ledger_interval_spins(&self) -> NonZeroU64 {
+        let spins = LEDGER_INTERVAL_US.div_ceil(self.engine.spin_interval_us);
+        NonZeroU64::new(spins).unwrap_or(NonZeroU64::MIN)
+    }
+
     /// The spins between two seals of the tape: the configured count, or five minutes of spins.
     pub(crate) fn seal_interval_spins(&self) -> NonZeroU64 {
         let configured = self
@@ -288,9 +318,42 @@ pub struct StrategySpec<P = NoParams> {
 }
 
 /// The default type for a strategy with no knobs, which allows an empty `params: {}` block.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct NoParams {}
+
+/// Refuses each key that `contents` writes below `strategy.params` and that `params` does not write
+/// back, then runs the bounds of `params`. The keys are read in a pass of their own, because the
+/// typed pass drops a key that a params type without `deny_unknown_fields` does not name.
+fn check_params<P: StrategyParams>(contents: &str, params: &P) -> Result<(), ConfigError> {
+    #[derive(Deserialize, Default)]
+    struct Document {
+        #[serde(default)]
+        strategy: GivenStrategy,
+    }
+    #[derive(Deserialize, Default)]
+    struct GivenStrategy {
+        #[serde(default)]
+        params: Option<BTreeMap<String, IgnoredAny>>,
+    }
+    let document: Document =
+        serde_saphyr::from_str(contents).map_err(|error| ConfigError::Parse {
+            detail: error.to_string().into_boxed_str(),
+        })?;
+    let known: Vec<String> = match serde_json::to_value(params) {
+        Ok(serde_json::Value::Object(fields)) => fields.keys().cloned().collect(),
+        _ => Vec::new(),
+    };
+    let given = document.strategy.params.unwrap_or_default();
+    if let Some(unknown) = given.keys().find(|key| !known.contains(key)) {
+        let known = if known.is_empty() { "none".to_owned() } else { known.join(", ") };
+        return Err(ParamError::Unknown {
+            field: unknown.as_str().into(),
+            known: known.into_boxed_str(),
+        }
+        .into());
+    }
+    params.check().map_err(ConfigError::from)
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]

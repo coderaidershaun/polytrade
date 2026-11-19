@@ -52,8 +52,8 @@ cargo run --release --features web --bin polysim-web -- --strategy strat-micro-r
 # Agent control plane — the MCP server stays off until its guard exists (stage 3 of the build),
 # so this file gives no command that starts it. The text after this block says why.
 
-# Gate G — each step must pass before anything merges (CONSTITUTION.md §14). Run it at the
-# workspace root. The Docker build below is its last step.
+# Gate G — each of its seven steps must pass before anything merges (CONSTITUTION.md §14). Run
+# it at the workspace root. The Python gate of posttrade is its last step.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -61,18 +61,28 @@ cargo clippy --target wasm32-unknown-unknown -p engine --lib --bin polysim-ui --
 # Step 4 names each test target; the integration tests only compile, each one is ignored.
 cargo test -p engine --test fitness
 cargo test -p engine --test integration
+cargo test -p lab --test fitness
 cargo test -p engine --all-features --test fitness
 cargo test -p engine --all-features --test integration
+cargo test -p lab --all-features --test fitness
 # Step 5 runs the zero-allocation proof of the hot driver in the release profile.
 cargo test -p engine --release --test fitness step_allocates_nothing
+# Step 6: the two pages, then the ARM64 Linux binary for deployment, built in Docker, in dist/
 (cd browser && trunk build --release) && (cd tools/dom-fixture && trunk build --release)
-
-# ARM64 Linux binary for deployment, built in Docker, lands in dist/
 docker buildx build \
     --platform linux/arm64 \
     --build-arg BIN=strat-micro-recorder-te-binance-spot-btcusdt \
     --output type=local,dest=dist \
     .
+# Step 7: the contract check, the golden run, then the Python gate of posttrade.
+cargo run -p engine --bin contract-export -- --check
+cargo run -p engine --bin golden-run -- target/golden-run
+cd posttrade
+uv sync --locked
+uv run ruff format --check .
+uv run ruff check .
+uv run mypy .
+uv run pytest
 ```
 
 `polysim-mcp` gives an agent four tools: `list_strategies`, `start_strategy`, `stop_strategy` and `set_execution_mode`. It starts each engine as a child process from its prebuilt release binary, and stops every engine it started when it exits. The file `.mcp.json.off` at the repo root holds its Claude Code entry, under the name `polysim`.
@@ -82,6 +92,8 @@ That file has the name `.mcp.json.off` on purpose, so no session starts this ser
 Until that guard exists (stage 3 of the build), this file gives no command that starts the server or registers it with Claude Code. A session that reaches its tools can set an engine to `live` and start it, so the server stays off.
 
 Step 2 of the gate also reads the clock lint of `clippy.toml`: a call that reads a clock or a counter is an error, except at a permitted site that carries `#[expect(clippy::disallowed_methods, reason = "...")]`. The fitness test `permitted_clock_sites_equal_the_list` holds the list of permitted sites. The last task of each part also runs the proof of step 5 one time in the profile that ships, `cargo test -p engine --profile deploy --test fitness step_allocates_nothing`. That run is not a step of the gate, because a build with full link-time optimisation takes minutes.
+
+Step 7 joins the two languages. `contract-export --check` fails when `contract/tables.json` no longer matches the column lists of the engine, and names the first line that differs. `golden-run` writes two small runs and `target/golden-run/expected.json`, a file of values that a person can check by hand, and the Python tests read both. `uv` fetches its packages and Python 3.12 on the first sync: if it cannot, step 7 has not run, which is never a pass.
 
 ## Config keys
 
@@ -152,19 +164,34 @@ Good to know:
 
 ## Post Trade Analysis
 
-Post-trade analysis lives in [`strategies/post-trade.ipynb`](strategies/post-trade.ipynb), reading the parquet a run records. The Python environment is managed by [uv](https://docs.astral.sh/uv/) and lives in `strategies/` beside its `pyproject.toml`:
+Each run has a folder of its own: `{persistence.dir}/{strategy-id}/{te-id}/{kind}/{run_id}/`. The kind is `live`, `sim`, `replay` or `backtest`. The folder holds `run.json`, which names the run, its config digest, its venue terms and how it ended, and one folder for each table. A file is `<name>.parquet.part` until it is complete, and each reader lists only `.parquet` files. The table `tape` holds each message that the engine consumed, in the order that it consumed them. `contract/tables.json` names each table, column, label and footer key. `cargo run -p engine --bin contract-export` writes it, and you must never edit it by hand (`CONSTITUTION.md` §7).
+
+The Python package `posttrade` judges runs from their files. It lives in `posttrade/`, one [uv](https://docs.astral.sh/uv/) project with Python 3.12. It reads only files, writes only below its own output folder (default `data/reports/`), and refuses each path below the holdout root `data/holdout`.
 
 ```shell
-cd strategies
+cd posttrade
+uv sync --locked
 
-# One-off: create .venv (Python >= 3.12), then install from uv.lock
-uv venv
-uv sync
+# List each run below a folder, with its sealed files and each open or cut file.
+uv run posttrade runs ../data
+# Audit one run: order chains, filled totals and the ledger. Exit 1 on a break.
+uv run posttrade check <run folder>
+# Check a run, then write its HTML report and summary.json. A failed check withholds each measure.
+uv run posttrade report <run folder>
+# Print the rows of a time window, or write one table as CSV outside each run.
+uv run posttrade timeline <run folder> --from <µs> --to <µs>
+uv run posttrade export <run folder> orders --out <folder>
 ```
 
-Open the notebook with `strategies/.venv` selected as the kernel — `ipykernel` is already in the environment.
+Exit codes: 0 when each check passes, 1 for a failed audit, a re-fold difference, a P&L attribution that does not close, or a file that vanished on each try, 2 for a file that does not match the contract or an output path that the tooling refuses, and 3 for a path below the holdout. The notebooks in `posttrade/notebooks/` only call the package, and Git holds them with no outputs.
 
-Go ahead and select you jupyter notebook and start analysing data.
+A re-fold folds a recorded run again, from the first message of its tape, into a run of kind `replay`. Each engine has a replay binary behind feature `replay`, so a live build links no `lab` code. The binary reads no venue and no key: it takes the venue terms from `run.json`, and it refuses a tape with a gap, a tape of another layout, or a config with another digest.
+
+```shell
+cargo run --release -p strat-micro-recorder --features replay --bin strat-micro-recorder-te-binance-spot-btcusdt-replay -- --run <run folder>
+```
+
+`tape-sync` ships each sealed file of each closed run to another folder, and deletes the local file only after the checksum of the copy is equal. Its runbook and its unit files are in [`ops/tape-sync/`](ops/tape-sync/README.md).
 
 ## Live Tests
 

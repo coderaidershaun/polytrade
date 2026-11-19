@@ -6,7 +6,7 @@ use engine::msg::ids::{InstrumentId, Price, Side};
 use engine::msg::inbound::{
     BookChunk, InboundMessage, KlineEvent, MessageBody, SpinTick, TradeEvent,
 };
-use engine::msg::persist::{FeatureId, FeatureRow, PersistRecord};
+use engine::msg::persist::{FeatureId, FeatureRow, ResearchRecord};
 use engine::msg::time::DurationUs;
 use engine::runtime::config::{IntensitySpec, KlineInterval, RecordedTables, TableKind};
 use engine::runtime::registry::InstrumentRow;
@@ -298,8 +298,8 @@ fn resync(subject: Subject, when: i64) -> Vec<InboundMessage> {
 
 fn fold(linked: &mut LinkedEngine, message: &InboundMessage, written: &mut Written) {
     linked.engine.dispatch(message);
-    while let Ok(record) = linked.persist.pop() {
-        if let PersistRecord::Feature(row) = record {
+    while let Ok(record) = linked.persist.research.pop() {
+        if let ResearchRecord::Feature(row) = record {
             written.features.push(row);
         }
     }
@@ -428,7 +428,8 @@ fn resumed_equals_cold(subject: Subject, hole_us: i64, warmup: DurationUs) {
         before,
         "{case}: the park and the resume allocated: each reset clears its state in place"
     );
-    while resumed.persist.pop().is_ok() {}
+    resumed.persist.research();
+    resumed.persist.audit();
     while resumed.outbound.pop().is_ok() {}
 
     let mut written = fold_suffix(subject, &mut resumed, resume_ts_us);

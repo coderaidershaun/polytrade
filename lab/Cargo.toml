@@ -6,7 +6,21 @@ authors = ["Shaun McDonogh"]
 license = "MIT"
 
 [dependencies]
+arrow-array = { version = "59.1.0", default-features = false }
+arrow-schema = { version = "59.1.0", default-features = false }
 engine = { path = "../engine" }
+parquet = { version = "59.1.0", default-features = false, features = ["arrow", "zstd"] }
+rtrb = { version = "0.3.4", default-features = false }
+serde_json = { version = "1.0.150", default-features = false, features = ["std"] }
+thiserror = { version = "2.0.18", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+proptest = { version = "1.11.0", default-features = false, features = ["std"] }
+serde = { version = "1.0.228", default-features = false, features = ["std", "derive"] }
+
+[[test]]
+name = "fitness"
+path = "tests/fitness/main.rs"
 
 [lints]
 workspace = true
