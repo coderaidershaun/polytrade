@@ -1,15 +1,13 @@
-//! The envelope every datagram opens with, checked in a fixed order so version skew is caught
-//! before a book body is misread, and the byte cursors every record is written and read through.
+//! The envelope every datagram opens with, checked in a fixed order so a peer of another layout is
+//! refused before a body is misread, and the byte cursors every record is written and read through.
 
 use crate::msg::time::VenueTs;
 
-use super::wire::{WireField, wire_struct};
+use super::frame::{ENGINE_TOPICS, LINK_LAYOUT};
+use super::wire::{LayoutDigest, WireField, wire_struct};
 
 /// `"PLNK"` — a foreign datagram or a mistyped port is rejected on the first four bytes.
 pub const LINK_MAGIC: u32 = 0x504C_4E4B;
-
-/// Bump on ANY layout change (UI_BOOK_LEVELS, Level, etc). Only thing catching cross-commit skew.
-pub const LINK_VERSION: u16 = 11;
 
 /// Over-length panics (never truncates); margin real but thin (max 30 chars today).
 pub const LINK_NAME_LEN: usize = 32;
@@ -20,10 +18,9 @@ pub const LINK_MAX_DATAGRAM: usize = 1200;
 /// Reserved+zero for MAC retrofit. Link security: private network boundary.
 const LINK_MAC_LEN: usize = 32;
 
-pub(super) const ENVELOPE_LEN: usize = 4 + 2 + 2 + 8 + 8 + 8 + 8 + 8 + LINK_MAC_LEN;
-pub(super) const NAME_LEN: usize = 1 + LINK_NAME_LEN;
+pub(super) const ENVELOPE_LEN: usize = Envelope::WIDTH;
 
-const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+pub(super) const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 /// FNV-1a digest; no strings on wire. Not security (sniffable); separates runs only.
@@ -32,7 +29,7 @@ pub struct LinkHash(pub u64);
 
 impl LinkHash {
     pub const fn of_name(name: &str) -> Self {
-        Self(fold(FNV_OFFSET_BASIS, name.as_bytes()))
+        Self(fnv_fold(FNV_OFFSET_BASIS, name.as_bytes()))
     }
 
     /// Ordered field-name digest; order+count both in digest -> read slot 7 as 7, not 8.
@@ -40,15 +37,15 @@ impl LinkHash {
         let mut hash = FNV_OFFSET_BASIS;
         let mut index = 0;
         while index < names.len() {
-            hash = fold(hash, names[index].as_bytes());
-            hash = fold(hash, &[0]);
+            hash = fnv_fold(hash, names[index].as_bytes());
+            hash = fnv_fold(hash, &[0]);
             index += 1;
         }
         Self(hash)
     }
 }
 
-const fn fold(mut hash: u64, bytes: &[u8]) -> u64 {
+pub(super) const fn fnv_fold(mut hash: u64, bytes: &[u8]) -> u64 {
     let mut index = 0;
     while index < bytes.len() {
         hash ^= bytes[index] as u64;
@@ -70,6 +67,8 @@ impl TopicId {
     pub const CATALOG_FEATURES: TopicId = TopicId(4);
     pub const LIFECYCLE: TopicId = TopicId(5);
     pub const LATENCY: TopicId = TopicId(6);
+    /// Recent event frames, sent once to a subscriber that names this topic.
+    pub const HISTORY: TopicId = TopicId(7);
     pub const FIRST_STRATEGY: TopicId = TopicId(16);
 
     /// Id of the strategy topic declared at `index`. The numbering lives here because the sites
@@ -99,15 +98,14 @@ impl TopicId {
 
     /// The topic a config file names: an engine topic by its fixed name, else the strategy topic
     /// declared under that name.
+    /// A config never names the subscription itself: it is how a peer asks for the others.
     pub(crate) fn from_name(name: &str, strategy_topics: &[&'static str]) -> Option<Self> {
-        match name {
-            "books" => Some(TopicId::BOOKS),
-            "events" => Some(TopicId::EVENTS),
-            "catalog_instruments" => Some(TopicId::CATALOG_INSTRUMENTS),
-            "catalog_features" => Some(TopicId::CATALOG_FEATURES),
-            "lifecycle" => Some(TopicId::LIFECYCLE),
-            "latency" => Some(TopicId::LATENCY),
-            _ => strategy_topics
+        let engine_topic = ENGINE_TOPICS
+            .iter()
+            .find(|row| row.topic != TopicId::SUBSCRIBE && row.name == name);
+        match engine_topic {
+            Some(row) => Some(row.topic),
+            None => strategy_topics
                 .iter()
                 .position(|declared| *declared == name)
                 .map(TopicId::strategy),
@@ -127,7 +125,8 @@ pub struct LinkIdentity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Envelope {
     pub magic: u32,
-    pub version: u16,
+    /// The digest of the layout of each frame kind. Peers of two layouts refuse each other.
+    pub layout: LinkHash,
     pub topic: TopicId,
     pub token_hash: LinkHash,
     pub strategy_hash: LinkHash,
@@ -141,7 +140,7 @@ impl Envelope {
     pub fn new(identity: LinkIdentity, topic: TopicId, seq: u64) -> Self {
         Self {
             magic: LINK_MAGIC,
-            version: LINK_VERSION,
+            layout: LINK_LAYOUT,
             topic,
             token_hash: identity.token_hash,
             strategy_hash: identity.strategy_hash,
@@ -156,7 +155,7 @@ impl Envelope {
 wire_struct! {
     Envelope {
         magic,
-        version,
+        layout,
         topic,
         token_hash,
         strategy_hash,
@@ -170,6 +169,12 @@ wire_struct! {
 /// The reserved MAC moves as one block rather than field-by-field: it is the only run of bytes here
 /// that carries no structure.
 impl WireField for [u8; LINK_MAC_LEN] {
+    const WIDTH: usize = LINK_MAC_LEN;
+    const DIGEST: u64 = LayoutDigest::START
+        .text("reserved mac")
+        .number(LINK_MAC_LEN as u64)
+        .finish();
+
     fn write(&self, writer: &mut ByteWriter<'_>) {
         writer.write_bytes(self);
     }
@@ -194,9 +199,10 @@ impl FrameGuard {
                 found: envelope.magic,
             });
         }
-        if envelope.version != LINK_VERSION {
-            return Err(LinkDecodeError::VersionMismatch {
-                found: envelope.version,
+        if envelope.layout != LINK_LAYOUT {
+            return Err(LinkDecodeError::LayoutMismatch {
+                found: envelope.layout,
+                expected: LINK_LAYOUT,
             });
         }
         if envelope.token_hash != self.token_hash {
@@ -245,7 +251,14 @@ impl WireName {
     }
 }
 
+/// A length byte, then the bytes of the name padded with zeros to the capacity.
 impl WireField for WireName {
+    const WIDTH: usize = u8::WIDTH + LINK_NAME_LEN;
+    const DIGEST: u64 = LayoutDigest::START
+        .text("name")
+        .number(LINK_NAME_LEN as u64)
+        .finish();
+
     fn write(&self, writer: &mut ByteWriter<'_>) {
         self.len.write(writer);
         writer.write_bytes(&self.bytes);
@@ -271,15 +284,17 @@ pub enum LinkDecodeError {
     Truncated { found: usize },
     #[error("magic {found:#010x} is not the link magic {LINK_MAGIC:#010x}")]
     MagicMismatch { found: u32 },
-    #[error("wire version {found} is not {LINK_VERSION} — peer built from another commit")]
-    VersionMismatch { found: u16 },
+    #[error(
+        "wire layout {found:?} is not this build's {expected:?}; the peer was built with another layout"
+    )]
+    LayoutMismatch { found: LinkHash, expected: LinkHash },
     #[error("token hash {found:?} is not the configured {expected:?}")]
     TokenMismatch { found: LinkHash, expected: LinkHash },
     #[error("strategy hash {found:?} is not the configured {expected:?}")]
     StrategyMismatch { found: LinkHash, expected: LinkHash },
     #[error("schema hash {found:?} is not the declared {expected:?} — link_fields drifted")]
     SchemaMismatch { found: LinkHash, expected: LinkHash },
-    #[error("topic {topic:?} is engine-reserved and unknown to this version")]
+    #[error("topic {topic:?} is engine-reserved and unknown to this build")]
     UnknownTopic { topic: TopicId },
     #[error("topic {topic:?} frames are {expected} bytes, datagram is {found}")]
     LengthMismatch {
@@ -314,6 +329,8 @@ pub enum LinkDecodeError {
     NameNotUtf8,
     #[error("unknown {field} discriminant {value}")]
     UnknownDiscriminant { field: &'static str, value: u8 },
+    #[error("controller epoch {found} is 2^63 or above")]
+    EpochOutOfRange { found: u64 },
 }
 
 impl LinkDecodeError {

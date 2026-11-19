@@ -19,12 +19,12 @@ use engine::msg::exec::{ExecCommand, ExecEvent, ExecKind, ExecLaneItem, VenueOrd
 use engine::msg::ids::{AssetId, ClientOrderId, InstrumentId, Price, Qty, Side};
 use engine::msg::inbound::{BookChunk, InboundMessage, MessageBody, SpinTick, TradeEvent};
 use engine::msg::persist::{FeatureId, PersistRecord};
-use engine::msg::run_state::{RunAssertion, RunState};
+use engine::msg::run_state::{ControllerEpoch, RunAssertion, RunState};
 use engine::msg::time::Stamper;
 use engine::msg::ui::{UiBookSnapshot, UiEvent};
 use engine::runtime::config::{RecordedTables, TableKind};
 use engine::runtime::registry::InstrumentRow;
-use engine::runtime::shutdown::RunControlGate;
+use engine::runtime::shutdown::RunStateHandles;
 use engine::venues::exec::open_orders_snapshot_end;
 use proptest::prelude::{Just, any, prop, prop_oneof};
 use proptest::strategy::Strategy as Generator;
@@ -265,7 +265,7 @@ fn engine(capacity: usize) -> (HotEngine, Lanes) {
         ui_event_sink,
         link: Some(LinkWiring {
             sink: LinkSink::new(link_producer),
-            acknowledged: RunControlGate::new().acknowledged().clone(),
+            acknowledged: RunStateHandles::new().acknowledged_writer,
         }),
         exec: vec![ExecWiring {
             sink: ExecSink::new(commands_producer, Stamper::Off),
@@ -595,7 +595,7 @@ impl Market {
                 let state = if is_running { RunState::Running } else { RunState::Idle };
                 let desired = RunAssertion {
                     state,
-                    epoch: self.epoch,
+                    epoch: ControllerEpoch::new(self.epoch),
                 };
                 run_control(desired, when)
             }

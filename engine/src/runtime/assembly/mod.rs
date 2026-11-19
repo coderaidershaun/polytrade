@@ -26,16 +26,15 @@ use std::sync::mpsc::SyncSender;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use rtrb::RingBuffer;
 use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 
-use crate::hot::dispatch::{ExposureWiring, HotEngine, HotEngineSetup, LinkWiring};
+use crate::hot::dispatch::{ExposureWiring, HotEngine, HotEngineSetup};
 use crate::hot::metrics::DriverSamples;
-use crate::hot::sink::{LinkSink, StrategyLogSink};
+use crate::hot::sink::StrategyLogSink;
 use crate::hot::spawn::{HotThreadConfig, SimTapGate, spawn_hot_thread};
 use crate::hot::strategy::Strategy;
-use crate::link::{LinkActor, LinkActorSetup, OutboundLink};
+use crate::link::LinkCountsHandle;
 use crate::log::{self, LaneReader, LogConfig, LogHandle};
 use crate::msg::persist::RotationRow;
 use crate::msg::time::{ClockSource, DurationUs, EngineClock, InvariantCounter, Stamper};
@@ -46,8 +45,8 @@ use crate::runtime::exposure::{ExposureHandle, ExposureWriter, ExposureWriterSet
 #[cfg(feature = "otlp")]
 use crate::runtime::otlp::{OtlpExporter, OtlpLanes, OtlpPlan};
 use crate::runtime::pin::PinCall;
-use crate::runtime::shutdown::{DrainSignal, FatalSignal, RunControlGate, TaskHandle};
-use crate::tape::PersistHandle;
+use crate::runtime::shutdown::{DrainSignal, FatalSignal, RunStateHandles, TaskHandle};
+use crate::tape::{PersistHandle, TapeStatus};
 use crate::venues::exec::EdgeHandle;
 use crate::venues::venue::{MarketDataWiring, WindowAssignment, spawn_market_data, tap_heartbeat};
 use crate::{info, warn};
@@ -56,6 +55,7 @@ use drain::install_panic_hook;
 use error::refuse;
 use exec::{CommandLane, ExecBringUp, ExecBringUpSetup, exec_bring_up, open_command_lane};
 use hot::{HotBringUp, HotBringUpSetup, hot_bring_up};
+use link::LinkStart;
 use metrics::{
     MetricsBringUp, MetricsBringUpSetup, MetricsThread, SampleProducers, metrics_bring_up,
 };
@@ -67,13 +67,9 @@ pub use drain::{DrainWatchdog, ForcedExit};
 pub use error::StartError;
 #[cfg(feature = "otlp")]
 pub(crate) use exec::SWEEP_SHARE_OF_DRAIN;
-pub use exec_identity::ExecutionLease;
+pub use exec_identity::{ExecutionLease, IdentityLock, IdentityLocks};
 pub use exit::{DrainDeadline, DrainFailure, DrainOutcome, Exit, Trigger};
 pub use preflight::{Preflight, StartPlan};
-// SMELL: `check_symbol_order_capacity` is public only because the fitness suite calls it. A test is
-// not a reason to make an item public, so its check should move onto a public entry point and it
-// should go back to crate visibility.
-pub use preflight::check_symbol_order_capacity;
 pub use run::run_trading_engine;
 pub use senders::PinnedSenders;
 
@@ -81,8 +77,9 @@ const ROTATIONS_CHANNEL_CAPACITY: usize = 256;
 
 pub struct Engine {
     /// One trading engine per host: while this is held, no second process under the same TE
-    /// identity can place. The credential names the nonce file, not the lock, so swapping keys
+    /// identity can start. The credential names the nonce file, not the lock, so swapping keys
     /// does not buy a second engine.
+    _identity_lock: IdentityLock,
     _execution_lease: Option<ExecutionLease>,
     runtime: Runtime,
     log_handle: LogHandle,
@@ -193,6 +190,7 @@ impl Engine {
         }
         plan.log_report();
 
+        let link_counts = LinkCountsHandle::new();
         let MetricsBringUp {
             thread: metrics,
             samples,
@@ -205,6 +203,7 @@ impl Engine {
             queue_count: plan.registry.input_queue_count(),
             core_id: config.engine.housekeeping_core_id,
             pin,
+            link_counts: config.link.is_some().then(|| link_counts.clone()),
             #[cfg(feature = "otlp")]
             rows: otlp_rows,
         }) {
@@ -239,6 +238,7 @@ impl Engine {
             .map_or_else(|| tokio_handle.clone(), |senders| senders.handle().clone());
 
         let StartPlan {
+            identity_lock,
             registry,
             exposure: restored_exposure,
             rest_quiet,
@@ -256,12 +256,11 @@ impl Engine {
             .map(|name| (*name).into())
             .collect();
 
-        let control = RunControlGate::new();
-        let on_controller_loss = config
-            .link
-            .as_ref()
-            .map_or_else(Default::default, |link| link.on_controller_loss);
-
+        let RunStateHandles {
+            desired_writer,
+            desired_reader,
+            acknowledged_writer,
+        } = RunStateHandles::new();
         let (rotations_tx, rotations_rx) = mpsc::channel::<RotationRow>(ROTATIONS_CHANNEL_CAPACITY);
         // The rotation binding the execution edge trades against. Sized for a handful of windows:
         // one assignment every five minutes, and the edge drains it on every select pass.
@@ -269,7 +268,7 @@ impl Engine {
             mpsc::channel::<WindowAssignment>(exec::ASSIGNMENTS_CHANNEL_CAPACITY);
         let PersistBringUp {
             wiring: persist_wiring,
-            handle: persistence,
+            tape,
         } = persist_bring_up(PersistBringUpSetup {
             config: &config,
             identity: &identity,
@@ -309,20 +308,7 @@ impl Engine {
             edge: planned_edge,
         } = open_command_lane(execution_plan, armed, spin_interval, &stamper);
 
-        let (link_wiring, link_feed) = match &bound_link {
-            None => (None, None),
-            Some(_) => {
-                let (producer, consumer) =
-                    RingBuffer::<OutboundLink>::new(link::LINK_RING_CAPACITY);
-                (
-                    Some(LinkWiring {
-                        sink: LinkSink::new(producer),
-                        acknowledged: control.acknowledged().clone(),
-                    }),
-                    Some(consumer),
-                )
-            }
-        };
+        let (link_wiring, link_feed) = link::outbound_ring(&bound_link, acknowledged_writer);
 
         let instruments = registry.instruments().to_vec();
         let restored = restored_exposure.instruments().to_vec();
@@ -366,7 +352,15 @@ impl Engine {
             link: link_producer,
             exec: exec_producer,
             writer_status,
+            control: control_producer,
+            tape_status,
         } = producers;
+        let persistence = tape.map(|tape| {
+            tape.spawn(tape_status.map(|queue| TapeStatus {
+                queue,
+                clock: clock.clone(),
+            }))
+        });
         let exposure = ExposureWriter::spawn(ExposureWriterSetup {
             dir: config.exposure.dir.clone(),
             identity: identity.clone(),
@@ -397,7 +391,7 @@ impl Engine {
             wires,
             senders: &config.senders,
             fatal: &fatal,
-            desired_run_state: control.desired().clone(),
+            desired_run_state: desired_reader.clone(),
             drain_deadline,
             input_capacity: config.queues.input_capacity,
         });
@@ -411,7 +405,7 @@ impl Engine {
             producers: group_producers,
             clock: &clock,
             fatal: &fatal,
-            desired_run_state: control.desired(),
+            desired_run_state: &desired_reader,
             rotations_tx: &rotations_tx,
             window_assignments: Some(assignments_tx),
             tap_heartbeat: tap_heartbeat(&config),
@@ -438,34 +432,26 @@ impl Engine {
         // The link both feeds the hot thread and drains the UI rings; it starts only once
         // the sinks it needs are live.
         let link = bound_link.map(|bound| {
-            LinkActor::spawn(
-                LinkActorSetup {
-                    socket: {
-                        let _on_edge_runtime = edge_runtime.enter();
-                        tokio::net::UdpSocket::from_std(bound.socket)
-                            .expect("a bound socket registers with the runtime that runs the link")
-                    },
-                    identity: bound.identity,
-                    guard: bound.guard,
-                    peers: bound.peers,
-                    on_controller_loss,
-                    inbound: link_producer.expect("a bound link always builds its input queue"),
-                    outbound: link_feed.expect("a bound link always builds its outbound ring"),
+            link::spawn_link_actor(
+                bound,
+                LinkStart {
+                    config: &config,
+                    inbound: link_producer,
+                    markers: control_producer,
+                    outbound: link_feed,
                     latency: latency_reports,
                     channels: ui_channels,
-                    control,
+                    control: desired_writer,
                     clock: clock.clone(),
                     spin_interval,
-                    topic_count: bound.topic_count,
-                    feature_count: bound.feature_count,
-                    placement: config.senders.placement,
-                    flush_period: config.senders.link_flush(),
+                    counts: link_counts,
                 },
                 &edge_runtime,
             )
         });
 
         Ok(Engine {
+            _identity_lock: identity_lock,
             _execution_lease: execution_lease,
             runtime,
             log_handle,

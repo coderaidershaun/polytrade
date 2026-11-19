@@ -4,6 +4,7 @@
 use crate::msg::exec::{Liquidity, OrderStyle, RejectClass};
 use crate::msg::persist::{FillRow, IncidentRow, OrderRow};
 use crate::msg::time::LocalTs;
+use crate::tape::TapeTable;
 
 use super::TableRow;
 use super::column::Column;
@@ -23,7 +24,7 @@ fn liquidity_str(liquidity: Option<Liquidity>) -> &'static str {
 }
 
 impl TableRow for OrderRow {
-    const NAME: &'static str = "orders";
+    const TABLE: TapeTable = TapeTable::Orders;
     const COLUMNS: &'static [Column<Self>] = &[
         Column::VenueTs("exchange_ts_us", |row| row.exchange_ts_us),
         Column::Ts("received_ts_us", |row| row.received_ts_us),
@@ -53,7 +54,7 @@ impl TableRow for OrderRow {
 }
 
 impl TableRow for FillRow {
-    const NAME: &'static str = "fills";
+    const TABLE: TapeTable = TapeTable::Fills;
     const COLUMNS: &'static [Column<Self>] = &[
         Column::VenueTs("exchange_ts_us", |row| row.exchange_ts_us),
         Column::Ts("received_ts_us", |row| row.received_ts_us),
@@ -81,7 +82,7 @@ impl TableRow for FillRow {
 }
 
 impl TableRow for IncidentRow {
-    const NAME: &'static str = "incidents";
+    const TABLE: TapeTable = TapeTable::Incidents;
     const COLUMNS: &'static [Column<Self>] = &[
         Column::VenueTs("exchange_ts_us", |row| row.exchange_ts_us),
         Column::Ts("received_ts_us", |row| row.received_ts_us),

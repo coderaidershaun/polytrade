@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use rtrb::{Consumer, Producer, RingBuffer};
 
+use crate::link::LinkCountsHandle;
 use crate::msg::time::{
     ClockSource, DurationUs, EngineClock, LocalTs, Stamper, Tick, TickAnchor, TickScale,
 };
@@ -27,7 +28,7 @@ use super::StartError;
 
 pub use error::MetricsError;
 pub use ring::{SampleProducers, SampleRing};
-pub use rows::{BacklogRow, DropRow, LatencyRow, RollupRow, RollupSink, SinkKind};
+pub use rows::{BacklogRow, DropRow, LatencyRow, RollupRow, RollupSink, SenderDropRow, SinkKind};
 
 use ring::{SampleConsumers, sample_rings};
 use rollup::{LatencyRollup, RollupSettings};
@@ -72,6 +73,7 @@ pub struct Metrics {
     reports_dropped: u64,
     display_period: DurationUs,
     next_report_ts_us: LocalTs,
+    link_counts: Option<LinkCountsHandle>,
 }
 
 impl Metrics {
@@ -95,6 +97,7 @@ impl Metrics {
             reports_dropped: 0,
             display_period,
             next_report_ts_us: setup.start_ts_us + display_period,
+            link_counts: None,
         };
         MetricsParts {
             metrics,
@@ -108,6 +111,7 @@ impl Metrics {
     pub fn pass(&mut self, now: LocalTs, sink: &mut impl RollupSink) {
         self.rollup.note_time(now);
         self.consumers.drain_into(&mut self.rollup);
+        self.read_link_counts();
         self.rollup.advance(now, sink);
         if self.rollup.now() < self.next_report_ts_us {
             return;
@@ -117,6 +121,18 @@ impl Metrics {
         if self.reports.push(report).is_err() {
             self.reports_dropped += 1;
             self.rollup.note_report_drops(self.reports_dropped);
+        }
+    }
+
+    /// The counts that the link actor publishes, so each closed interval writes a drop row for each
+    /// sender of peer frames.
+    pub fn watch_link_counts(&mut self, counts: LinkCountsHandle) {
+        self.link_counts = Some(counts);
+    }
+
+    fn read_link_counts(&mut self) {
+        if let Some(counts) = &self.link_counts {
+            self.rollup.note_link_senders(counts.load().senders);
         }
     }
 
@@ -155,6 +171,7 @@ impl Metrics {
     pub fn finish(&mut self, now: LocalTs, sink: &mut impl RollupSink) {
         self.rollup.note_time(now);
         self.consumers.drain_into(&mut self.rollup);
+        self.read_link_counts();
         self.rollup.advance(now, sink);
         self.rollup.finish(sink);
     }
@@ -184,6 +201,8 @@ pub(super) struct MetricsBringUpSetup<'a> {
     /// The housekeeping core the thread pins itself to. Absent, the OS places it.
     pub core_id: Option<usize>,
     pub pin: PinCall,
+    /// What the link actor publishes, when the engine has a link.
+    pub link_counts: Option<LinkCountsHandle>,
     /// The rows lane of the OTLP export. Absent, the rows stay in the log lines of each interval.
     #[cfg(feature = "otlp")]
     pub rows: Option<crate::runtime::otlp::OtlpRows>,
@@ -201,7 +220,7 @@ pub(super) fn metrics_bring_up(
     let scale = TickScale::between(first, second)
         .expect("the cpu counter and the engine clock both move in two milliseconds");
     let MetricsParts {
-        metrics,
+        mut metrics,
         samples,
         reports,
     } = Metrics::with_rings(MetricsSetup {
@@ -211,6 +230,9 @@ pub(super) fn metrics_bring_up(
         scale,
         start_ts_us: second.at,
     });
+    if let Some(counts) = setup.link_counts {
+        metrics.watch_link_counts(counts);
+    }
     let thread_setup = MetricsThreadSetup {
         metrics,
         clock: setup.clock.clone(),

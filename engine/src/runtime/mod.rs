@@ -3,7 +3,7 @@
 
 pub mod artifacts;
 pub mod config;
-mod durable_file;
+pub mod durable_file;
 pub mod exposure;
 #[cfg(all(feature = "otlp", not(target_arch = "wasm32")))]
 pub mod otlp;
@@ -20,6 +20,6 @@ mod assembly;
 #[cfg(not(target_arch = "wasm32"))]
 pub use assembly::{
     DrainDeadline, DrainFailure, DrainOutcome, DrainWatchdog, Engine, ExecutionLease, Exit,
-    ForcedExit, PinnedSenders, Preflight, StartError, StartPlan, Trigger,
-    check_symbol_order_capacity, metrics, run_trading_engine,
+    ForcedExit, IdentityLock, IdentityLocks, PinnedSenders, Preflight, StartError, StartPlan,
+    Trigger, metrics, run_trading_engine,
 };

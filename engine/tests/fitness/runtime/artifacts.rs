@@ -117,9 +117,8 @@ fn nonce_file_of(mode: Option<ExecutionMode>, identity: &RunIdentity) -> String 
     } else {
         binance_exec::lease_namespace(BinanceEnv::Production, b"account-a")
     };
-    let lease = ExecutionLease::acquire(state.path(), TeTag::of(identity), &namespace)
-        .expect("no other lease holds this engine identity");
-    drop(lease);
+    ExecutionLease::acquire(state.path(), TeTag::of(identity), &namespace)
+        .expect("the nonce of this engine identity advances");
     let mut names: Vec<String> = std::fs::read_dir(state.path())
         .expect("the state folder lists")
         .flatten()

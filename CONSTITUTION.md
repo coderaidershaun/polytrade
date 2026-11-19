@@ -21,6 +21,8 @@ comply. IF one cannot comply, THEN surface conflict explicitly. Amendments: §15
 | engine halt         | fatal latch, bounded drain, exit code not 0: `FatalReason` (§6)              |
 | ring-pressure halt  | a quoting halt that follows ring space, not messages (§6)                    |
 | incident record     | typed record of a money event, with a count, in its own table (§6)           |
+| marker              | the message that carries a desired run state to the fold: `RunControl` (§6)  |
+| controller          | a workstation that asserts a run state over the link (§6)                    |
 | polysim             | the repo that this workspace came from. In a clause: the code of this repo   |
 | Amended `<date>`    | amendment of that date, with its WHY (§15)                                   |
 | Replaced, WITHDRAWN | record of earlier law, not in force                                          |
@@ -91,9 +93,23 @@ Preflight:
   the registry (with the cap of 20 input queues), the core id, the scale read, the order capacity,
   the exposure file, the permission probe, the link names and the link bind, the execution checks,
   and the checks of the venue setup.
+  - Amended 2026-11-18: `Preflight` has a fourth field, `locks: &IdentityLocks`. After the link
+    bind and before the execution checks, preflight takes the identity lock of the engine, in each
+    mode, `off` included (`engine/src/runtime/assembly/preflight.rs`). A held lock refuses the
+    start with `StartError::ExecutionIdentityInUse { path }`, which names the lock file. The engine
+    holds the lock for its whole run, and the drain lets it go last. WHY: two engines of one
+    identity share the files of the run, the tape folder included, and the tape writer removes each
+    unfinished file of another boot (§6, 2026-11-17 section on tape files).
+  - The lock file is `<folder>/.exec-<TeTag of the identity, 8 hex digits>.lock`, in the folder
+    `polysim-execution-locks` below the temporary folder of the OS. The identity alone names it.
 - [ ] The execution lease is the last check. So each other refusal leaves the run nonce unspent.
-  - Amended 2026-11-13: each venue has its own lease. Preflight takes the lock of each lease before
-    it advances any nonce. Section on several sources, end of §8.
+  - Amended 2026-11-18: a lease holds no lock. `ExecutionLease` advances and holds the run nonce of
+    its venue only, as the last step of an armed preflight. The identity lock comes before it, and
+    the checks of the execution setup run between the two. Thus a refused identity lock or a
+    refused execution check leaves each nonce unspent. Section on several sources, end of §8.
+  - Replaced 2026-11-18: "Amended 2026-11-13: each venue has its own lease. Preflight takes the
+    lock of each lease before it advances any nonce. Section on several sources, end of §8." WHY:
+    the lock left the lease and became the identity lock of the engine, in each mode.
 - [ ] The venue reads go through one `VenuePort`. `Preflight::run` uses the real port, which runs
   them on one current-thread runtime and drops it before it returns. `Preflight::run_with(port)`
   takes a stand-in, so a test needs no key.
@@ -111,6 +127,10 @@ The start:
 - [ ] Then the engine runtime and the writers start. The hot thread builds its input rings and its
   engine on its own core, and touches that memory. Then the timer, the execution edge, the
   market-data actors, and the link start.
+  - Amended 2026-11-18: the tape writer starts after the hot thread hands back the producers of
+    its input rings, because it takes the producer of its own status queue (§6, 2026-11-18 section
+    on tape faults). The exposure writer starts after it, then the execution edge, the timer, the
+    market-data actors, and the link. The record ring of the tape is made before the hot thread.
 - [ ] IF a pin is refused (Linux), THEN each thread that started stops before the start returns.
   No writer has started, so no tape file is pruned. The run nonce is spent by then.
 - [ ] The pin call is a parameter (`PinCall`). `run_trading_engine` passes `pin_to_core`, and a
@@ -135,6 +155,23 @@ The stop of the exporter must end before the watchdog of the drain, after the ex
   start has an exporter to stop.
 - [ ] IF the OS refuses the exporter thread, THEN the run goes on with no export and one ERROR line.
   The start never panics for the export, so the drain and the exit sweep always run.
+
+### Amended 2026-11-18: the hot loop folds each message pushed before a drain
+
+WHY: a hot thread that found its queues empty, and then saw the drain request, stopped. A message
+that its producer pushed between the two reads was never folded, and then the replay differed
+from the run at its end.
+
+- [ ] IF a step of the hot loop finds each queue empty and the drain is requested, THEN the loop
+  steps one time more. It stops only IF that step also finds each queue empty. ELSE it goes on
+  (`HotLoop::run`, `engine/src/hot/spawn.rs`).
+- [ ] A tripped fatal latch still stops the loop at once, with no further step.
+- [ ] The live drain stops the producers of the edges first, then requests the drain, then joins
+  the hot thread. Thus each message that a producer pushed before the request is folded.
+- [ ] No test pins the order alone. The replay test
+  `two_threaded_runs_give_equal_tables_and_drain_clean` (`engine/tests/fitness/tape/e2e_replay.rs`)
+  requests the drain right after its pushes. It failed 1 run of 20 under load before the change,
+  and 0 of 20 after it.
 
 ## 3. Memory
 
@@ -282,6 +319,10 @@ WHY: the OTLP wire is an outside contract that a collector reads, and it counts 
   - IF OUTPUT queue is full, THEN drop + count. Execution command ring: amended 2026-07-27.
 - [ ] IF invariant panic occurs, THEN do coordinated bounded drain: flush persistence queue, close
   Parquet clean, exit non-zero.
+  - Amended 2026-11-18: a table of the tape that a write fault stopped is not closed. Its open file
+    keeps the name `.parquet.part`, with no footer, and the next start removes it. Each other table
+    is sealed. Section on tape faults, end of §6. WHY: a table that failed a write cannot write a
+    footer that a reader can trust.
 - [ ] Drain deadline = HARD. Corrupt state never continues to produce research data.
 - [ ] lib = `thiserror`. bin = `anyhow` + `.context()` on every `?`.
 - [ ] Forbidden:
@@ -310,6 +351,9 @@ remote-kill primitive.
   stream through `on_link` breaks silently on first drop.
 - [ ] Drop happens at edge. Recording happens downstream of drop, on hot side. Thus tape holds
   only consumed frames (§2).
+- [ ] Amended 2026-11-18: each drop is counted for its sender, and a sender above its rate is
+  refused. Section on the count by sender, end of §6. WHY: one total count told no operator which
+  peer filled the queue, and one flooding peer took the whole queue.
 
 ### Amended 2026-07-27: execution command ring
 
@@ -435,13 +479,21 @@ Failure classes:
       `FatalReason::SimulatorInboxFull`. Each is HALT (engine).
     - WHY: three sites of the market-data actors and one site of the simulator actor tripped the
       fatal latch where they met the fault. A full inbox of the simulator panicked.
-  - Amended 2026-11-16, as built: two roots have no reader yet. WHY: part 5 of the plan owns the
-    tape, and the fold decides each of its halts from messages.
-    - The root of the tape writer: part 5 of the plan.
+  - Amended 2026-11-18, as built: one more root reads `failure_class()`, the root of the tape
+    writer. Thus seven roots read it, and eight with feature `otlp`. `Faults::table_stopped`
+    (`engine/src/tape/fault.rs`) reads the class of each `PersistError` at the root
+    `WriterState::run` (`engine/src/tape/drain.rs`). Section on tape faults, end of §6. WHY: the
+    first write error ended the writer thread, and nothing told the hot thread.
+  - Amended 2026-11-18, as built: one root has no reader. WHY: the fold decides each of its halts
+    from messages.
     - The driver of the hot thread: no error enum reaches it. Each halt of the fold is a
       `HaltReason` that the fold decides from messages, and the driver stops at the fatal latch.
     - Two more sites trip by design: an engine-fed input producer at a full ring (the lane table
       below), and the panic hook (a bug has no class).
+  - Replaced 2026-11-18: "Amended 2026-11-16, as built: two roots have no reader yet. WHY: part 5
+    of the plan owns the tape, and the fold decides each of its halts from messages.", with its
+    line "The root of the tape writer: part 5 of the plan." WHY: part 5 built the reader of the tape
+    writer.
   - Replaced 2026-11-16: "Amended 2026-11-13, as built: three roots have no reader yet, each with
     its receiving part.", with its line "The market-data actors and the simulator actor: part 4.
     Each of their 4 sites trips the fatal latch at the place of its fault." and its WHY "the plan
@@ -463,11 +515,13 @@ Lanes:
 | Engine-fed input queue: market data (`queues.input_capacity`), timer (`queues.timer_capacity`), execution events (`queues.execution_capacity`) | fatal latch, bounded drain | HALT (engine) |
 | Market tap ring of the simulator | fatal latch, bounded drain | HALT (engine) |
 | Link input queue (`queues.link_capacity`) | drop the frame, count it (2026-07-25) | REJECT |
+| Amended 2026-11-17: control queue of the markers (`queues.control_capacity`) | drop the marker, count it. The link actor pushes the pending marker again at the next announce (2026-11-17 section on the marker queue, below) | REJECT |
 | State lanes: UI books and events, outbound link, strategy log, latency samples | drop the record, count it | REJECT |
 | Exposure lane | keep the newest snapshot | REJECT (of the older snapshot) |
 | Command lane | commands stay in the bank, in order, with their bank stamps (2026-07-27) | RETRY |
 | Command bank | quoting halt `HaltReason::CommandBankOverflow` | HALT (quoting) |
 | Persistence seal | try at the request and at each spin, up to `persistence.seal_try_limit` tries, then quoting halt `HaltReason::SealNotAccepted` | RETRY, then HALT (quoting) |
+| Amended 2026-11-18: status queue of the tape writer | fatal latch, bounded drain | HALT (engine) |
 | Copy lane of the OTLP export (feature `otlp`): each line that the log drain writes | drop the copy, count it (2026-11-13, the OTLP export) | REJECT |
 | Rows lane of the OTLP export (feature `otlp`): each row of the metrics thread | drop the row, count it (2026-11-13, the OTLP export) | REJECT |
 
@@ -476,6 +530,16 @@ Lanes:
   sends at most one `WriterFailed` in a run, so the ring cannot fill in a correct run. WHY: a
   writer failure halts quoting at one message of the input sequence, so a replay halts at the same
   point.
+  - Amended 2026-11-18: the tape writer has a writer-status queue of its own. It is an engine-fed
+    input queue too, and holds 4 messages (`WRITER_STATUS_CAPACITY`). It exists when the config has
+    a `persistence:` block, in each mode, armed or not. Its id is the last id of the registry. The
+    tape writer is its one producer and sends at most one `WriterFailed` in a run. The queue of the
+    exposure writer still exists only when execution is armed. WHY: the SPSC ring has one
+    producer, which the exposure writer owns, and a tape exists with execution off too.
+- [ ] Amended 2026-11-18: the link input queue counts each drop for its sender and refuses a sender
+  above its rate (section on the count by sender, end of §6). The persistence seal is also
+  requested by the fold at each seal border of message time and at each park, and a request while
+  a seal waits keeps its count of tries (section on the seal by message time, end of §6).
 - [ ] Amended 2026-11-13: the exposure lane keeps its class. Its ring carries whole snapshots from a
   pool made at start, and the reader hands each snapshot back. WHY: a snapshot at the size of the
   registry cannot cross a ring by value, and the hot thread allocates nothing.
@@ -510,6 +574,9 @@ Two ring-pressure halts:
   two runs ends at the message where one of them shows such a halt.
 - [ ] The state digest leaves out each field that reads ring space: the commands that the bank
   holds, a pending seal and its count of tries, and the drop counters.
+  - Amended 2026-11-18: the count of seal borders that the fold passed is state, and the digest
+    holds it. Section on the seal by message time, end of §6. WHY: the count follows the spins,
+    not ring space.
 - [ ] No other state follows ring space (2026-07-27).
 
 The end of the process:
@@ -608,6 +675,356 @@ Never line on a timeout binds each request of the export.
   1,000 ms: the pass in flight, then one last pass. Its failures are no `DrainFailure`, so a run
   whose collector is down exits graceful.
 
+### Amended 2026-11-17: a marker has its own queue and its own writer handle
+
+WHY: a marker rode the link input queue behind the payloads of peers. Under a payload flood its
+push failed, so the edges parked at once and the fold did not. The type of the run-state cell let
+each holder write it, and only a comment stopped an edge.
+
+The marker queue:
+
+- [ ] The link actor pushes each marker to an input queue of its own, the control queue. It never
+  pushes a marker to the link input queue.
+- [ ] The control queue exists only when the config has a `link:` block. It counts toward the cap
+  of 20 input queues (§2).
+- [ ] Its id comes after the ids of the market-data groups, the timer, the link input queue, each
+  execution queue, and the writer-status queue. WHY: each recorded message holds its queue id, so a
+  new queue takes the next id and shifts no other id.
+- [ ] Its capacity is `queues.control_capacity`, default 16. The config refuses 0, as for each
+  other queue key.
+- [ ] IF the control queue is full, THEN the link actor drops the marker and counts the drop:
+  REJECT (lane table of the 2026-11-13 section on failure classes). The exception of 2026-07-25 for
+  an untrusted remote producer covers it: a remote controller decides each marker. A marker
+  carries a whole run state with its epoch, never a delta, so a dropped marker is equal to one never
+  sent.
+  - Amended 2026-11-18, as built: the producer counts the drops (`ControlQueueProducer::dropped`)
+    and writes one WARN line at each power of 2 of the count. `LinkCounts` holds no count of them.
+    WHY: the producer is the one place that sees the full ring, and the push runs in the task of
+    the link actor.
+- [ ] Level repair: the link actor pushes the pending marker after each claim of control, after a
+  dead-man park, and again at each announce (1 s). A marker is pending while the acknowledged state
+  differs from the desired state. A second copy changes nothing, because the fold applies only a
+  higher epoch.
+- [ ] The repair has no cap and no halt of its own. A hot thread that pops no marker also pops no
+  spin tick, and the full timer queue halts the engine (HALT (engine), lane table).
+- [ ] The fold takes a marker in the one order of ingress (`select_oldest`): the oldest received
+  stamp first, and a tie to the lower queue id. Thus a marker waits only for the messages that are
+  not newer than it, and a payload flood never delays it past its next pop.
+- [ ] The write end `ControlQueueProducer` names its class beside its type, as each lane type does.
+  It sits beside the other write ends of the input queues, in the concept module
+  `engine::hot::ingress`. The write ends `QueueProducer`, `LinkQueueProducer`, and
+  `touched_input_ring` move there too, and `engine::hot::spawn` re-exports them, so their paths in
+  §8 hold.
+  - Amended 2026-11-18, as built: `SimTapGate` moved there too, and `LinkPush`, the outcome of a
+    push to the link input queue, is new there. `engine::hot::spawn` re-exports all six:
+    `ControlQueueProducer`, `LinkPush`, `LinkQueueProducer`, `QueueProducer`, `SimTapGate`, and
+    `touched_input_ring`. `ControlQueueProducer::push(desired, now)` builds the marker itself, and
+    `ControlPlane::push_pending` is the one caller in the link actor.
+- [ ] Pins: `payload_flood_never_delays_a_marker_past_its_next_pop`, and the control queue as a
+  case of `each_lane_full_gives_its_class`.
+
+The writer handles:
+
+- [ ] The run state has three handles, and one constructor gives all three:
+  - `DesiredWriter`: only the link actor holds it, inside `ControlPlane`. It writes and reads the
+    desired state, reads the acknowledged state, and gives `pending()`.
+  - `DesiredReader`: each edge holds one. It reads the state and nothing more. It is `Clone`.
+  - `AcknowledgedWriter`: only the hot thread holds it. The fold stores the state that it applied.
+    It is not `Clone`.
+- [ ] No edge can write the run state. An edge that calls a write does not compile.
+  `DesiredReader` has no conversion into a writer, and neither writer is `Clone`. Pin:
+  `edge_handle_cannot_write_run_state`.
+- [ ] The handles take the place of `RunStateCell` and `RunControlGate`
+  (`engine::runtime::shutdown`) in each holder, and each keeps the visibility of the field that it
+  fills. The `pub` contexts of the Binance and Polymarket adapters hold a `DesiredReader`, and the
+  setup of the link actor holds the `DesiredWriter` (§8, 2026-11-17).
+- [ ] Amended 2026-11-18, as built, in `engine::runtime::shutdown`:
+  - The one constructor is `RunStateHandles::new()`, and `Default` calls it. Its three `pub`
+    fields are the handles: `desired_writer`, `desired_reader`, and `acknowledged_writer`.
+  - `DesiredWriter` gives `desired`, `acknowledged`, and `pending`. Its write, `accept_if_newer`,
+    is `pub(crate)`.
+  - `DesiredReader` gives `state` only. `AcknowledgedWriter` has no read, and its `store` is
+    `pub(crate)`.
+  - `RunControlGate` is gone. `RunStateCell` stays as a private type inside each handle.
+  - An engine with no `link:` block drops its `AcknowledgedWriter` at start, so nothing reads it.
+  - WHY: the first pass named the handles before they were built.
+
+### Amended 2026-11-17: only a listed controller asserts a run state
+
+WHY: the link took a run assertion from each sender with the token, and the highest epoch wins.
+So one forged frame locked out each real controller until a restart. Each claim refreshed the timer of
+the controller loss before the control plane judged it. An epoch of 2^63 or more read back as
+another state at another epoch.
+
+The list of controllers:
+
+- [ ] The config lists the controllers: `link.controllers`, a list of IP addresses. The control
+  plane holds the list.
+- [ ] An entry holds no port. The relay sends each tab from a socket of its own, with a port that
+  the OS selects, so no port names a controller. The control plane compares only the IP address of
+  the sender of an assertion with the list.
+- [ ] IF the address is not listed, THEN the control plane refuses the assertion and counts it for
+  that address in `LinkCounts`: REJECT. The assertion changes neither the desired state nor the
+  pending marker, and it does not refresh the timer of the controller loss. The subscription of the
+  frame to its topics still holds.
+  - Amended 2026-11-18, as built: the verdict is `AssertionVerdict::UnlistedSender`. The control
+    plane counts by IP address in `RefusedAssertions`: 16 rows, and each address past the 16th
+    adds to one shared count, `past_table`. The link actor copies the table into
+    `LinkCounts.refused_assertions` at each announce. The control plane writes one WARN line for
+    an address at each power of 2 of its count. WHY: a table made at start holds a fixed count of
+    rows, and an address counts as one sender whatever its port.
+- [ ] A subscribe at epoch 0 claims no control (`AssertionVerdict::NoClaim`). The control plane
+  neither refuses it nor counts it.
+- [ ] Only an assertion of a listed controller refreshes the timer of the controller loss. Thus the
+  dead-man rule (`on_controller_loss: idle`) parks the engine when each listed controller is silent
+  for `ControlPlane::SILENCE_LIMIT`, whatever another address sends.
+  - Amended 2026-11-18, as built: the order in `ControlPlane::on_assertion` is epoch 0
+    (`NoClaim`), then the address check, then the refresh of the timer, then the check of the top
+    epoch, then the highest-epoch store. Thus each claim of a listed address refreshes the timer: a
+    stale claim and a claim at the top epoch too. The dead-man rule parks only after the control
+    plane took one claim of a listed address. `SILENCE_LIMIT` is 5 s, the lifetime of a
+    subscription. WHY: a listed controller that sends a stale claim is still alive.
+- [ ] An engine with an empty list accepts no assertion, and its start says so in one line. The
+  list is empty by default. Each shipped config with a `link:` block lists the host of its relay,
+  `127.0.0.1`.
+  - Amended 2026-11-18, as built: the line is the WARN line "link.controllers is empty — this
+    engine accepts no run assertion", which `ControlPlane::new` writes when the task of the link
+    actor starts. The config takes each entry as an `IpAddr`, so an entry with a port does not
+    load.
+- [ ] The limit of this form: each process on a listed host that has the token can assert. The list
+  keeps each other host out. The message code of the link (stage 3 of the master plan) names the
+  sender exactly.
+
+The epoch:
+
+- [ ] The controller epoch is a newtype, the type of `RunAssertion.epoch`. Its one wire form
+  refuses 2^63 and above at decode, with the value seen, so the subscribe and the lifecycle frame
+  refuse alike. The refusal is counted, and the desired state does not change: REJECT. WHY: the
+  run-state cell keeps the state in the top bit of the word of the epoch.
+- [ ] The control plane also refuses an assertion at epoch 2^63 - 1 and counts it with the refused
+  epochs. Decode and the cell still round-trip that epoch. WHY: the dead-man park takes the desired
+  epoch plus 1, so it must always have an epoch.
+- [ ] Amended 2026-11-18, as built: the two refusals have two counts.
+  - The newtype is `ControllerEpoch` (`engine::msg::run_state`), with `MAX` = 2^63 - 1. It is the
+    type of `RunAssertion.epoch`, `Subscribe.desired_epoch`, and `Lifecycle.acknowledged_epoch`.
+  - The decode refusal is `LinkDecodeError::EpochOutOfRange { found }`. It refuses the whole frame,
+    so the topics of that subscribe are not refreshed either. `LinkCounts.decode_failed` counts it,
+    with each other decode refusal, and it has no count of its own.
+  - The control plane refuses `ControllerEpoch::MAX` from a listed address with
+    `AssertionVerdict::EpochTooHigh`, and counts it in `refused_epochs`, which the link actor
+    copies into `LinkCounts.refused_epochs`. From an address that is not listed, the same epoch is
+    `UnlistedSender`.
+  - WHY: the decode refuses before the control plane sees the assertion, so the inbound path
+    counts it. The first pass named one count for both.
+- [ ] Pins: `each_u64_epoch_is_refused_or_round_trips`,
+  `assertion_from_unlisted_address_changes_nothing`, and
+  `start_then_stop_from_a_tab_parks_the_fold` (from a tab through the real relay to the fold, and
+  back).
+  - Amended 2026-11-18, as built: L4 and L5 sit in `engine/tests/fitness/link/controller.rs`. L16
+    sits in `engine/tests/fitness/operator/tab_to_fold.rs`, under feature `web`, so only the run
+    with all features runs it. WHY: L16 starts the real relay, which builds only with feature
+    `web`.
+
+### Amended 2026-11-17: a tape file has its final name only when it is complete
+
+WHY: a tape file had its final name from its create, before it had a footer, and nothing synced
+it. A reader that listed the files during a run, or after a crash, opened a file with no footer.
+
+- [ ] The writer of the tape writes each file under `<name>.parquet.part`. The file takes its final
+  name `<name>.parquet` only when it is complete, in this order: the last rows, the footer, a sync
+  of the file, the rename, and a sync of its folder.
+- [ ] The final name keeps its form (§7, 2026-07-29):
+  `{persistence.dir}/{strategy-id}/{te-id}[/sim]/{table}/date=YYYY-MM-DD/{HH}-{boot_ts_us}-{seq:06}.parquet`.
+- [ ] A reader lists `.parquet` names only. Thus no reader opens a file that is not complete. The
+  readers in the repo obey: the retention walk of the writer, the read-back helper of the fitness
+  suite, the test of rotations of target `integration`, and `strategies/etl.py`. A new reader
+  obeys too.
+- [ ] IF the sync of the file or the rename fails, THEN the writer removes the `.part` and returns
+  `PersistError::Io` with its path. IF only the sync of the folder fails, THEN the file keeps its
+  final name, and the error names the folder.
+  - Amended 2026-11-18, as built: the error also names its table, `PersistError::Io { table,
+    path, source }`.
+- [ ] Amended 2026-11-18, as built: the root of the tape writer reads `failure_class()`. A fault
+  stops only its own table, and the writer goes on with each other table. Section on tape faults,
+  end of §6.
+  - Replaced 2026-11-18: "The root of the tape writer has no reader of `failure_class()` yet
+    (2026-11-13 section on failure classes). Until part 5 of the plan gives it one, the first error
+    ends the writer thread." WHY: part 5 built the reader.
+- [ ] A process that ends with a file open leaves that file as `.part`, with no footer. No writer
+  can finish it.
+- [ ] The retention walk runs at the start of the writer and after each periodic seal. It removes
+  each `.part` whose boot stamp is not the stamp of this writer, at any age. IF it removes one or
+  more, THEN it writes one INFO line with the count. It never removes a `.part` of its own boot, so
+  it is safe while a file is open.
+  - Amended 2026-11-18, as built: the walk runs at the start of the writer and after each
+    `PersistRecord::SealAll`, which the fold sends at each seal border and at each park. It does
+    not run after a seal at the row cap, at an hour cross, or at shutdown. WHY: the writer has no
+    interval of its own now (section on the seal by message time, end of §6).
+  - Replaced 2026-11-18: "after each periodic seal". WHY: no periodic seal exists.
+- [ ] The walk is safe only while one writer writes a run folder. The identity lock that each
+  engine takes in each mode (part 5 of the plan, the fleet server) makes that a fact of the code.
+  - Amended 2026-11-18, as built: preflight takes the identity lock in each mode, and the drain
+    lets it go last (§2, 2026-11-13 section on preflight). Thus one writer writes a run folder.
+  - Replaced 2026-11-18: "Until then, two engines of one identity in mode `off` can each remove
+    the open file of the other." WHY: the lock is built.
+- [ ] Each step of a write goes through `FileSteps` (`engine::runtime::durable_file`): create the
+  folder, create the file, write, sync, rename, sync the folder, and remove. The durable files (the
+  nonce file, the exposure file) take the same steps under a temporary name beside the file,
+  `<path>.<pid>.tmp`. A test ends or fails a write at any one step through a stand-in (§12,
+  2026-11-17 ruling on the file steps).
+  - Amended 2026-11-18, as built: the config edit of the fleet server takes the same steps through
+    `durable_file::write_through`, and gives the temporary file the permission bits of the old
+    file before the sync and the rename (§8, 2026-10-14 section on the agent control plane).
+- [ ] Pin: `kill_at_each_write_step_leaves_no_file_without_footer`. A kill after each step leaves
+  no file with its final name and no footer. A file that the row cap seals reads back during the
+  run, with each row in order. The next start removes each unfinished file of the killed run.
+
+### Amended 2026-11-18: a frame proves its layout
+
+WHY: the envelope carried a version number that a person raised by hand. One forgotten raise let
+a peer of another layout read the bytes of a frame as other fields, with no error.
+
+- [ ] The envelope carries `LINK_LAYOUT` (`engine::link`, `engine/src/link/frame.rs`), a
+  `LinkHash` of 8 bytes, in the place of the version. The envelope is 86 bytes: magic, layout,
+  topic, token hash, strategy hash, sender hash, boot stamp, sequence, MAC.
+- [ ] The digest is computed at compile time (FNV-1a, `LayoutDigest` in `engine/src/link/wire.rs`).
+  It folds the envelope, each row of the topic table `ENGINE_TOPICS` (name, topic id, body width,
+  body digest), and the payload of a strategy topic (topic 16).
+- [ ] Each wire type gives its width and its digest: `WireField` has `WIDTH` and `DIGEST`, with no
+  default, so a type without them does not compile.
+  - A struct folds each field name, with its width and its digest.
+  - An enum folds its label and each variant with its tag. Thus the reason tables of the link feed
+    (`RejectReason`, `RejectClass`, `HaltReason`) are in the digest.
+  - An option folds its two tags, and an array its length.
+- [ ] The body length of each topic comes from the widths. The topic table has 8 rows: subscribe 0,
+  books 1, events 2, catalog instruments 3, catalog features 4, lifecycle 5, latency 6, history 7.
+- [ ] A frame with another layout is refused before its body is read:
+  `LinkDecodeError::LayoutMismatch { found, expected }`: REJECT. The link actor counts it in
+  `LinkCounts.layout_mismatched` and in `decode_failed`. The order of the decode: length,
+  envelope, magic, layout, token, strategy, topic, exact length, body.
+- [ ] Peers of two layouts refuse each other, by design.
+- [ ] The golden file `engine/tests/fitness/link/link_frames.txt` starts with the line
+  `layout 0x<digest>`, then one line for each frame kind. The test compares first: an equal digest
+  with other bytes is red, in bless mode too (`POLYSIM_BLESS_LINK=1`). Bless mode rewrites the
+  file only for a new digest.
+- [ ] Pins, in `engine/tests/fitness/link/wire_digest.rs`:
+  `changed_frame_bytes_need_a_changed_digest`, `each_frame_kind_round_trips`, and
+  `digest_mismatch_is_refused_before_the_body`.
+
+### Amended 2026-11-18: the count by sender and the rate of a sender
+
+WHY: a drop on the link input queue was one total count that nobody read, so no operator knew
+which peer filled the queue, and one flooding peer took the whole queue.
+
+- [ ] `LinkQueueProducer::push(from, message)` returns a `LinkPush`. The producer keeps
+  `SenderCounts` (`engine/src/link/senders.rs`): one row for each source `SocketAddr` (IP and port),
+  `LINK_MAX_SENDERS` (64) rows, and one shared row `others` past them. Each row counts
+  `queue_full` and `over_rate`. The engine never gives a row back while it runs.
+- [ ] The rate is `link.sender_rate_per_sec`: the frames of one source address in one heartbeat of
+  the link actor (1 s). Its default is `queues.link_capacity`, and the config refuses 0.
+- [ ] IF a frame passes the rate of its sender, THEN the producer refuses it before the ring
+  (`LinkPush::OverRate`) and counts `over_rate`: REJECT. A frame inside the rate counts toward the
+  rate, also when the full ring then drops it (`queue_full`, and the total `dropped`).
+- [ ] At each announce the link actor starts a new rate period and copies the table into
+  `LinkCounts.senders`. It writes one WARN line for a sender at each power of 2 of its refusals.
+- [ ] The metrics thread reads `LinkCounts` through `Metrics::watch_link_counts`. At each interval
+  close it writes one `SenderDropRow` for each sender with a row, a sender with no loss included,
+  and one row for `others` when it is not 0. With feature `otlp` the rows go out as
+  `polysim.link.sender_drops`, with the attributes `polysim.sender` and `polysim.cause`.
+- [ ] The hot thread reads nothing new. The counts live in the producer, which the task of the link
+  actor runs.
+- [ ] Pins: `fold_state_equals_refold_of_consumed_link_frames` and
+  `link_drops_are_counted_for_each_sender` (`engine/tests/fitness/link/link_input.rs`), and
+  `link_record_and_link_callback_have_independent_gates`
+  (`engine/tests/fitness/link/link_ingress.rs`).
+
+### Amended 2026-11-18: a late tab gets the recent events
+
+WHY: a tab that opened during a run got only the catalog and the lifecycle, so its charts were
+empty.
+
+- [ ] `HistoryRing` (`engine/src/link/actor/history.rs`) holds the recent event frames. The link
+  actor makes it at start, with room for `link.history_capacity` frames (default 300,000: five
+  minutes at 1,000 frames a second), and never grows it. A full ring overwrites its oldest frame.
+- [ ] The history is topic 7, `history`, with the body of an event frame (`LinkBody::History`). The
+  link actor sends it only to a subscriber that names topic 7. A subscription to each topic, the
+  default of an engine peer, gets none.
+- [ ] Each flush sends history first: at most `link.history_per_flush` frames (default 128) for all
+  replays together, the first replay first. Then the live frames go, each in the flush of its
+  arrival.
+- [ ] At most 16 replays run at a time (`LINK_MAX_SUBSCRIBERS`). A 17th subscriber gets no replay,
+  and nothing counts it.
+- [ ] IF eviction overtakes a replay, THEN the replay goes on at the oldest frame that the ring
+  holds, and `LinkCounts.history_skipped` counts the frames that it missed.
+- [ ] A failed send of a history frame is counted in `history_failed`: REJECT. The live frames go
+  on. `history_sent` counts the frames sent. The line of each 60 s names `history_failed` and
+  `history_skipped`.
+- [ ] No code of the hot thread names the ring.
+- [ ] The workstation reads the topic into its chart model (`ChartModel::apply_history`), fills
+  only.
+- [ ] The config refuses 0 for each of the two keys.
+- [ ] Pins, in `engine/tests/fitness/link/history.rs`:
+  `late_subscriber_gets_recent_events_and_live_frames_still_flow` and
+  `history_ring_never_grows_and_never_reaches_the_hot_thread`.
+
+### Amended 2026-11-18: the seal by message time
+
+WHY: the writer sealed each 300 s of its own wall clock. A run and its second fold sealed at other
+borders, so a border of a tape file was no function of the messages.
+
+- [ ] The fold requests a seal of each open tape file when a spin crosses a multiple of
+  `persistence.seal_interval_spins` (N): `SealBorders::is_crossed_by`
+  (`engine/src/hot/dispatch/seal.rs`).
+  - It seals one time for each multiple that it reaches, never by `seq % N == 0`.
+  - A skipped slot seals at the next spin. A jump over several multiples gives one seal.
+- [ ] N defaults to the spins of 300 s at `engine.spin_interval_us`: 300 for the shipped Binance
+  config, 3,000 for the shipped Polymarket config. The config refuses 0.
+- [ ] The check is one step of the fold of a spin, after the retry of the latched writes and before
+  the strategy. It runs in each run state.
+- [ ] The count of borders that the fold passed is state, in the state digest.
+- [ ] The request sends `PersistRecord::SealAll` through the seal sink. A request while a seal
+  waits keeps the count of tries of that seal. A park also requests a seal.
+- [ ] The writer has no interval and no clock read that decides a seal. It still seals at its row
+  cap (10,000 rows), at an hour cross of the row stamps, at each `SealAll`, and at shutdown.
+- [ ] The rows of `rotations` come over a channel of their own, not the record ring. Thus their
+  borders follow the reads of the writer. Stage 2 of the master plan owns that table.
+- [ ] Pins: `run_and_second_run_seal_at_equal_borders` (`engine/tests/fitness/tape/seal_marker.rs`),
+  which compares the file names with the boot stamp masked; the border case of
+  `seal_retry_reaches_cap_then_halts`; the zero case of
+  `each_refusal_starts_no_thread_and_spends_no_nonce`.
+
+### Amended 2026-11-18: a tape fault has the class of its table
+
+WHY: the first write error ended the writer thread, and nothing told the hot thread. The engine
+traded on while no order or fill reached the disk (defect 14, the part of a writer fault).
+
+- [ ] Each table names its kind in `TapeTable` (`engine/src/tape/mod.rs`). `TapeTable::fault_class`
+  gives its class, with no catch-all arm:
+  - audit tables, HALT (quoting): `orders`, `fills`, `incidents`, `link_frames`
+  - research tables, REJECT (of that table): `features`, `trades`, `book_events`, `klines`,
+    `rotations`
+- [ ] `PersistError::{Io, Parquet, Batch}` name their table, and their `failure_class()` is the
+  class of the table. `WriterPanicked` and `DrainInterrupted` are HALT (engine).
+- [ ] A fault at any step of a file (open, write, seal) stops its table. The open file of that
+  table stays `.part`, with no footer. Each later row of the table is lost and counted. Each other
+  table goes on and seals. At the end one ERROR line gives the lost rows and the stopped tables.
+- [ ] Audit fault:
+  - The writer writes one ERROR line. The first audit fault pushes one `WriterFailed` of
+    `FileWriter::Tape` to the status queue of the tape writer (lane table, above).
+  - The fold halts quoting with `HaltReason::WriterFailed`.
+  - The first audit error is the error of the drain, so the exit is `DrainFailed`.
+  - A later audit fault writes its line and counts, and sends nothing.
+- [ ] Research fault: one ERROR line and one more stopped table in the count
+  (`PersistHandle::stopped_tables`). Nothing halts, and the drain ends `Ok`.
+- [ ] The count of stopped tables counts each stop, audit or research.
+- [ ] The full ring still drops an audit row and counts it. The flag of defect 14 stands at
+  `engine/src/hot/sink/latched.rs` and waits for the audit ring of stage 2.
+- [ ] `rotations` is research by open question 3 (a) of the plan. The case for audit goes to stage
+  2 of the master plan, with the audit ring.
+- [ ] Pins: `audit_write_fault_stops_quoting_and_research_fault_stops_one_table`
+  (`engine/tests/fitness/tape/writer_fault.rs`), and the case of the tape writer in
+  `each_lane_full_gives_its_class`.
+
 ## 7. Logging
 
 - [ ] Bespoke minimal subsystem. No logging framework dependency.
@@ -692,6 +1109,9 @@ execution-safety defect, not an observability preference.
   of its footer, and the console log of `polysim-mcp`. Each name stays byte for byte. The mode
   badge of the UI still reads `ExecutionMode::badge`. WHY: each writer made its own name from the
   mode, so one writer that missed the mode could put simulated fills under a live name.
+- [ ] Amended 2026-11-17: a tape file has the name `<name>.parquet.part` until it is complete, and
+  its final name keeps its form byte for byte. Section on tape files, end of §6. WHY: a reader
+  must never open a file that has no footer.
 
 ### Amended 2026-10-14: the MCP server's stdout is the wire
 
@@ -896,6 +1316,22 @@ source. Thus identity is two-part and the folder nests.
   - Replaced 2026-11-12: the file was `common.rs`, module `common`.
 - [ ] Otherwise per-TE duplication is accepted (customer code, §9).
 - [ ] Breaking data-format change = new te folder/id.
+- [ ] Amended 2026-11-18: each te folder also holds `schema.lock`, written by hand. It holds one
+  line `column <name>` for each column of the strategy, in the order of their ids, and one line
+  `link_schema_digest 0x<hex>`, the digest of its link schema (`schema_hash_of_fields`). Blank
+  lines and `#` lines are skipped. The Polymarket publisher has no column, so its lock holds the
+  digest only.
+  - The fitness test `schema_lock_of_each_strategy_holds` walks each folder below `strategies/`
+    that holds a `strategy.rs`, and compares it with its lock. A rename, a removal, a move of a
+    column, and a change of the link schema fail. A column added at the end fails until its line
+    is added at the end of the lock by hand. The test never writes a lock. For the recorder it
+    also holds that the columns 57 to 76 are the link fields in wire order, and the 32 claims of
+    its group accessors.
+  - `permuted_declaration_decodes_to_equal_tables` decodes each file by its own footer: two orders
+    of declaration give equal tables.
+  - WHY: the names were frozen by hand for one strategy, in a test, so a rename in another
+    strategy broke the reader of its tape with each gate green. The kind of a column waits for
+    stage 2 task T6 of the master plan.
 
 ### Amended 2026-08-08: venue execution adapter
 
@@ -943,6 +1379,37 @@ place where engine state lives.
   file parses as the requested mode.
 - [ ] Server exit stops every engine it started: SIGTERM first, SIGKILL only past one shared
   deadline.
+- [ ] Amended 2026-11-18, as built: the fleet sees an engine that it did not start. WHY: after a
+  restart of the server, a running engine, a live one too, was listed as stopped, and a start made
+  a second process of it.
+  - The fleet probes the identity lock of each engine (§2, 2026-11-13 section on preflight):
+    `IdentityLocks::is_held`, a shared lock that it lets go at once. A held lock lists the engine
+    as `running elsewhere`, and a start of it is refused with `FleetError::RunningElsewhere
+    { identity, lock }`. A row of a child of this server wins over the probe.
+  - An engine that starts while the fleet probes its lock is refused as held, by design.
+  - The states of a row: `running`, `stopping`, `running elsewhere`, `exited`, and `stopped`.
+- [ ] Amended 2026-11-18, as built: a stop waits outside the lock of the fleet. WHY: a stop held the
+  one lock of the fleet until the engine exited, so no session listed the engines during a stop.
+  - Under the lock, the stop sends SIGTERM and the slot becomes `stopping`. Outside it,
+    `StopBatch::settle` waits. Under the lock again, the outcome is recorded.
+  - A stop of a slot that is stopping, and a start of it, give `FleetError::Stopping`.
+  - The close of the server (`stop_all` of the tools) takes the same three steps.
+  - The start tool still holds the lock through the start grace of 2 s, so a list waits behind a
+    start.
+- [ ] Amended 2026-11-18, as built: the one edit of the server goes through the durable-file
+  writer (`durable_file::write_through`), with the permission bits of the old file.
+  - IF a step before the rename fails, THEN the config is not changed, and the temporary file is
+    removed: `FleetError::ConfigWrite`.
+  - IF the remove of the temporary file fails too, THEN both errors come back, with the path of
+    the file left behind: `FleetError::ConfigWriteLeftBehind`.
+  - IF only the sync of the folder fails, THEN the file holds the new mode but is not proven
+    durable: `FleetError::ConfigNotSynced`. Its message says so.
+  - WHY: the edit wrote a staging file and renamed it with no sync, and a failed step left the
+    staging file beside the config.
+- [ ] Amended 2026-11-18, as built: the HTTP server accepts through the one accept loop with a cap
+  (§12, 2026-11-17 ruling on the accept loop). Past the cap it takes no new session, writes one
+  line to stderr, and keeps each engine that it started. Its exit signal still stops them, and the
+  server then exits 0. WHY: an exit of the server would stop each engine that it started.
 - [ ] Amended 2026-10-15: `--http <port>` serves the same tools on 127.0.0.1 only, with no auth:
   on a single-operator host, loopback is the auth. A request that carries an `Origin` header is
   refused (the MCP spec requires Origin validation), so no browser quirk around the CORS preflight
@@ -985,6 +1452,19 @@ server. That server must not become a second place where link or market state li
 - [ ] Diagnostics go to stderr, like `polysim-mcp` (§7, 2026-10-26).
 - [ ] The app descriptor (`/jet-app.json`) advertises the MCP server when `--mcp <url>` is given.
   `polysim-web` only repeats that address. It never starts, stops or calls the server.
+- [ ] Amended 2026-11-18, as built: the guard sits in its own file,
+  `engine/src/operator/relay/guard.rs` (`guard`, `Refusal`, and `is_loopback_authority`, each
+  private to the relay). Its rules above hold unchanged. WHY: the guard is the one barrier in front
+  of run control, so it is read alone.
+- [ ] Amended 2026-11-18, as built: the hello of a tab carries the token hash of `LinkCredential`
+  (`engine/src/link/credential.rs`), the one constructor of the link credential. The engine builds
+  its guard and its identity from the same credential. Thus the token hash is derived in one
+  place. WHY: the relay and the engine derived it in two places, so a change of one of them made
+  the guard of the engine refuse each tab.
+- [ ] Amended 2026-11-18, as built: the relay accepts through the one accept loop with a cap, the
+  flag `--accept-tries` (§12, 2026-11-17 ruling on the accept loop). Past the cap, `serve` returns
+  `WebError::Accept`, and `polysim-web` exits with code 1. WHY: the relay retried each accept
+  error with no end.
 
 ### Amended 2026-10-26: the workstation's link seam and the web surface are `pub` on merit
 
@@ -1002,6 +1482,9 @@ test: another target, another bin, or another program.
 - [ ] `operator::relay::{WebConfig, ArgumentError, serve, WebError}` are `pub`: the surface that the
   `polysim-web` bin composes. `ArgumentError` is `pub` because `WebConfig::parse` returns it.
 - [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
+- [ ] Amended 2026-11-17: the control plane of the link is `pub` on the same merit as the link seam
+  of the workstation: time goes in, and it owns no socket, clock, or thread. Section on the `pub`
+  items of part 5, end of §8.
 
 ### Amended 2026-10-26: `dom-fixture` is a bin that holds its own scenes
 
@@ -1067,13 +1550,31 @@ that is gone.
 - [ ] Two files have new names: `operator/fleet/supervisor.rs` (was `mcp/fleet.rs`) and
   `operator/relay/tab.rs` (was `web/relay.rs`). WHY: a module with the name of its folder fails
   the lint `clippy::module_inception`.
+- [ ] Amended 2026-11-18: the files that part 5 added below `engine/src/`, each with one job:
+  - `link/actor/`: `control_plane.rs`, `inbound.rs`, `outbound.rs`, and `history.rs`; the root
+    file `mod.rs` keeps the wiring and the heartbeat.
+  - `link/credential.rs` (the one link credential) and `link/senders.rs` (the count by sender).
+  - `operator/accept.rs`, the one accept loop of the relay and the fleet server. It sits in
+    `operator/`, because `relay/` builds only with feature `web` and `fleet/` only with `mcp`.
+  - `operator/relay/guard.rs` and `operator/fleet/stop.rs`.
+  - `hot/dispatch/seal.rs` (the seal borders) and `tape/fault.rs` (the faults of the tape writer).
+  - The write ends of the input queues moved from `hot/spawn.rs` to `hot/ingress.rs`.
+  - WHY: each new box of part 5 has a file of its own, so a reader finds it by its name.
 - [ ] Public paths: `polysim::…` = `engine::…`. An exported macro sits at the crate root
   (`engine::info!`). Each other path follows its folder: `engine::venues::sim::…`,
   `engine::tape::…`, `engine::runtime::config::…`.
-- [ ] `engine::runtime::{StartError, ExecutionLease, Exit, check_symbol_order_capacity,
-  run_trading_engine}` keep their path: the root file of `runtime` exports them from `assembly`,
-  with the start and exit items of 2026-11-13 (`Preflight`, `StartPlan`, `Engine`, `DrainOutcome`,
-  `Trigger`, `DrainFailure`, `DrainDeadline`, `DrainWatchdog`, `ForcedExit`).
+- [ ] `engine::runtime::{StartError, ExecutionLease, Exit, run_trading_engine}` keep their path:
+  the root file of `runtime` exports them from `assembly`, with the start and exit items of
+  2026-11-13 (`Preflight`, `StartPlan`, `Engine`, `DrainOutcome`, `Trigger`, `DrainFailure`,
+  `DrainDeadline`, `DrainWatchdog`, `ForcedExit`) and the identity lock of 2026-11-18
+  (`IdentityLock`, `IdentityLocks`).
+  - Amended 2026-11-18: `check_symbol_order_capacity` is crate-private
+    (`engine/src/runtime/assembly/preflight.rs`), and no root file exports it. A test reaches the
+    check through `Preflight::run_with` with a stand-in venue port. WHY: only a fitness test called
+    it, and §12 (2026-07-28) forbids `pub` for a test's sake.
+  - Replaced 2026-11-18: "`engine::runtime::{StartError, ExecutionLease, Exit,
+    check_symbol_order_capacity, run_trading_engine}` keep their path". WHY: the function is
+    crate-private.
   - Replaced 2026-11-13: "`engine::runtime::{EngineError, ExecutionLease, ExitReport,
     check_symbol_order_capacity, decide_exit, run_trading_engine}` keep their path". WHY:
     `EngineError` became `StartError`, `ExitReport` became `Exit`, and the exit decision became
@@ -1175,6 +1676,11 @@ test, or sits in a module that is a concept in its own right, and each clause na
     lane type names its failure class in code, beside the type (2026-11-13 section on failure
     classes). The sinks sit in the concept module `engine::hot::sink`, and the two input producers
     in `engine::hot::spawn`.
+    - Amended 2026-11-18, as built: three input producers name their class:
+      `QueueProducer::WHEN_FULL`, `LinkQueueProducer::WHEN_FULL`, and
+      `ControlQueueProducer::WHEN_FULL` (REJECT). Each is defined in the concept module
+      `engine::hot::ingress`, and `engine::hot::spawn` re-exports them, so the paths above hold.
+      WHY: the write ends moved beside the read end of the input queues, one concept in one file.
   - `StrategyGate`: `StrategyCtx::gate` returns it to strategy code, the seam of §8 (2026-07-20).
   - `Ema` (`engine::hot::series`): the series module is a concept in its own right, and the
     strategies name it (`strategies/strat-micro-recorder/te-binance-spot-btcusdt/models.rs`).
@@ -1222,8 +1728,14 @@ each venue needed its own engine. The link between two engines carries state and
     version 3. WHY: two markets of one venue can trade one symbol, as Binance spot and perpetual
     BTCUSDT do.
 - [ ] Preflight runs the checks of each source (§2, 2026-11-13). The execution leases stay the last
-  checks. Preflight takes the lock of each lease before it advances any run nonce. Thus a refused
-  lock leaves each nonce unspent.
+  checks. The one identity lock of the engine comes before each lease, in each mode, and a lease
+  holds no lock. Thus a refused lock leaves each nonce unspent.
+  - Amended 2026-11-18, as built: a lease holds the run nonce of its venue only (§2, 2026-11-13
+    section on preflight). The execution lease of each venue in the list above is that nonce. WHY:
+    one lock for each engine, in each mode, keeps a second process of the identity out, also with
+    execution off.
+  - Replaced 2026-11-18: "Preflight takes the lock of each lease before it advances any run nonce.
+    Thus a refused lock leaves each nonce unspent." WHY: the lock left the lease.
   - Amended 2026-11-13, as built: preflight runs the checks of each source, and it takes one lease.
     The order of several locks and nonces comes with the start of several edges (stage 3 tasks T6
     and T12 of the master plan). WHY: until then one source sends orders.
@@ -1671,6 +2183,126 @@ test, sits in a module that is a concept in its own right, or has a ruling of §
   private. WHY: §12 (2026-07-28) forbids `pub` for a test's sake.
 - [ ] The integration tests of part 4 use only items that were `pub` before them. No item became
   `pub` for them.
+- [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
+
+### Amended 2026-11-17: the `pub` items of part 5, each with its merit
+
+WHY: §12 (2026-07-28) forbids `pub` for a test's sake. The control logic of the link sat inside
+the private link actor, so a test reached it only through a socket. A test had no way to build
+the actor without a hot thread. Each item below has a caller that is not a test, sits in a module that
+is a concept in its own right, or has a ruling of §12.
+
+- [ ] `ControlPlane` (`engine::link`, in `engine/src/link/actor/control_plane.rs`) is `pub`, with
+  `new`, `on_assertion`, `check_controller`, `pending`, and `SILENCE_LIMIT`. `AssertionVerdict`
+  (`NoClaim`, `Accepted`, `Stale`), the value of `on_assertion`, is `pub` with it.
+  - Merit: the control plane is a concept in its own right. It is the one place that judges the
+    assertion of a controller, and the one place of the dead-man rule. It is pure state with the
+    time passed in: it reads no clock and owns no socket, queue, or thread. Thus the link actor and
+    a test drive it the same way, as with the link seam of the workstation (2026-10-26).
+  - The link actor owns it and pushes each marker that it returns.
+  - The `DesiredWriter` takes the place of its `RunControlGate`, and the list of controllers and
+    their refused counts join its state (§6, the two 2026-11-17 sections on the run state). It
+    keeps this merit through each change.
+  - Amended 2026-11-18, as built: `ControlPlane::new(DesiredWriter, &[IpAddr], ControllerLoss)`.
+    It also has `push_pending`, `refused_assertions`, and `refused_epochs`, which the link actor
+    calls. `desired` and `acknowledged` are `pub` by the ruling of §12 on read accessors
+    (2026-11-18): only the fitness support calls them from outside the crate. `AssertionVerdict`
+    has five variants: `NoClaim`, `Accepted`, `Stale`, `UnlistedSender`, and `EpochTooHigh`.
+    `RefusedAssertions` with `of` and `total` is `pub` with it, as the value of
+    `refused_assertions`. WHY: the refusals of part 5 are verdicts of the control plane, and it
+    holds the one desired writer, so a test reads both states through it.
+  - Replaced 2026-11-18: "`acknowledged` stays `pub(super)`." WHY: it is `pub` since the writer
+    handles of part 5.
+- [ ] `LinkActor` with `spawn(setup, &Handle)`, and `LinkActorSetup` with its fields, are `pub`
+  (`engine::link`, in `engine/src/link/actor/mod.rs`). Each type that the setup names is `pub`.
+  New with it: `PeerFeed`, `LinkCountsHandle` with `new` and `load`, and `LinkCounts`.
+  - Merit: the link actor is the one edge actor of the link (§2), a concept in its own right. One
+    task owns the link socket, the subscriber table, and the sequence gate. Each part that it owns
+    is `pub`, so a caller builds an actor on loopback from public parts, with no hot thread.
+  - The setup holds the socket that preflight bound (§2, 2026-11-13), as a `std::net::UdpSocket`.
+    The actor registers it with the runtime that runs the actor, inside its own task.
+  - Amended 2026-11-18, as built: `LinkCounts` holds what the actor refused, lost, or sent since its
+    start. The actor publishes it at each announce through `LinkCountsHandle`, for a reader on
+    another thread: the metrics thread and a test.
+    - Counts: `decode_failed` (with `layout_mismatched`, a part of it), `gate_rejected`,
+      `topic_ignored`, `send_failed`, `receive_failed`, `table_full_refused`, `peer_silenced`,
+      `refused_epochs`, `history_sent`, `history_failed`, and `history_skipped`.
+    - Tables: `refused_assertions` (by IP address) and `senders` (by source address).
+    - It holds no count of the drops of the control queue (§6, the marker queue) and no count of
+      its own for a refused epoch at decode (§6, the controller).
+  - Replaced 2026-11-18: "`LinkCounts` holds what the actor refused or lost since its start, one
+    count for each cause." and "Each new cause of part 5 is one more count there." WHY: it holds
+    tables and a count of sent frames too, and two causes count elsewhere.
+  - When part 5 adds the control queue and the writer handles (§6, 2026-11-17), the setup takes a
+    `ControlQueueProducer` (`engine::hot::ingress`) and the `DesiredWriter`
+    (`engine::runtime::shutdown`). Each one is `pub` with the setup, on this merit.
+    - Amended 2026-11-18, as built: the setup also takes `controllers: Vec<IpAddr>` and `history:
+      HistoryRing`, and its field `markers` holds the `ControlQueueProducer`.
+  - `Actor`, `Wake`, and `PeerState` stay private.
+- [ ] Module `engine::msg::ui::channel` is `pub`, with `ui_channel`, `UiWiring`, `UiChannels`, and
+  `UiLifecycle`. Merit: vocabulary of `msg`, the feed that crosses from the hot thread to the link
+  actor. The setup of the link actor takes `UiChannels`.
+- [ ] By the rulings of §12 (2026-11-17):
+  - the file steps of a write (`engine::runtime::durable_file`), with `PersistWriter::through`
+    and `PersistWriter::on_disk`
+  - the one accept loop of the relay and the fleet server (`engine::operator::accept`)
+- [ ] Amended 2026-11-18, as built: each other `pub` item of part 5, with its merit. WHY: §12
+  (2026-07-28) forbids `pub` for a test's sake, so each item of the builds names its merit.
+  - The writer handles `RunStateHandles`, `DesiredWriter`, `DesiredReader`, and
+    `AcknowledgedWriter` (`engine::runtime::shutdown`): they take the place of `RunStateCell` and
+    `RunControlGate`, which were `pub`. The `pub` contexts of the venue adapters, the setup of the
+    link actor, and `LinkWiring.acknowledged` of the fold hold them.
+  - `ControlQueueProducer` with `new`, `push`, and `WHEN_FULL`, and the new methods of
+    `LinkQueueProducer` (`push(from, message)`, `with_sender_rate`, `sender_rate`,
+    `start_rate_period`, `senders`) with their value `LinkPush`: write ends of the input queues, in
+    the concept module `engine::hot::ingress`. The setup of the link actor takes both producers.
+  - `ControllerEpoch` with `ZERO`, `MAX`, `new`, `saturating`, `get`, `next`, and `TryFrom<u64>`,
+    and its error `EpochOutOfRange` (`engine::msg::run_state`): vocabulary of `msg`, the epoch of
+    `RunAssertion`, `Subscribe`, and `Lifecycle`. The workstation builds its epochs with it.
+  - `LINK_LAYOUT`, `Envelope.layout`, `LinkDecodeError::{LayoutMismatch, EpochOutOfRange}`,
+    `TopicId::HISTORY`, and `LinkBody::History`: the wire of the link, `pub` as the envelope and
+    the frame are. `LINK_LAYOUT` takes the place of the version number of the envelope, which was
+    `pub`.
+  - `SubscriberTable::naming`: one more method of a `pub` type, which the link actor calls.
+  - `HistoryRing` with `new`, `record`, `begin_flush`, `next_frame`, and `skipped` (`engine::link`):
+    the same merit as `ControlPlane`. It is a pure machine of the link actor, with no socket, clock,
+    or thread, and the setup of the link actor takes it.
+  - `SenderCounts` with `rows`, `SenderCount`, and `LINK_MAX_SENDERS` (`engine::link`): the value
+    of `LinkCounts.senders`, which the metrics thread reads.
+  - `Metrics::watch_link_counts`, `SenderDropRow`, and `RollupRow::SenderDrop`: the module
+    `engine::runtime::metrics` is `pub`, the timing harness names it (`tools/latency-probe/rig.rs`),
+    and its rows go to the OTLP export.
+  - `Registry::control_queue_id` and `Registry::tape_status_queue_id`: the other getters of
+    `Registry` are `pub`, so one design language holds.
+  - The new config fields `QueuesConfig.control_capacity`, `PersistenceConfig.seal_interval_spins`,
+    and `LinkConfig.{controllers, sender_rate_per_sec, history_capacity, history_per_flush}`, with
+    `LinkConfig::history_capacity()` and `history_per_flush()`: the binaries load the config, and
+    each of its fields is `pub`. `PersistWiring.seal_interval_spins`: a field of the wiring of the
+    fold, whose fields are `pub`.
+  - `UiModel::apply_history` and `ChartModel::apply_history`: the link seam of the workstation
+    (2026-10-26 section above).
+  - `TapeTable` with `as_str`, `fault_class`, and `Display`, and the field `table` of
+    `PersistError::{Io, Parquet, Batch}`: the concept module `engine::tape`. `PersistError` is
+    `pub` and names its table.
+  - `FileWriter::Tape`: vocabulary of `msg`, a variant of a `pub` enum.
+  - `AcceptTries` with `Default`, `FromStr`, and `Display` (`engine::operator::accept`): a caller
+    that is not a test, `polysim-mcp`, parses its flag with it. `HttpSettings { port, stdin_watch,
+    accept_tries }` and `serve_http(fleet, settings)`: `polysim-mcp` composes them.
+  - New variants of `pub` errors: `WebError::Accept`, `ArgumentError::AcceptTries`, and
+    `FleetError::{Stopping, RunningElsewhere, LockProbe, ConfigWriteLeftBehind, ConfigNotSynced}`.
+- [ ] Amended 2026-11-18: by the rulings of §12 (2026-11-18): `LinkCredential`; the identity locks
+  of the start seam (`IdentityLocks`, `IdentityLock`, `Preflight.locks`);
+  `Fleet::with_identity_locks`; `Fleet::with_file_steps` and `FileSteps::set_permissions`; the
+  fault seam of the tape writer; and the read accessors that only tests call.
+- [ ] Amended 2026-11-19: no item of part 5 is `pub` with no merit and no ruling. The correction
+  round of the verifier of part 5 removed `PersistError::table()`, `RefusedAssertions::past_table`,
+  `SenderCounts::others`, `AcceptTries::new` and `Fleet::stop`, which nothing called, and made
+  `Config::seal_interval_spins()` `pub(crate)`, as `seal_try_limit` is. `Fleet::stop_all` keeps
+  its merit: `PolysimMcp::stop_all` calls it once, at the exit, after each session has ended, so its
+  hold of `&mut Fleet` through the wait holds up no request; a stop of one engine waits outside the
+  lock of the fleet. WHY: an item that is `pub` with no caller is a promise to a caller that does not
+  exist, and the law should name only interfaces that something uses. Replaced: the line of
+  2026-11-18 that listed these items as findings for the verifier.
 - [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
 
 ## 9. Naming & API Ergonomics
@@ -2169,6 +2801,11 @@ is an architectural invariant. Socket behavior is not, and the charter stays arc
   - the `(sender, boot, topic)` seq-gate logic (dedup, reorder, restart resets the gate)
 - [ ] Socket-level behavior stays OUT: subscription TTL expiry, subscribe refresh, the
   peer-restart gate over a real socket. It is contract-seam/integration territory.
+- [ ] Amended 2026-11-18: the golden file of the frames,
+  `engine/tests/fitness/link/link_frames.txt`, starts with the line `layout 0x<digest>` of
+  `LINK_LAYOUT`. A change of bytes under an equal digest is red, in bless mode too, and bless mode
+  rewrites the file only for a new digest (§6, 2026-11-18 section on the layout of a frame). WHY: a
+  golden file that bless mode rewrote with no check pinned nothing.
 
 ### Amended 2026-07-28: tests live only under `<package>/tests/`
 
@@ -2190,6 +2827,9 @@ test looks in ONE place.
 - Two items were promoted on the day this passed:
   - `runtime::ExecutionLease`: exclusive live-execution ownership is an engine-level promise that
     its already-exported peers imply.
+    - Amended 2026-11-18, as built: `ExecutionLease` now holds only the run nonce of its venue. The
+      ownership of an identity is `IdentityLock`, taken in each mode (§2, 2026-11-13 section on
+      preflight). The lease keeps its path and its promotion. WHY: the lock left the lease.
   - `hot::quant::optimise`: every sibling calculator module was `pub` already. It was the lone
     exception.
 
@@ -2229,6 +2869,15 @@ operator visits.
   charter stays architectural: the pinned thing is an exposure boundary, not socket plumbing.
 - [ ] The test drives real sockets with hand-written requests. A client library would tidy away
   the very headers under test.
+- [ ] Amended 2026-11-18, as built: the pins of the guard and of the relay moved to
+  `engine/tests/fitness/operator/relay.rs`: `web_guard_runs_before_each_route` (the guard, each
+  route) and `tab_subscribe_is_admitted_by_the_real_link_guard` (the relay into the real guard of
+  the engine). `web_http.rs` keeps the descriptor, the bundle, the missing bundle, and the unknown
+  peer. `engine/tests/fitness/operator/accept.rs` pins the accept loop
+  (`accept_errors_past_cap_give_the_class_of_the_caller`), and
+  `engine/tests/fitness/operator/fleet/fleet_contract.rs` and `fleet_server.rs` pin the fleet
+  server. `mcp_http.rs` keeps four tests of the transport. WHY: each test of a box of part 5
+  replaced the tests that pinned its old form (2026-11-12 section on replaced fitness tests).
 
 ### Amended 2026-11-13: the OTLP export is pinned in fitness through a loopback collector
 
@@ -2323,6 +2972,12 @@ go.
 WHY: the link token hash is derived in two places, the relay and the engine guard, and no test
 drives both. A seam that a change reshapes and that no test drives can break with each gate green.
 
+- Amended 2026-11-18, as built: the token hash is derived in one place, `LinkCredential`
+  (`engine/src/link/credential.rs`), and `tab_subscribe_is_admitted_by_the_real_link_guard`
+  drives the relay into the real guard of the engine. The WHY above keeps its text as the record
+  of the cause. The workstation still derives the strategy hash a second time
+  (`engine/src/operator/workstation/link/session.rs`).
+
 - [ ] Each seam that a change reshapes gets a contract test in the same change. The test is a
   module of target `fitness`, in the folder of the top module of the seam (lanes and real funds,
   above).
@@ -2363,6 +3018,13 @@ drives both. A seam that a change reshapes and that no test drives can break wit
     which an engine loads `.env`, so no test may drive it.
   - The pin call keeps its own merit (§8, 2026-11-13 section on the fold, start, and exit seams):
     the timing harness passes `pin_to_core`, of type `PinCall`, which returns `PinRefused`.
+  - Amended 2026-11-18, as built: the ruling also makes `pub` the identity locks that `Preflight`
+    takes: the field `Preflight.locks`, `IdentityLocks` with `of_host`, `in_folder`, `path_of`,
+    `take`, `is_held`, and `Default`, and `IdentityLock`, which `take` returns
+    (`engine::runtime`). `run_trading_engine` passes `IdentityLocks::of_host()`. A test passes
+    `IdentityLocks::in_folder` of its own, so it never meets the lock of a real engine of the host.
+    Test: the mode-`off` case of `each_refusal_starts_no_thread_and_spends_no_nonce`. WHY: the
+    start seam takes the lock in each mode now, and its field must name a `pub` type.
 - [ ] Each other item of 2026-11-13 that a contract test reaches has a caller outside the tests,
   and §8 names it (2026-11-13 section on the fold, start, and exit seams).
 - [ ] This ruling makes no other item `pub`. The ban of 2026-07-28 on `pub(crate) -> pub` for a
@@ -2488,6 +3150,99 @@ drives both. A seam that a change reshapes and that no test drives can break wit
     them only with the funnel in front of a real ring.
   - The simulator edge stamps its messages itself, not through the funnel. Its queued stamp stays a
     named gap.
+- [ ] This ruling makes no other item `pub`. The ban of 2026-07-28 on `pub(crate) -> pub` for a
+  test holds for each other item.
+- [ ] Ruling, 2026-11-17: the file steps of a write have no caller outside the tests, and they are
+  `pub` by this ruling. They are the module `engine::runtime::durable_file`, with the trait
+  `FileSteps` (create a folder, create a file, rename, sync a folder, remove), the trait
+  `StepFile` of an open file (each write, and `sync`), and `DiskFiles`, the adapter of the real
+  file system. The tape writer takes them through `PersistWriter::through(steps)`, and
+  `PersistWriter::on_disk()` gives `DiskFiles`. Test:
+  `kill_at_each_write_step_leaves_no_file_without_footer`.
+  - WHY: the seam changes. A tape file takes its final name only when it is complete (§6,
+    2026-11-17). No trick of the real file system fails a write of an open file or a sync. Thus a
+    test ends or fails a write at one step only through a stand-in, the second adapter of the
+    trait, in the fitness suite.
+  - `WriteError`, `Staging`, and `write` stay `pub(crate)`.
+  - The config edit of the fleet server and the fault of the tape writer (part 5) reach their
+    faults through this seam. IF one of them needs one more item `pub`, THEN its task names the
+    item and its test in its report, and the second law pass of part 5 rules on it, as built.
+  - Amended 2026-11-18, as built: the ruling also makes `pub` the sixth method of `FileSteps`,
+    `set_permissions`, with a default that calls `std::fs::set_permissions`, and
+    `Fleet::with_file_steps(steps)`, which gives the fleet a stand-in for the steps of its config
+    edit. Test: `failed_config_edit_changes_nothing`. `write_through`, `WriteFailure`, and
+    `LeftBehind` stay `pub(crate)`, with `WriteError`, `Staging`, and `write`. WHY: the config edit
+    keeps the permission bits of the old file, and a test fails its edit at one step only through
+    the stand-in.
+- [ ] Ruling, 2026-11-17: the one accept loop of the relay and the fleet server has no caller
+  outside the tests, and it is `pub` by this ruling. It is the module `engine::operator::accept`,
+  built when feature `web` or feature `mcp` is on: the loop, its listener trait, and the adapter
+  of the TCP listener that each server passes. Test:
+  `accept_errors_past_cap_give_the_class_of_the_caller`.
+  - The loop tries again after an accept error, up to a cap of tries in a row, with a pause that
+    doubles from 100 ms. One good accept sets the count to 0. Past the cap the loop returns its
+    error, and the caller gives the class: the relay exits with a code that is not 0, and the fleet
+    server takes no new session and keeps each engine that it started. An error of the loop never
+    stops an engine. The exit signal of the fleet server still stops them (2026-10-14).
+  - The cap is the flag `--accept-tries` of `polysim-web` and `polysim-mcp`, default 3, because
+    neither binary reads a config file.
+  - WHY: the seam changes. Two copies of one loop tried again with no end. A test fails an accept
+    only through a stand-in listener, the second adapter of the trait. The module sits in
+    `engine/src/operator/`, because `relay/` builds only with feature `web`, and `fleet/` only with
+    feature `mcp`.
+  - The second law pass of part 5 names each item of the module as built.
+  - Amended 2026-11-18, as built: the items of `engine::operator::accept` (`pub mod`):
+    - `Listener`, with `accept` and `pause` (a default of `tokio::time::sleep`), and its adapter
+      `impl Listener for TcpListener`
+    - `AcceptError` with `tries` and `last`
+    - `each_connection(listener, tries, serve) -> AcceptError`, which returns only at the cap
+    - `AcceptTries`, which `pub` has on its own merit: `polysim-mcp` parses its flag with it (§8,
+      2026-11-18 list of the `pub` items of part 5)
+  - Amended 2026-11-18, as built: the cap is reached at `tries` errors in a row, and no pause
+    follows the last one. The pause has no ceiling and no random part. A good accept also sets the
+    pause back to 100 ms. The relay exits with code 1. Past the cap, the fleet server stops its
+    engines and exits 0 at its exit signal, or at the end of its stdin under `--watch-stdin`. A
+    value of 0 for `--accept-tries` is refused. The L12 test module builds only with feature `web`.
+  - Replaced 2026-11-18: "the one accept loop of the relay and the fleet server has no caller
+    outside the tests". WHY: `AcceptTries` has one, so the ruling covers each other item.
+- [ ] This ruling makes no other item `pub`. The ban of 2026-07-28 on `pub(crate) -> pub` for a
+  test holds for each other item.
+- [ ] Ruling, 2026-11-18: the one link credential has no caller outside the tests, and it is `pub`
+  by this ruling. It is `LinkCredential` with `new(token, strategy_id)`, `token_hash`, `guard`, and
+  `identity` (`engine::link`, `engine/src/link/credential.rs`). The relay takes its token hash for
+  the hello of a tab, and the engine builds its guard and its identity from it. Tests:
+  `tab_subscribe_is_admitted_by_the_real_link_guard`, `start_then_stop_from_a_tab_parks_the_fold`.
+  - WHY: the seam changed. The token hash was derived in two places, and no test drove both. A
+    test reaches the real guard of the engine only through the one constructor.
+- [ ] Ruling, 2026-11-18: `Fleet::with_identity_locks(locks)` has no caller outside the tests, and
+  it is `pub` by this ruling. It gives the fleet the folder of its identity locks. Each test of the
+  fleet passes a folder of its own (`EngineTree::fleet` of the fitness support). Tests:
+  `engine_started_elsewhere_is_listed_running_and_start_is_refused`, and each test that builds a
+  fleet.
+  - WHY: the folder of the host is shared by each engine of the host. A test that uses it can
+    see a real engine as running elsewhere, or keep a real engine from its start. `Fleet::new`
+    keeps the folder of the host.
+- [ ] Ruling, 2026-11-18: the value form of the fault seam of the tape writer has no caller outside
+  the tests, and it is `pub` by this ruling. It is `TapeStatus { queue, clock }`,
+  `PersistWriter::reporting_to(status)`, `PersistHandle::stopped_tables()`, and `StoppedTables`
+  with `count` (`engine::tape`). Test:
+  `audit_write_fault_stops_quoting_and_research_fault_stops_one_table`.
+  - WHY: the class of a tape fault is a seam that changed in part 5. The writer runs on its own
+    thread against the file system, so a test drives it with a stand-in of the file steps, gives it
+    a status queue, and reads its count of stopped tables, as with the value form of the exposure
+    writer seam (2026-11-13 ruling).
+- [ ] Ruling, 2026-11-18: the read accessors of part 5 that only tests call from outside the crate
+  are `pub` by this ruling: `ControlPlane::desired` and `ControlPlane::acknowledged`,
+  `ControlQueueProducer::dropped`, `HistoryRing::{held, capacity, len, is_empty}`, and
+  `SenderCounts::of`.
+  - WHY: each reads a state, a count, or a size that a contract or fitness test of part 5 asserts,
+    and writes nothing. The value lives only in its owner, or in a log line, which a test cannot
+    assert.
+  - Tests: `acknowledged_state_reaches_highest_epoch_after_drops_stop`, the control case of
+    `each_lane_full_gives_its_class`,
+    `late_subscriber_gets_recent_events_and_live_frames_still_flow`,
+    `history_ring_never_grows_and_never_reaches_the_hot_thread`, and
+    `link_drops_are_counted_for_each_sender`.
 - [ ] This ruling makes no other item `pub`. The ban of 2026-07-28 on `pub(crate) -> pub` for a
   test holds for each other item.
 

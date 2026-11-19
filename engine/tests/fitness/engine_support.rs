@@ -1,7 +1,8 @@
 //! Builders that many tests share, so that each builds its messages, its instrument row, and its
 //! persistence ring wired to a `PersistSink` the same way.
 
-use std::num::NonZeroU32;
+use std::net::IpAddr;
+use std::num::{NonZeroU32, NonZeroU64};
 
 use engine::hot::dispatch::{
     ExecWiring, ExposureWiring, HotEngine, HotEngineSetup, LinkWiring, PersistWiring,
@@ -15,6 +16,7 @@ use engine::hot::sink::{
     UiEventSink,
 };
 use engine::hot::strategy::{EngineView, Strategy, StrategyConfig};
+use engine::link::ControlPlane;
 use engine::link::OutboundLink;
 use engine::log::HotRecord;
 use engine::msg::exec::{
@@ -30,10 +32,11 @@ use engine::msg::inbound::{
     MessageBody, RunControl, SpinTick, TradeEvent,
 };
 use engine::msg::persist::{FeatureId, FillRow, OrderRow, PersistRecord};
-use engine::msg::run_state::RunAssertion;
 use engine::msg::run_state::RunState;
+use engine::msg::run_state::{ControllerEpoch, RunAssertion};
 use engine::msg::time::{DurationUs, LocalTs, Stamper, VenueTs};
 use engine::msg::ui::{UI_BOOK_RING_CAPACITY, UI_EVENT_RING_CAPACITY, UiBookSnapshot, UiEvent};
+use engine::runtime::config::ControllerLoss;
 use engine::runtime::config::{BinanceMarket, Subscriptions, VenueMarket};
 use engine::runtime::config::{
     CandlesSpec, EwmaVolSpec, ImbalanceSpec, Instruments, KlineInterval, RecordedTables, SpinField,
@@ -42,7 +45,7 @@ use engine::runtime::config::{
 };
 use engine::runtime::exposure::ExposureSnapshot;
 use engine::runtime::registry::InstrumentRow;
-use engine::runtime::shutdown::RunControlGate;
+use engine::runtime::shutdown::{DesiredWriter, RunStateHandles};
 use rtrb::{Consumer, RingBuffer};
 
 use crate::micro_strategy::MicroRecorder;
@@ -449,12 +452,43 @@ fn ui_engine(
 }
 
 /// Everything a control/link test drives an engine through: the persist tape it records into, the
-/// outbound frames a strategy banked, and the pair the control path converges.
+/// outbound frames a strategy banked, and the writer of the desired state, which its control plane
+/// takes.
 pub struct LinkedEngine {
     pub engine: HotEngine,
     pub persist: Consumer<PersistRecord>,
     pub outbound: Consumer<OutboundLink>,
-    pub control: RunControlGate,
+    desired_writer: Option<DesiredWriter>,
+}
+
+impl LinkedEngine {
+    /// The writer of the desired state of this engine, for a link actor that a test runs.
+    ///
+    /// # Panics
+    /// On a second call, or after [`LinkedEngine::control_plane`]: the desired state has one writer.
+    #[cfg(feature = "web")]
+    pub fn desired_writer(&mut self) -> DesiredWriter {
+        self.desired_writer
+            .take()
+            .expect("one writer of the desired state for each linked engine")
+    }
+
+    /// The control plane over the run state of this engine, as the link actor holds it, taking
+    /// assertions from `controllers` only.
+    ///
+    /// # Panics
+    /// On a second call: the desired state has one writer.
+    pub fn control_plane(
+        &mut self,
+        controllers: &[IpAddr],
+        on_controller_loss: ControllerLoss,
+    ) -> ControlPlane {
+        let writer = self
+            .desired_writer
+            .take()
+            .expect("one control plane for each linked engine: the desired state has one writer");
+        ControlPlane::new(writer, controllers, on_controller_loss)
+    }
 }
 
 pub struct LinkedSetup<'a> {
@@ -464,9 +498,9 @@ pub struct LinkedSetup<'a> {
     pub warmup: DurationUs,
 }
 
-/// An engine with persistence AND a link. The desired half of `control` is left untouched by the
-/// engine itself — dispatch derives its run state from recorded markers alone, so a test that
-/// only sets the latch must see nothing happen.
+/// An engine with persistence AND a link. The desired state is left untouched by the engine itself
+/// — dispatch derives its run state from recorded markers alone, so a test that only sets the
+/// desired state must see nothing happen.
 pub fn engine_with_link(setup: LinkedSetup<'_>) -> LinkedEngine {
     let LinkedSetup {
         instruments,
@@ -476,14 +510,14 @@ pub fn engine_with_link(setup: LinkedSetup<'_>) -> LinkedEngine {
     } = setup;
     let (persistence, persist) = persist_ring_for(1024, tables);
     let (link_producer, outbound) = RingBuffer::<OutboundLink>::new(256);
-    let control = RunControlGate::new();
+    let run_state = RunStateHandles::new();
     let engine = HotEngine::new(HotEngineSetup {
         persistence: Some(persistence),
         ui_book_sink: ui_book_ring(UI_BOOK_RING_CAPACITY).0,
         ui_event_sink: ui_event_ring(UI_EVENT_RING_CAPACITY).0,
         link: Some(LinkWiring {
             sink: LinkSink::new(link_producer),
-            acknowledged: control.acknowledged().clone(),
+            acknowledged: run_state.acknowledged_writer,
         }),
         warmup,
         ..detached_setup(instruments, strategy)
@@ -492,7 +526,7 @@ pub fn engine_with_link(setup: LinkedSetup<'_>) -> LinkedEngine {
         engine,
         persist,
         outbound,
-        control,
+        desired_writer: Some(run_state.desired_writer),
     }
 }
 
@@ -507,19 +541,20 @@ pub fn run_control(assertion: RunAssertion, when: i64) -> InboundMessage {
 pub fn idle_at(epoch: u64) -> RunAssertion {
     RunAssertion {
         state: RunState::Idle,
-        epoch,
+        epoch: ControllerEpoch::new(epoch),
     }
 }
 
 pub fn running_at(epoch: u64) -> RunAssertion {
     RunAssertion {
         state: RunState::Running,
-        epoch,
+        epoch: ControllerEpoch::new(epoch),
     }
 }
 
 /// Persistence on with every table recorded, so a test asserting on an emit lane sees it land.
-/// [`persist_ring_for`] drives the gate itself.
+/// [`persist_ring_for`] drives the gate itself. Neither seals on a spin: a seal record in the ring
+/// would change what each test reads there.
 pub fn persist_ring(capacity: usize) -> (PersistWiring, Consumer<PersistRecord>) {
     persist_ring_for(capacity, RecordedTables::new(&ALL_TABLES))
 }
@@ -539,6 +574,7 @@ pub fn persist_ring_for(
     let wiring = PersistWiring {
         sink: PersistSink::new(producer, NonZeroU32::MAX),
         tables,
+        seal_interval_spins: NonZeroU64::MAX,
     };
     (wiring, consumer)
 }

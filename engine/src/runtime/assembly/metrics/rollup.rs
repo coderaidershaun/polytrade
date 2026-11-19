@@ -3,6 +3,7 @@
 
 use hdrhistogram::Histogram;
 
+use crate::link::SenderCounts;
 use crate::msg::ids::{MAX_INPUT_QUEUES, QueueId};
 use crate::msg::latency::{Category, CounterSample, Stage, StageSample, WireSample};
 use crate::msg::time::{ClockSource, DurationUs, LocalTs, TickScale};
@@ -11,7 +12,9 @@ use crate::runtime::config::LatencyBudgets;
 
 use super::report::{BudgetBreach, IntervalLog, RunCounts};
 use super::ring::SampleRing;
-use super::rows::{BacklogRow, DropRow, LatencyRow, RollupRow, RollupSink, SinkKind};
+use super::rows::{
+    BacklogRow, DropRow, LatencyRow, RollupRow, RollupSink, SenderDropRow, SinkKind,
+};
 use super::stage::{Fault, PAIRS, stage_nanos, wire_nanos};
 
 /// Below a nanosecond there is nothing to resolve. Above ten seconds a stage is broken, not slow,
@@ -116,6 +119,7 @@ pub(super) struct LatencyRollup {
     backlog_max: [u32; MAX_INPUT_QUEUES],
     drop_totals: [u64; SinkKind::ALL.len()],
     drops_at_interval_start: [u64; SinkKind::ALL.len()],
+    link_senders: SenderCounts,
     counts: RunCounts,
     budget_breaches: u64,
     breaches: Vec<BudgetBreach>,
@@ -147,6 +151,7 @@ impl LatencyRollup {
             backlog_max: [0; MAX_INPUT_QUEUES],
             drop_totals: [0; SinkKind::ALL.len()],
             drops_at_interval_start: [0; SinkKind::ALL.len()],
+            link_senders: SenderCounts::default(),
             counts: RunCounts::default(),
             budget_breaches: 0,
             breaches: Vec::with_capacity(PAIRS.len()),
@@ -238,6 +243,10 @@ impl LatencyRollup {
         self.drop_totals[SinkKind::of_ring(ring) as usize] = total;
     }
 
+    pub(super) fn note_link_senders(&mut self, senders: SenderCounts) {
+        self.link_senders = senders;
+    }
+
     pub(super) fn note_report_drops(&mut self, total: u64) {
         self.drop_totals[SinkKind::LatencyReports as usize] = total;
     }
@@ -309,6 +318,14 @@ impl LatencyRollup {
                 interval_end_ts_us,
                 sink: sink_kind,
                 dropped_total: self.drop_totals[sink_kind as usize],
+            }));
+        }
+        for (sender, count) in self.link_senders.rows() {
+            sink.write(RollupRow::SenderDrop(SenderDropRow {
+                interval_end_ts_us,
+                sender,
+                queue_full_total: count.queue_full,
+                over_rate_total: count.over_rate,
             }));
         }
         let queue_ids = (0..self.settings.queue_count).map_while(|index| QueueId::new(index).ok());

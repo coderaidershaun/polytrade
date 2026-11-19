@@ -1,5 +1,5 @@
 //! The start checks of a run, each before any thread: a refused start has nothing to stop, spends
-//! no run nonce, and writes no file. The lease is the last check.
+//! no run nonce, and writes no file. The identity lock comes last but for the nonce of an armed run.
 
 use crate::hot::exec::ExecCapacity;
 use crate::hot::strategy::Strategy;
@@ -14,19 +14,24 @@ use crate::venues::port::{NetworkPort, VenuePort};
 
 use super::StartError;
 use super::exec::{ExecCheck, ExecPlan, check_execution, check_order_client_timeout};
+use super::exec_identity::{IdentityLock, IdentityLocks};
 use super::link::{BoundLink, link_bring_up};
 
-/// The checks of one start: the run, its parsed config, and the strategy, whose features and link
-/// topics the link checks read.
+/// The checks of one start: the run, its parsed config, the strategy, whose features and link
+/// topics the link checks read, and the folder of the identity locks, which is
+/// [`IdentityLocks::of_host`] for each engine binary.
 pub struct Preflight<'a, P> {
     pub identity: &'a RunIdentity,
     pub config: &'a Config<P>,
     pub strategy: &'a dyn Strategy,
+    pub locks: &'a IdentityLocks,
 }
 
 /// What preflight proved and built, handed whole to the start. Nothing in it runs a thread.
 pub struct StartPlan {
     pub(super) identity: RunIdentity,
+    /// Held from here to the end of the run, so no second process of this identity starts.
+    pub(super) identity_lock: IdentityLock,
     /// The names of the artifacts, made once from the caller's mode and never again at the start:
     /// they pick the position file this run owns, and a second derivation could load one ledger
     /// while the writer keeps another.
@@ -59,13 +64,14 @@ impl<P> Preflight<'_, P> {
     }
 
     /// # Errors
-    /// The [`StartError`] of the first check that refuses. The lease is the last check, so each
-    /// other refusal leaves the run nonce unspent.
+    /// The [`StartError`] of the first check that refuses. The run nonce of an armed run is spent
+    /// last, after the identity lock, so each other refusal leaves it unspent.
     pub fn run_with(self, port: &mut dyn VenuePort) -> Result<StartPlan, StartError> {
         let Preflight {
             identity,
             config,
             strategy,
+            locks,
         } = self;
         let artifacts = RunArtifacts::new(config.execution_mode(), identity);
         let mut registry = Registry::build(config)?;
@@ -101,6 +107,9 @@ impl<P> Preflight<'_, P> {
             .map(|(_, source, _)| port.probe(source, &registry, &rest_quiet))
             .transpose()?;
         let link = link_bring_up(config, identity, strategy, &registry)?;
+        // In each mode: two engines of one identity would share one tape folder, where each start
+        // removes the unfinished files of the other.
+        let identity_lock = locks.take(identity)?;
         let execution = check_execution(ExecCheck {
             armed: armed.map(|(venue, _, execution)| (venue, execution)),
             venue: probed.map(|probed| probed.0),
@@ -111,6 +120,7 @@ impl<P> Preflight<'_, P> {
         })?;
         Ok(StartPlan {
             identity: identity.clone(),
+            identity_lock,
             artifacts,
             registry,
             exposure,
@@ -206,7 +216,7 @@ fn check_execution_order_capacity(
 ///
 /// # Errors
 /// [`StartError::ExecutionOrderCapacity`] when both sides of the ladder exceed the venue ceiling.
-pub fn check_symbol_order_capacity(
+pub(crate) fn check_symbol_order_capacity(
     row: &InstrumentRow,
     max_orders_per_side: u32,
 ) -> Result<(), StartError> {

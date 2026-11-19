@@ -1,9 +1,9 @@
 //! Persistence setup: the Parquet output ring, the footer metadata that decodes its dense
-//! indices, and the writer thread that drains it.
+//! indices, and the writer thread that drains it, which starts once its status queue exists.
 
 use std::time::Duration;
 
-use rtrb::RingBuffer;
+use rtrb::{Consumer, RingBuffer};
 use tokio::sync::mpsc;
 
 use crate::hot::dispatch::PersistWiring;
@@ -14,12 +14,31 @@ use crate::msg::persist::{PersistRecord, RotationRow};
 use crate::runtime::artifacts::RunArtifacts;
 use crate::runtime::config::{Config, RecordedTables, RunIdentity};
 use crate::runtime::registry::Registry;
-use crate::tape::{PersistConfig, PersistHandle, PersistWriter, RunMeta};
+use crate::tape::{PersistConfig, PersistHandle, PersistWriter, RunMeta, TapeStatus};
 
 pub(super) struct PersistBringUp {
     /// `None` with no `persistence:` block: no output ring, and every `ctx.emit*` discards.
     pub(super) wiring: Option<PersistWiring>,
-    pub(super) handle: Option<PersistHandle>,
+    pub(super) tape: Option<TapeStart>,
+}
+
+/// The writer thread of the tape before it starts. The hot thread builds the status queue of the
+/// writer with each other input queue, so the writer starts after the hot thread hands it back.
+pub(super) struct TapeStart {
+    config: PersistConfig,
+    meta: RunMeta,
+    records: Consumer<PersistRecord>,
+    rotations: mpsc::Receiver<RotationRow>,
+}
+
+impl TapeStart {
+    pub(super) fn spawn(self, status: Option<TapeStatus>) -> PersistHandle {
+        let writer = match status {
+            Some(status) => PersistWriter::on_disk().reporting_to(status),
+            None => PersistWriter::on_disk(),
+        };
+        writer.spawn(self.config, self.meta, self.records, self.rotations)
+    }
 }
 
 pub(super) struct PersistBringUpSetup<'a, P> {
@@ -40,7 +59,7 @@ pub(super) fn persist_bring_up<P>(setup: PersistBringUpSetup<'_, P>) -> PersistB
         drop(setup.rotations);
         return PersistBringUp {
             wiring: None,
-            handle: None,
+            tape: None,
         };
     };
     // SMELL: research rows and audit rows, such as orders and fills, share this one ring, so a
@@ -49,22 +68,23 @@ pub(super) fn persist_bring_up<P>(setup: PersistBringUpSetup<'_, P>) -> PersistB
     let (producer, consumer) =
         RingBuffer::<PersistRecord>::new(setup.config.queues.persistence_capacity);
     let tables = RecordedTables::new(&setup.config.strategy.tables);
-    let handle = PersistWriter::spawn(
-        PersistConfig {
+    let tape = TapeStart {
+        config: PersistConfig {
             dir: persist_config.dir.clone(),
             tables,
             retention: Duration::from_hours(persist_config.retention_hours),
         },
-        run_meta(&setup),
-        consumer,
-        setup.rotations,
-    );
+        meta: run_meta(&setup),
+        records: consumer,
+        rotations: setup.rotations,
+    };
     PersistBringUp {
         wiring: Some(PersistWiring {
             sink: PersistSink::new(producer, setup.config.seal_try_limit()),
             tables,
+            seal_interval_spins: setup.config.seal_interval_spins(),
         }),
-        handle: Some(handle),
+        tape: Some(tape),
     }
 }
 

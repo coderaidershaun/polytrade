@@ -3,29 +3,33 @@
 
 use crate::msg::ids::{AssetId, InstrumentId, Price, Qty};
 use crate::msg::persist::FeatureId;
-use crate::msg::run_state::RunState;
+use crate::msg::run_state::{ControllerEpoch, RunState};
 use crate::msg::time::{DurationUs, VenueTs};
 use crate::runtime::config::ExecutionMode;
 
-use super::envelope::{
-    ByteReader, ByteWriter, ENVELOPE_LEN, LINK_MAX_DATAGRAM, LinkDecodeError, NAME_LEN, TopicId,
-    WireName,
-};
-use super::wire::{OPTIONAL_MANTISSA_LEN, WireField, wire_enum, wire_struct};
+use super::envelope::{ByteReader, ByteWriter, LinkDecodeError, TopicId, WireName};
+use super::wire::{LayoutDigest, WireField, wire_enum, wire_struct};
+
+/// The bytes of a `u64`, so the layout is the one of a plain epoch. The read refuses 2^63 and above
+/// with the value seen, so the subscribe and the lifecycle frame refuse alike.
+impl WireField for ControllerEpoch {
+    const WIDTH: usize = u64::WIDTH;
+    const DIGEST: u64 = u64::DIGEST;
+
+    fn write(&self, writer: &mut ByteWriter<'_>) {
+        self.get().write(writer);
+    }
+
+    fn read(reader: &mut ByteReader<'_>) -> Result<Self, LinkDecodeError> {
+        let epoch = u64::read(reader)?;
+        ControllerEpoch::try_from(epoch).map_err(|refused| LinkDecodeError::EpochOutOfRange {
+            found: refused.found,
+        })
+    }
+}
 
 /// Topics ONE subscription can name (not total topics that exist).
 pub const LINK_MAX_TOPICS: usize = 16;
-
-pub(super) const SUBSCRIBE_BODY_LEN: usize = 1 + 2 * LINK_MAX_TOPICS + 1 + 8;
-pub(super) const CATALOG_INSTRUMENT_BODY_LEN: usize =
-    8 + 2 + 2 + NAME_LEN + 2 * OPTIONAL_MANTISSA_LEN + 8 + 2 + 2 + 2 * NAME_LEN;
-pub(super) const CATALOG_FEATURE_BODY_LEN: usize = 8 + 2 + 2 + NAME_LEN;
-pub(super) const LIFECYCLE_BODY_LEN: usize = 1 + 1 + 1 + 8 + 8 + 2;
-
-const _: () = assert!(ENVELOPE_LEN + SUBSCRIBE_BODY_LEN <= LINK_MAX_DATAGRAM);
-const _: () = assert!(ENVELOPE_LEN + CATALOG_INSTRUMENT_BODY_LEN <= LINK_MAX_DATAGRAM);
-const _: () = assert!(ENVELOPE_LEN + CATALOG_FEATURE_BODY_LEN <= LINK_MAX_DATAGRAM);
-const _: () = assert!(ENVELOPE_LEN + LIFECYCLE_BODY_LEN <= LINK_MAX_DATAGRAM);
 
 /// Topics subscriber wants. Empty = all topics (matches absent `topics:` in config).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -108,12 +112,27 @@ wire_enum! {
 pub struct Subscribe {
     pub topics: TopicSet,
     pub desired_state: RunState,
-    pub desired_epoch: u64,
+    pub desired_epoch: ControllerEpoch,
 }
 
 /// The named topics ride a fixed-width slot array, so the count is a claim about the prefix rather
 /// than the frame length — hence the one bespoke pair in this module.
 impl WireField for Subscribe {
+    const WIDTH: usize =
+        u8::WIDTH + TopicId::WIDTH * LINK_MAX_TOPICS + RunState::WIDTH + ControllerEpoch::WIDTH;
+    const DIGEST: u64 = LayoutDigest::START
+        .text("subscribe")
+        .text("count")
+        .part(u8::WIDTH, u8::DIGEST)
+        .text("topics")
+        .number(LINK_MAX_TOPICS as u64)
+        .part(TopicId::WIDTH, TopicId::DIGEST)
+        .text("desired_state")
+        .part(RunState::WIDTH, RunState::DIGEST)
+        .text("desired_epoch")
+        .part(ControllerEpoch::WIDTH, ControllerEpoch::DIGEST)
+        .finish();
+
     fn write(&self, writer: &mut ByteWriter<'_>) {
         let wanted = self.topics.topics();
         self.topics.len.write(writer);
@@ -154,7 +173,7 @@ pub struct Lifecycle {
     pub phase: RunPhase,
     pub run_state: RunState,
     pub execution_mode: Option<ExecutionMode>,
-    pub acknowledged_epoch: u64,
+    pub acknowledged_epoch: ControllerEpoch,
     pub spin_interval_us: DurationUs,
     pub feature_count: u16,
 }

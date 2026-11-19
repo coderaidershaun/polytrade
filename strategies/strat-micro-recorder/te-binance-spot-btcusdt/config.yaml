@@ -85,6 +85,9 @@ link:
   # hold = keep running and warn if the workstation vanishes. idle = dead-man switch, for
   # unattended trading.
   on_controller_loss: hold
+  # Only these hosts may start or park this engine: the relay of the workstation on this box.
+  # IP addresses only, no port: the relay sends from a port that the OS selects.
+  controllers: ["127.0.0.1"]
   # The polymarket engine publishes poly_up on 9311. Name the topic rather than take everything.
   subscribe:
     - address: "127.0.0.1:9311"

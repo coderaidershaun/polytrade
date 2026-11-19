@@ -16,16 +16,13 @@ use engine::runtime::exposure::ExposureError;
 use engine::runtime::otlp::OtlpError;
 use engine::runtime::shutdown::{AnswerPart, FatalReason, FatalSignal};
 use engine::runtime::{
-    DrainDeadline, DrainFailure, DrainOutcome, DrainWatchdog, ExecutionLease, Exit, Preflight,
+    DrainDeadline, DrainFailure, DrainOutcome, DrainWatchdog, Exit, IdentityLocks, Preflight,
     StartError, Trigger,
 };
-use engine::tape::PersistError;
+use engine::tape::{PersistError, TapeTable};
 use engine::venues::VenueError;
 use engine::venues::binance::exec::ProbeError;
-use engine::venues::exec::{
-    ExecCore, ExitPlan, MirroredOrder, SessionOutcome, SweepFailure, TeTag,
-};
-use engine::venues::sim;
+use engine::venues::exec::{ExecCore, ExitPlan, MirroredOrder, SessionOutcome, SweepFailure};
 use parquet::errors::ParquetError;
 
 use super::preflight::{Scales, StandInVenue, sim_document, snapshot};
@@ -330,15 +327,16 @@ fn each_exposure_error() -> [ExposureError; 9] {
 fn each_persist_error() -> [PersistError; 5] {
     [
         PersistError::Io {
-            path: PathBuf::from("data/orders.parquet"),
+            table: TapeTable::Trades,
+            path: PathBuf::from("data/trades.parquet"),
             source: std::io::Error::other("disk full"),
         },
         PersistError::Parquet {
-            table: "orders",
+            table: TapeTable::Orders,
             source: ParquetError::General("short write".to_owned()),
         },
         PersistError::Batch {
-            table: "fills",
+            table: TapeTable::Fills,
             source: ArrowError::ComputeError("columns of two lengths".to_owned()),
         },
         PersistError::WriterPanicked {
@@ -621,10 +619,11 @@ fn fatal_is_never_a_graceful_exit() {
 fn start_refusal_exits_by_its_class() {
     let root = TempDir::new("exit-start-refusal");
     let state = root.path().join("state");
-    // A lease locks one identity on the whole host, so no other test takes this identity.
     let identity = RunIdentity::new("strat-exit", "te-start-refusal").expect("a valid identity");
-    let held = ExecutionLease::acquire(&state, TeTag::of(&identity), &sim::lease_namespace())
-        .expect("the test takes the lease of this engine identity");
+    let locks = IdentityLocks::in_folder(root.path().join("locks"));
+    let held = locks
+        .take(&identity)
+        .expect("the test takes the identity lock of this engine");
     let document = sim_document(&state, "");
     let config = Config::<NoParams>::from_yaml(&document).expect("the document passes config");
     let before = snapshot(&state);
@@ -633,6 +632,7 @@ fn start_refusal_exits_by_its_class() {
         identity: &identity,
         config: &config,
         strategy: &Idle,
+        locks: &locks,
     }
     .run_with(&mut StandInVenue {
         scales: Scales::Stamped {

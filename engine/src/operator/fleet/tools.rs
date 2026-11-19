@@ -14,6 +14,7 @@ use crate::runtime::config::{ExecutionMode, RunIdentity};
 
 use super::error::FleetError;
 use super::reply::{EngineListing, ModeChange, Started, Stopped};
+use super::stop::stop_result;
 use super::supervisor::{Fleet, StopOutcome};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, JsonSchema)]
@@ -31,7 +32,9 @@ struct ModeParams {
     mode: ExecutionMode,
 }
 
-/// Every clone drives the same fleet, so the session and the final stop share one registry.
+/// Every clone drives the same fleet, so the session and the final stop share one registry. A stop
+/// holds the lock of the fleet only to signal and to record, and waits for its engines without
+/// it, so a list from another client answers during the stop.
 #[derive(Debug, Clone)]
 pub struct PolysimMcp {
     fleet: Arc<Mutex<Fleet>>,
@@ -44,6 +47,8 @@ impl PolysimMcp {
         }
     }
 
+    /// The exit drops each session before this runs, so holding the fleet through the wait holds
+    /// up no client.
     pub(super) async fn stop_all(&self) -> Vec<StopOutcome> {
         self.fleet.lock().await.stop_all().await
     }
@@ -52,7 +57,7 @@ impl PolysimMcp {
 #[tool_router]
 impl PolysimMcp {
     #[tool(
-        description = "List every trading engine under strategies/ on this host, with its execution mode (off, sim, live, absent or unreadable) and whether this server is running it.",
+        description = "List every trading engine under strategies/ on this host, with its execution mode (off, sim, live, absent or unreadable) and its state: running or stopping in this server, running elsewhere when another process holds its identity lock, exited, or stopped.",
         annotations(read_only_hint = true, idempotent_hint = true)
     )]
     async fn list_strategies(&self) -> Result<Json<EngineListing>, FleetError> {
@@ -88,7 +93,10 @@ impl PolysimMcp {
         Parameters(params): Parameters<EngineParams>,
     ) -> Result<Json<Stopped>, FleetError> {
         let identity = identity_of(&params.strategy_id, &params.te_id)?;
-        self.fleet.lock().await.stop(&identity).await.map(Json)
+        let stops = self.fleet.lock().await.begin_stops(vec![identity.clone()]);
+        let settled = stops.settle().await;
+        let outcomes = self.fleet.lock().await.finish_stops(settled);
+        stop_result(&identity, outcomes).map(Json)
     }
 
     #[tool(

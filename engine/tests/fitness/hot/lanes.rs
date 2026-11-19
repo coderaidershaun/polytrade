@@ -9,7 +9,8 @@ use engine::hot::sink::{
 };
 use engine::hot::spawn::spawn_hot_thread;
 use engine::hot::spawn::{
-    HotDriver, HotLoop, HotThreadConfig, IdleWait, LinkQueueProducer, QueueProducer, SimTapGate,
+    ControlQueueProducer, HotDriver, HotLoop, HotThreadConfig, IdleWait, LinkQueueProducer,
+    QueueProducer, SimTapGate,
 };
 use engine::log::open_hot_lane;
 use engine::msg::failure::{FailureClass, Halt};
@@ -25,7 +26,8 @@ use engine::runtime::registry::Registry;
 use engine::runtime::shutdown::{DrainSignal, FatalReason, FatalSignal};
 use engine::runtime::{DrainDeadline, DrainOutcome, Exit, Trigger, pin_to_core};
 use rtrb::{Consumer, RingBuffer};
-use std::num::NonZeroU32;
+use std::net::{Ipv4Addr, SocketAddr};
+use std::num::{NonZeroU32, NonZeroU64};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -42,8 +44,9 @@ fn spin_at(seq: u64, when: i64) -> InboundMessage {
 /// CONTRACT: an input queue that the engine feeds halts the engine when it is full, and the link
 /// queue, which an untrusted peer fills, drops the frame and counts it. A full input queue that
 /// dropped would fold a hole in the order of messages, and a full link queue that halted would let
-/// any peer stop the engine. The writer-status queue is one that the engine feeds: its own file
-/// writers fill it.
+/// any peer stop the engine. The writer-status queues are ones that the engine feeds: its own file
+/// writers fill them, the exposure writer one and the tape writer the other. The control queue drops and counts too: its sender is outside the engine, and
+/// the link actor pushes the pending marker again at its next heartbeat.
 #[test]
 fn each_lane_full_gives_its_class() {
     let queue = QueueId::new(0).unwrap();
@@ -56,16 +59,37 @@ fn each_lane_full_gives_its_class() {
         }),
     );
     full_engine_fed_queue_halts(shipped_writer_status_queue(), [writer_failed; 2]);
+    let tape_failed = InboundMessage::new(
+        ts(1_000),
+        MessageBody::WriterFailed(WriterFailure {
+            writer: FileWriter::Tape,
+            consecutive_failures: 1,
+        }),
+    );
+    full_engine_fed_queue_halts(shipped_tape_status_queue(), [tape_failed; 2]);
 
     let (producer, _peer_frames) = RingBuffer::<InboundMessage>::new(1);
     let mut link = LinkQueueProducer::new(producer, QueueId::new(1).unwrap());
-    link.push(spin_at(0, 1_000));
-    link.push(spin_at(1, 2_000));
+    let peer = SocketAddr::from((Ipv4Addr::LOCALHOST, 47_004));
+    link.push(peer, spin_at(0, 1_000));
+    link.push(peer, spin_at(1, 2_000));
     assert_eq!(
         link.dropped(),
         1,
         "the second frame is dropped and counted, with no trip"
     );
+
+    let (producer, markers) = RingBuffer::<InboundMessage>::new(1);
+    let mut control = ControlQueueProducer::new(producer, QueueId::new(2).unwrap());
+    control.push(idle_at(1), ts(1_000));
+    control.push(running_at(2), ts(2_000));
+    assert_eq!(
+        control.dropped(),
+        1,
+        "the second marker is dropped and counted, with no trip"
+    );
+    assert_eq!(markers.slots(), 1, "the first marker waits in the ring");
+    assert_eq!(ControlQueueProducer::WHEN_FULL, FailureClass::Reject);
 
     let (producer, input_ring) = RingBuffer::<InboundMessage>::new(4);
     let (tap_producer, tap_ring) = RingBuffer::<MarketTapItem>::new(1);
@@ -172,6 +196,18 @@ fn shipped_writer_status_queue() -> QueueId {
         .expect("an engine that trades has a writer-status queue")
 }
 
+/// The status queue of the tape writer of the binance engine that ships, which keeps a tape.
+fn shipped_tape_status_queue() -> QueueId {
+    let config = Config::<MicroRecorderParams>::load(Path::new(
+        "../strategies/strat-micro-recorder/te-binance-spot-btcusdt/config.yaml",
+    ))
+    .expect("the shipped binance config loads");
+    Registry::build(&config)
+        .expect("the shipped binance registry builds")
+        .tape_status_queue_id()
+        .expect("an engine with a tape has a tape status queue")
+}
+
 /// A tape that records the link-frame table, so that each run-control message writes one row.
 struct Parked {
     engine: HotEngine,
@@ -183,10 +219,15 @@ impl Parked {
     /// Two run controls fill a tape ring of two slots. The park at epoch 5 asks for a seal that
     /// does not fit, so the seal waits, with a cap on its tries.
     fn with_seal_try_limit(limit: u32) -> Parked {
+        Parked::with_seal_borders(limit, NonZeroU64::MAX)
+    }
+
+    fn with_seal_borders(limit: u32, interval_spins: NonZeroU64) -> Parked {
         let (producer, tape) = RingBuffer::<PersistRecord>::new(2);
         let persistence = PersistWiring {
             sink: PersistSink::new(producer, NonZeroU32::new(limit).unwrap()),
             tables: RecordedTables::new(&[TableKind::LinkFrames]),
+            seal_interval_spins: interval_spins,
         };
         Parked::parked_with(persistence, tape)
     }
@@ -353,5 +394,21 @@ fn seal_retry_reaches_cap_then_halts() {
     assert!(
         matches!(tape.as_slice(), [PersistRecord::SealAll]),
         "after the halt the seal still goes when room returns: {tape:?}"
+    );
+
+    // A seal border at each spin asks for a seal while one waits. The waiting seal closes each
+    // file once it goes, so it keeps its count, and try 3 of 3 still halts.
+    let mut parked = Parked::with_seal_borders(3, NonZeroU64::MIN);
+    parked.spin(1, 4_000);
+    let halt = parked.spin(2, 5_000);
+    assert!(
+        matches!(
+            halt,
+            Some(UiHalt::Halted {
+                reason: HaltReason::SealNotAccepted,
+                ..
+            })
+        ),
+        "a border keeps the count of the waiting seal: {halt:?}"
     );
 }

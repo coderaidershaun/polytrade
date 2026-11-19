@@ -137,6 +137,11 @@ pub struct Registry {
     /// `None` unless execution is armed: a writer that gives up halts quoting, and with execution
     /// off no quote can halt.
     writer_status_queue_id: Option<QueueId>,
+    /// `None` when the config carries no `link:` block: the run-control markers of the link.
+    control_queue_id: Option<QueueId>,
+    /// `None` with no `persistence:` block. The tape writer reports a fault of an audit table here,
+    /// on a queue of its own, because each input queue has one producer.
+    tape_status_queue_id: Option<QueueId>,
     input_queue_count: usize,
 }
 
@@ -163,9 +168,9 @@ impl Registry {
             .as_ref()
             .map(|_| queue_id_at(timer_queue_id.index() + 1))
             .transpose()?;
-        // The queue of each venue that takes orders, in venue order, and then the writer status
-        // are appended last: queue ids are recorded on messages, and shifting one would
-        // re-attribute an entire recorded tape.
+        // The queue of each venue that takes orders, in venue order, then the writer status, the
+        // control queue of the link and the status of the tape writer are appended last: queue ids are recorded on messages, and
+        // shifting one would re-attribute an entire recorded tape.
         let mut last_queue_id = link_queue_id.unwrap_or(timer_queue_id);
         let mut exec_queue_ids = Vec::new();
         let mut venue_names = Vec::new();
@@ -185,7 +190,19 @@ impl Registry {
             .any(Option::is_some)
             .then(|| queue_id_at(last_queue_id.index() + 1))
             .transpose()?;
-        let input_queue_count = writer_status_queue_id.unwrap_or(last_queue_id).index() + 1;
+        let last_queue_id = writer_status_queue_id.unwrap_or(last_queue_id);
+        let control_queue_id = config
+            .link
+            .as_ref()
+            .map(|_| queue_id_at(last_queue_id.index() + 1))
+            .transpose()?;
+        let last_queue_id = control_queue_id.unwrap_or(last_queue_id);
+        let tape_status_queue_id = config
+            .persistence
+            .as_ref()
+            .map(|_| queue_id_at(last_queue_id.index() + 1))
+            .transpose()?;
+        let input_queue_count = tape_status_queue_id.unwrap_or(last_queue_id).index() + 1;
 
         Ok(Registry {
             instruments,
@@ -201,6 +218,8 @@ impl Registry {
             link_queue_id,
             exec_queue_ids,
             writer_status_queue_id,
+            control_queue_id,
+            tape_status_queue_id,
             input_queue_count,
         })
     }
@@ -315,6 +334,14 @@ impl Registry {
 
     pub fn writer_status_queue_id(&self) -> Option<QueueId> {
         self.writer_status_queue_id
+    }
+
+    pub fn control_queue_id(&self) -> Option<QueueId> {
+        self.control_queue_id
+    }
+
+    pub fn tape_status_queue_id(&self) -> Option<QueueId> {
+        self.tape_status_queue_id
     }
 }
 

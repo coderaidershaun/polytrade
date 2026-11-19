@@ -1,5 +1,6 @@
-//! The sending half of the link: it drains the UI rings and the latency reports to subscribers, and
-//! repeats the catalog every heartbeat, so a subscriber that joins late catches up.
+//! The sending half of the link: it drains the UI rings and the latency reports to subscribers,
+//! sends a late subscriber the recent events, and builds the lifecycle and catalog frames that each
+//! heartbeat repeats, so a late subscriber catches up.
 
 use std::net::SocketAddr;
 
@@ -11,11 +12,14 @@ use crate::msg::ui::channel::UiLifecycle;
 use super::super::control::{CatalogFeature, CatalogInstrument, Lifecycle, RunPhase, Subscribe};
 use super::super::envelope::{Envelope, TopicId, WireName};
 use super::super::frame::{LinkBody, LinkDatagram};
-use super::{Actor, REPORT_TICKS};
-use crate::msg::run_state::RunState;
+use super::Actor;
+use crate::msg::run_state::{ControllerEpoch, RunState};
 
 impl Actor {
+    /// History goes first, so a live event recorded in this flush cannot evict a frame that its
+    /// replay is about to send.
     pub(super) fn flush_feeds(&mut self, now: LocalTs) {
+        self.send_history(now);
         while let Ok(outbound) = self.outbound.pop() {
             self.send(outbound.topic, LinkBody::Payload(outbound.payload), now);
         }
@@ -24,31 +28,30 @@ impl Actor {
         }
         while let Ok(event) = self.channels.events.pop() {
             self.send(TopicId::EVENTS, LinkBody::Event(event), now);
+            self.history.record(event);
         }
         while let Ok(report) = self.latency.pop() {
             self.send(TopicId::LATENCY, LinkBody::Latency(report), now);
         }
     }
 
-    pub(super) fn announce(&mut self, now: LocalTs) {
-        self.poll_lifecycle(now);
-        let lifecycle = LinkBody::Lifecycle(self.lifecycle());
-        self.send(TopicId::LIFECYCLE, lifecycle, now);
-        for index in 0..self.catalog_frames.len() {
-            let (topic, body) = self.catalog_frames[index];
-            self.send(topic, body, now);
-        }
-        self.check_controller(now);
-        self.push_marker_if_needed(now);
-        self.check_peer_silence(now);
-        self.announce_ticks += 1;
-        if self.announce_ticks.is_multiple_of(REPORT_TICKS) {
-            self.report_counts();
+    fn send_history(&mut self, now: LocalTs) {
+        self.recipients.clear();
+        self.recipients
+            .extend(self.subscribers.naming(TopicId::HISTORY, now));
+        self.history.begin_flush(&self.recipients);
+        while let Some((address, event)) = self.history.next_frame() {
+            let len = self.encode(TopicId::HISTORY, LinkBody::History(event));
+            if self.try_transmit(address, len) {
+                self.counts.history_sent += 1;
+            } else {
+                self.counts.history_failed += 1;
+            }
         }
     }
 
-    fn lifecycle(&self) -> Lifecycle {
-        let acknowledged = self.control.acknowledged().load();
+    pub(super) fn lifecycle(&self) -> Lifecycle {
+        let acknowledged = self.control.acknowledged();
         Lifecycle {
             phase: self.phase,
             run_state: acknowledged.state,
@@ -59,7 +62,7 @@ impl Actor {
         }
     }
 
-    fn poll_lifecycle(&mut self, now: LocalTs) {
+    pub(super) fn poll_lifecycle(&mut self, now: LocalTs) {
         while let Ok(message) = self.channels.lifecycle.try_recv() {
             match message {
                 UiLifecycle::Ready(catalog) => {
@@ -118,13 +121,13 @@ impl Actor {
             let body = LinkBody::Subscribe(Subscribe {
                 topics,
                 desired_state: RunState::Running,
-                desired_epoch: 0,
+                desired_epoch: ControllerEpoch::ZERO,
             });
             self.send_to(address, TopicId::SUBSCRIBE, body);
         }
     }
 
-    fn send(&mut self, topic: TopicId, body: LinkBody, now: LocalTs) {
+    pub(super) fn send(&mut self, topic: TopicId, body: LinkBody, now: LocalTs) {
         self.recipients.clear();
         self.recipients
             .extend(self.subscribers.recipients(topic, now));
@@ -153,12 +156,14 @@ impl Actor {
     /// Never waits, so a peer whose socket is full cannot stall the others. A dropped send is
     /// counted, and the far side sees it as a sequence gap.
     fn transmit(&mut self, address: SocketAddr, len: usize) {
-        if self
-            .socket
-            .try_send_to(&self.buffer[..len], address)
-            .is_err()
-        {
+        if !self.try_transmit(address, len) {
             self.counts.send_failed += 1;
         }
+    }
+
+    fn try_transmit(&self, address: SocketAddr, len: usize) -> bool {
+        self.socket
+            .try_send_to(&self.buffer[..len], address)
+            .is_ok()
     }
 }

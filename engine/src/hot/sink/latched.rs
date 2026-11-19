@@ -50,6 +50,9 @@ impl PersistSink {
         }
     }
 
+    // SMELL: a full ring drops an order or a fill row and counts it, as it does a research row, so
+    // the audit trail can miss a row while the engine trades on. An audit row needs a ring that
+    // never drops it.
     pub(crate) fn push(&mut self, record: PersistRecord) {
         if self.can_push_seal() {
             self.send_seal();
@@ -60,9 +63,14 @@ impl PersistSink {
         }
     }
 
-    /// Closes and rolls every open file, ordered after any records already banked this spin.
+    /// Closes and rolls every open file, ordered after any records already banked this spin. A
+    /// seal that waits already closes every file once it goes, so a second request keeps its count
+    /// of tries, and a writer that takes no seal still reaches the cap.
     #[cold]
     pub(crate) fn request_seal(&mut self) {
+        if self.is_seal_pending() {
+            return;
+        }
         self.seal = Seal::Waiting { tries: 0 };
         self.try_seal();
     }

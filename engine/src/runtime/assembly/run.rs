@@ -10,6 +10,7 @@ use crate::runtime::pin::pin_to_core;
 
 use super::Engine;
 use super::drain::ForcedExit;
+use super::exec_identity::IdentityLocks;
 use super::exit::Exit;
 use super::preflight::Preflight;
 
@@ -61,6 +62,7 @@ where
         identity: &identity,
         config: &config,
         strategy: strategy.as_ref(),
+        locks: &IdentityLocks::of_host(),
     };
     let plan = preflight
         .run()

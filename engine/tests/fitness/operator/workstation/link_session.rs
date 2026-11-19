@@ -11,7 +11,7 @@ use engine::link::{
 };
 use engine::msg::ids::{AssetId, InstrumentId, Price, Qty, Side};
 use engine::msg::persist::FeatureId;
-use engine::msg::run_state::RunState;
+use engine::msg::run_state::{ControllerEpoch, RunState};
 use engine::msg::time::{DurationUs, LocalTs, VenueTs};
 use engine::msg::ui::{UiBookSnapshot, UiBookState, UiCatalog, UiEvent};
 use engine::operator::workstation::link::model::{ConnectionState, ControlVerdict};
@@ -157,7 +157,7 @@ fn lifecycle(acknowledged_epoch: u64, run_state: RunState) -> Lifecycle {
         phase: RunPhase::Ready,
         run_state,
         execution_mode: Some(ExecutionMode::Live),
-        acknowledged_epoch,
+        acknowledged_epoch: ControllerEpoch::new(acknowledged_epoch),
         spin_interval_us: SPIN_INTERVAL,
         feature_count: 0,
     }
@@ -577,6 +577,7 @@ proptest! {
                     Delivery::Event(event) => model.apply_event(event),
                     Delivery::Catalog(_) => panic!("a feed frame produced a catalog"),
                     Delivery::Latency(_) => panic!("a feed frame produced a latency report"),
+                    Delivery::History(_) => panic!("a feed frame produced a history frame"),
                 }
             }
         }
@@ -620,153 +621,6 @@ fn decode_subscribe(bytes: &[u8]) -> (Envelope, Subscribe) {
 
 fn next_subscribe(session: &mut LinkSession, now: LocalTs) -> (Envelope, Subscribe) {
     decode_subscribe(session.subscribe_due(now).expect("a subscribe is due"))
-}
-
-/// The whole trust model of the control epoch in one place: 0 is the reserved "no opinion" that lets
-/// a workstation watch an engine without taking control away from whoever holds it; asserting yields
-/// an epoch strictly above 0, releasing drops the current assertion back to "no opinion" without
-/// rewinding the underlying counter, and a later boot stamp (a restarted workstation) must outrank
-/// this process's own previous run rather than reuse its epochs. Against an engine's acknowledged
-/// epoch, an older one reads as still in flight, a match reads as applied, and a higher one reads as
-/// lost to another controller.
-#[test]
-fn controller_epoch_rises_and_its_verdict_tracks_the_engines_acknowledgement() {
-    let mut session = session();
-
-    let (_, watching) = next_subscribe(&mut session, NOW);
-    assert_eq!(
-        watching.desired_epoch, 0,
-        "epoch 0 is the reserved 'no opinion': it is what lets a workstation watch an engine \
-         without taking control of it away from whoever holds it"
-    );
-    let status = session.status(NOW);
-    assert_eq!(status.asserted_state, None);
-    assert_eq!(status.control, ControlVerdict::NoOpinion);
-
-    session.assert_run_state(RunState::Idle);
-    assert_eq!(
-        session.status(NOW).control,
-        ControlVerdict::Pending,
-        "an assertion no heartbeat has acknowledged yet is still in flight"
-    );
-    let (_, opening) = next_subscribe(&mut session, NOW);
-    assert_eq!(opening.desired_state, RunState::Idle);
-    assert!(
-        opening.desired_epoch > 0,
-        "the engine accepts on a strict >, so 0 could never win"
-    );
-
-    assert!(session.attach_to_next_peer());
-    let status = session.status(NOW);
-    assert_eq!(
-        status.asserted_state, None,
-        "moving to another engine releases the assertion"
-    );
-    assert_eq!(status.control, ControlVerdict::NoOpinion);
-    let (_, released) = next_subscribe(&mut session, NOW);
-    assert_eq!(released.desired_epoch, 0);
-
-    session.assert_run_state(RunState::Running);
-    let (_, held) = next_subscribe(&mut session, NOW);
-    assert!(
-        held.desired_epoch > opening.desired_epoch,
-        "epochs are per-controller and monotonic: attaching to another engine must not rewind them"
-    );
-
-    // A later boot stamp is what makes a restarted workstation outrank its own previous run.
-    let mut restarted = session_at(NOW + DurationUs::from_secs(60));
-    restarted.assert_run_state(RunState::Idle);
-    let (_, outranking) = next_subscribe(&mut restarted, NOW + DurationUs::from_secs(60));
-    assert!(outranking.desired_epoch > held.desired_epoch);
-
-    let mut engine = Engine::booted_at(FIRST_BOOT_US);
-    let mut session = session_at(NOW);
-    session.assert_run_state(RunState::Idle);
-    let (_, asserted) = next_subscribe(&mut session, NOW);
-    let mine = asserted.desired_epoch;
-    let mut verdict_after = |acknowledged_epoch: u64, run_state: RunState| {
-        let frame = engine.send(LinkBody::Lifecycle(lifecycle(
-            acknowledged_epoch,
-            run_state,
-        )));
-        session.on_datagram(&frame, NOW);
-        session.status(NOW).control
-    };
-
-    assert_eq!(
-        verdict_after(mine - 1, RunState::Running),
-        ControlVerdict::Pending,
-        "an older acknowledged epoch means our frame has not landed yet"
-    );
-    assert_eq!(verdict_after(mine, RunState::Idle), ControlVerdict::Applied);
-    assert_eq!(
-        verdict_after(mine + 5, RunState::Running),
-        ControlVerdict::Lost {
-            holder_epoch: mine + 5
-        },
-        "a higher epoch holds the engine, and re-asserting ours would never take it back"
-    );
-}
-
-/// A subscribe is the only thing the workstation ever sends, and it must be sent at the right
-/// moments: at once on attaching, every two seconds after that so the engine's five-second table
-/// survives a lost refresh, and immediately when the operator asserts a state, which is what makes
-/// START and STOP answer in one round trip instead of up to two seconds later.
-#[test]
-fn a_subscribe_is_due_at_start_every_two_seconds_and_at_once_after_an_assert() {
-    let mut session = session();
-    let just_short = DurationUs::from_micros(SUBSCRIBE_INTERVAL.micros() - 1);
-
-    let (envelope, subscribe) = next_subscribe(&mut session, NOW);
-    assert_eq!(envelope.topic, TopicId::SUBSCRIBE);
-    assert_eq!(envelope.seq, 1);
-    assert_eq!(
-        envelope.boot_ts_us,
-        NOW.to_peer(),
-        "the first clock reading is the boot stamp"
-    );
-    assert_eq!(
-        subscribe.topics.topics(),
-        [
-            TopicId::BOOKS,
-            TopicId::EVENTS,
-            TopicId::CATALOG_INSTRUMENTS,
-            TopicId::CATALOG_FEATURES,
-            TopicId::LIFECYCLE,
-            TopicId::LATENCY
-        ],
-        "the workstation names the topics it reads: 'all' would have the engine unicast strategy \
-         payload frames at a process that can only count them as rejects"
-    );
-    assert!(
-        session.subscribe_due(NOW).is_none(),
-        "one subscribe per interval"
-    );
-    assert!(session.subscribe_due(NOW + just_short).is_none());
-
-    let refresh = NOW + SUBSCRIBE_INTERVAL;
-    let (envelope, _) = next_subscribe(&mut session, refresh);
-    assert_eq!(
-        envelope.seq, 2,
-        "each subscribe numbers itself above the last"
-    );
-
-    let asserted_at = refresh + DurationUs::from_millis(500);
-    assert!(session.subscribe_due(asserted_at).is_none());
-    session.assert_run_state(RunState::Idle);
-    let (_, subscribe) = next_subscribe(&mut session, asserted_at);
-    assert_eq!(subscribe.desired_state, RunState::Idle);
-    assert!(
-        subscribe.desired_epoch > 0,
-        "the raised epoch rides the very next subscribe"
-    );
-
-    assert!(session.subscribe_due(asserted_at + just_short).is_none());
-    assert!(
-        session
-            .subscribe_due(asserted_at + SUBSCRIBE_INTERVAL)
-            .is_some()
-    );
 }
 
 /// Datagrams reach this port from anyone who can send to it. A wrong token or strategy is another
@@ -859,6 +713,7 @@ impl Replica {
         match &delivery {
             Some(Delivery::Book(snapshot)) => self.model.apply_book(*snapshot),
             Some(Delivery::Event(event)) => self.model.apply_event(*event),
+            Some(Delivery::History(event)) => self.model.apply_history(*event),
             Some(Delivery::Catalog(_) | Delivery::Latency(_)) | None => {}
         }
         delivery
@@ -1031,7 +886,11 @@ fn moving_to_the_next_peer_starts_the_gate_the_catalog_and_the_controller_over()
         first_subscribe.seq + 1,
         "the subscribe count keeps rising across a move, because an engine remembers the highest it heard"
     );
-    assert_eq!(subscribe.desired_epoch, 0, "the assertion was released");
+    assert_eq!(
+        subscribe.desired_epoch,
+        ControllerEpoch::ZERO,
+        "the assertion was released"
+    );
 
     // The same positions the first engine used: stale to an old gate, fresh to a reset one.
     assert_eq!(

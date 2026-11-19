@@ -11,10 +11,10 @@ use arrow_schema::{ArrowError, SchemaRef};
 use crate::msg::time::LocalTs;
 
 use self::column::Column;
-use super::RunMeta;
+use super::{RunMeta, TapeTable};
 
 pub(super) trait TableRow: Sized + 'static {
-    const NAME: &'static str;
+    const TABLE: TapeTable;
     const COLUMNS: &'static [Column<Self>];
 
     /// Record's local-receipt time (hour rotation + date/HH partitioning key).

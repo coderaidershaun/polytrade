@@ -1,27 +1,91 @@
-//! The strategy payload frame and its datagram. The sender's field list gives each slot its
-//! meaning, never the wire, so two senders with different field lists disagree about a slot.
+//! The strategy payload frame, the datagram, and the table of topics with the body of each. The
+//! digest of the wire layout folds that table, so each topic and each body width is in it.
 
 use crate::msg::time::VenueTs;
 use crate::msg::ui::{LatencyReport, UiBookSnapshot, UiEvent};
 
-use super::control::{
-    CATALOG_FEATURE_BODY_LEN, CATALOG_INSTRUMENT_BODY_LEN, CatalogFeature, CatalogInstrument,
-    LIFECYCLE_BODY_LEN, Lifecycle, SUBSCRIBE_BODY_LEN, Subscribe,
-};
+use super::control::{CatalogFeature, CatalogInstrument, Lifecycle, Subscribe};
 use super::envelope::{
     ByteReader, ByteWriter, ENVELOPE_LEN, Envelope, FrameGuard, LINK_MAX_DATAGRAM, LinkDecodeError,
     LinkHash, TopicId,
 };
-use super::feed::{BOOK_BODY_LEN, EVENT_BODY_LEN, REPORT_BODY_LEN};
-use super::wire::{WireField, wire_array};
+use super::wire::{LayoutDigest, WireField, wire_array};
 
 /// The most slots that fit the 384-byte input message. Its size assert fails on a 39th.
 pub const LINK_MAX_FIELDS: usize = 38;
 
-const PAYLOAD_BODY_LEN: usize = 8 + 8 + 1 + 8 * LINK_MAX_FIELDS;
+/// One engine topic: the name a config gives it, its id, and the width and digest of its body.
+#[derive(Clone, Copy)]
+pub(super) struct TopicLayout {
+    pub(super) name: &'static str,
+    pub(super) topic: TopicId,
+    width: usize,
+    digest: u64,
+}
 
-// A frame with every slot filled still fits one datagram.
-const _: () = assert!(ENVELOPE_LEN + PAYLOAD_BODY_LEN <= LINK_MAX_DATAGRAM);
+impl TopicLayout {
+    const fn of<T: WireField>(name: &'static str, topic: TopicId) -> Self {
+        Self {
+            name,
+            topic,
+            width: T::WIDTH,
+            digest: T::DIGEST,
+        }
+    }
+}
+
+/// Each engine topic and its body. Topics 8 to 15 are reserved for the engine; a strategy topic
+/// carries a payload.
+pub(super) const ENGINE_TOPICS: [TopicLayout; 8] = [
+    TopicLayout::of::<Subscribe>("subscribe", TopicId::SUBSCRIBE),
+    TopicLayout::of::<UiBookSnapshot>("books", TopicId::BOOKS),
+    TopicLayout::of::<UiEvent>("events", TopicId::EVENTS),
+    TopicLayout::of::<CatalogInstrument>("catalog_instruments", TopicId::CATALOG_INSTRUMENTS),
+    TopicLayout::of::<CatalogFeature>("catalog_features", TopicId::CATALOG_FEATURES),
+    TopicLayout::of::<Lifecycle>("lifecycle", TopicId::LIFECYCLE),
+    TopicLayout::of::<LatencyReport>("latency", TopicId::LATENCY),
+    TopicLayout::of::<UiEvent>("history", TopicId::HISTORY),
+];
+
+/// The digest of the whole wire layout: the envelope, each engine topic with its body, and the
+/// payload of a strategy topic. The envelope carries it, so two builds of different layouts refuse
+/// each other instead of misreading a body.
+pub const LINK_LAYOUT: LinkHash = LinkHash(layout_digest());
+
+const fn layout_digest() -> u64 {
+    let mut digest = LayoutDigest::START
+        .text("link")
+        .text("envelope")
+        .part(Envelope::WIDTH, Envelope::DIGEST);
+    let mut index = 0;
+    while index < ENGINE_TOPICS.len() {
+        let row = ENGINE_TOPICS[index];
+        digest = digest
+            .text(row.name)
+            .number(row.topic.0 as u64)
+            .part(row.width, row.digest);
+        index += 1;
+    }
+    digest
+        .text("strategy payload")
+        .number(TopicId::FIRST_STRATEGY.0 as u64)
+        .part(LinkPayload::WIDTH, LinkPayload::DIGEST)
+        .finish()
+}
+
+const fn fits_one_datagram() -> bool {
+    let mut index = 0;
+    while index < ENGINE_TOPICS.len() {
+        if ENVELOPE_LEN + ENGINE_TOPICS[index].width > LINK_MAX_DATAGRAM {
+            return false;
+        }
+        index += 1;
+    }
+    ENVELOPE_LEN + LinkPayload::WIDTH <= LINK_MAX_DATAGRAM
+}
+
+// Each frame, a payload with every slot filled included, fits one datagram.
+const _: () = assert!(fits_one_datagram());
 
 /// `schema_hash` is a digest of the sender's ordered `link_fields()`. A mismatch drops the frame
 /// and counts the drop.
@@ -37,6 +101,23 @@ pub struct LinkPayload {
 }
 
 impl LinkPayload {
+    const WIDTH: usize =
+        LinkHash::WIDTH + VenueTs::WIDTH + u8::WIDTH + <[f64; LINK_MAX_FIELDS]>::WIDTH;
+    const DIGEST: u64 = LayoutDigest::START
+        .text("payload")
+        .text("schema_hash")
+        .part(LinkHash::WIDTH, LinkHash::DIGEST)
+        .text("event_ts_us")
+        .part(VenueTs::WIDTH, VenueTs::DIGEST)
+        .text("count")
+        .part(u8::WIDTH, u8::DIGEST)
+        .text("values")
+        .part(
+            <[f64; LINK_MAX_FIELDS]>::WIDTH,
+            <[f64; LINK_MAX_FIELDS]>::DIGEST,
+        )
+        .finish();
+
     /// # Panics
     /// When `values` is longer than `LINK_MAX_FIELDS`. The field list is a code-level fact, so
     /// exceeding it is a bug rather than a runtime condition.
@@ -97,7 +178,7 @@ impl LinkPayload {
 
 wire_array! { f64; LINK_MAX_FIELDS; 0.0 }
 
-/// Sender identity + position in stream (envelope residue after FrameGuard::check). Omit magic/version/hashes/mac to save budget.
+/// Sender identity + position in stream (envelope residue after FrameGuard::check). Omit magic/layout/hashes/mac to save budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LinkOrigin {
     pub sender_te_hash: LinkHash,
@@ -152,6 +233,8 @@ pub enum LinkBody {
     CatalogFeature(CatalogFeature),
     Lifecycle(Lifecycle),
     Latency(LatencyReport),
+    /// An event frame recorded before the subscriber came, with the body of a live one.
+    History(UiEvent),
     Payload(LinkPayload),
 }
 
@@ -181,6 +264,7 @@ impl LinkDatagram {
             LinkBody::CatalogFeature(feature) => feature.write(&mut writer),
             LinkBody::Lifecycle(lifecycle) => lifecycle.write(&mut writer),
             LinkBody::Latency(report) => report.write(&mut writer),
+            LinkBody::History(event) => event.write(&mut writer),
             LinkBody::Payload(payload) => payload.write(&mut writer),
         }
         writer.written()
@@ -217,6 +301,7 @@ impl LinkDatagram {
             }
             TopicId::LIFECYCLE => LinkBody::Lifecycle(Lifecycle::read(&mut reader)?),
             TopicId::LATENCY => LinkBody::Latency(LatencyReport::read(&mut reader)?),
+            TopicId::HISTORY => LinkBody::History(UiEvent::read(&mut reader)?),
             _ => LinkBody::Payload(LinkPayload::read(&mut reader, guard)?),
         };
         Ok(Self { envelope, body })
@@ -232,20 +317,17 @@ fn expected_topic(body: &LinkBody) -> Option<TopicId> {
         LinkBody::CatalogFeature(_) => Some(TopicId::CATALOG_FEATURES),
         LinkBody::Lifecycle(_) => Some(TopicId::LIFECYCLE),
         LinkBody::Latency(_) => Some(TopicId::LATENCY),
+        LinkBody::History(_) => Some(TopicId::HISTORY),
         LinkBody::Payload(_) => None,
     }
 }
 
 fn topic_body_len(topic: TopicId) -> Option<usize> {
-    match topic {
-        TopicId::SUBSCRIBE => Some(SUBSCRIBE_BODY_LEN),
-        TopicId::BOOKS => Some(BOOK_BODY_LEN),
-        TopicId::EVENTS => Some(EVENT_BODY_LEN),
-        TopicId::CATALOG_INSTRUMENTS => Some(CATALOG_INSTRUMENT_BODY_LEN),
-        TopicId::CATALOG_FEATURES => Some(CATALOG_FEATURE_BODY_LEN),
-        TopicId::LIFECYCLE => Some(LIFECYCLE_BODY_LEN),
-        TopicId::LATENCY => Some(REPORT_BODY_LEN),
-        _ if topic.is_strategy_topic() => Some(PAYLOAD_BODY_LEN),
-        _ => None,
+    if topic.is_strategy_topic() {
+        return Some(LinkPayload::WIDTH);
     }
+    ENGINE_TOPICS
+        .iter()
+        .find(|row| row.topic == topic)
+        .map(|row| row.width)
 }

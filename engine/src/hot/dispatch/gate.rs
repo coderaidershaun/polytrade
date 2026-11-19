@@ -11,7 +11,7 @@ use crate::msg::persist::{LinkFrameRow, LinkRowKind, PersistRecord};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, FoldTime, LocalTs};
-use crate::runtime::shutdown::RunStateCell;
+use crate::runtime::shutdown::AcknowledgedWriter;
 
 use super::HotEngine;
 
@@ -162,7 +162,7 @@ pub struct LinkWiring {
     pub sink: LinkSink,
     /// The fold writes the run state that it applied here, and the link reads it to learn whether
     /// its marker landed.
-    pub acknowledged: RunStateCell,
+    pub acknowledged: AcknowledgedWriter,
 }
 
 impl HotEngine {
@@ -223,7 +223,7 @@ impl HotEngine {
                 kind,
                 sender_te_hash: 0,
                 topic: TopicId::SUBSCRIBE.0,
-                seq: control.desired.epoch,
+                seq: control.desired.epoch.get(),
                 slot: 0,
                 count: 0,
                 value: 0.0,
@@ -250,7 +250,7 @@ impl HotEngine {
     fn park(&mut self) {
         hot_info!(
             "run state IDLE (epoch {}) — sealing parquet",
-            self.run.epoch
+            self.run.epoch.get()
         );
         self.drain_actions();
         self.state.gates.park();
@@ -266,7 +266,7 @@ impl HotEngine {
     fn resume(&mut self, received_ts: LocalTs) {
         hot_info!(
             "run state RUNNING (epoch {}) — derived state reset, warmup re-armed",
-            self.run.epoch
+            self.run.epoch.get()
         );
         self.state.derived.reset_for_gap();
         let mut ctx = self.state.ctx(received_ts);

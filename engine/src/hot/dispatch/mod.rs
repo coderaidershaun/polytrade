@@ -6,6 +6,7 @@ mod digest;
 mod exposure;
 mod gate;
 mod market;
+mod seal;
 mod setup;
 mod telemetry;
 mod ui_emit;
@@ -13,6 +14,7 @@ mod ui_emit;
 use derived::Derived;
 use exposure::{moves_position, restored_snapshot};
 use gate::MarketGates;
+use seal::SealBorders;
 
 use crate::hot::book::Book;
 use crate::hot::dispatch::ui_emit::UiEmitter;
@@ -26,13 +28,13 @@ use crate::hot::strategy::{Actions, ActionsSetup, DrainSinks, Strategy, Strategy
 use crate::log::hot_error;
 use crate::msg::exec::{AccountChunk, ExecEvent};
 use crate::msg::ids::{InstrumentId, Price, Qty, Side};
-use crate::msg::inbound::{InboundMessage, MessageBody, SpinTick, WriterFailure};
+use crate::msg::inbound::{FileWriter, InboundMessage, MessageBody, SpinTick, WriterFailure};
 use crate::msg::run_state::RunAssertion;
 use crate::msg::time::{FoldTime, LocalTs};
 use crate::msg::ui::{DomQuote, UI_QUOTE_LEVELS};
 use crate::runtime::config::RecordedTables;
 use crate::runtime::exposure::ExposureSnapshot;
-use crate::runtime::shutdown::RunStateCell;
+use crate::runtime::shutdown::AcknowledgedWriter;
 
 pub use digest::StateDigest;
 pub use exposure::ExposureWiring;
@@ -63,6 +65,8 @@ struct HotState {
     actions: Actions,
     /// None if no persistence configured.
     sink: Option<PersistSink>,
+    /// None if no persistence configured.
+    seal_borders: Option<SealBorders>,
     /// Bound `StrategyCtx::link_send` refuses a topic past.
     declared_link_topics: usize,
 }
@@ -102,7 +106,7 @@ pub struct HotEngine {
     strategy_log_sink: StrategyLogSink,
     link_sink: Option<LinkSink>,
     run: RunAssertion,
-    run_report: Option<RunStateCell>,
+    run_report: Option<AcknowledgedWriter>,
     unretained_volume_bars: u64,
     feature_names: Vec<&'static str>,
     ui: UiEmitter,
@@ -124,9 +128,17 @@ impl HotEngine {
         } = setup;
         let (books, trackers, ewma) = per_instrument_state(instruments);
         let declarations = Declarations::resolve(strategy.as_mut(), instruments);
-        let (persist_sink, tables) = match persistence {
-            Some(PersistWiring { sink, tables }) => (Some(sink), tables),
-            None => (None, RecordedTables::default()),
+        let (persist_sink, seal_borders, tables) = match persistence {
+            Some(PersistWiring {
+                sink,
+                tables,
+                seal_interval_spins,
+            }) => (
+                Some(sink),
+                Some(SealBorders::every(seal_interval_spins)),
+                tables,
+            ),
+            None => (None, None, RecordedTables::default()),
         };
         let (link_sink, run_report) = match link {
             Some(LinkWiring { sink, acknowledged }) => (Some(sink), Some(acknowledged)),
@@ -153,6 +165,7 @@ impl HotEngine {
                     link_schema_hash: declarations.link_schema_hash,
                 }),
                 sink: persist_sink,
+                seal_borders,
                 declared_link_topics: declarations.link_topics,
             },
             strategy,
@@ -214,6 +227,7 @@ impl HotEngine {
         self.state.spin_seq = tick.seq;
         self.sample_trackers();
         self.retry_latched_writes();
+        self.state.seal_at_border(tick.seq);
         self.spin_strategy(tick, received_ts_us);
         self.drain_actions();
         self.run_execution_pass(tick, received_ts_us);
@@ -325,11 +339,15 @@ impl HotEngine {
     /// The message is the one point in the input where a writer gave up, so a replay halts at it.
     #[cold]
     fn halt_on_writer_failure(&mut self, failure: &WriterFailure) {
-        hot_error!(
-            "the {:?} writer failed {} writes in a row, so its file no longer follows the position — quoting halts",
-            failure.writer,
-            failure.consecutive_failures
-        );
+        match failure.writer {
+            FileWriter::Exposure => hot_error!(
+                "the exposure writer failed {} writes in a row, so its file no longer follows the position — quoting halts",
+                failure.consecutive_failures
+            ),
+            FileWriter::Tape => hot_error!(
+                "the tape writer could not write an audit table, so the tape no longer records each order and fill — quoting halts"
+            ),
+        }
         let at = self.state.fold_time.as_local();
         self.state.exec.halt(HaltReason::WriterFailed, at);
     }

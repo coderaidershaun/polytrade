@@ -27,7 +27,7 @@ use engine::runtime::config::{
 };
 use engine::runtime::pin_to_core;
 use engine::runtime::registry::Registry;
-use engine::runtime::shutdown::{FatalSignal, RunStateCell};
+use engine::runtime::shutdown::{FatalSignal, RunStateHandles};
 use engine::tape::{PersistConfig, PersistWriter, RunMeta};
 use engine::venues::edge::backoff::BackoffCaps;
 use engine::venues::polymarket::actor::{PolymarketAdapter, PolymarketAdapterContext};
@@ -118,7 +118,7 @@ async fn poly_rotation_capture_spans_two_rotations_with_zero_gap_handover() {
     let (_persist_producer, persist_consumer) =
         RingBuffer::<PersistRecord>::new(PERSIST_RING_CAPACITY);
     let (rotations_tx, rotations_rx) = mpsc::channel::<RotationRow>(ROTATIONS_CHANNEL_CAPACITY);
-    let persistence = PersistWriter::spawn(
+    let persistence = PersistWriter::on_disk().spawn(
         PersistConfig {
             dir: output_dir.path().to_path_buf(),
             tables: RecordedTables::new(&[]),
@@ -133,7 +133,7 @@ async fn poly_rotation_capture_spans_two_rotations_with_zero_gap_handover() {
         window_assignments: None,
         clock: clock.clone(),
         fatal: fatal.clone(),
-        run_state: RunStateCell::new(),
+        run_state: RunStateHandles::new().desired_reader,
         backoff: BackoffCaps::default(),
         rotations_tx,
     };

@@ -1,9 +1,9 @@
-//! Writer thread: drain the record ring into one Parquet writer per table, sealing on interval, row
-//! cap, hour cross, or shutdown. Dedicated thread (encode and fsync both block).
+//! Writer thread: drain the record ring into one Parquet writer per table, sealing at each seal
+//! record of the fold, row cap, hour cross, or shutdown. Dedicated thread (encode and fsync block).
 
-use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rtrb::Consumer;
 use tokio::sync::mpsc;
@@ -14,40 +14,70 @@ use crate::msg::persist::{
 };
 use crate::msg::time::wall_clock_now;
 use crate::runtime::config::{RecordedTables, TableKind};
+use crate::runtime::durable_file::{DiskFiles, FileSteps};
 use crate::runtime::shutdown::WriterThread;
 
+use super::fault::{Faults, StoppedTables, Table, TapeStatus};
 use super::retention::Retention;
 use super::schema::{self, TableRow};
-use super::table::TableWriter;
+use super::table::{TableFiles, TableWriter};
 use super::{PersistConfig, PersistError, RunMeta};
 
-const SEAL_INTERVAL: Duration = Duration::from_secs(300);
 const IDLE_SLEEP: Duration = Duration::from_millis(1);
 const MAX_POP_BATCH: usize = 8_192;
 
-pub struct PersistWriter;
+/// The writer thread of the tape, before it starts. It takes each file step through its
+/// [`FileSteps`], so a test can end a write at any step.
+pub struct PersistWriter {
+    steps: Arc<dyn FileSteps>,
+    status: Option<TapeStatus>,
+}
 
 impl PersistWriter {
+    pub fn on_disk() -> Self {
+        Self::through(Arc::new(DiskFiles))
+    }
+
+    pub fn through(steps: Arc<dyn FileSteps>) -> Self {
+        Self {
+            steps,
+            status: None,
+        }
+    }
+
+    /// Without a status queue, a fault of an audit table still stops its table and fails the
+    /// drain, but no message tells the fold, so quoting goes on.
+    pub fn reporting_to(self, status: TapeStatus) -> Self {
+        Self {
+            status: Some(status),
+            ..self
+        }
+    }
+
     #[expect(
         clippy::disallowed_methods,
-        reason = "a writer stamps and paces its own files, which are never engine state"
+        reason = "the boot stamp keeps the file names of two runs apart; it decides no seal and no state"
     )]
     pub fn spawn(
+        self,
         cfg: PersistConfig,
         meta: RunMeta,
         records: Consumer<PersistRecord>,
         rotations: mpsc::Receiver<RotationRow>,
     ) -> PersistHandle {
         let boot_ts_us = wall_clock_now().micros();
-        let footer = schema::footer_metadata(&meta);
         let run_dir = meta.artifacts.tape_dir(&cfg.dir);
-        let retention = Retention::new(run_dir.clone(), cfg.retention);
+        let retention = Retention::new(run_dir.clone(), cfg.retention, boot_ts_us);
         let writers = TableWriterBuilder {
             tables: cfg.tables,
-            run_dir,
-            boot_ts_us,
-            footer: &footer,
+            files: TableFiles {
+                run_dir,
+                boot_ts_us,
+                footer: schema::footer_metadata(&meta),
+                steps: self.steps,
+            },
         };
+        let stopped = StoppedTables::default();
         let state = WriterState {
             consumer: records,
             features: writers.named(TableKind::Features),
@@ -62,46 +92,57 @@ impl PersistWriter {
             rotations_rx: rotations,
             unnamed_table_rows: 0,
             retention,
+            faults: Faults::new(self.status, stopped.clone()),
         };
         let writer = WriterThread::spawn("persist", move |drain| state.run(&drain));
-        PersistHandle(writer)
+        PersistHandle { writer, stopped }
     }
 }
 
-struct TableWriterBuilder<'a> {
+struct TableWriterBuilder {
     tables: RecordedTables,
-    run_dir: PathBuf,
-    boot_ts_us: i64,
-    footer: &'a [(String, String)],
+    files: TableFiles,
 }
 
-impl TableWriterBuilder<'_> {
-    fn named<R: TableRow>(&self, table: TableKind) -> Option<TableWriter<R>> {
-        self.tables.contains(table).then(|| self.writer())
+impl TableWriterBuilder {
+    fn named<R: TableRow>(&self, table: TableKind) -> Table<R> {
+        if self.tables.contains(table) {
+            Table::Writing(Box::new(self.writer()))
+        } else {
+            Table::Unnamed
+        }
     }
 
     /// For the tables that `TableKind` names nowhere, so `strategy.tables` has no way to switch them
     /// off: the venue lineage, without which no row says which market its `instrument_id` stood
     /// for, and the incidents, the record of money that the engine could not book.
-    fn always_written<R: TableRow>(&self) -> TableWriter<R> {
-        self.writer()
+    fn always_written<R: TableRow>(&self) -> Table<R> {
+        Table::Writing(Box::new(self.writer()))
     }
 
     fn writer<R: TableRow>(&self) -> TableWriter<R> {
-        TableWriter::new(&self.run_dir, self.boot_ts_us, self.footer)
+        TableWriter::new(self.files.clone())
     }
 }
 
-pub struct PersistHandle(WriterThread<PersistError>);
+pub struct PersistHandle {
+    writer: WriterThread<PersistError>,
+    stopped: StoppedTables,
+}
 
 impl PersistHandle {
+    /// The tables that the writer stopped after a fault. A drain reads the final count.
+    pub fn stopped_tables(&self) -> StoppedTables {
+        self.stopped.clone()
+    }
+
     /// Call once the hot thread has stopped, so the records drained here are the run's last.
     ///
     /// # Errors
-    /// [`PersistError`] if a table failed to seal, or if the writer thread panicked or was never
-    /// joined — an unsealed Parquet file has no footer and no reader can open it.
+    /// [`PersistError`] of the first fault of an audit table, or if the writer thread panicked or
+    /// was never joined. A fault of a research table stops that table only, and is counted.
     pub async fn drain(self) -> Result<(), PersistError> {
-        self.0
+        self.writer
             .drain(
                 |payload| PersistError::WriterPanicked { payload },
                 PersistError::DrainInterrupted,
@@ -112,55 +153,41 @@ impl PersistHandle {
 
 struct WriterState {
     consumer: Consumer<PersistRecord>,
-    features: Option<TableWriter<FeatureRow>>,
-    trades: Option<TableWriter<TradeRow>>,
-    book_events: Option<TableWriter<BookEventRow>>,
-    klines: Option<TableWriter<KlineRow>>,
-    link_frames: Option<TableWriter<LinkFrameRow>>,
-    orders: Option<TableWriter<OrderRow>>,
-    fills: Option<TableWriter<FillRow>>,
-    incidents: TableWriter<IncidentRow>,
-    rotations: TableWriter<RotationRow>,
+    features: Table<FeatureRow>,
+    trades: Table<TradeRow>,
+    book_events: Table<BookEventRow>,
+    klines: Table<KlineRow>,
+    link_frames: Table<LinkFrameRow>,
+    orders: Table<OrderRow>,
+    fills: Table<FillRow>,
+    incidents: Table<IncidentRow>,
+    rotations: Table<RotationRow>,
     rotations_rx: mpsc::Receiver<RotationRow>,
     /// Rows of tables that the config does not name. The bank filters them first, so only a row
     /// sent past it counts. A warning, never fatal.
     unnamed_table_rows: u64,
     retention: Retention,
+    faults: Faults,
 }
 
 impl WriterState {
-    // SMELL: the first write error ends this thread, and nothing tells the hot thread, so the
-    // engine trades on while no order or fill reaches disk. A writer fault needs to stop quoting.
+    /// The root of the thread: each fault stops its own table as it happens, and the class of the
+    /// table decides here whether the run ends clean.
     fn run(mut self, drain: &AtomicBool) -> Result<(), PersistError> {
         crate::log::register_thread("persist");
         self.retention.announce();
-        let pump_result = self.pump(drain);
-        // Seal on the failure path too: a stopped pump still owes its healthy tables a footer.
-        let seal_result = self.seal_all();
-        let outcome = pump_result.and(seal_result);
-        if let Err(error) = &outcome {
-            crate::error!("persistence writer stopped: {error}");
-        }
-        outcome
+        self.pump(drain);
+        self.seal_all();
+        self.faults.into_result()
     }
 
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "a writer stamps and paces its own files, which are never engine state"
-    )]
-    fn pump(&mut self, drain: &AtomicBool) -> Result<(), PersistError> {
+    fn pump(&mut self, drain: &AtomicBool) {
         self.retention.prune();
-        let mut last_seal = Instant::now();
         loop {
-            let drained_any = self.consume_batch()?;
-            if last_seal.elapsed() >= SEAL_INTERVAL {
-                self.seal_all()?;
-                self.retention.prune();
-                last_seal = Instant::now();
-            }
+            let drained_any = self.consume_batch();
             if drain.load(Ordering::Acquire) {
-                self.consume_all()?;
-                return Ok(());
+                self.consume_all();
+                return;
             }
             if !drained_any {
                 std::thread::sleep(IDLE_SLEEP);
@@ -168,11 +195,11 @@ impl WriterState {
         }
     }
 
-    fn consume_batch(&mut self) -> Result<bool, PersistError> {
+    fn consume_batch(&mut self) -> bool {
         let mut count = 0;
         while count < MAX_POP_BATCH {
             let Ok(record) = self.consumer.pop() else { break };
-            self.route(record)?;
+            self.route(record);
             count += 1;
         }
         let mut rotations = 0;
@@ -180,39 +207,44 @@ impl WriterState {
             let Ok(row) = self.rotations_rx.try_recv() else {
                 break;
             };
-            self.rotations.push(row)?;
+            self.rotations.push(row, &mut self.faults);
             rotations += 1;
         }
-        Ok(count > 0 || rotations > 0)
+        count > 0 || rotations > 0
     }
 
-    fn consume_all(&mut self) -> Result<(), PersistError> {
+    fn consume_all(&mut self) {
         while let Ok(record) = self.consumer.pop() {
-            self.route(record)?;
+            self.route(record);
         }
         while let Ok(row) = self.rotations_rx.try_recv() {
-            self.rotations.push(row)?;
+            self.rotations.push(row, &mut self.faults);
         }
-        Ok(())
     }
 
-    fn route(&mut self, record: PersistRecord) -> Result<(), PersistError> {
+    fn route(&mut self, record: PersistRecord) {
+        let faults = &mut self.faults;
         let landed = match record {
-            PersistRecord::Feature(row) => push_row(&mut self.features, row)?,
-            PersistRecord::Trade(row) => push_row(&mut self.trades, row)?,
-            PersistRecord::BookEvent(row) => push_row(&mut self.book_events, row)?,
-            PersistRecord::Kline(row) => push_row(&mut self.klines, row)?,
-            PersistRecord::LinkFrame(row) => push_row(&mut self.link_frames, row)?,
-            PersistRecord::Order(row) => push_row(&mut self.orders, row)?,
-            PersistRecord::Fill(row) => push_row(&mut self.fills, row)?,
-            PersistRecord::Incident(row) => self.incidents.push(row).map(|()| true)?,
-            // It comes through the ring, so each record banked before it is already here.
-            PersistRecord::SealAll => return self.seal_all(),
+            PersistRecord::Feature(row) => self.features.push(row, faults),
+            PersistRecord::Trade(row) => self.trades.push(row, faults),
+            PersistRecord::BookEvent(row) => self.book_events.push(row, faults),
+            PersistRecord::Kline(row) => self.klines.push(row, faults),
+            PersistRecord::LinkFrame(row) => self.link_frames.push(row, faults),
+            PersistRecord::Order(row) => self.orders.push(row, faults),
+            PersistRecord::Fill(row) => self.fills.push(row, faults),
+            PersistRecord::Incident(row) => self.incidents.push(row, faults),
+            // It comes through the ring, so each record banked before it is already here. The fold
+            // sends one at each seal border of message time and at each park, and the prune of old
+            // files follows each one.
+            PersistRecord::SealAll => {
+                self.seal_all();
+                self.retention.prune();
+                return;
+            }
         };
         if let (false, Some(table)) = (landed, record.table()) {
             self.count_unnamed_table_row(table);
         }
-        Ok(())
     }
 
     /// Warns at each power of two, so a wrong config shows without a flood of lines.
@@ -228,66 +260,16 @@ impl WriterState {
         }
     }
 
-    fn seal_all(&mut self) -> Result<(), PersistError> {
-        let mut seal = SealOutcome::default();
-        seal.observe_table(&mut self.features);
-        seal.observe_table(&mut self.trades);
-        seal.observe_table(&mut self.book_events);
-        seal.observe_table(&mut self.klines);
-        seal.observe_table(&mut self.link_frames);
-        seal.observe_table(&mut self.orders);
-        seal.observe_table(&mut self.fills);
-        seal.observe(self.incidents.seal());
-        seal.observe(self.rotations.seal());
-        seal.into_result()
-    }
-}
-
-/// `false` when `strategy.tables` does not name the table, so it has no writer.
-fn push_row<R: TableRow>(
-    writer: &mut Option<TableWriter<R>>,
-    row: R,
-) -> Result<bool, PersistError> {
-    match writer {
-        Some(writer) => writer.push(row).map(|()| true),
-        None => Ok(false),
-    }
-}
-
-/// Seals each table, so a fault of one still leaves a footer on each other.
-#[derive(Default)]
-struct SealOutcome {
-    first_error: Option<PersistError>,
-    failures: u32,
-    tables: u32,
-}
-
-impl SealOutcome {
-    /// A table that the config does not name has no file, so it counts as no table.
-    fn observe_table<R: TableRow>(&mut self, writer: &mut Option<TableWriter<R>>) {
-        let Some(writer) = writer else { return };
-        self.observe(writer.seal());
-    }
-
-    fn observe(&mut self, result: Result<(), PersistError>) {
-        self.tables += 1;
-        let Err(error) = result else { return };
-        crate::error!("persist table seal failed: {error}");
-        self.failures += 1;
-        if self.first_error.is_none() {
-            self.first_error = Some(error);
-        }
-    }
-
-    fn into_result(self) -> Result<(), PersistError> {
-        let Some(error) = self.first_error else {
-            return Ok(());
-        };
-        crate::error!(
-            "persist seal: {} of {} tables failed; healthy tables kept their footers",
-            self.failures,
-            self.tables
-        );
-        Err(error)
+    fn seal_all(&mut self) {
+        let faults = &mut self.faults;
+        self.features.seal(faults);
+        self.trades.seal(faults);
+        self.book_events.seal(faults);
+        self.klines.seal(faults);
+        self.link_frames.seal(faults);
+        self.orders.seal(faults);
+        self.fills.seal(faults);
+        self.incidents.seal(faults);
+        self.rotations.seal(faults);
     }
 }

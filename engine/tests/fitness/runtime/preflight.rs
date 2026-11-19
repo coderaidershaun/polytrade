@@ -17,7 +17,7 @@ use engine::runtime::exposure::ExposureError;
 #[cfg(feature = "otlp")]
 use engine::runtime::otlp::OtlpError;
 use engine::runtime::registry::{BinanceLimits, Registry};
-use engine::runtime::{ExecutionLease, Preflight, StartError};
+use engine::runtime::{ExecutionLease, IdentityLocks, Preflight, StartError};
 use engine::venues::VenueError;
 use engine::venues::binance::exec::ProbeError;
 use engine::venues::binance::preflight::{ScaleError, SymbolScales};
@@ -42,7 +42,7 @@ const ENGINE: &str = "te-refusals";
 const ONE: i64 = 100_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Scales {
+pub(crate) enum Scales {
     Stamped { max_num_orders: u32 },
     Unstamped,
     Refused,
@@ -50,8 +50,8 @@ pub(super) enum Scales {
 
 /// The venue as a test sees it: no network, no key, no `.env`. A probe always refuses, because
 /// only a real probe can hand on credentials.
-pub(super) struct StandInVenue {
-    pub(super) scales: Scales,
+pub(crate) struct StandInVenue {
+    pub(crate) scales: Scales,
 }
 
 impl VenuePort for StandInVenue {
@@ -107,7 +107,7 @@ fn identity() -> RunIdentity {
 }
 
 /// A simulated Binance spot engine on one instrument, whose state folder is `state`.
-pub(super) fn sim_document(state: &Path, execution_extra: &str) -> String {
+pub(crate) fn sim_document(state: &Path, execution_extra: &str) -> String {
     let execution = execution_block_with("sim", &format!("{execution_extra}{SIM_BLOCK}"));
     with_state(
         config_with_execution_on(BINANCE_SPOT_SOURCE, &execution),
@@ -138,6 +138,12 @@ pub(super) fn snapshot(state: &Path) -> BTreeMap<String, Vec<u8>> {
         .collect()
 }
 
+/// The identity locks of a test sit beside its state folder, so tests that run at the same time
+/// never share one.
+pub(crate) fn locks_beside(state: &Path) -> IdentityLocks {
+    IdentityLocks::in_folder(state.with_file_name("locks"))
+}
+
 /// Runs preflight on `document` and holds what each refusal must leave: no new file and no changed
 /// byte in the state folder, so the run nonce is unspent, and the class of a refused start.
 fn refusal(document: &str, scales: Scales, state: &Path) -> StartError {
@@ -147,6 +153,7 @@ fn refusal(document: &str, scales: Scales, state: &Path) -> StartError {
         identity: &identity(),
         config: &config,
         strategy: &Idle,
+        locks: &locks_beside(state),
     }
     .run_with(&mut StandInVenue { scales });
     let Err(refused) = refused else {
@@ -178,8 +185,9 @@ fn the_nonce_file(state: &Path) -> std::path::PathBuf {
 }
 
 /// CONTRACT: each refusal of table (e) that a test can reach without a key comes before any thread
-/// and before the lease, and the held lease, the last check, leaves the nonce file as it was. The
-/// thread half of the census is the scan `preflight_names_no_thread_but_its_one_runtime`.
+/// and before the run nonce, and a held identity lock, the last check before the nonce, leaves the
+/// nonce file as it was, in each mode. The thread half of the census is the scan
+/// `preflight_names_no_thread_but_its_one_runtime`.
 #[test]
 fn each_refusal_starts_no_thread_and_spends_no_nonce() {
     let root = TempDir::new("preflight-refusals");
@@ -187,15 +195,18 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
     let stamped = Scales::Stamped {
         max_num_orders: 200,
     };
-    let held = ExecutionLease::acquire(&state, TeTag::of(&identity()), &sim::lease_namespace())
-        .expect("the test takes the lease of this engine identity");
+    ExecutionLease::acquire(&state, TeTag::of(&identity()), &sim::lease_namespace())
+        .expect("the test spends the first nonce of this engine identity");
+    let held = locks_beside(&state)
+        .take(&identity())
+        .expect("the test takes the identity lock of this engine");
     let nonce_before = fs::read(the_nonce_file(&state)).expect("the nonce file reads");
 
-    // Config, registry, core id, scale read, order capacity and exposure pass, and the lease, the
-    // last check, is refused.
+    // Config, registry, core id, scale read, order capacity and exposure pass, and the identity
+    // lock, the last check before the nonce, is refused.
     let lease = refusal(&sim_document(&state, ""), stamped, &state);
     let StartError::ExecutionIdentityInUse { path } = &lease else {
-        panic!("a held lease refuses with its own variant, got {lease}");
+        panic!("a held identity lock refuses with its own variant, got {lease}");
     };
     assert!(
         lease.to_string().contains(&path.display().to_string()),
@@ -206,6 +217,23 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
         nonce_before
     );
     drop(held);
+
+    // An engine with execution off holds its identity lock too, so a second process of one
+    // identity is refused before any thread whatever its mode. Two of them would share one tape
+    // folder, where each start removes the unfinished files that the other is writing.
+    let off_holder = locks_beside(&state)
+        .take(&identity())
+        .expect("the test takes the identity lock of this engine");
+    let off_document = with_state(
+        config_with_execution_on(BINANCE_SPOT_SOURCE, &execution_block_with("off", "")),
+        &state,
+    );
+    let off = refusal(&off_document, stamped, &state);
+    assert!(
+        matches!(off, StartError::ExecutionIdentityInUse { .. }),
+        "a held lock refuses an engine with execution off: {off}"
+    );
+    drop(off_holder);
 
     // E3: a hot core this host does not have.
     let core = refusal(
@@ -558,7 +586,7 @@ fn each_refusal_starts_no_thread_and_spends_no_nonce() {
     fs::remove_dir(&nonce).expect("the test removes the folder");
     fs::write(&nonce, last_nonce).expect("the test restores the nonce file");
 
-    // E1 and E2: the nine documents that config or the registry refuses, by the field named.
+    // E1 and E2: each document that config or the registry refuses, by the field named.
     for (case, document, is_expected) in refused_documents() {
         let error = match Config::<NoParams>::from_yaml(&document) {
             Err(error) => error,
@@ -662,8 +690,9 @@ proptest! {
 
 type RefusedDocument = (&'static str, String, fn(&ConfigError) -> bool);
 
-/// The nine documents of the old config guard, each with the field that must name its refusal.
-fn refused_documents() -> [RefusedDocument; 9] {
+/// The documents of the old config guard and the zero of each seal key, each with the field that
+/// must name its refusal.
+fn refused_documents() -> [RefusedDocument; 11] {
     let missing_spin = "engine:
   hot_core_id: 0
 queues:
@@ -781,6 +810,26 @@ queues:
             |error: &ConfigError| {
                 matches!(error, ConfigError::Invalid { field, value, .. }
                     if *field == "persistence.retention_hours" && value.as_ref() == "87601")
+            },
+        ),
+        (
+            "seal_try_limit of zero",
+            config_with_source(BINANCE_PERP_SOURCE)
+                .replace("  dir: ./data\n", "  dir: ./data\n  seal_try_limit: 0\n"),
+            |error: &ConfigError| {
+                matches!(error, ConfigError::Invalid { field, value, .. }
+                    if *field == "persistence.seal_try_limit" && value.as_ref() == "0")
+            },
+        ),
+        (
+            "seal_interval_spins of zero",
+            config_with_source(BINANCE_PERP_SOURCE).replace(
+                "  dir: ./data\n",
+                "  dir: ./data\n  seal_interval_spins: 0\n",
+            ),
+            |error: &ConfigError| {
+                matches!(error, ConfigError::Invalid { field, value, .. }
+                    if *field == "persistence.seal_interval_spins" && value.as_ref() == "0")
             },
         ),
     ]

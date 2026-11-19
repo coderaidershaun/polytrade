@@ -4,8 +4,8 @@
 use std::net::SocketAddr;
 
 use crate::link::{
-    Envelope, FrameGuard, LINK_MAX_DATAGRAM, Lifecycle, LinkBody, LinkDatagram, LinkDecodeError,
-    LinkHash, LinkIdentity, SequenceGate, Subscribe, TopicId, TopicSet,
+    Envelope, FrameGuard, LINK_MAX_DATAGRAM, Lifecycle, LinkBody, LinkCredential, LinkDatagram,
+    LinkDecodeError, LinkHash, LinkIdentity, SequenceGate, Subscribe, TopicId, TopicSet,
 };
 use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, LocalTs, VenueTs};
@@ -29,13 +29,14 @@ const REPORT_INTERVAL: DurationUs = DurationUs::from_secs(60);
 /// Enumerated rather than [`TopicSet::ALL`]: "all" means every topic the sender offers, which would
 /// have an engine unicast strategy payload frames at a process that declares no link fields and can
 /// only count them as rejects.
-const WANTED_TOPICS: [TopicId; 6] = [
+const WANTED_TOPICS: [TopicId; 7] = [
     TopicId::BOOKS,
     TopicId::EVENTS,
     TopicId::CATALOG_INSTRUMENTS,
     TopicId::CATALOG_FEATURES,
     TopicId::LIFECYCLE,
     TopicId::LATENCY,
+    TopicId::HISTORY,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -63,6 +64,8 @@ pub enum LinkSessionError {
 pub enum Delivery {
     Book(UiBookSnapshot),
     Event(UiEvent),
+    /// An event that the engine recorded before this session came, sent once and oldest first.
+    History(UiEvent),
     Catalog(UiCatalog),
     Latency(LatencyReport),
 }
@@ -81,6 +84,7 @@ struct DeliveredCounts {
     catalog: u64,
     lifecycle: u64,
     latency: u64,
+    history: u64,
 }
 
 /// One trading engine at a time. Everything about that engine (the sequence gate, the catalog, the
@@ -122,8 +126,7 @@ impl LinkSession {
         if target.peers.is_empty() {
             return Err(LinkSessionError::NoPeers);
         }
-        let token_hash = target.token_hash;
-        let strategy_hash = LinkHash::of_name(target.strategy.as_str());
+        let credential = LinkCredential::of_token_hash(target.token_hash, target.strategy.as_str());
         // A workstation is not a trading engine, so it has no te-id. The boot stamp and the nonce
         // together keep two workstations, or one that restarts, from presenting to the engine as
         // one sender.
@@ -133,19 +136,10 @@ impl LinkSession {
             active: 0,
             session: 0,
             strategy_id: target.strategy,
-            identity: LinkIdentity {
-                token_hash,
-                strategy_hash,
-                sender_te_hash: LinkHash::of_name(&sender),
-                boot_ts_us: now.to_peer(),
-            },
-            guard: FrameGuard {
-                token_hash,
-                strategy_hash,
-                // The workstation declares no link fields, so a strategy payload frame reaching it
-                // is another engine's traffic and this rejects it.
-                schema_hash: LinkHash::of_fields(&[]),
-            },
+            identity: credential.identity(LinkHash::of_name(&sender), now.to_peer()),
+            // The workstation declares no link fields, so a strategy payload frame reaching it is
+            // another engine's traffic and this rejects it.
+            guard: credential.guard(LinkHash::of_fields(&[])),
             topics: TopicSet::new(&WANTED_TOPICS).expect("the wanted topic list is a code literal"),
             gate: SequenceGate::new(),
             run_gate: RemoteRunGate::default(),
@@ -219,6 +213,10 @@ impl LinkSession {
             LinkBody::Latency(report) => {
                 self.delivered.latency += 1;
                 Some(Delivery::Latency(report))
+            }
+            LinkBody::History(event) => {
+                self.delivered.history += 1;
+                Some(Delivery::History(event))
             }
             LinkBody::Subscribe(_) | LinkBody::Payload(_) => {
                 self.rejected.foreign += 1;
@@ -375,13 +373,14 @@ impl LinkSession {
         let rejected = &self.rejected;
         let delivered = &self.delivered;
         info!(
-            "link session {} delivered[books={} events={} catalog={} lifecycle={} latency={}] rejected[decode={} gated={} foreign={}] gate{:?}",
+            "link session {} delivered[books={} events={} catalog={} lifecycle={} latency={} history={}] rejected[decode={} gated={} foreign={}] gate{:?}",
             self.peer(),
             delivered.books,
             delivered.events,
             delivered.catalog,
             delivered.lifecycle,
             delivered.latency,
+            delivered.history,
             rejected.decode,
             rejected.gated,
             rejected.foreign,

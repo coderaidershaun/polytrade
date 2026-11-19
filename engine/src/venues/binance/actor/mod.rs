@@ -21,7 +21,7 @@ use crate::msg::run_state::RunState;
 use crate::msg::time::{EngineClock, LocalTs};
 use crate::runtime::config::{BinanceMarket, KlineInterval};
 use crate::runtime::registry::{ConnectionCategory, InstrumentRow, ProducerGroup};
-use crate::runtime::shutdown::{FatalSignal, RunStateCell, TaskHandle};
+use crate::runtime::shutdown::{DesiredReader, FatalSignal, TaskHandle};
 use crate::venues::edge::backoff::BackoffCaps;
 use crate::venues::edge::fault::MarketDataError;
 use crate::venues::edge::lane::{Flow, Lane, LaneSpec, SessionEnd, run_lane};
@@ -57,7 +57,7 @@ pub struct BinanceAdapterContext {
     pub clock: EngineClock,
     pub fatal: FatalSignal,
     // IDLE = don't connect, drop socket. QueueProducer stays alive -> no ring re-plumbing.
-    pub run_state: RunStateCell,
+    pub run_state: DesiredReader,
     pub backoff: BackoffCaps,
     pub tap_heartbeat: Duration,
     /// The venue's cool-off window, shared with the signed order client against one per-IP budget.
@@ -86,7 +86,7 @@ struct Actor {
     category: StreamCategory,
     clock: EngineClock,
     fatal: FatalSignal,
-    run_state: RunStateCell,
+    run_state: DesiredReader,
     backoff: BackoffCaps,
     producer: QueueProducer,
     rest: RestClient,

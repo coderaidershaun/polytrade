@@ -215,10 +215,13 @@ fn two_threaded_runs_give_equal_tables_and_drain_clean() {
         let rows_b = table_rows(dir_b.path(), expect.name);
         assert!(!rows_a.is_empty(), "{} produced rows", expect.name);
         assert_eq!(
-            rows_a, rows_b,
+            rows_a,
+            rows_b,
             "{} row contents differ between two runs of the same input sequence, so the run is \
-             reading something the tape does not carry",
-            expect.name
+             reading something the tape does not carry\nrun A:\n{}\nrun B:\n{}",
+            expect.name,
+            tape_listing(dir_a.path()),
+            tape_listing(dir_b.path())
         );
     }
 }
@@ -279,7 +282,7 @@ fn run_e2e(dir_root: &Path) -> RunOutcome {
         asset_symbols: Vec::new(),
     };
     let (rotations_tx, rotations_rx) = mpsc::channel::<RotationRow>(64);
-    let persistence = PersistWriter::spawn(
+    let persistence = PersistWriter::on_disk().spawn(
         PersistConfig {
             dir: dir_root.to_path_buf(),
             tables: RecordedTables::new(&ALL_TABLES),
@@ -390,4 +393,36 @@ fn assert_footer(footer: &[(String, Option<String>)]) {
             .contains("btcusdt"),
         "instrument dictionary carries the venue symbol"
     );
+}
+
+/// Each entry below `dir`, with its size, and each folder that could not be read, so a run that
+/// reads no rows shows whether its files are missing, unfinished, or unreadable.
+fn tape_listing(dir: &Path) -> String {
+    let mut lines = Vec::new();
+    list_into(dir, &mut lines);
+    lines.join("\n")
+}
+
+fn list_into(dir: &Path, lines: &mut Vec<String>) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            lines.push(format!("  unreadable {}: {error}", dir.display()));
+            return;
+        }
+    };
+    for entry in entries {
+        match entry {
+            Ok(entry) => {
+                let path = entry.path();
+                if path.is_dir() {
+                    list_into(&path, lines);
+                } else {
+                    let size = entry.metadata().map_or(0, |metadata| metadata.len());
+                    lines.push(format!("  {} ({size} bytes)", path.display()));
+                }
+            }
+            Err(error) => lines.push(format!("  unreadable entry in {}: {error}", dir.display())),
+        }
+    }
 }
