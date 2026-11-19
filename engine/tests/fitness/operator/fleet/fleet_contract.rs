@@ -69,6 +69,33 @@ async fn engine_started_elsewhere_is_listed_running_and_start_is_refused() {
     );
 }
 
+/// CONTRACT: the stop of the exit closes the fleet to starts. A stop waits for its engines without
+/// the lock of the fleet, so this guard alone keeps an engine from starting while the server shuts
+/// down and outliving it.
+#[tokio::test]
+async fn a_start_after_stop_all_is_refused() {
+    let tree = EngineTree::new("fleet-closed");
+    let witness = tree.root().join("spawned");
+    tree.engine(
+        "strat-closed",
+        "te-off",
+        MODE_OFF,
+        &marking_script(&witness),
+    );
+    let mut fleet = tree.fleet(FAST);
+
+    assert!(fleet.stop_all().await.is_empty(), "nothing was running");
+    let error = fleet
+        .start(&identity("strat-closed", "te-off"))
+        .await
+        .expect_err("the fleet is closed");
+    assert!(matches!(error, FleetError::ShuttingDown), "{error:?}");
+    assert!(
+        !tree.console_log("strat-closed-te-off").exists(),
+        "a refused start opens no console log"
+    );
+}
+
 /// One client over an in-memory pipe, so two of them can call the same server at once.
 struct Session {
     client: RunningService<RoleClient, ()>,

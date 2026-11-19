@@ -4,8 +4,8 @@
 use std::net::SocketAddr;
 
 use crate::link::{
-    Envelope, FrameGuard, LINK_MAX_DATAGRAM, Lifecycle, LinkBody, LinkDatagram, LinkDecodeError,
-    LinkHash, LinkIdentity, SequenceGate, Subscribe, TopicId, TopicSet,
+    Envelope, FrameGuard, LINK_MAX_DATAGRAM, Lifecycle, LinkBody, LinkCredential, LinkDatagram,
+    LinkDecodeError, LinkHash, LinkIdentity, SequenceGate, Subscribe, TopicId, TopicSet,
 };
 use crate::msg::run_state::RunState;
 use crate::msg::time::{DurationUs, LocalTs, VenueTs};
@@ -126,8 +126,7 @@ impl LinkSession {
         if target.peers.is_empty() {
             return Err(LinkSessionError::NoPeers);
         }
-        let token_hash = target.token_hash;
-        let strategy_hash = LinkHash::of_name(target.strategy.as_str());
+        let credential = LinkCredential::of_token_hash(target.token_hash, target.strategy.as_str());
         // A workstation is not a trading engine, so it has no te-id. The boot stamp and the nonce
         // together keep two workstations, or one that restarts, from presenting to the engine as
         // one sender.
@@ -137,19 +136,10 @@ impl LinkSession {
             active: 0,
             session: 0,
             strategy_id: target.strategy,
-            identity: LinkIdentity {
-                token_hash,
-                strategy_hash,
-                sender_te_hash: LinkHash::of_name(&sender),
-                boot_ts_us: now.to_peer(),
-            },
-            guard: FrameGuard {
-                token_hash,
-                strategy_hash,
-                // The workstation declares no link fields, so a strategy payload frame reaching it
-                // is another engine's traffic and this rejects it.
-                schema_hash: LinkHash::of_fields(&[]),
-            },
+            identity: credential.identity(LinkHash::of_name(&sender), now.to_peer()),
+            // The workstation declares no link fields, so a strategy payload frame reaching it is
+            // another engine's traffic and this rejects it.
+            guard: credential.guard(LinkHash::of_fields(&[])),
             topics: TopicSet::new(&WANTED_TOPICS).expect("the wanted topic list is a code literal"),
             gate: SequenceGate::new(),
             run_gate: RemoteRunGate::default(),

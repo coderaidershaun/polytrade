@@ -239,7 +239,7 @@ fn parse_reply(raw: &[u8]) -> Reply {
     }
 }
 
-pub(super) fn get(port: u16, path: &str) -> Reply {
+fn get(port: u16, path: &str) -> Reply {
     exchange(port, "GET", path, &[("Host", &host(port))])
 }
 

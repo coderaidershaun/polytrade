@@ -11,15 +11,9 @@ use super::reply::Stopped;
 use super::supervisor::{Fleet, POLL_INTERVAL, StopOutcome};
 
 impl Fleet {
-    /// # Errors
-    /// [`FleetError::NotRunning`], [`FleetError::Stopping`], or the signal, kill and wait failures.
-    pub async fn stop(&mut self, identity: &RunIdentity) -> Result<Stopped, FleetError> {
-        let stops = self.begin_stops(vec![identity.clone()]);
-        let settled = stops.settle().await;
-        stop_result(identity, self.finish_stops(settled))
-    }
-
-    /// Stops every running child under one shared deadline, and refuses every later start.
+    /// Stops every running child under one shared deadline, and refuses every later start. It
+    /// holds the fleet through the whole wait, so it is the stop of the exit, which comes after the
+    /// last session has ended.
     pub async fn stop_all(&mut self) -> Vec<StopOutcome> {
         let stops = self.begin_stop_all();
         let settled = stops.settle().await;
@@ -27,7 +21,7 @@ impl Fleet {
     }
 
     /// Closes the fleet to starts, and signals every running child.
-    pub(super) fn begin_stop_all(&mut self) -> StopBatch {
+    fn begin_stop_all(&mut self) -> StopBatch {
         self.is_closed = true;
         let mut running: Vec<RunIdentity> = self
             .children
@@ -39,7 +33,7 @@ impl Fleet {
         self.begin_stops(running)
     }
 
-    pub(super) fn finish_all(&mut self, settled: SettledStops) -> Vec<StopOutcome> {
+    fn finish_all(&mut self, settled: SettledStops) -> Vec<StopOutcome> {
         self.finish_stops(settled)
             .into_iter()
             .filter(|outcome| !matches!(outcome.result, Err(FleetError::NotRunning { .. })))

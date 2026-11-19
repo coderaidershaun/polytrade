@@ -37,12 +37,6 @@ impl Listener for TcpListener {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AcceptTries(NonZeroU32);
 
-impl AcceptTries {
-    pub const fn new(tries: NonZeroU32) -> Self {
-        Self(tries)
-    }
-}
-
 impl Default for AcceptTries {
     fn default() -> Self {
         Self(NonZeroU32::MIN.saturating_add(2))
