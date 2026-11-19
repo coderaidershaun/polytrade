@@ -71,11 +71,6 @@ impl SenderCounts {
             .map_or_else(SenderCount::default, |row| row.count)
     }
 
-    /// The counts of each sender that came after the table was full, together.
-    pub fn others(&self) -> SenderCount {
-        self.others
-    }
-
     /// Each sender with a row, then `None` for the others once they lost a frame.
     pub fn rows(&self) -> impl Iterator<Item = (Option<SocketAddr>, SenderCount)> + '_ {
         let senders = self
