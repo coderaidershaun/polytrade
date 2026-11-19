@@ -2,14 +2,15 @@
 //! in for the whole event history, so each event and each intensity query costs constant time.
 
 use super::HawkesEvents;
+use crate::hot::quant::options::exp;
 use crate::msg::time::LocalTs;
 
 /// Exponential kernel parameters, every rate per second.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HawkesParams {
-    pub mu: f64,
-    pub alpha: f64,
-    pub beta: f64,
+    mu: f64,
+    alpha: f64,
+    beta: f64,
 }
 
 impl HawkesParams {
@@ -30,6 +31,21 @@ impl HawkesParams {
     }
 
     #[inline]
+    pub fn mu_per_sec(&self) -> f64 {
+        self.mu
+    }
+
+    #[inline]
+    pub fn alpha_per_sec(&self) -> f64 {
+        self.alpha
+    }
+
+    #[inline]
+    pub fn beta_per_sec(&self) -> f64 {
+        self.beta
+    }
+
+    #[inline]
     pub fn branching_ratio(&self) -> f64 {
         self.alpha / self.beta
     }
@@ -37,6 +53,11 @@ impl HawkesParams {
     #[inline]
     pub fn half_life_secs(&self) -> f64 {
         core::f64::consts::LN_2 / self.beta
+    }
+
+    #[inline]
+    pub fn is_stationary(&self) -> bool {
+        self.branching_ratio() < 1.0
     }
 }
 
@@ -57,10 +78,6 @@ impl UnivariateHawkes {
         }
     }
 
-    pub fn set_params(&mut self, params: HawkesParams) {
-        self.params = params;
-    }
-
     /// Walks the whole window, so it runs once per refit and never once per event.
     pub fn reseed_from(&mut self, events: &HawkesEvents) {
         let Some(last_ts) = events.last_ts() else {
@@ -78,15 +95,19 @@ impl UnivariateHawkes {
         self.last_ts = Some(last_ts);
     }
 
+    /// A stamp before the last one counts at the last one, as the event window clamps it, so the
+    /// sum never decays twice over the same span.
     #[inline]
     pub fn on_event(&mut self, ts: LocalTs) {
-        self.excitation = match self.last_ts {
-            Some(last) => {
-                (-self.params.beta * ts.diff(last).to_secs().max(0.0)).exp() * self.excitation + 1.0
-            }
-            None => 1.0,
+        let Some(last) = self.last_ts else {
+            self.excitation = 1.0;
+            self.last_ts = Some(ts);
+            return;
         };
-        self.last_ts = Some(ts);
+        let kept = ts.max(last);
+        self.excitation =
+            exp(-self.params.beta * kept.diff(last).to_secs()) * self.excitation + 1.0;
+        self.last_ts = Some(kept);
     }
 
     #[inline]

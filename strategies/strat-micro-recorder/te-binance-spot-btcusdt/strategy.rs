@@ -3,7 +3,7 @@
 
 use engine::hot::quant::hawkes::HawkesChoice;
 use engine::hot::quant::liquidity::KylesLambdaSpec;
-use engine::hot::quant::micro::{PriceBand, ResilienceSample, banded_imbalance};
+use engine::hot::quant::micro::{BookSides, PriceBand, ResilienceSample};
 use engine::hot::quant::pricing::{GueantParams, Objective};
 use engine::hot::quant::toxicity::{MarkoutSide, vpin};
 use engine::hot::quant::volatility::Returns;
@@ -46,10 +46,10 @@ const KYLES_LAMBDA: KylesLambdaSpec = KylesLambdaSpec {
     min_sign_fraction: 0.2,
 };
 
-const HAWKES: HawkesChoice = HawkesChoice {
-    max_events: HAWKES_MAX_EVENTS,
-    min_events: 100,
-    refit_arrivals: HAWKES_REFIT_ARRIVALS,
+const HAWKES: HawkesChoice = match HawkesChoice::new(HAWKES_MAX_EVENTS, 100, HAWKES_REFIT_ARRIVALS)
+{
+    Ok(choice) => choice,
+    Err(_) => panic!("the recorder's hawkes choice breaks a rule of HawkesChoice::new"),
 };
 
 const HAWKES_MAX_EVENTS: usize = 1024;
@@ -197,8 +197,7 @@ impl Strategy for MicroRecorder {
         if event.interval != model.interval {
             return;
         }
-        model.closes.push(event.close.to_f64());
-        model.is_dirty = true;
+        model.egarch.push_close(event.close.to_f64());
     }
 
     fn on_trade(&mut self, ctx: &mut StrategyCtx<'_>, event: &TradeEvent) {
@@ -218,14 +217,41 @@ impl Strategy for MicroRecorder {
         if !chunk.is_last_chunk {
             return;
         }
-        let Some(model) = self.recorded_mut(chunk.instrument) else {
+        let features = self.features;
+        let instrument = chunk.instrument;
+        let Some(model) = self.recorded_mut(instrument) else {
             return;
         };
-        if ctx.book(chunk.instrument).state() != BookState::Valid {
+        if ctx.book(instrument).state() != BookState::Valid {
             return;
         }
-        let mid = ctx.tracker(chunk.instrument).mid();
+        let mid = ctx.tracker(instrument).mid();
         model.feed_markout_mid(ctx.now().as_local(), mid);
+
+        let (Some(features), Some(feed)) = (features, model.kyle.as_mut()) else {
+            return;
+        };
+        let Some(estimate) = feed.on_mid(mid) else {
+            return;
+        };
+        ctx.emit(
+            features.kyle_lambda_per_notional,
+            instrument,
+            estimate.lambda,
+        );
+        ctx.emit(features.kyle_intercept, instrument, estimate.intercept);
+        if let Some(in_bps) = mid.and_then(|mid| estimate.per_unit(mid / BPS)) {
+            ctx.emit(
+                features.kyle_lambda_bps_per_notional,
+                instrument,
+                in_bps.lambda,
+            );
+            ctx.emit_present(
+                features.kyle_one_bp_notional,
+                instrument,
+                in_bps.one_unit_flow,
+            );
+        }
     }
 
     fn on_book_reset(&mut self, _ctx: &mut StrategyCtx<'_>, instrument: InstrumentId) {
@@ -278,28 +304,7 @@ impl Strategy for MicroRecorder {
         };
         let flow = (bar.buy_notional - bar.sell_notional) as f64 / FIXED_SCALE as f64;
         let mid_now = ctx.tracker(instrument).mid();
-        let Some(estimate) = feed.on_bar(flow, bar.trade_arrivals, mid_now) else {
-            return;
-        };
-        ctx.emit(
-            features.kyle_lambda_per_notional,
-            instrument,
-            estimate.lambda,
-        );
-        ctx.emit(features.kyle_intercept, instrument, estimate.intercept);
-        if let Some(mid) = mid_now {
-            let lambda_bps = estimate.lambda / mid * BPS;
-            ctx.emit(
-                features.kyle_lambda_bps_per_notional,
-                instrument,
-                lambda_bps,
-            );
-            ctx.emit_present(
-                features.kyle_one_bp_notional,
-                instrument,
-                Some(1.0 / lambda_bps).filter(|flow| flow.is_finite() && *flow > 0.0),
-            );
-        }
+        feed.on_bar(flow, bar.trade_arrivals, mid_now);
     }
 }
 
@@ -365,11 +370,9 @@ fn record_spin(
     }
     let intensity = model
         .intensity
-        .refit(ctx.tracker(instrument).intensity(), now);
-    model.refresh(ctx, instrument);
-    let egarch_vol = model
-        .estimate
-        .map(|estimate| estimate.conditional_vol_per_sec);
+        .estimate(ctx.tracker(instrument).intensity(), now);
+    let egarch = model.refresh(ctx, instrument);
+    let egarch_vol = egarch.map(|estimate| estimate.forecast_vol_per_sec);
     let realised_st = gated_realised_vol(&model.spin_mids, Returns::Log, cfg.spin_interval);
     ctx.emit_present(features.mid, instrument, mid);
     ctx.emit_present(features.microprice, instrument, microprice);
@@ -379,11 +382,11 @@ fn record_spin(
         .then(|| book.mid())
         .flatten()
         .map(|book_mid| {
-            banded_imbalance(
-                book.bids(),
-                book.asks(),
-                PriceBand::around(book_mid, OBI_BAND_HALF_WIDTH_BPS),
-            )
+            let sides = BookSides {
+                bids: book.bids(),
+                asks: book.asks(),
+            };
+            sides.banded_imbalance(PriceBand::around(book_mid, OBI_BAND_HALF_WIDTH_BPS))
         });
     ctx.emit_present(features.obi_half_bp, instrument, obi);
     ctx.emit_present(features.egarch_vol_lt, instrument, egarch_vol);
@@ -393,15 +396,15 @@ fn record_spin(
         instrument,
         realised_st.map(|vol| vol * BPS),
     );
-    if let Some(estimate) = model.estimate {
+    if let Some(estimate) = egarch {
         ctx.emit(features.egarch_omega, instrument, estimate.omega);
         ctx.emit(features.egarch_gamma, instrument, estimate.gamma);
         ctx.emit(features.egarch_theta, instrument, estimate.theta);
         ctx.emit(features.egarch_beta, instrument, estimate.beta);
-        ctx.emit(
+        ctx.emit_present(
             features.egarch_uncond_vol_lt,
             instrument,
-            estimate.unconditional_vol_per_sec,
+            estimate.long_run_log_vol_per_sec,
         );
     }
     let ewma_vol = ctx.ewma_vol(instrument);

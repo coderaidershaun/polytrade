@@ -1,6 +1,8 @@
 //! Quant calculator pins: leaf numeric correctness for the estimators feeding the research tape.
 //! One module per calculator, each named for the concept rather than the source path.
 
+use core::num::NonZeroUsize;
+
 use engine::hot::quant::hawkes::{HawkesEvents, HawkesParams};
 use engine::msg::time::{DurationUs, LocalTs};
 
@@ -60,7 +62,11 @@ pub(crate) struct ExpSimulation {
 
 impl ExpSimulation {
     pub(crate) fn run(&self) -> Vec<LocalTs> {
-        let HawkesParams { mu, alpha, beta } = self.params;
+        let (mu, alpha, beta) = (
+            self.params.mu_per_sec(),
+            self.params.alpha_per_sec(),
+            self.params.beta_per_sec(),
+        );
         let horizon = self.horizon.to_secs();
         let mut generator = Lcg(self.seed);
         let mut times = Vec::new();
@@ -99,7 +105,7 @@ fn ts(secs: f64) -> LocalTs {
 const START: LocalTs = LocalTs::from_micros(0);
 
 fn window(stamps: &[LocalTs]) -> HawkesEvents {
-    let mut events = HawkesEvents::new(32_768);
+    let mut events = HawkesEvents::new(NonZeroUsize::new(32_768).expect("a window holds events"));
     for &stamp in stamps {
         events.push(stamp);
     }
@@ -108,6 +114,12 @@ fn window(stamps: &[LocalTs]) -> HawkesEvents {
 
 /// The exponential path the fitter is scored on: truth, its event window, and the fit time.
 fn exponential_fixture() -> (HawkesParams, HawkesEvents, LocalTs) {
+    let (truth, path, now) = exponential_path();
+    (truth, window(&path), now)
+}
+
+/// The stamps of that path, for a reader that takes one arrival at a time.
+fn exponential_path() -> (HawkesParams, Vec<LocalTs>, LocalTs) {
     let truth = HawkesParams::new(0.5, 0.8, 2.0);
     let horizon = DurationUs::from_secs(6000);
     let path = ExpSimulation {
@@ -119,5 +131,5 @@ fn exponential_fixture() -> (HawkesParams, HawkesEvents, LocalTs) {
     }
     .run();
     assert!(path.len() > 3000, "thin path: {} events", path.len());
-    (truth, window(&path), START + horizon)
+    (truth, path, START + horizon)
 }

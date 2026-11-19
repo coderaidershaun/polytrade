@@ -11,8 +11,8 @@ use volume::VolumeClock;
 
 use crate::hot::book::Book;
 use crate::hot::digest::digest_fields;
-use crate::hot::quant::intensity::IntensityCounts;
-use crate::hot::quant::micro;
+use crate::hot::quant::intensity::{IntensityCounts, IntensityShape, TopOfBook, TradePrint};
+use crate::hot::quant::micro::{self, BookSides, Touch};
 use crate::hot::series::FastQueue;
 use crate::log::hot_warn;
 use crate::msg::ids::{Price, Side};
@@ -150,7 +150,12 @@ impl MicroTracker {
             intensity: spec.intensity.as_ref().map(|s| {
                 let tick = tick_size
                     .expect("intensity configured but instrument tick_size unset — startup gate must refuse");
-                IntensityCounts::new(s, tick)
+                IntensityCounts::new(IntensityShape {
+                    tick,
+                    max_depth_ticks: s.max_depth_ticks,
+                    half_life_secs: s.half_life_secs,
+                    min_events: s.min_events,
+                })
             }),
             latest: Latest::default(),
             last_trade: None,
@@ -169,9 +174,18 @@ impl MicroTracker {
         let closed = self.cut_volume_bars(event);
         // The trade handler never mutates the book, so `latest` is the pre-trade top of book the
         // reach histogram anchors against.
-        let (best_bid, best_ask) = (self.latest.best_bid, self.latest.best_ask);
+        let top = TopOfBook {
+            best_bid: self.latest.best_bid,
+            best_ask: self.latest.best_ask,
+        };
         if let Some(intensity) = self.intensity.as_mut() {
-            intensity.on_trade(event, received_ts_us, best_bid, best_ask);
+            let print = TradePrint {
+                side: event.side,
+                price: event.price,
+                exchange_ts_us: event.exchange_ts_us,
+                received_ts_us,
+            };
+            intensity.on_print(print, top);
         }
         closed
     }
@@ -202,8 +216,9 @@ impl MicroTracker {
     /// `None` on a one-sided book. Callers feeding EWMA vol must gate on `Some`, not the stale slot.
     pub fn on_book(&mut self, book: &Book) -> Option<f64> {
         let (bid, ask) = book.best_bid().zip(book.best_ask())?;
-        let microprice = micro::microprice(bid, ask);
-        let spread = micro::spread(bid.price, ask.price);
+        let touch = Touch { bid, ask };
+        let microprice = touch.microprice();
+        let spread = touch.spread();
         self.latest.microprice = Some(microprice);
         self.latest.spread = Some(spread);
         self.latest.best_bid = Some(bid.price);
@@ -212,7 +227,11 @@ impl MicroTracker {
             series.push(microprice);
         }
         if let Some(stream) = self.imbalance.as_mut() {
-            let value = micro::imbalance(book.bids(), book.asks(), stream.top_n);
+            let sides = BookSides {
+                bids: book.bids(),
+                asks: book.asks(),
+            };
+            let value = sides.imbalance(stream.top_n);
             stream.series.push(value);
             self.latest.imbalance = Some(value);
         }

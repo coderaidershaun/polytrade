@@ -1,17 +1,20 @@
-//! Realised volatility: population stdev of consecutive returns, scaled /sec for cross-venue compare.
+//! Realised volatility per second, so that venues that sample at other intervals compare in one
+//! unit.
 
 use crate::msg::time::DurationUs;
 
-/// `Log`: scale-free for prices. `Absolute`: for bounded 0..1 probability (log explodes at bounds).
+/// `Log` for prices, because a log return has no scale. `Absolute` for a probability between 0 and
+/// 1, where a log return explodes near the bounds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Returns {
     Log,
     Absolute,
 }
 
-/// Volatility /sec: pop stdev over consecutive returns, divided by sqrt(interval_secs).
-/// Non-finite closes dropped; dropped close pairs neighbours into return spanning 2×interval.
-/// Returns `None` on <2 usable closes or non-positive interval.
+/// The root mean square of the returns between consecutive closes, divided by the root of the
+/// interval in seconds. No mean is subtracted, so a steady trend counts as volatility. A close that
+/// is not finite or not positive drops out, and its neighbours pair into one return that spans two
+/// intervals. `None` with fewer than two usable closes, or an interval that is not positive.
 pub fn realised_vol_per_sec(
     closes: impl Iterator<Item = f64>,
     returns: Returns,
@@ -22,19 +25,15 @@ pub fn realised_vol_per_sec(
         return None;
     }
     let mut count = 0usize;
-    let mut sum = 0.0;
     let mut sum_squares = 0.0;
     for value in consecutive_returns(closes, returns) {
         count += 1;
-        sum += value;
         sum_squares += value * value;
     }
     if count == 0 {
         return None;
     }
-    let count = count as f64;
-    let mean = sum / count;
-    let variance = (sum_squares / count - mean * mean).max(0.0);
+    let variance = sum_squares / count as f64;
     Some(variance.sqrt() / interval_secs.sqrt())
 }
 

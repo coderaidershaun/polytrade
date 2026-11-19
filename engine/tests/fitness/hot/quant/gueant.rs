@@ -1,7 +1,9 @@
 //! The quoting model's closed-form terms against a worked example, and its rounding onto the grid,
 //! which stops a computed depth from becoming an order that crosses the book.
 
-use engine::hot::quant::pricing::{GueantParams, Objective, QuoteCoefficients, QuoteInputs};
+use engine::hot::quant::pricing::{
+    GueantParams, Objective, QuoteCoefficients, QuoteInputs, SideRates, Snap, Ticks,
+};
 use engine::msg::ids::Price;
 
 const TICK: Price = Price::from_mantissa(1_000_000); // $0.01 at the 1e-8 fixed-point scale.
@@ -11,12 +13,21 @@ fn approx(a: f64, b: f64, tol: f64) -> bool {
 }
 
 const ORDER_SIZE: f64 = 1.0;
+
+fn in_ticks(a_per_sec: f64, k_per_depth: f64, sigma_per_sqrt_sec: f64) -> SideRates<Ticks> {
+    SideRates {
+        a_per_sec,
+        k_per_depth,
+        sigma_per_sqrt_sec,
+        unit: Ticks,
+    }
+}
 const SIGMA: f64 = 2.0;
 
 // Δ=1, q=3, A=5, k̃=0.5, σ̃=2, γ̃=0.0736 -> c1=2, c2=0.2, h=2.2, j=0.4.
-fn worked_example() -> QuoteCoefficients {
+fn worked_example() -> QuoteCoefficients<Ticks> {
     GueantParams::new(0.0736, ORDER_SIZE, Objective::InventoryPenalty)
-        .coefficients(5.0, 0.5, SIGMA)
+        .coefficients(in_ticks(5.0, 0.5, SIGMA))
         .expect("valid estimates")
 }
 
@@ -24,9 +35,11 @@ fn inputs(fair_ticks: f64, inventory: f64, best_bid_tick: i64, best_ask_tick: i6
     QuoteInputs {
         fair: fair_ticks * TICK.to_f64(),
         inventory,
-        best_bid: Price::from_mantissa(best_bid_tick * TICK.mantissa()),
-        best_ask: Price::from_mantissa(best_ask_tick * TICK.mantissa()),
+        best_bid: Some(Price::from_mantissa(best_bid_tick * TICK.mantissa())),
+        best_ask: Some(Price::from_mantissa(best_ask_tick * TICK.mantissa())),
         tick: TICK,
+        snap: Snap::Outward,
+        min_distance_ticks: None,
     }
 }
 
@@ -60,14 +73,24 @@ fn model_b_matches_a_known_worked_example() {
 #[test]
 fn rounding_is_outward_and_never_crosses_the_book() {
     // Symmetric depth 2.2, fair mid-book -> bid floors, ask ceils, both outside book.
-    let clean = worked_example().quote(inputs(10_050.0, 0.0, 10_049, 10_051));
+    let clean = worked_example()
+        .quote(inputs(10_050.0, 0.0, 10_049, 10_051))
+        .expect("finite inputs");
     assert_eq!(clean.bid_tick, 10_047, "bid floors: floor(10050 - 2.2)");
     assert_eq!(clean.ask_tick, 10_053, "ask ceils: ceil(10050 + 2.2)");
-    assert_eq!(clean.bid, Price::from_mantissa(10_047 * TICK.mantissa()));
-    assert_eq!(clean.ask, Price::from_mantissa(10_053 * TICK.mantissa()));
+    assert_eq!(
+        clean.bid,
+        Some(Price::from_mantissa(10_047 * TICK.mantissa()))
+    );
+    assert_eq!(
+        clean.ask,
+        Some(Price::from_mantissa(10_053 * TICK.mantissa()))
+    );
 
     // Long inventory -> ask_depth negative (liquidation skew); crossing ask clamps to best_bid+1.
-    let long = worked_example().quote(inputs(10_050.0, 10.0, 10_049, 10_051));
+    let long = worked_example()
+        .quote(inputs(10_050.0, 10.0, 10_049, 10_051))
+        .expect("finite inputs");
     assert_eq!(
         long.ask_tick, 10_050,
         "post-only lifts the crossing ask to best_bid + 1"
@@ -77,4 +100,234 @@ fn rounding_is_outward_and_never_crosses_the_book() {
         "defensive bid floors to floor(10050 - 6.2)"
     );
     assert!(long.ask_tick > long.bid_tick);
+
+    // When both depths are below half the spacing of floats at fair, both sides snap onto fair and
+    // collide. The side that sheds inventory stays, and the other moves one tick out: a long book
+    // keeps its ask, a short book keeps its bid. A quarter tick keeps fair on the grid exactly.
+    let quarter = Price::from_mantissa(25_000_000);
+    let tiny = GueantParams::new(1e-30, ORDER_SIZE, Objective::InventoryPenalty)
+        .coefficients(in_ticks(1.0, 1e14, 1.0))
+        .expect("valid estimates");
+    let spacing = 10_050f64.next_up() - 10_050.0;
+    assert!(
+        tiny.bid_depth(1.0).abs() < spacing / 2.0 && tiny.ask_depth(-1.0).abs() < spacing / 2.0
+    );
+    let at_fair = |inventory: f64| QuoteInputs {
+        fair: 10_050.0 * quarter.to_f64(),
+        inventory,
+        best_bid: Some(Price::from_mantissa(10_049 * quarter.mantissa())),
+        best_ask: Some(Price::from_mantissa(10_051 * quarter.mantissa())),
+        tick: quarter,
+        snap: Snap::Outward,
+        min_distance_ticks: None,
+    };
+    let long = tiny.quote(at_fair(1.0)).expect("finite inputs");
+    assert_eq!(
+        (long.bid_tick, long.ask_tick),
+        (10_049, 10_050),
+        "a long book keeps its ask and moves its bid out"
+    );
+    let short = tiny.quote(at_fair(-1.0)).expect("finite inputs");
+    assert_eq!(
+        (short.bid_tick, short.ask_tick),
+        (10_050, 10_051),
+        "a short book keeps its bid and moves its ask out"
+    );
+}
+
+/// Model A (ξ = γ) by its closed form at one point, its limit Model B as ξΔ/k goes to 0, and each
+/// rate that the closed form cannot take. A wrong branch or a wrong factor of Δ moves each quote of
+/// a strategy that picks Model A, and nothing else reads it.
+#[test]
+fn model_a_matches_its_closed_form_and_each_bad_rate_is_refused() {
+    let (sigma, order_size) = (2.0, 2.0);
+    // As r = ξΔ/k goes to 0, Model A tends to the limits that Model B takes. By hand, for
+    // 0 < r < 1: r − r²/2 ≤ ln(1 + r) ≤ r, so c1 of Model A is within r/2 of 1/k, relative, and c2
+    // is within e^(r/2) − 1 < r of the c2 of Model B.
+    let (k, a, r) = (1.0, 5.0, 1e-6);
+    let gamma = r * k / order_size;
+    let limit = GueantParams::new(gamma, order_size, Objective::CaraUtility)
+        .coefficients(in_ticks(a, k, sigma))
+        .expect("valid estimates");
+    let model_b = GueantParams::new(gamma, order_size, Objective::InventoryPenalty)
+        .coefficients(in_ticks(a, k, sigma))
+        .expect("valid estimates");
+    let c1_of =
+        |c: &QuoteCoefficients<Ticks>| c.half_spread() - 0.5 * order_size * c.skew_per_inventory();
+    let c2_of = |c: &QuoteCoefficients<Ticks>| c.skew_per_inventory() / sigma;
+    assert!(
+        (c1_of(&limit) / c1_of(&model_b) - 1.0).abs() <= r / 2.0,
+        "c1 {} against {}",
+        c1_of(&limit),
+        c1_of(&model_b)
+    );
+    assert!(
+        (c2_of(&limit) / c2_of(&model_b) - 1.0).abs() <= r,
+        "c2 {} against {}",
+        c2_of(&limit),
+        c2_of(&model_b)
+    );
+
+    // The closed form for ξ > 0: c1 = ln(1 + ξΔ/k)/(ξΔ) and
+    // c2 = √(γ/(2AΔk)·(1 + ξΔ/k)^(k/(ξΔ) + 1)).
+    // With γ = ξ = 0.25, Δ = 2, k = 0.5 and A = 0.5, ξΔ/k = 1, so by hand c1 = ln 2/0.5 = 2·ln 2
+    // and c2 = √(0.25/(2·0.5·2·0.5)·2^2) = √1 = 1.
+    let model_a = GueantParams::new(0.25, order_size, Objective::CaraUtility)
+        .coefficients(in_ticks(0.5, 0.5, sigma))
+        .expect("valid estimates");
+    let c1 = model_a.half_spread() - 0.5 * order_size * model_a.skew_per_inventory();
+    let c2 = model_a.skew_per_inventory() / sigma;
+    assert!(approx(c1, 2.0 * std::f64::consts::LN_2, 1e-12), "c1 {c1}");
+    assert!(approx(c2, 1.0, 1e-12), "c2 {c2}");
+
+    // Each rate must be finite and positive, and the coefficients finite. 1e-300 · 1e-300 is below
+    // the smallest float, so 2·A·Δ·k is 0 there and c2 is infinite.
+    assert_eq!(1e-300 * 1e-300, 0.0);
+    for objective in [Objective::InventoryPenalty, Objective::CaraUtility] {
+        let params = GueantParams::new(0.5, order_size, objective);
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            for (a, k, sigma) in [(bad, 0.5, 2.0), (5.0, bad, 2.0), (5.0, 0.5, bad)] {
+                assert!(
+                    params.coefficients(in_ticks(a, k, sigma)).is_none(),
+                    "{objective:?}: A {a}, k {k}, sigma {sigma} gave coefficients"
+                );
+            }
+        }
+        assert!(
+            params.coefficients(in_ticks(1e-300, 1e-300, 2.0)).is_none(),
+            "{objective:?}: an infinite c2 gave coefficients"
+        );
+    }
+}
+
+/// A quote reads market and ledger values, so a fair or an inventory that is not finite, a grid
+/// tick that is not positive, a side whose tick is not positive, and a price past the range of a
+/// mantissa each give no quote for that side, never a panic and never a price at or below zero.
+#[test]
+fn quote_refuses_values_that_are_not_finite_and_ticks_that_are_not_positive() {
+    let c = worked_example();
+    let base = inputs(10_050.0, 0.0, 10_049, 10_051);
+    for (case, refused) in [
+        (
+            "fair NaN",
+            QuoteInputs {
+                fair: f64::NAN,
+                ..base
+            },
+        ),
+        (
+            "fair +inf",
+            QuoteInputs {
+                fair: f64::INFINITY,
+                ..base
+            },
+        ),
+        (
+            "fair -inf",
+            QuoteInputs {
+                fair: f64::NEG_INFINITY,
+                ..base
+            },
+        ),
+        (
+            "inventory NaN",
+            QuoteInputs {
+                inventory: f64::NAN,
+                ..base
+            },
+        ),
+        (
+            "inventory +inf",
+            QuoteInputs {
+                inventory: f64::INFINITY,
+                ..base
+            },
+        ),
+        (
+            "tick 0",
+            QuoteInputs {
+                tick: Price::from_mantissa(0),
+                ..base
+            },
+        ),
+        (
+            "tick -1",
+            QuoteInputs {
+                tick: Price::from_mantissa(-1),
+                ..base
+            },
+        ),
+        (
+            "band NaN",
+            QuoteInputs {
+                min_distance_ticks: Some(f64::NAN),
+                ..base
+            },
+        ),
+    ] {
+        assert_eq!(c.quote(refused), None, "{case}: quoted");
+    }
+
+    // Fair 2 ticks up with a depth of 2.2 on each side, by hand: the bid floors to tick
+    // floor(2 − 2.2) = −1, so it has no price, and the ask ceils to ceil(2 + 2.2) = 5.
+    let low = c.quote(inputs(2.0, 0.0, 1, 3)).expect("finite inputs");
+    assert_eq!(low.bid, None, "a bid at or below zero was quoted");
+    assert_eq!(low.ask, Some(Price::from_mantissa(5 * TICK.mantissa())));
+
+    // Fair 1e13 ticks up: the ask ceils to tick 1e13 + 3, whose price passes the range of a
+    // mantissa, so it has no price; the bid stays behind the best ask, at tick 2.
+    assert!(i64::MAX / TICK.mantissa() < 10_000_000_000_003);
+    let high = c.quote(inputs(1e13, 0.0, 1, 3)).expect("finite inputs");
+    assert_eq!(
+        high.ask, None,
+        "an ask past the range of a mantissa was quoted"
+    );
+    assert_eq!(high.bid, Some(Price::from_mantissa(2 * TICK.mantissa())));
+}
+
+/// The nearest snap and the band of a minimum distance, by hand on the worked example: rounding may
+/// bring a side up to half a tick nearer the market, the band never lets a side nearer fair than
+/// its distance, and a collision still keeps one tick between the sides.
+#[test]
+fn nearest_rounding_keeps_the_band_and_a_tick_between_sides() {
+    let nearest = |fair_ticks: f64, inventory: f64, min_distance_ticks: Option<f64>| QuoteInputs {
+        snap: Snap::Nearest,
+        min_distance_ticks,
+        best_bid: None,
+        best_ask: None,
+        ..inputs(fair_ticks, inventory, 0, 0)
+    };
+    let c = worked_example();
+
+    // Depth 2.2 on each side of 10,050: round(10,047.8) = 10,048 and round(10,052.2) = 10,052.
+    let open = c
+        .quote(nearest(10_050.0, 0.0, None))
+        .expect("finite inputs");
+    assert_eq!((open.bid_tick, open.ask_tick), (10_048, 10_052));
+
+    // A band of 3 ticks binds: floor(10,050 − 3) = 10,047 and ceil(10,050 + 3) = 10,053. A band of
+    // 1 tick sits inside the depth and changes nothing.
+    let banded = c
+        .quote(nearest(10_050.0, 0.0, Some(3.0)))
+        .expect("finite inputs");
+    assert_eq!((banded.bid_tick, banded.ask_tick), (10_047, 10_053));
+    let inside = c
+        .quote(nearest(10_050.0, 0.0, Some(1.0)))
+        .expect("finite inputs");
+    assert_eq!((inside.bid_tick, inside.ask_tick), (10_048, 10_052));
+
+    // A half-spread below half a tick rounds both sides onto fair, so they collide: a long book
+    // keeps its ask and a short book keeps its bid, each with the other side one tick out.
+    let narrow = GueantParams::new(1e-6, ORDER_SIZE, Objective::InventoryPenalty)
+        .coefficients(in_ticks(1.0, 10.0, 1.0))
+        .expect("valid estimates");
+    assert!(narrow.bid_depth(1.0) < 0.5 && narrow.ask_depth(-1.0) < 0.5);
+    let long = narrow
+        .quote(nearest(10_050.0, 1.0, None))
+        .expect("finite inputs");
+    assert_eq!((long.bid_tick, long.ask_tick), (10_049, 10_050));
+    let short = narrow
+        .quote(nearest(10_050.0, -1.0, None))
+        .expect("finite inputs");
+    assert_eq!((short.bid_tick, short.ask_tick), (10_050, 10_051));
 }

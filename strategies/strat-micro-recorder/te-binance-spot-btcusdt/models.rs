@@ -5,11 +5,11 @@ use engine::hot::quant::hawkes::{HawkesChoice, HawkesSide};
 use engine::hot::quant::intensity::{PacedIntensity, SideEstimate};
 use engine::hot::quant::liquidity::{KyleFeed, KylesLambdaSpec};
 use engine::hot::quant::micro::OrderbookResilience;
-use engine::hot::quant::pricing::GueantParams;
+use engine::hot::quant::pricing::{Bps, GueantParams, QuoteInputs, SideRates, Snap};
 use engine::hot::quant::toxicity::{
     ForwardHorizon, MarkoutSpec, MarkoutTracker, ReverseHorizon, SideMarkouts,
 };
-use engine::hot::quant::volatility::{Egarch, EgarchEstimate, Returns};
+use engine::hot::quant::volatility::{Egarch, EgarchEstimate, Returns, realised_vol_per_sec};
 use engine::hot::series::{FastQueue, MedianScratch};
 use engine::hot::strategy::{InstrumentRow, StrategyCtx};
 use engine::msg::ids::{FIXED_SCALE, InstrumentId, Price, Qty, Side};
@@ -44,16 +44,14 @@ const MARKOUT_EMA_HALFLIFE: u32 = 8;
 /// Worst-case mid observations/sec for markout ring. Binance 10x/s + spin + headroom.
 const MARKOUT_MAX_MIDS_PER_SEC: u32 = 12;
 
-/// Long-horizon EGARCH + short-horizon realised vol. estimate caches last fit; refit when dirty.
+/// The long-horizon EGARCH fit and the short-horizon realised volatility of one instrument, beside
+/// the feeds of each model.
 pub(crate) struct BinanceVol {
     /// Candle interval EGARCH rescale built against; on_kline accepts this interval alone.
     pub(crate) interval: KlineInterval,
-    pub(crate) closes: FastQueue<f64>,
     pub(crate) spin_mids: FastQueue<f64>,
-    egarch: Egarch,
-    pub(crate) is_dirty: bool,
+    pub(crate) egarch: Egarch,
     is_seeded: bool,
-    pub(crate) estimate: Option<EgarchEstimate>,
     pub(crate) resilience: OrderbookResilience,
     pub(crate) resilience_window: FastQueue<f64>,
     pub(crate) median_scratch: MedianScratch,
@@ -61,8 +59,8 @@ pub(crate) struct BinanceVol {
     /// Guéant tick-space grid. None if startup preflight left unstamped.
     pub(crate) tick: Option<Price>,
     pub(crate) markouts: MarkoutTracker,
-    last_mid_ts_us: Option<LocalTs>,
-    /// None if no volume clock (on_volume never fires) or no tick (λ has no grid).
+    /// `None` without volume bars, since `on_volume` then never fires, and without a tick size, so
+    /// that only an instrument with a tick records the Kyle columns.
     pub(crate) kyle: Option<KyleFeed>,
     pub(crate) hawkes_bid: HawkesSide,
     pub(crate) hawkes_ask: HawkesSide,
@@ -93,12 +91,9 @@ impl BinanceVol {
         let resilience_len = samples_in_horizon(RESILIENCE_HORIZON, spin_interval).max(1);
         Self {
             interval,
-            closes: FastQueue::new(keep, SERIES_BACKING_MULTIPLE),
             spin_mids: FastQueue::new(realised_window_len(spin_interval), SERIES_BACKING_MULTIPLE),
             egarch: Egarch::new(span, EGARCH_MIN_CLOSES, keep),
-            is_dirty: false,
             is_seeded: false,
-            estimate: None,
             resilience: OrderbookResilience::new(),
             resilience_window: FastQueue::new(resilience_len, SERIES_BACKING_MULTIPLE),
             median_scratch: MedianScratch::for_window(resilience_len),
@@ -113,34 +108,35 @@ impl BinanceVol {
                 spin_interval,
                 max_mids_per_sec: MARKOUT_MAX_MIDS_PER_SEC,
             }),
-            last_mid_ts_us: None,
             kyle: row
                 .tick_size
                 .filter(|_| row.tracker.volume_bars.is_some())
-                .map(|tick| KyleFeed::new(setup.kyles_lambda, tick)),
+                .map(|_| KyleFeed::new(setup.kyles_lambda)),
             hawkes_bid: HawkesSide::new(setup.hawkes),
             hawkes_ask: HawkesSide::new(setup.hawkes),
         }
     }
 
-    /// First live spin: absorb tracked warmup candles (REST backfill), refit on fresh candle. Clear-copy keeps idempotent.
-    pub(crate) fn refresh(&mut self, ctx: &mut StrategyCtx<'_>, instrument: InstrumentId) {
+    /// Gives the EGARCH fit in force, refitted when a close arrived. The first live spin first fills
+    /// the window from the tracker's candles, which hold the backfill that arrived during warmup.
+    pub(crate) fn refresh(
+        &mut self,
+        ctx: &mut StrategyCtx<'_>,
+        instrument: InstrumentId,
+    ) -> Option<EgarchEstimate> {
         if !self.is_seeded {
             self.is_seeded = true;
             if let Some(series) = ctx.tracker(instrument).candles(self.interval) {
-                self.closes.clear();
+                self.egarch.clear();
                 for candle in series.closed.iter() {
-                    self.closes.push(candle.close.to_f64());
+                    self.egarch.push_close(candle.close.to_f64());
                 }
-                self.is_dirty |= !self.closes.is_empty();
             }
         }
-        if !self.is_dirty {
-            return;
-        }
-        self.estimate = self.closes.egarch(&mut self.egarch);
-        self.is_dirty = false;
-        if let Some(estimate) = self.estimate
+        let is_refit = self.egarch.is_due();
+        let estimate = self.egarch.estimate();
+        if is_refit
+            && let Some(estimate) = estimate
             && !estimate.converged
         {
             engine::alert!(
@@ -150,35 +146,31 @@ impl BinanceVol {
                 estimate.iterations
             );
         }
+        estimate
     }
 
     /// Market data back to post-new state, keeping preallocated buffers. Config-derived (interval/tick/refit) stay.
     pub(crate) fn reset(&mut self) {
-        self.closes.clear();
+        self.egarch.clear();
         self.spin_mids.clear();
         self.egarch.reset_warm_start();
-        self.is_dirty = false;
         // Re-seeded from tracker's candles on next live spin (same as boot). REST backfill contiguous.
         self.is_seeded = false;
-        self.estimate = None;
         self.resilience = OrderbookResilience::new();
         self.resilience_window.clear();
         self.intensity.reset();
         self.markouts.clear();
-        self.last_mid_ts_us = None;
         if let Some(kyle) = self.kyle.as_mut() {
-            kyle.reset();
+            kyle.clear();
         }
         self.hawkes_bid.reset();
         self.hawkes_ask.reset();
     }
 
-    /// The markout mid entry point. Spins and chunks arrive on different queues, so a late stamp is
-    /// clamped forward rather than allowed to disorder the series.
+    /// Feeds one mid to the markouts. The markout tracker raises a stamp below the last fed stamp
+    /// to that stamp, so its series of mids stays in time order.
     pub(crate) fn feed_markout_mid(&mut self, ts_us: LocalTs, mid: Option<f64>) {
         let Some(mid) = mid else { return };
-        let ts_us = self.last_mid_ts_us.map_or(ts_us, |last| last.max(ts_us));
-        self.last_mid_ts_us = Some(ts_us);
         self.markouts.on_mid(ts_us, mid);
     }
 }
@@ -284,7 +276,7 @@ pub(crate) fn gated_realised_vol(
     if closes.len() <= MIN_VOL_RETURNS {
         return None;
     }
-    closes.realised_volatility(returns, interval)
+    realised_vol_per_sec(closes.iter(), returns, interval)
 }
 
 /// σ_log per second: the EGARCH conditional forecast raised by the fast realised window, whichever
@@ -324,8 +316,8 @@ pub(crate) struct GueantScale {
     params: GueantParams,
     features: Features,
     tick: Price,
-    /// S̃ = S/τ, the fair price as a continuous tick index — S is the mid, not the microprice.
-    fair_ticks: f64,
+    /// S, the fair price the quote centres on: the mid, not the microprice.
+    fair: f64,
     ticks_per_bp: f64,
     /// σ̃ in bps per √second.
     pub(crate) sigma_bps: f64,
@@ -352,7 +344,7 @@ impl GueantScale {
             params,
             features,
             tick,
-            fair_ticks: mid / tick.to_f64(),
+            fair: mid,
             ticks_per_bp: ticks_per_bp(mid, tick),
             sigma_bps: log_vol * BPS,
             half_spread_bps: (spread / 2.0) / mid * BPS,
@@ -376,27 +368,14 @@ impl GueantScale {
     ) -> Option<Price> {
         let estimate = estimate?.fresh()?;
         let half_spread_ticks = self.half_spread_bps * self.ticks_per_bp;
-        let a_mid_per_sec = estimate.a_mid_per_sec(half_spread_ticks);
+        let a_mid_per_sec = estimate.a_mid_per_sec(half_spread_ticks)?;
         let k_per_bp = estimate.k_per_tick * self.ticks_per_bp;
-        let coefficients = self
-            .params
-            .coefficients(a_mid_per_sec, k_per_bp, self.sigma_bps)?;
-        let depth_ticks = match side {
-            QuoteSide::Bid => coefficients.bid_depth(self.inventory),
-            QuoteSide::Ask => coefficients.ask_depth(self.inventory),
-        } * self.ticks_per_bp;
-        // Nearest tick, then clamped to the far edge of the minimum-distance band: the strategy
-        // never quotes tighter than MIN_QUOTE_DISTANCE_BPS from fair, which also stops an
-        // inventory-skewed δ(q) from crossing its own mid — the old fair-side clamp is the band
-        // edge's special case. The engine snaps a bid down and an ask up onto the same grid this
-        // already sits on, so the snap is idempotent and the price recorded is the price declared.
-        let min_distance_ticks = MIN_QUOTE_DISTANCE_BPS * self.ticks_per_bp;
-        let tick_index = match side {
-            QuoteSide::Bid => ((self.fair_ticks - depth_ticks).round() as i64)
-                .min((self.fair_ticks - min_distance_ticks).floor() as i64),
-            QuoteSide::Ask => ((self.fair_ticks + depth_ticks).round() as i64)
-                .max((self.fair_ticks + min_distance_ticks).ceil() as i64),
-        };
+        let coefficients = self.params.coefficients(SideRates {
+            a_per_sec: a_mid_per_sec,
+            k_per_depth: k_per_bp,
+            sigma_per_sqrt_sec: self.sigma_bps,
+            unit: Bps,
+        })?;
         let GueantSideColumns {
             half_spread_bps: half_spread,
             skew_bps: skew,
@@ -404,15 +383,29 @@ impl GueantScale {
         } = self.features.gueant(side);
         ctx.emit(half_spread, instrument, coefficients.half_spread());
         ctx.emit(skew, instrument, coefficients.skew_per_inventory());
-        // A half-spread wider than the whole price would put the bid through zero, which is
-        // invalid. Both conditions here gate negative and wrapped prices.
-        if tick_index > 0
-            && let Some(mantissa) = tick_index.checked_mul(self.tick.mantissa())
-        {
-            ctx.emit(price, instrument, Price::from_mantissa(mantissa).to_f64());
-            return Some(Price::from_mantissa(mantissa));
-        }
-        None
+        // Each side snaps to its nearest tick, then out to the far edge of the band of minimum
+        // distance, so the strategy never quotes nearer fair than MIN_QUOTE_DISTANCE_BPS, and an
+        // inventory skew cannot push a side across its own mid. The engine snaps a bid down and an
+        // ask up onto the grid that the price already sits on, so the price recorded is the price
+        // declared.
+        let quotes = coefficients.quote_in_ticks(
+            self.ticks_per_bp,
+            QuoteInputs {
+                fair: self.fair,
+                inventory: self.inventory,
+                best_bid: None,
+                best_ask: None,
+                tick: self.tick,
+                snap: Snap::Nearest,
+                min_distance_ticks: Some(MIN_QUOTE_DISTANCE_BPS * self.ticks_per_bp),
+            },
+        )?;
+        let quoted = match side {
+            QuoteSide::Bid => quotes.bid,
+            QuoteSide::Ask => quotes.ask,
+        }?;
+        ctx.emit(price, instrument, quoted.to_f64());
+        Some(quoted)
     }
 }
 
@@ -449,18 +442,14 @@ pub(crate) fn emit_side_hawkes(
         beta,
         branching,
     } = features.hawkes(side);
-    // Full simplex over arrival window, once per HAWKES.refit_arrivals. Rest reads resident.
-    if hawkes.is_refit_due() {
-        hawkes.refit(now);
+    if let Some(estimate) = hawkes.estimate(now) {
+        ctx.emit(mu, instrument, estimate.params.mu_per_sec());
+        ctx.emit(alpha, instrument, estimate.params.alpha_per_sec());
+        ctx.emit(beta, instrument, estimate.params.beta_per_sec());
+        ctx.emit(branching, instrument, estimate.params.branching_ratio());
     }
-    if let Some(estimate) = hawkes.estimate().filter(|fit| !fit.is_stale) {
-        ctx.emit(mu, instrument, estimate.mu);
-        ctx.emit(alpha, instrument, estimate.alpha);
-        ctx.emit(beta, instrument, estimate.beta);
-        ctx.emit(branching, instrument, estimate.branching_ratio);
-    }
-    if let Some(live) = hawkes.live() {
-        ctx.emit(lambda, instrument, live.intensity(now));
+    if let Some(intensity) = hawkes.intensity(now) {
+        ctx.emit(lambda, instrument, intensity);
     }
 }
 
