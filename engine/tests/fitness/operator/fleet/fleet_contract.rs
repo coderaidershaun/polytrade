@@ -69,9 +69,9 @@ async fn engine_started_elsewhere_is_listed_running_and_start_is_refused() {
     );
 }
 
-/// CONTRACT: the stop of the exit closes the fleet to starts. A stop waits for its engines without
-/// the lock of the fleet, so this guard alone keeps an engine from starting while the server shuts
-/// down and outliving it.
+/// CONTRACT: the stop of the exit closes the fleet to starts. A stop of one engine waits for it
+/// without the lock of the fleet, so this guard is what keeps an engine from starting while the
+/// server shuts down and outliving it.
 #[tokio::test]
 async fn a_start_after_stop_all_is_refused() {
     let tree = EngineTree::new("fleet-closed");
