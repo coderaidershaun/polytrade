@@ -529,9 +529,13 @@ fn link_drops_are_counted_for_each_sender() {
     for port in 0..crowd {
         link.push(address(41_000 + port), frame_message(1));
     }
+    let others = link
+        .senders()
+        .rows()
+        .find_map(|(sender, count)| sender.is_none().then_some(count));
     assert_eq!(
-        link.senders().others(),
-        counted(4, 0),
+        others,
+        Some(counted(4, 0)),
         "each sender past the table is counted in one row of its own"
     );
 

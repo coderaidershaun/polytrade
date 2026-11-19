@@ -321,6 +321,16 @@ async fn start_then_stop_from_a_tab_parks_the_fold() {
         (start.desired_state, start.desired_epoch.get()),
         (RunState::Running, 5)
     );
+    let start_just_short = start_at + DurationUs::from_micros(SUBSCRIBE_INTERVAL.micros() - 1);
+    assert!(
+        session.subscribe_due(start_just_short).is_none(),
+        "the 2 s interval starts again at the subscribe of the assert"
+    );
+    assert!(
+        session
+            .subscribe_due(start_at + SUBSCRIBE_INTERVAL)
+            .is_some()
+    );
     let marker = engine.marker_of(&mut fold, (RunState::Running, 5)).await;
     fold.engine.dispatch(&marker);
     assert_eq!(
