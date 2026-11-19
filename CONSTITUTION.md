@@ -2294,15 +2294,15 @@ is a concept in its own right, or has a ruling of §12.
   of the start seam (`IdentityLocks`, `IdentityLock`, `Preflight.locks`);
   `Fleet::with_identity_locks`; `Fleet::with_file_steps` and `FileSteps::set_permissions`; the
   fault seam of the tape writer; and the read accessors that only tests call.
-- [ ] Amended 2026-11-18: items that are `pub` with no merit and no ruling. WHY: this pass found
-  them, and it gives none of them a merit. Each one is a finding for the verifier of part 5:
-  - with no caller at all: `PersistError::table()`, `RefusedAssertions::past_table`,
-    `SenderCounts::others` (a caller in its own file only), and `AcceptTries::new`
-  - with a test as the only caller outside the crate: `Config::seal_interval_spins()`. The line of
-    2026-11-14 on the getters of `Config` (part 3 list, above) makes each new getter `pub(crate)`,
-    as `seal_try_limit` is.
-  - `Fleet::stop` and `Fleet::stop_all` keep their merit as methods of `Fleet`, but nothing calls
-    them now, and each holds `&mut Fleet` through the whole wait of a stop.
+- [ ] Amended 2026-11-19: no item of part 5 is `pub` with no merit and no ruling. The correction
+  round of the verifier of part 5 removed `PersistError::table()`, `RefusedAssertions::past_table`,
+  `SenderCounts::others`, `AcceptTries::new` and `Fleet::stop`, which nothing called, and made
+  `Config::seal_interval_spins()` `pub(crate)`, as `seal_try_limit` is. `Fleet::stop_all` keeps
+  its merit: `PolysimMcp::stop_all` calls it once, at the exit, after each session has ended, so its
+  hold of `&mut Fleet` through the wait holds up no request; a stop of one engine waits outside the
+  lock of the fleet. WHY: an item that is `pub` with no caller is a promise to a caller that does not
+  exist, and the law should name only interfaces that something uses. Replaced: the line of
+  2026-11-18 that listed these items as findings for the verifier.
 - [ ] A fitness test that names these follows from this ruling. It is never the argument for it.
 
 ## 9. Naming & API Ergonomics
