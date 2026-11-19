@@ -420,6 +420,10 @@ async fn start_and_stop_walk_the_state_machine(tree: &EngineTree, session: &Sess
         (&stopped["exit_code"], &stopped["forced"]),
         (&json!(0), &json!(false))
     );
+    assert_eq!(
+        (&stopped["strategy_id"], &stopped["te_id"]),
+        (&json!("strat-a"), &json!("te-off"))
+    );
     let duration = stopped["duration_ms"].as_u64().expect("a duration");
     assert!(
         Duration::from_millis(duration) < STOP_DEADLINE,

@@ -25,6 +25,15 @@ impl LinkCredential {
         }
     }
 
+    /// The credential of a workstation, which reads the hash of the token from the relay's hello
+    /// and never sees the token itself.
+    pub const fn of_token_hash(token_hash: LinkHash, strategy_id: &str) -> Self {
+        Self {
+            token_hash,
+            strategy_hash: LinkHash::of_name(strategy_id),
+        }
+    }
+
     /// The only secret that a frame guard checks, so whoever reads it can send frames that the
     /// engine accepts.
     pub const fn token_hash(&self) -> LinkHash {

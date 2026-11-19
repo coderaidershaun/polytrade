@@ -47,10 +47,10 @@ impl PolysimMcp {
         }
     }
 
+    /// The exit drops each session before this runs, so holding the fleet through the wait holds
+    /// up no client.
     pub(super) async fn stop_all(&self) -> Vec<StopOutcome> {
-        let stops = self.fleet.lock().await.begin_stop_all();
-        let settled = stops.settle().await;
-        self.fleet.lock().await.finish_all(settled)
+        self.fleet.lock().await.stop_all().await
     }
 }
 
