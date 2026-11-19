@@ -135,16 +135,6 @@ impl PersistError {
         }
     }
 
-    /// The table that the error stopped, or `None` when the writer thread itself failed.
-    pub const fn table(&self) -> Option<TapeTable> {
-        match self {
-            PersistError::Io { table, .. }
-            | PersistError::Parquet { table, .. }
-            | PersistError::Batch { table, .. } => Some(*table),
-            PersistError::WriterPanicked { .. } | PersistError::DrainInterrupted => None,
-        }
-    }
-
     fn io_at(table: TapeTable, path: &Path) -> impl FnOnce(std::io::Error) -> Self + '_ {
         move |source| Self::Io {
             table,

@@ -1,11 +1,13 @@
 //! A tape table that cannot be written stops alone when only research reads it, and halts quoting
 //! when it is a record of what the engine did with money.
 
+use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Component, Path};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use rtrb::{Consumer, RingBuffer};
 use tokio::sync::mpsc;
 
@@ -38,12 +40,14 @@ const REPORT_DEADLINE: Duration = Duration::from_secs(10);
 
 /// CONTRACT: the class of a tape fault comes from its table. A fault of the trades table, which
 /// only research reads, stops that table and counts it, while the orders table goes on and seals
-/// each file. A fault of the orders table sends one `WriterFailed` message to the fold, which halts
+/// each file, whether the trades file cannot be written or cannot be opened. A fault of the orders
+/// table sends one `WriterFailed` message to the fold, which halts
 /// quoting at it. A writer that ended at any fault would lose the orders of a run for a research
 /// table, and one that told nobody would let the engine trade on with no record of its orders.
 #[test]
 fn audit_write_fault_stops_quoting_and_research_fault_stops_one_table() {
     a_research_fault_stops_only_its_table();
+    a_research_table_that_cannot_open_stops_only_itself();
     an_audit_fault_halts_quoting();
 }
 
@@ -63,6 +67,35 @@ fn a_research_fault_stops_only_its_table() {
         "the orders table goes on, and each open file is sealed"
     );
     assert!(parquet_files(&run_dir(dir.path()).join("trades")).is_empty());
+}
+
+/// A plain file stands where the trades folder must go, so each open of a trades file fails, for
+/// any user, root included: no folder can be made below a file.
+fn a_research_table_that_cannot_open_stops_only_itself() {
+    let dir = TempDir::new("tape-research-open-fault");
+    let tape = run_dir(dir.path());
+    std::fs::create_dir_all(&tape).expect("the test makes the tape folder");
+    std::fs::write(tape.join("trades"), b"not a folder").expect("the test plants a file");
+    let mut writer = Writer::through(Arc::new(DiskFiles), dir.path());
+    let stopped = writer.handle.stopped_tables();
+    let drained = drain_blocking(writer.handle);
+
+    assert!(drained.is_ok(), "nothing halts: {drained:?}");
+    assert_eq!(stopped.count(), 1, "the trades table stops, with a count");
+    assert!(writer.reports.pop().is_err(), "no message goes to the fold");
+    let orders = parquet_files(&tape.join("orders"));
+    assert!(
+        orders.iter().all(|path| {
+            File::open(path)
+                .is_ok_and(|file| ParquetRecordBatchReaderBuilder::try_new(file).is_ok())
+        }),
+        "each file of the healthy table keeps its footer though a sibling table failed"
+    );
+    assert_eq!(
+        rows_of_each_file(dir.path(), "orders"),
+        [ROWS, ROWS],
+        "each healthy row is sealed into a file with a footer"
+    );
 }
 
 fn an_audit_fault_halts_quoting() {
@@ -133,6 +166,10 @@ struct Writer {
 
 impl Writer {
     fn failing_writes_of(table: &'static str, dir: &Path) -> Writer {
+        Writer::through(Arc::new(FailsWritesOf { table }), dir)
+    }
+
+    fn through(steps: Arc<dyn FileSteps>, dir: &Path) -> Writer {
         let (status_producer, reports) = RingBuffer::<InboundMessage>::new(4);
         let fatal = FatalSignal::new();
         let status = TapeStatus {
@@ -149,18 +186,16 @@ impl Writer {
         for record in records {
             producer.push(record).expect("the ring holds each record");
         }
-        let handle = PersistWriter::through(Arc::new(FailsWritesOf { table }))
-            .reporting_to(status)
-            .spawn(
-                PersistConfig {
-                    dir: dir.to_path_buf(),
-                    tables: RecordedTables::new(&[TableKind::Orders, TableKind::Trades]),
-                    retention: Duration::from_hours(6),
-                },
-                run_meta(),
-                consumer,
-                mpsc::channel(1).1,
-            );
+        let handle = PersistWriter::through(steps).reporting_to(status).spawn(
+            PersistConfig {
+                dir: dir.to_path_buf(),
+                tables: RecordedTables::new(&[TableKind::Orders, TableKind::Trades]),
+                retention: Duration::from_hours(6),
+            },
+            run_meta(),
+            consumer,
+            mpsc::channel(1).1,
+        );
         Writer {
             handle,
             reports,
